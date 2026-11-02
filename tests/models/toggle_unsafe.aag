@@ -1,0 +1,5 @@
+aag 1 0 1 0 0 1
+2 3
+2
+c
+latch toggles, bad = latch: unsafe at depth 1

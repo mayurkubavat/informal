@@ -1,0 +1,13 @@
+; write then read back the same address; bad is unreachable
+1 sort bitvec 4
+2 sort bitvec 8
+3 sort array 1 2
+4 state 3 mem
+5 input 1 addr
+6 input 2 data
+7 write 3 4 5 6
+8 next 3 4 7
+9 read 2 7 5
+10 sort bitvec 1
+11 neq 10 9 6
+12 bad 11 readback

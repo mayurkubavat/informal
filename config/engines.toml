@@ -1,0 +1,80 @@
+# External engines for the fdv portfolio (phase 0).
+#
+# Each [[engine]] says how to run one model checker and how to read its
+# verdict. `{model}` is replaced with the model path. Exit codes are checked
+# first, then the `unsafe` pattern, then the `safe` pattern.
+#
+# The verdict patterns below follow each tool's documented or usual output
+# but have NOT yet been checked against binaries installed on this machine.
+# Phase 0's gate is exactly that check: `fdv bench` on HWMCC sets must
+# reproduce each tool's published solve counts.
+
+[[engine]]
+name = "ric3"
+program = "rIC3"
+args = ["{model}"]
+formats = ["aiger", "btor2"]
+proves = true
+finds_bugs = true
+[engine.exit_codes]
+safe = [20]
+unsafe = [10]
+[engine.patterns]
+safe = '(?i)\bsafe\b'
+unsafe = '(?i)\bunsafe\b'
+
+[[engine]]
+name = "pono-ind"
+program = "pono"
+args = ["-e", "ind", "-k", "1000", "{model}"]
+formats = ["btor2"]
+proves = true
+finds_bugs = true
+witness_on_stdout = true
+[engine.patterns]
+safe = '(?m)^unsat$'
+unsafe = '(?m)^sat$'
+
+[[engine]]
+name = "pono-ic3ia"
+program = "pono"
+args = ["-e", "ic3ia", "{model}"]
+formats = ["btor2"]
+proves = true
+finds_bugs = true
+witness_on_stdout = true
+[engine.patterns]
+safe = '(?m)^unsat$'
+unsafe = '(?m)^sat$'
+
+[[engine]]
+name = "abc-pdr"
+program = "yosys-abc"
+args = ["-c", "read_aiger {model}; pdr"]
+formats = ["aiger"]
+proves = true
+finds_bugs = true
+[engine.patterns]
+safe = 'Property proved'
+unsafe = 'was asserted in frame \d+'
+depth = 'was asserted in frame (\d+)'
+
+[[engine]]
+name = "abc-bmc3"
+program = "yosys-abc"
+args = ["-c", "read_aiger {model}; bmc3 -T 3600"]
+formats = ["aiger"]
+finds_bugs = true
+[engine.patterns]
+unsafe = 'was asserted in frame \d+'
+depth = 'was asserted in frame (\d+)'
+
+[[engine]]
+name = "btormc"
+program = "btormc"
+args = ["-kmax", "1000", "{model}"]
+formats = ["btor2"]
+finds_bugs = true
+witness_on_stdout = true
+[engine.patterns]
+unsafe = '(?m)^sat$'
