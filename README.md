@@ -44,8 +44,9 @@ target/release/fdv bench path/to/hwmcc24 --each --timeout 300
 ```
 
 Engines must be on `PATH` under the names in `config/engines.toml`
-(`rIC3`, `pono`, `yosys-abc`, `btormc`). Install rIC3 with
-its own pinned nightly toolchain (see `docs/engines.md`); Pono and ABC build from source (see `docs/engines.md`).
+(`ric3`, `pono`, `abc`, `btormc`). rIC3 builds on stable Rust; rIC3, Pono
+and ABC all build from source (see `docs/engines.md`, which also covers
+macOS limits such as rIC3's Linux-only portfolio).
 
 ## Layout
 

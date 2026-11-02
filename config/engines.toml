@@ -4,24 +4,47 @@
 # verdict. `{model}` is replaced with the model path. Exit codes are checked
 # first, then the `unsafe` pattern, then the `safe` pattern.
 #
-# The verdict patterns below follow each tool's documented or usual output
-# but have NOT yet been checked against binaries installed on this machine.
-# Phase 0's gate is exactly that check: `fdv bench` on HWMCC sets must
-# reproduce each tool's published solve counts.
+# rIC3 (1.5.2) and ABC entries were checked on macOS arm64 (2026-11-02)
+# against tests/models, rIC3's examples/counter/counter.aig and a sample of
+# HWMCC'24 models with published answers. Neither tool sets a verdict exit
+# code (both exit 0), so verdicts come from the output. Pono and BtorMC
+# entries are still unchecked guesses.
 
 [[engine]]
-name = "ric3"
-program = "rIC3"
-args = ["{model}"]
+name = "ric3-ic3"
+program = "ric3"
+args = ["check", "--ui", "false", "{model}", "ic3"]
 formats = ["aiger", "btor2"]
 proves = true
 finds_bugs = true
-[engine.exit_codes]
-safe = [20]
-unsafe = [10]
 [engine.patterns]
-safe = '(?i)\bsafe\b'
-unsafe = '(?i)\bunsafe\b'
+safe = '(?m)^UNSAT$'
+unsafe = '(?m)^SAT$'
+
+[[engine]]
+name = "ric3-bmc"
+program = "ric3"
+args = ["check", "--ui", "false", "{model}", "bmc"]
+formats = ["aiger", "btor2"]
+finds_bugs = true
+[engine.patterns]
+unsafe = '(?m)^SAT$'
+depth = 'found a counterexample at depth (\d+)'
+
+# rIC3's 16-way portfolio (the HWMCC'24 configuration). Linux only: it forks
+# its workers and reports back over ipc-channel, which uses Mach ports on
+# macOS, and those do not survive fork(). On macOS every run hangs until
+# the timeout, so the entry stays commented out there.
+# [[engine]]
+# name = "ric3"
+# program = "ric3"
+# args = ["check", "--ui", "false", "{model}", "portfolio"]
+# formats = ["aiger", "btor2"]
+# proves = true
+# finds_bugs = true
+# [engine.patterns]
+# safe = '(?m)^UNSAT$'
+# unsafe = '(?m)^SAT$'
 
 [[engine]]
 name = "pono-ind"
@@ -47,22 +70,29 @@ witness_on_stdout = true
 safe = '(?m)^unsat$'
 unsafe = '(?m)^sat$'
 
+# ABC (build from github.com/berkeley-abc/abc; `yosys-abc` takes the same
+# commands). The prefix is needed for HWMCC AIGER 1.9 files: `fold` turns
+# invariant constraints into the property (without it ABC checks constraint
+# outputs as properties and reports false bugs), and `logic; undc; strash;
+# zero` makes don't-care latch inits nondeterministic instead of 0. ABC's
+# ASCII reader rejects .aag files with a bad-state section; that reads as
+# unknown, not a wrong verdict.
 [[engine]]
 name = "abc-pdr"
-program = "yosys-abc"
-args = ["-c", "read_aiger {model}; pdr"]
+program = "abc"
+args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; pdr"]
 formats = ["aiger"]
 proves = true
 finds_bugs = true
 [engine.patterns]
-safe = 'Property proved'
+safe = 'Property proved\.'
 unsafe = 'was asserted in frame \d+'
 depth = 'was asserted in frame (\d+)'
 
 [[engine]]
 name = "abc-bmc3"
-program = "yosys-abc"
-args = ["-c", "read_aiger {model}; bmc3 -T 3600"]
+program = "abc"
+args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; bmc3 -T 3600"]
 formats = ["aiger"]
 finds_bugs = true
 [engine.patterns]
