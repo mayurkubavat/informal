@@ -3,7 +3,7 @@
 //!   fdv info  <model.btor2>                      parse, validate, print features
 //!   fdv fmt   <model.btor2>                      print canonical Btor2
 //!   fdv check <model> [--engines F] [--timeout S]  run the portfolio
-//!   fdv bench <dir>   [--engines F] [--timeout S] [--each] [--db runs.jsonl]
+//!   fdv bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
@@ -54,6 +54,10 @@ enum Cmd {
         db: PathBuf,
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
+        /// Models checked at once. Keep it low with the rIC3 portfolio,
+        /// which already uses 16 threads per model.
+        #[arg(long, default_value_t = 1)]
+        jobs: usize,
     },
 }
 
@@ -145,6 +149,7 @@ fn main() -> anyhow::Result<()> {
             each,
             db,
             only,
+            jobs,
         } => {
             let engines = load_engines(&engines, &only)?;
             let models = fdv_bench::collect_models(&dir)?;
@@ -164,7 +169,7 @@ fn main() -> anyhow::Result<()> {
                 fdv_bench::Mode::Portfolio
             };
             eprintln!(
-                "{} models, {} engines, {timeout}s timeout -> {}",
+                "{} models, {} engines, {timeout}s timeout, {jobs} jobs -> {}",
                 models.len(),
                 engines.len(),
                 db.display()
@@ -174,6 +179,7 @@ fn main() -> anyhow::Result<()> {
                 &engines,
                 Duration::from_secs(timeout),
                 mode,
+                jobs,
                 &mut file,
                 |r| {
                     eprintln!(

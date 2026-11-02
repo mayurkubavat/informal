@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// One engine run, as stored in the run database.
@@ -96,77 +97,109 @@ pub fn describe(path: &Path) -> anyhow::Result<(String, Option<Features>)> {
 
 /// Run the benchmark and append one record per engine run to `db`.
 /// `on_record` sees each record as it lands (for progress output).
+/// `jobs` models are checked at once (1 = one after another); records are
+/// written as each model finishes, so their order follows completion.
 pub fn run(
     models: &[PathBuf],
     engines: &[Arc<dyn Engine>],
     timeout: Duration,
     mode: Mode,
-    db: &mut dyn Write,
-    mut on_record: impl FnMut(&RunRecord),
+    jobs: usize,
+    db: &mut (dyn Write + Send),
+    on_record: impl FnMut(&RunRecord) + Send,
 ) -> anyhow::Result<Vec<RunRecord>> {
-    let mut all = Vec::new();
-    for path in models {
-        let Some(format) = ModelFormat::of_path(path) else {
-            continue;
-        };
-        let (sha, features) = describe(path)?;
-        let req = CheckRequest {
-            model: path.clone(),
-            format,
-            timeout,
-        };
-        let base = |mode, engine: String| RunRecord {
-            ts_unix_ms: now_ms(),
-            model: path.display().to_string(),
-            model_sha256: sha.clone(),
-            format,
-            features: features.clone(),
-            mode,
-            engine,
-            verdict: String::new(),
-            depth: None,
-            detail: None,
-            wall_ms: 0,
-            timeout_ms: timeout.as_millis(),
-        };
+    let next = AtomicUsize::new(0);
+    let sink = Mutex::new((db, on_record, Vec::new()));
+    std::thread::scope(|s| {
+        let workers: Vec<_> = (0..jobs.clamp(1, models.len().max(1)))
+            .map(|_| {
+                s.spawn(|| -> anyhow::Result<()> {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(path) = models.get(i) else {
+                            return Ok(());
+                        };
+                        let records = run_model(path, engines, timeout, mode)?;
+                        let mut guard = sink.lock().unwrap_or_else(|p| p.into_inner());
+                        let (db, on_record, all) = &mut *guard;
+                        for rec in records {
+                            serde_json::to_writer(&mut **db, &rec)?;
+                            db.write_all(b"\n")?;
+                            db.flush()?;
+                            on_record(&rec);
+                            all.push(rec);
+                        }
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .try_for_each(|w| w.join().expect("bench worker panicked"))
+    })?;
+    Ok(sink.into_inner().unwrap_or_else(|p| p.into_inner()).2)
+}
 
-        let mut records = Vec::new();
-        match mode {
-            Mode::EachEngine => {
-                for e in engines
-                    .iter()
-                    .filter(|e| e.capabilities().formats.contains(&format))
-                {
-                    let ctx = fdv_engine::RunContext::new(timeout);
-                    let mut rec = base("single", e.name().to_string());
-                    fill(
-                        &mut rec,
-                        e.check(&req, &ctx).map_err(|err| format!("{err:#}")),
-                    );
-                    records.push(rec);
-                }
-            }
-            Mode::Portfolio => {
-                let o = portfolio::run(engines, &req, None);
-                let mut rec = base("portfolio", "portfolio".into());
-                let v = portfolio::verdict(&o);
-                rec.wall_ms = o.wall_ms;
-                fill_verdict(&mut rec, &v);
-                if let Some(w) = &o.winner {
-                    rec.detail = Some(format!("won by {}", w.engine));
-                }
+/// Every record for one model: one per engine, or one for the portfolio.
+fn run_model(
+    path: &Path,
+    engines: &[Arc<dyn Engine>],
+    timeout: Duration,
+    mode: Mode,
+) -> anyhow::Result<Vec<RunRecord>> {
+    let Some(format) = ModelFormat::of_path(path) else {
+        return Ok(Vec::new());
+    };
+    let (sha, features) = describe(path)?;
+    let req = CheckRequest {
+        model: path.to_path_buf(),
+        format,
+        timeout,
+    };
+    let base = |mode, engine: String| RunRecord {
+        ts_unix_ms: now_ms(),
+        model: path.display().to_string(),
+        model_sha256: sha.clone(),
+        format,
+        features: features.clone(),
+        mode,
+        engine,
+        verdict: String::new(),
+        depth: None,
+        detail: None,
+        wall_ms: 0,
+        timeout_ms: timeout.as_millis(),
+    };
+
+    let mut records = Vec::new();
+    match mode {
+        Mode::EachEngine => {
+            for e in engines
+                .iter()
+                .filter(|e| e.capabilities().formats.contains(&format))
+            {
+                let ctx = fdv_engine::RunContext::new(timeout);
+                let mut rec = base("single", e.name().to_string());
+                fill(
+                    &mut rec,
+                    e.check(&req, &ctx).map_err(|err| format!("{err:#}")),
+                );
                 records.push(rec);
             }
         }
-        for rec in records {
-            serde_json::to_writer(&mut *db, &rec)?;
-            db.write_all(b"\n")?;
-            db.flush()?;
-            on_record(&rec);
-            all.push(rec);
+        Mode::Portfolio => {
+            let o = portfolio::run(engines, &req, None);
+            let mut rec = base("portfolio", "portfolio".into());
+            let v = portfolio::verdict(&o);
+            rec.wall_ms = o.wall_ms;
+            fill_verdict(&mut rec, &v);
+            if let Some(w) = &o.winner {
+                rec.detail = Some(format!("won by {}", w.engine));
+            }
+            records.push(rec);
         }
     }
-    Ok(all)
+    Ok(records)
 }
 
 fn fill(rec: &mut RunRecord, r: Result<EngineResult, String>) {
@@ -316,6 +349,7 @@ mod tests {
             &engines,
             Duration::from_secs(10),
             Mode::EachEngine,
+            1,
             &mut db,
             |_| {},
         )
@@ -350,6 +384,7 @@ mod tests {
             &engines,
             Duration::from_secs(10),
             Mode::Portfolio,
+            1,
             &mut db,
             |_| {},
         )
