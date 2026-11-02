@@ -34,17 +34,17 @@ depth = 'found a counterexample at depth (\d+)'
 # rIC3's 16-way portfolio (the HWMCC'24 configuration). Linux only: it forks
 # its workers and reports back over ipc-channel, which uses Mach ports on
 # macOS, and those do not survive fork(). On macOS every run hangs until
-# the timeout, so the entry stays commented out there.
-# [[engine]]
-# name = "ric3"
-# program = "ric3"
-# args = ["check", "--ui", "false", "{model}", "portfolio"]
-# formats = ["aiger", "btor2"]
-# proves = true
-# finds_bugs = true
-# [engine.patterns]
-# safe = '(?m)^UNSAT$'
-# unsafe = '(?m)^SAT$'
+# the timeout, so comment this entry out there.
+[[engine]]
+name = "ric3"
+program = "ric3"
+args = ["check", "--ui", "false", "{model}", "portfolio"]
+formats = ["aiger", "btor2"]
+proves = true
+finds_bugs = true
+[engine.patterns]
+safe = '(?m)^UNSAT$'
+unsafe = '(?m)^SAT$'
 
 [[engine]]
 name = "pono-ind"
