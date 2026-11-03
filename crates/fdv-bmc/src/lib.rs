@@ -7,6 +7,7 @@
 //! supported at bit level yet and report unknown.
 
 pub mod cnf;
+pub mod ic3;
 pub mod unroll;
 
 use anyhow::Context;
@@ -196,6 +197,40 @@ impl Engine for KInduction {
     }
 }
 
+/// IC3 / PDR on the AIG (see [`ic3`]).
+pub struct Ic3Engine;
+
+impl Engine for Ic3Engine {
+    fn name(&self) -> &str {
+        "fdv-ic3"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            formats: FORMATS.to_vec(),
+            proves: true,
+            finds_bugs: true,
+            ..Default::default()
+        }
+    }
+    fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
+        let t0 = Instant::now();
+        let g = match prepare(req) {
+            Ok(g) => g,
+            Err(e) => return Ok(result(self.name(), unknown(e), t0)),
+        };
+        let c = ctx.clone();
+        let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(move || solver(&c))) else {
+            return Ok(result(
+                self.name(),
+                unknown("latch inits that are not constants"),
+                t0,
+            ));
+        };
+        let v = ic3.check(ctx);
+        Ok(result(self.name(), v, t0))
+    }
+}
+
 /// The in-house engines, for adding to a portfolio. Empty when this build
 /// has no CaDiCaL: the fallback solver is too slow to be worth a thread.
 pub fn engines() -> Vec<Arc<dyn Engine>> {
@@ -346,6 +381,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ic3_proves_and_refutes() {
+        let e = Ic3Engine;
+        assert_eq!(check(&e, &counter(7, true)), Verdict::Safe);
+        assert_eq!(check(&e, &counter(6, true)), Verdict::Safe);
+        assert_eq!(
+            check(&e, &counter(5, true)),
+            Verdict::Unsafe { depth: Some(5) }
+        );
+        assert_eq!(
+            check(&e, &counter(4, false)),
+            Verdict::Unsafe { depth: Some(4) }
+        );
+        assert_eq!(
+            check(&e, &counter(0, false)),
+            Verdict::Unsafe { depth: Some(0) }
+        );
     }
 
     #[test]

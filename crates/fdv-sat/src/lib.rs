@@ -25,6 +25,11 @@ pub trait Sat {
     /// Polled during search; returning true stops it with `Unknown`.
     fn set_terminate(&mut self, f: Box<dyn Fn() -> bool + Send>);
     fn name(&self) -> &'static str;
+    /// After `Unsat` under assumptions: true if assumption `lit` was needed
+    /// (it is in the final conflict). Solvers without cores say true.
+    fn failed(&self, _lit: Lit) -> bool {
+        true
+    }
     /// Announce `n` more variables before using them (CaDiCaL >= 2.2
     /// wants this for incremental use).
     fn reserve(&mut self, _n: i32) {}
@@ -61,6 +66,7 @@ mod ffi {
         );
         pub fn ccadical_signature() -> *const c_char;
         pub fn ccadical_declare_more_variables(s: *mut CCaDiCaL, n: c_int) -> c_int;
+        pub fn ccadical_failed(s: *mut CCaDiCaL, lit: c_int) -> c_int;
     }
 }
 
@@ -152,6 +158,9 @@ impl Sat for Cadical {
     }
     fn name(&self) -> &'static str {
         "cadical"
+    }
+    fn failed(&self, lit: Lit) -> bool {
+        unsafe { ffi::ccadical_failed(self.raw, lit) != 0 }
     }
     fn reserve(&mut self, n: i32) {
         if n > 0 {
