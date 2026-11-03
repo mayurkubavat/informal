@@ -6,6 +6,9 @@
 //! used by tests and as a fallback when CaDiCaL is not linked.
 //! Literals are DIMACS-style: variable `v > 0` is `v`, its negation `-v`.
 
+pub mod mini;
+pub use mini::Mini;
+
 pub type Lit = i32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,6 +360,82 @@ mod tests {
                 exercise(&mut c);
             }
             Err(e) => eprintln!("skipping: {e}"),
+        }
+    }
+
+    #[test]
+    fn mini() {
+        exercise(&mut Mini::default());
+    }
+
+    /// Random small CNFs: Mini agrees with DPLL, its models satisfy the
+    /// clauses, and its failed assumptions alone are already UNSAT.
+    #[test]
+    fn mini_matches_dpll_on_random_cnf() {
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut rnd = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for round in 0..3000 {
+            let nv = 4 + rnd(12) as i32;
+            let nc = (nv as u64 * (2 + rnd(4))) as usize;
+            let mut cls = Vec::new();
+            for _ in 0..nc {
+                let len = 1 + rnd(3) as usize;
+                let c: Vec<Lit> = (0..len)
+                    .map(|_| {
+                        let v = 1 + rnd(nv as u64) as Lit;
+                        if rnd(2) == 0 {
+                            v
+                        } else {
+                            -v
+                        }
+                    })
+                    .collect();
+                cls.push(c);
+            }
+            let assume: Vec<Lit> = (0..rnd(4))
+                .map(|_| {
+                    let v = 1 + rnd(nv as u64) as Lit;
+                    if rnd(2) == 0 {
+                        v
+                    } else {
+                        -v
+                    }
+                })
+                .collect();
+            let (mut m, mut d) = (Mini::default(), Dpll::default());
+            for c in &cls {
+                m.add_clause(c);
+                d.add_clause(c);
+            }
+            let (a, b) = (m.solve(&assume), d.solve(&assume));
+            assert_eq!(a, b, "round {round}");
+            if a == Answer::Sat {
+                for c in &cls {
+                    assert!(
+                        c.iter().any(|&l| m.value(l)),
+                        "round {round}: clause {c:?} false"
+                    );
+                }
+                for &x in &assume {
+                    assert!(m.value(x));
+                }
+            } else {
+                let core: Vec<Lit> = assume.iter().copied().filter(|&x| m.failed(x)).collect();
+                let mut d2 = Dpll::default();
+                for c in &cls {
+                    d2.add_clause(c);
+                }
+                assert_eq!(
+                    d2.solve(&core),
+                    Answer::Unsat,
+                    "round {round}: core {core:?} of {assume:?}"
+                );
+            }
         }
     }
 

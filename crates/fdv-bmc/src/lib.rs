@@ -184,12 +184,19 @@ impl Engine for KInduction {
     }
 }
 
-/// IC3 / PDR on the AIG (see [`ic3`]).
-pub struct Ic3Engine;
+/// IC3 / PDR on the AIG (see [`ic3`]). `mini` picks fdv's own small CDCL
+/// solver for the frame and lifting solvers instead of CaDiCaL.
+pub struct Ic3Engine {
+    pub mini: bool,
+}
 
 impl Engine for Ic3Engine {
     fn name(&self) -> &str {
-        "fdv-ic3"
+        if self.mini {
+            "fdv-ic3"
+        } else {
+            "fdv-ic3-cadical"
+        }
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -206,7 +213,19 @@ impl Engine for Ic3Engine {
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
         let c = ctx.clone();
-        let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(move || solver(&c))) else {
+        let mini = self.mini;
+        let make = move || -> Box<dyn Sat> {
+            if !mini {
+                return solver(&c);
+            }
+            let mut s = fdv_sat::Mini::default();
+            let (cancel, deadline) = (c.cancel.clone(), c.deadline);
+            s.set_terminate(Box::new(move || {
+                cancel.is_cancelled() || Instant::now() >= deadline
+            }));
+            Box::new(s)
+        };
+        let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(make)) else {
             return Ok(result(
                 self.name(),
                 unknown("latch inits that are not constants"),
@@ -227,7 +246,8 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
     vec![
         Arc::new(Bmc { max_depth: None }),
         Arc::new(KInduction { max_depth: None }),
-        Arc::new(Ic3Engine),
+        Arc::new(Ic3Engine { mini: true }),
+        Arc::new(Ic3Engine { mini: false }),
     ]
 }
 
@@ -372,21 +392,22 @@ mod tests {
 
     #[test]
     fn ic3_proves_and_refutes() {
-        let e = Ic3Engine;
-        assert_eq!(check(&e, &counter(7, true)), Verdict::Safe);
-        assert_eq!(check(&e, &counter(6, true)), Verdict::Safe);
-        assert_eq!(
-            check(&e, &counter(5, true)),
-            Verdict::Unsafe { depth: Some(5) }
-        );
-        assert_eq!(
-            check(&e, &counter(4, false)),
-            Verdict::Unsafe { depth: Some(4) }
-        );
-        assert_eq!(
-            check(&e, &counter(0, false)),
-            Verdict::Unsafe { depth: Some(0) }
-        );
+        for e in [Ic3Engine { mini: true }, Ic3Engine { mini: false }] {
+            assert_eq!(check(&e, &counter(7, true)), Verdict::Safe);
+            assert_eq!(check(&e, &counter(6, true)), Verdict::Safe);
+            assert_eq!(
+                check(&e, &counter(5, true)),
+                Verdict::Unsafe { depth: Some(5) }
+            );
+            assert_eq!(
+                check(&e, &counter(4, false)),
+                Verdict::Unsafe { depth: Some(4) }
+            );
+            assert_eq!(
+                check(&e, &counter(0, false)),
+                Verdict::Unsafe { depth: Some(0) }
+            );
+        }
     }
 
     #[test]
