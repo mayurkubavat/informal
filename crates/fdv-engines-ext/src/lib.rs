@@ -156,7 +156,6 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-/// Load every `[[engine]]` from a TOML file.
 /// True when `systemd-run --user --scope` works here (checked once).
 fn scopes_available() -> bool {
     static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -224,6 +223,7 @@ fn stage_bytes(bytes: &[u8]) -> Option<Staged> {
     })
 }
 
+/// Load every `[[engine]]` from a TOML file.
 pub fn load(path: &Path) -> anyhow::Result<Vec<Arc<dyn Engine>>> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -324,6 +324,13 @@ impl Engine for ExternalEngine {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
+        // Workers the engine forked may outlive it (rIC3's portfolio does
+        // when its parent dies) and would hold the output pipes open
+        // forever: kill whatever is left of the process group.
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(child.id() as i32, libc::SIGKILL);
+        }
         let stdout = out_t.join().unwrap_or_default();
         let stderr = err_t.join().unwrap_or_default();
 
