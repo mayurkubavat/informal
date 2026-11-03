@@ -33,6 +33,13 @@ pub trait Sat {
     fn failed(&self, _lit: Lit) -> bool {
         true
     }
+    /// Solve deciding only on the variables in `domain` (GipSAT-style COI
+    /// restriction). The caller guarantees that any assignment of the
+    /// domain without conflict extends to a model of every clause. Solvers
+    /// that cannot restrict decisions just solve.
+    fn solve_domain(&mut self, assumptions: &[Lit], _domain: &[Lit]) -> Answer {
+        self.solve(assumptions)
+    }
     /// Announce `n` more variables before using them (CaDiCaL >= 2.2
     /// wants this for incremental use).
     fn reserve(&mut self, _n: i32) {}

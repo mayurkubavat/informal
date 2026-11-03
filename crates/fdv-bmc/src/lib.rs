@@ -233,6 +233,17 @@ impl Engine for Ic3Engine {
             ));
         };
         let v = ic3.check(ctx);
+        if std::env::var_os("FDV_IC3_STATS").is_some() {
+            eprintln!(
+                "{}: frames {} lemmas {} queries {} ({:.2} s) lift {:.2} s",
+                self.name(),
+                ic3.depth(),
+                ic3.stats_lemmas,
+                ic3.stats_queries,
+                ic3.stats_query_time.as_secs_f64(),
+                ic3.stats_lift_time.as_secs_f64()
+            );
+        }
         Ok(result(self.name(), v, t0))
     }
 }

@@ -7,13 +7,18 @@
 //!
 //! It runs on the SAT interface (CaDiCaL today); the IC3-only solver of
 //! the round-2 plan replaces it underneath without changing this file's
-//! logic. Not yet: CTG / CTP generalization, EXCTG, DynAMic, lemma sharing.
+//! logic. Generalization uses CTGs. Not yet: CTP, EXCTG, DynAMic, lemma
+//! sharing.
 
 use crate::cnf::{self, TLit, Template};
 use fdv_aig::{is_neg, neg, var, Aig, Init, Lit};
 use fdv_engine::{RunContext, Verdict};
 use fdv_sat::{Answer, Sat};
 use std::collections::BinaryHeap;
+
+/// CTGs blocked per literal drop, and how deep CTG blocking may recurse.
+const MAX_CTGS: usize = 3;
+const MAX_CTG_DEPTH: usize = 1;
 
 /// A cube over latch literals (AIG literals), sorted.
 type Cube = Vec<Lit>;
@@ -83,7 +88,13 @@ pub struct Ic3<'g> {
     /// latch variable -> template literal of its next-state function
     next_of: std::collections::HashMap<u32, TLit>,
     make_sat: Box<dyn Fn() -> Box<dyn Sat>>,
+    /// DFS marks for domain computation (epoch-stamped).
+    mark: Vec<u32>,
+    epoch: u32,
     pub stats_lemmas: usize,
+    pub stats_queries: usize,
+    pub stats_query_time: std::time::Duration,
+    pub stats_lift_time: std::time::Duration,
 }
 
 fn t(l: Lit) -> TLit {
@@ -116,7 +127,12 @@ impl<'g> Ic3<'g> {
             bad,
             next_of: g.latches.iter().map(|l| (var(l.lit), t(l.next))).collect(),
             make_sat,
+            mark: vec![0; nvars + 2],
+            epoch: 0,
             stats_lemmas: 0,
+            stats_queries: 0,
+            stats_query_time: Default::default(),
+            stats_lift_time: Default::default(),
         };
         // The lifting solver has no constraint units: lifting must keep
         // states that satisfy the constraints (see `lifted_state`).
@@ -212,15 +228,27 @@ impl<'g> Ic3<'g> {
         // where some of them fail, with the same inputs and latches: UNSAT,
         // and its core names the latches that force them all. Every state of
         // the lifted cube then satisfies the constraints and reaches target.
+        // Only latches and inputs in the cone of the target (and the
+        // constraints) can matter; the rest are left out of the query.
+        let roots: Vec<TLit> = target.to_vec();
+        let dom = self.domain(&roots, 0);
+        let ep = self.epoch;
+        let in_cone = |m: &Vec<u32>, x: TLit| m[x.unsigned_abs() as usize] == ep;
+        let latches: Cube = latches
+            .into_iter()
+            .filter(|&l| in_cone(&self.mark, t(l)))
+            .collect();
         let act = self.lift.fresh();
         let mut clause = vec![-act];
         clause.extend(target.iter().map(|&x| -x));
         clause.extend(g.constraints.iter().map(|&c| -t(c)));
         self.lift.sat.add_clause(&clause);
         let mut assume = vec![act];
-        assume.extend(inputs);
+        assume.extend(inputs.iter().copied().filter(|&x| in_cone(&self.mark, x)));
         assume.extend(latches.iter().map(|&l| t(l)));
-        let r = self.lift.sat.solve(&assume);
+        let t0 = std::time::Instant::now();
+        let r = self.lift.sat.solve_domain(&assume, &dom);
+        self.stats_lift_time += t0.elapsed();
         let cube = if r == Answer::Unsat {
             latches
                 .iter()
@@ -247,6 +275,64 @@ impl<'g> Ic3<'g> {
             .collect()
     }
 
+    /// Variables a query needs decisions on (GipSAT): the cone of `roots`
+    /// and of the constraints through the AND gates, closed under the
+    /// lemmas of frames `>= level` that touch it. Everything outside can be
+    /// completed afterwards: gates by evaluation, and the remaining latches
+    /// by an initial state, which every lemma of a frame >= 1 admits.
+    fn domain(&mut self, roots: &[TLit], level: usize) -> Vec<TLit> {
+        self.epoch += 1;
+        let ep = self.epoch;
+        let mut out = Vec::new();
+        let mut stack: Vec<u32> = roots
+            .iter()
+            .map(|r| r.unsigned_abs())
+            .chain(self.g.constraints.iter().map(|&c| var(c) + 1))
+            .collect();
+        if self.g.bads.len() > 1 && roots.contains(&self.bad) {
+            stack.extend(self.g.bads.iter().map(|&b| var(b) + 1));
+        }
+        let mut grow = |stack: &mut Vec<u32>, mark: &mut Vec<u32>, out: &mut Vec<TLit>| {
+            while let Some(tv) = stack.pop() {
+                let tv = tv as usize;
+                if tv >= mark.len() || mark[tv] == ep {
+                    continue;
+                }
+                mark[tv] = ep;
+                out.push(tv as TLit);
+                if tv >= 1 && tv - 1 < self.g.nodes.len() {
+                    if let fdv_aig::Node::And(a, b) = self.g.nodes[tv - 1] {
+                        stack.push(var(a) + 1);
+                        stack.push(var(b) + 1);
+                    }
+                }
+            }
+        };
+        grow(&mut stack, &mut self.mark, &mut out);
+        if level >= 1 {
+            loop {
+                let mut added = false;
+                for lemma in self.frames[level..].iter().flatten() {
+                    let touches = lemma.iter().any(|&l| self.mark[var(l) as usize + 1] == ep);
+                    if touches {
+                        for &l in lemma {
+                            let tv = var(l) + 1;
+                            if self.mark[tv as usize] != ep {
+                                stack.push(tv);
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                if !added {
+                    break;
+                }
+                grow(&mut stack, &mut self.mark, &mut out);
+            }
+        }
+        out
+    }
+
     /// Is `cube` blocked at level `i` relative to F_{i-1}: is
     /// F_{i-1} & !cube & T & cube' unsatisfiable? `Ok(core)`: yes, with the
     /// core-reduced cube (still disjoint from init). `Err(pred)`: no, with a
@@ -258,6 +344,12 @@ impl<'g> Ic3<'g> {
         want_pred: bool,
     ) -> Result<Cube, Option<Cube>> {
         let primed = self.primed(cube);
+        let roots: Vec<TLit> = primed
+            .iter()
+            .copied()
+            .chain(cube.iter().map(|&l| t(l)))
+            .collect();
+        let dom = self.domain(&roots, i - 1);
         let s = &mut self.solvers[i - 1];
         let act = s.fresh();
         let mut clause = vec![-act];
@@ -265,7 +357,10 @@ impl<'g> Ic3<'g> {
         s.sat.add_clause(&clause);
         let mut assume = vec![act];
         assume.extend(&primed);
-        let r = s.sat.solve(&assume);
+        let t0 = std::time::Instant::now();
+        let r = s.sat.solve_domain(&assume, &dom);
+        self.stats_queries += 1;
+        self.stats_query_time += t0.elapsed();
         let out = match r {
             Answer::Unsat => Ok(cube
                 .iter()
@@ -296,22 +391,79 @@ impl<'g> Ic3<'g> {
         core
     }
 
-    /// Drop literals one at a time while the cube stays blocked (MIC).
-    fn generalize(&mut self, mut cube: Cube, i: usize, ctx: &RunContext) -> Cube {
+    /// Drop literals one at a time while the cube stays blocked (MIC),
+    /// using counterexamples to generalization (CTG, Hassan, Bradley and
+    /// Somenzi 2013) to make room: a predecessor that blocks a drop is
+    /// itself blocked one level down when it can be, then the drop is
+    /// retried; otherwise the candidate shrinks to what it shares with it.
+    fn generalize(&mut self, mut cube: Cube, i: usize, depth: usize, ctx: &RunContext) -> Cube {
         let mut idx = 0;
         while idx < cube.len() && !ctx.should_stop() {
             let mut cand = cube.clone();
             cand.remove(idx);
-            if cand.is_empty() || self.intersects_init(&cand) {
-                idx += 1;
-                continue;
-            }
-            match self.relative_inductive(&cand, i, false) {
-                Ok(core) if !self.intersects_init(&core) => cube = core,
-                _ => idx += 1,
+            match self.ctg_down(cand, i, depth, ctx) {
+                Some(core) => {
+                    // Keep scanning at the same position of the smaller cube.
+                    idx = core
+                        .iter()
+                        .position(|&l| l > cube[idx])
+                        .unwrap_or(core.len());
+                    cube = core;
+                }
+                None => idx += 1,
             }
         }
         cube
+    }
+
+    fn ctg_down(
+        &mut self,
+        mut cube: Cube,
+        i: usize,
+        depth: usize,
+        ctx: &RunContext,
+    ) -> Option<Cube> {
+        let mut ctgs = 0;
+        loop {
+            if cube.is_empty() || self.intersects_init(&cube) || ctx.should_stop() {
+                return None;
+            }
+            match self.relative_inductive(&cube, i, true) {
+                Ok(core) => return (!self.intersects_init(&core)).then_some(core),
+                Err(None) => return None,
+                Err(Some(ctg)) => {
+                    if depth < MAX_CTG_DEPTH
+                        && ctgs < MAX_CTGS
+                        && i > 1
+                        && !self.intersects_init(&ctg)
+                    {
+                        if let Ok(core) = self.relative_inductive(&ctg, i - 1, false) {
+                            ctgs += 1;
+                            let g = self.generalize(core, i - 1, depth + 1, ctx);
+                            let mut lvl = i - 1;
+                            while lvl < self.top()
+                                && self.relative_inductive(&g, lvl + 1, false).is_ok()
+                            {
+                                lvl += 1;
+                            }
+                            self.add_lemma(g, lvl);
+                            continue;
+                        }
+                    }
+                    // Join: keep only the literals the CTG state shares.
+                    ctgs = 0;
+                    let joined: Cube = cube
+                        .iter()
+                        .copied()
+                        .filter(|l| ctg.binary_search(l).is_ok())
+                        .collect();
+                    if joined.len() == cube.len() {
+                        return None;
+                    }
+                    cube = joined;
+                }
+            }
+        }
     }
 
     /// Block a bad cube found at the top frame; `Err(depth)` on a real
@@ -343,7 +495,7 @@ impl<'g> Ic3<'g> {
             }
             match self.relative_inductive(&ob.cube, ob.level, true) {
                 Ok(core) => {
-                    let g = self.generalize(core, ob.level, ctx);
+                    let g = self.generalize(core, ob.level, 0, ctx);
                     // Push the lemma as high as it stays inductive.
                     let mut lvl = ob.level;
                     while lvl < self.top() && self.relative_inductive(&g, lvl + 1, false).is_ok() {
@@ -428,7 +580,9 @@ impl<'g> Ic3<'g> {
                     };
                 }
                 let k = self.top();
-                match self.solvers[k].sat.solve(&[self.bad]) {
+                let bad = self.bad;
+                let dom = self.domain(&[bad], k);
+                match self.solvers[k].sat.solve_domain(&[bad], &dom) {
                     Answer::Unknown => {
                         return Verdict::Unknown {
                             reason: "timeout".into(),

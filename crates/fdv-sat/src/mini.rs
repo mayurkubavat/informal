@@ -66,6 +66,10 @@ pub struct Mini {
     conflict: Vec<Lit>, // failed assumptions (negated), after Unsat
     terminate: Option<Box<dyn Fn() -> bool + Send>>,
     units_since_simplify: usize,
+    /// Decision domain for the current solve (empty: every variable).
+    in_domain: Vec<bool>,
+    restricted: bool,
+    skipped: Vec<Var>,
     learnts: usize,
     max_learnts: f64,
     pub conflicts: u64,
@@ -93,6 +97,9 @@ impl Default for Mini {
             conflict: Vec::new(),
             terminate: None,
             units_since_simplify: 0,
+            in_domain: Vec::new(),
+            restricted: false,
+            skipped: Vec::new(),
             learnts: 0,
             max_learnts: 2000.0,
             conflicts: 0,
@@ -406,6 +413,11 @@ impl Mini {
 
     fn pick(&mut self) -> Option<Lit> {
         while let Some(v) = self.heap.pop(&self.activity) {
+            if self.restricted && !self.in_domain.get(v).copied().unwrap_or(false) {
+                // Out of the domain: set aside, back in the heap after the solve.
+                self.skipped.push(v);
+                continue;
+            }
             if self.assign[v] == Val::Undef {
                 let v = v as Lit;
                 return Some(if self.phase[v as usize] { v } else { -v });
@@ -630,6 +642,35 @@ impl Sat for Mini {
 
     fn value(&self, lit: Lit) -> bool {
         self.model.get(var(lit)).is_some_and(|&v| v == (lit > 0))
+    }
+
+    fn solve_domain(&mut self, assumptions: &[Lit], domain: &[Lit]) -> Answer {
+        for &d in domain {
+            self.ensure(var(d));
+        }
+        if self.in_domain.len() < self.assign.len() {
+            self.in_domain.resize(self.assign.len(), false);
+        }
+        for &d in domain {
+            self.in_domain[var(d)] = true;
+        }
+        for &a in assumptions {
+            self.ensure(var(a));
+            if self.in_domain.len() < self.assign.len() {
+                self.in_domain.resize(self.assign.len(), false);
+            }
+            self.in_domain[var(a)] = true;
+        }
+        self.restricted = true;
+        let r = self.solve(assumptions);
+        self.restricted = false;
+        for &d in domain.iter().chain(assumptions) {
+            self.in_domain[var(d)] = false;
+        }
+        for v in std::mem::take(&mut self.skipped) {
+            self.heap.insert(v, &self.activity);
+        }
+        r
     }
 
     fn failed(&self, lit: Lit) -> bool {
