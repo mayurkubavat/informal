@@ -789,6 +789,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fdv-engine",
+ "fdv-slang",
  "fdv-tcl",
  "regex",
  "serde",
@@ -806,6 +807,15 @@ dependencies = [
 [[package]]
 name = "fdv-sat"
 version = "0.1.0"
+
+[[package]]
+name = "fdv-slang"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "fdv-tcl"

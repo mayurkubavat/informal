@@ -18,6 +18,7 @@ Background research lives in `research/`.
 | `fdv-bench` | Benchmark harness. Appends one JSON line per engine run to the run database and scores engines by solved count and PAR-2, including a virtual-best row. |
 | `fdv-sat` | SAT interface: CaDiCaL through its C API, plus a small DPLL solver for tests. |
 | `fdv-bmc` | In-house engines: Btor2 bit-blasting, BMC and k-induction. |
+| `fdv-slang` | SystemVerilog front end on slang (C++ shim through FFI): diagnostics, top module, hierarchy, name checks for properties. |
 | `fdv-tcl` | Embedded Tcl 8.6 (the C library through FFI) for fdv scripts. |
 | `fdv-fpv` | FPV sessions: design setup, SVA subset compiler, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
 | `fdv-cli` | The `fdv` command. |

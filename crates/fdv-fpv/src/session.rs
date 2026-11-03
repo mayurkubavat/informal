@@ -2,7 +2,10 @@
 //! JasperGold and VC Formal scripts build up command by command, and the
 //! prove step that turns them into engine runs.
 //!
-//! Elaboration goes through Yosys for now (`read_verilog -sv -formal`,
+//! When fdv is built with slang, elaboration first runs slang over the
+//! design: SystemVerilog errors come back with file and line, the top
+//! module is taken from slang, and property expressions are checked
+//! against the names the top module declares. Model building goes through Yosys for now (`read_verilog -sv -formal`,
 //! then Btor2): it is the interim front end until slang lands. Properties
 //! are lowered by [`crate::sva`] and injected as immediate assertions at
 //! the end of the top module, so they see every signal in its scope. Each
@@ -122,6 +125,11 @@ pub struct Session {
     pub workdir: PathBuf,
     #[serde(skip)]
     pub engines: Vec<Arc<dyn Engine>>,
+    /// slang's view of the design, after elaboration (when linked).
+    #[serde(skip)]
+    pub slang: Option<fdv_slang::Design>,
+    /// Instance tree from slang, for the UI.
+    pub hierarchy: Vec<fdv_slang::Instance>,
     pub yosys: PathBuf,
 }
 
@@ -139,6 +147,8 @@ impl Session {
             engine_filter: Vec::new(),
             workdir,
             engines,
+            slang: None,
+            hierarchy: Vec::new(),
             yosys: find_yosys(),
         }
     }
@@ -157,6 +167,7 @@ impl Session {
         expr: &str,
     ) -> Result<String, String> {
         sva::parse(expr)?; // reject what the lowering can't handle up front
+        self.check_names(expr)?;
         let name = name.unwrap_or_else(|| {
             let n = self.props.iter().filter(|p| p.kind == kind).count();
             format!("{}_{}", kind.label(), n)
@@ -172,6 +183,22 @@ impl Session {
             status: Status::Unprocessed,
         });
         Ok(name)
+    }
+
+    /// With slang's view of the design, reject names the top module does
+    /// not declare (typos would otherwise surface as Yosys errors, or as
+    /// implicit nets that make a property vacuous).
+    fn check_names(&self, expr: &str) -> Result<(), String> {
+        if let (Some(d), Some(top)) = (&self.slang, &self.design.top) {
+            let unknown = d.unknown_names(top, expr);
+            if !unknown.is_empty() {
+                return Err(format!(
+                    "unknown name(s) in module {top}: {}",
+                    unknown.join(", ")
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Names matching a Tcl-style glob (`*`, `?`).
@@ -191,7 +218,27 @@ impl Session {
         if self.design.files.is_empty() {
             bail!("no design files: run analyze / read_file first");
         }
-        if self.design.top.is_none() {
+        let req = fdv_slang::Request {
+            files: self.design.files.clone(),
+            defines: self.design.defines.clone(),
+            incdirs: self.design.incdirs.clone(),
+            top: self.design.top.clone(),
+            params: self.design.params.clone(),
+        };
+        if let Some(d) = fdv_slang::compile(&req) {
+            let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
+            if !errors.is_empty() {
+                bail!("SystemVerilog errors:\n{}", errors.join("\n"));
+            }
+            if self.design.top.is_none() {
+                match d.tops.as_slice() {
+                    [t] => self.design.top = Some(t.clone()),
+                    tops => bail!("cannot tell the top module (candidates: {tops:?}); use -top"),
+                }
+            }
+            self.hierarchy = d.instances.clone();
+            self.slang = Some(d);
+        } else if self.design.top.is_none() {
             self.design.top = Some(guess_top(&self.design.files)?);
         }
         // A plain elaboration, to report syntax errors now rather than at prove.
@@ -403,6 +450,11 @@ impl Session {
         let files = self.injected_files()?;
         let engines = self.engines();
         for &i in &targets {
+            // Properties added before elaboration are checked now.
+            if let Err(e) = self.check_names(&self.props[i].expr) {
+                self.props[i].status = Status::Error { message: e };
+                continue;
+            }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
             let status = match self.run_yosys(&files, &[format!("FDV_P{i}")], &out) {
                 Err(e) => Status::Error {

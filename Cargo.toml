@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/fdv-ir", "crates/fdv-engine", "crates/fdv-engines-ext", "crates/fdv-bench", "crates/fdv-tcl", "crates/fdv-fpv", "crates/fdv-sat", "crates/fdv-bmc", "crates/fdv-cli"]
+members = ["crates/fdv-ir", "crates/fdv-engine", "crates/fdv-engines-ext", "crates/fdv-bench", "crates/fdv-tcl", "crates/fdv-fpv", "crates/fdv-sat", "crates/fdv-bmc", "crates/fdv-slang", "crates/fdv-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,7 @@ fdv-tcl = { path = "crates/fdv-tcl" }
 fdv-fpv = { path = "crates/fdv-fpv" }
 fdv-sat = { path = "crates/fdv-sat" }
 fdv-bmc = { path = "crates/fdv-bmc" }
+fdv-slang = { path = "crates/fdv-slang" }
 
 [profile.release]
 lto = "thin"

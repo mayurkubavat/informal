@@ -21,7 +21,12 @@ directory (`fdv_work/` by default).
 
 1. `analyze` / `read_file` collect files, `+define+`, `+incdir+` and `-f`
    filelists (paths resolve the way VCS does; `$VAR` expands).
-2. `elaborate` runs Yosys once to report syntax errors early.
+2. `elaborate` runs slang over the design (when fdv is built with it):
+   SystemVerilog errors come back with file, line and column, the top
+   module comes from slang, and from then on every property is checked
+   against the names the top module declares, so a typo is an error rather
+   than an implicit net that makes the check vacuous. It then runs Yosys
+   once, which builds the model.
 3. Each property is lowered by the SVA subset compiler (`fdv-fpv/src/sva.rs`)
    into an immediate assertion over `$past`, and the checker block is
    inserted before the top module's `endmodule`, so properties see every
@@ -77,6 +82,14 @@ passes on a different setup without saying so.
 Extra fdv commands in every flavor: `fdv::session` (the session as JSON)
 and `fdv::set_engines name ...` (pick engines by name). Each flavor's
 commands also stay reachable by namespace (`jg::prove`, `vcf::check_fv`).
+
+## Building with slang
+
+slang is found in `FDV_SLANG_DIR` or `~/Silicon/DV/tools/slang` (a
+checkout built with `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+-DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build`). The C++
+shim in `crates/fdv-slang/cpp` is compiled against it. Without slang, fdv
+still builds and falls back to a regex guess of the top module.
 
 ## Known gaps
 
