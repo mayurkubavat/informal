@@ -292,7 +292,7 @@ impl<'g> Ic3<'g> {
         if self.g.bads.len() > 1 && roots.contains(&self.bad) {
             stack.extend(self.g.bads.iter().map(|&b| var(b) + 1));
         }
-        let mut grow = |stack: &mut Vec<u32>, mark: &mut Vec<u32>, out: &mut Vec<TLit>| {
+        let grow = |stack: &mut Vec<u32>, mark: &mut Vec<u32>, out: &mut Vec<TLit>| {
             while let Some(tv) = stack.pop() {
                 let tv = tv as usize;
                 if tv >= mark.len() || mark[tv] == ep {
