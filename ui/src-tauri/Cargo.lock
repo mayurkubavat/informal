@@ -741,6 +741,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fdv-aig"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fdv-ir",
+]
+
+[[package]]
 name = "fdv-app"
 version = "0.1.0"
 dependencies = [
@@ -758,6 +766,7 @@ name = "fdv-bmc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fdv-aig",
  "fdv-engine",
  "fdv-ir",
  "fdv-sat",
@@ -776,6 +785,7 @@ name = "fdv-engines-ext"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fdv-aig",
  "fdv-engine",
  "libc",
  "regex",

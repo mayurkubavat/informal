@@ -194,6 +194,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fdv-bitwuzla"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "fdv-engine",
+ "fdv-ir",
+ "fdv-sat",
+]
+
+[[package]]
 name = "fdv-bmc"
 version = "0.1.0"
 dependencies = [
@@ -212,6 +223,7 @@ dependencies = [
  "clap",
  "fdv-aig",
  "fdv-bench",
+ "fdv-bitwuzla",
  "fdv-bmc",
  "fdv-engine",
  "fdv-engines-ext",

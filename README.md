@@ -20,6 +20,7 @@ Background research lives in `research/`.
 | `fdv-aig` | Bit-level model: AIG with structural hashing, AIGER reader and writer, Btor2 bit-blaster, preprocessing. |
 | `fdv-bmc` | In-house engines on the AIG: BMC and k-induction. |
 | `fdv-slang` | SystemVerilog front end on slang (C++ shim through FFI): diagnostics, top module, hierarchy, name checks for properties. |
+| `fdv-bitwuzla` | Word-level engines on Bitwuzla (C++ shim through FFI): BMC over Btor2 with arrays. |
 | `fdv-tcl` | Embedded Tcl 8.6 (the C library through FFI) for fdv scripts. |
 | `fdv-fpv` | FPV sessions: design setup, SVA subset compiler, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
 | `fdv-cli` | The `fdv` command. |

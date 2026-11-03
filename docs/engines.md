@@ -62,9 +62,13 @@ of use. `fdv simp <model>` shows a model's size before and after.
 | --- | --- | --- | --- |
 | `fdv-bmc` | no | yes | Shortest counterexample first |
 | `fdv-kind` | yes | yes | k-induction with lazy simple-path constraints, BMC base case |
+| `fdv-wbmc` | no | yes | Word-level BMC on Bitwuzla: Btor2 unrolled into terms, arrays included |
 | `fdv-ic3` | yes | yes | IC3 / PDR: lifting, core + MIC generalization, propagation (first cut) |
 
-Not supported yet (they report unknown): arrays and liveness. Next:
+Not supported yet at bit level (they report unknown): arrays and
+liveness; `fdv-wbmc` covers arrays for bug finding. Bitwuzla is built
+under `~/Silicon/DV/tools/bitwuzla` with its own patched CaDiCaL, and
+fdv links that one library for both (crate `fdv-sat` decides). Next:
 DAG-CNF variable elimination when encoding, and IC3 invariants fed into
 k-induction once our IC3 exists.
 Build CaDiCaL once (`./configure -fPIC && make` in

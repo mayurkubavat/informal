@@ -1,0 +1,16 @@
+[package]
+name = "fdv-bitwuzla"
+description = "Word-level engines on Bitwuzla (C++ through a small shim): BMC over Btor2 with arrays"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fdv-ir.workspace = true
+fdv-engine.workspace = true
+fdv-sat.workspace = true
+
+[build-dependencies]
+cc = "1"

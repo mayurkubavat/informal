@@ -1,14 +1,54 @@
 //! Links CaDiCaL's static library when it is built: `FDV_CADICAL_DIR` (a
 //! checkout), else the patched copy Bitwuzla builds under
 //! ~/Silicon/DV/tools/bitwuzla, else ~/Silicon/DV/tools/cadical.
-//! Without it the crate still builds, and `Cadical::new` returns an error.
+//! When Bitwuzla is built (~/Silicon/DV/tools/bitwuzla/install or
+//! `FDV_BITWUZLA_DIR`), its static library is linked instead: it carries
+//! the same patched CaDiCaL, so the binary has one copy.
+//! Without any of them the crate still builds, and `Cadical::new` returns an error.
 
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=FDV_CADICAL_DIR");
     println!("cargo:rustc-check-cfg=cfg(fdv_cadical)");
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    // Bitwuzla's static library already contains its patched CaDiCaL,
+    // C API included: link it instead of a second CaDiCaL, and tell crates
+    // that wrap Bitwuzla (DEP_CADICAL_BITWUZLA_ROOT) where it is.
+    println!("cargo:rerun-if-env-changed=FDV_BITWUZLA_DIR");
+    let bw = std::env::var_os("FDV_BITWUZLA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("Silicon/DV/tools/bitwuzla/install"));
+    let bwlib = ["lib/x86_64-linux-gnu", "lib", "lib64"]
+        .iter()
+        .map(|d| bw.join(d))
+        .find(|d| d.join("libbitwuzla.a").is_file());
+    if std::env::var_os("FDV_CADICAL_DIR").is_none() {
+        if let Some(dir) = bwlib {
+            println!(
+                "cargo:rerun-if-changed={}",
+                dir.join("libbitwuzla.a").display()
+            );
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            for l in ["bitwuzla", "bitwuzlals", "bitwuzlabv", "bitwuzlabb"] {
+                println!("cargo:rustc-link-lib=static={l}");
+            }
+            for l in ["gmp", "mpfr"] {
+                println!("cargo:rustc-link-lib=dylib={l}");
+            }
+            let cxx = if cfg!(target_os = "macos") {
+                "c++"
+            } else {
+                "stdc++"
+            };
+            println!("cargo:rustc-link-lib=dylib={cxx}");
+            println!("cargo:rustc-cfg=fdv_cadical");
+            println!("cargo:bitwuzla_root={}", bw.display());
+            return;
+        }
+    }
     // Library directories, in order of preference: an explicit checkout,
     // then the patched CaDiCaL inside the Bitwuzla build (so a binary with
     // both carries one copy), then the plain checkout.
@@ -21,7 +61,10 @@ fn main() {
         let mut found: Vec<PathBuf> = rd
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("cadical")))
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("cadical"))
+            })
             .map(|p| p.join("src"))
             .collect();
         found.sort();
@@ -34,7 +77,11 @@ fn main() {
         if lib.is_file() {
             println!("cargo:rustc-link-search=native={}", dir.display());
             println!("cargo:rustc-link-lib=static=cadical");
-            let cxx = if cfg!(target_os = "macos") { "c++" } else { "stdc++" };
+            let cxx = if cfg!(target_os = "macos") {
+                "c++"
+            } else {
+                "stdc++"
+            };
             println!("cargo:rustc-link-lib=dylib={cxx}");
             println!("cargo:rustc-cfg=fdv_cadical");
             println!("cargo:warning=CaDiCaL: {}", lib.display());

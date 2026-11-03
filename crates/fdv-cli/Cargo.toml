@@ -23,3 +23,4 @@ fdv-fpv.workspace = true
 fdv-bmc.workspace = true
 fdv-slang.workspace = true
 fdv-aig.workspace = true
+fdv-bitwuzla.workspace = true

@@ -103,6 +103,7 @@ fn load_engines(
 ) -> anyhow::Result<Vec<std::sync::Arc<dyn fdv_engine::Engine>>> {
     let mut engines = fdv_engines_ext::load(path)?;
     engines.extend(fdv_bmc::engines());
+    engines.extend(fdv_bitwuzla::engines());
     if !only.is_empty() {
         engines.retain(|e| only.iter().any(|n| n == e.name()));
         if engines.is_empty() {
@@ -240,6 +241,7 @@ fn main() -> anyhow::Result<()> {
             };
             let mut engines = fdv_engines_ext::load(&engines)?;
             engines.extend(fdv_bmc::engines());
+            engines.extend(fdv_bitwuzla::engines());
             let session = fdv_fpv::Session::new(engines, workdir);
             let shell = fdv_fpv::Shell::new(session, flavor);
             for c in &commands {
