@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "Formal DV", "width": 1280, "height": 820, "minWidth": 900, "minHeight": 600 }],
+    "windows": [{ "title": "Formal DV", "width": 1440, "height": 900, "minWidth": 900, "minHeight": 600 }],
     "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'" }
   },
   "bundle": {

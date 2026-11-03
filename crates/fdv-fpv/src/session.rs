@@ -127,6 +127,8 @@ pub struct Session {
 
 impl Session {
     pub fn new(engines: Vec<Arc<dyn Engine>>, workdir: PathBuf) -> Self {
+        // Absolute, since Yosys runs inside it and writes paths under it.
+        let workdir = std::path::absolute(&workdir).unwrap_or(workdir);
         Session {
             design: Design::default(),
             elaborated: false,

@@ -18,7 +18,8 @@ ui/
 cd ui
 npm install
 npm run dev          # views only, in a browser, against a mock backend
-npm run tauri dev    # the desktop app (run from ui/, finds ../config/engines.toml)
+npm run tauri dev    # the desktop app (finds ../config/engines.toml and runs from the repo root)
+npm run tauri dev -- -- $PWD/../tests/fpv/counter/counter.jg.tcl   # open with a script sourced
 npm run tauri build  # .deb / AppImage on Linux, .app / .dmg on macOS
 ```
 

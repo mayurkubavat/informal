@@ -65,12 +65,36 @@ fn read_text(path: String) -> Result<String, String> {
 }
 
 fn main() {
-    let worker = Worker::spawn(Flavor::Jg, || {
-        let engines = engines_config()
+    // Run from the repo root (the directory holding config/engines.toml), so
+    // script paths read as they do for `fdv shell` and generated models land
+    // in its fdv_work/ rather than under src-tauri, which the dev watcher
+    // would take as a source change.
+    let config = engines_config();
+    if let Some(root) = config.as_ref().and_then(|c| c.parent()?.parent()) {
+        let _ = std::env::set_current_dir(root);
+    }
+    let config = config.and_then(|c| std::fs::canonicalize(c).ok());
+    // `fdv-app script.tcl` sources a script at start, flavor detected from it.
+    let script = std::env::args().nth(1).map(PathBuf::from);
+    let flavor = script
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map_or(Flavor::Jg, |t| fdv_fpv::detect_flavor(&t));
+    let worker = Worker::spawn(flavor, move || {
+        let engines = config
             .and_then(|c| fdv_engines_ext::load(&c).map_err(|e| eprintln!("fdv: {e:#}")).ok())
             .unwrap_or_default();
         Session::new(engines, PathBuf::from("fdv_work"))
     });
+    if let Some(p) = script {
+        let w = worker.clone();
+        std::thread::spawn(move || {
+            let r = w.call(Request::Source(p));
+            if !r.ok {
+                eprintln!("fdv: {}", r.result);
+            }
+        });
+    }
     tauri::Builder::default()
         .manage(worker)
         .invoke_handler(tauri::generate_handler![snapshot, shell_eval, shell_source, shell_flavor, read_text])
