@@ -1,149 +1,23 @@
-//! Tseitin encoding of gates and bit-vector operators straight into a
-//! SAT solver, with constant folding and structural hashing of AND / XOR.
-//! Words are `Vec<Lit>`, least significant bit first.
+//! Bit-vector operators as AIG circuits. Words are `Vec<Lit>`, least
+//! significant bit first. Division follows Btor2 (SMT-LIB): x / 0 is all
+//! ones and x % 0 is x.
 
-use fdv_sat::{Lit, Sat};
-use std::collections::HashMap;
+use crate::{neg, Aig, Lit, FALSE, TRUE};
 
 pub type Word = Vec<Lit>;
 
-pub struct Gates {
-    pub sat: Box<dyn Sat>,
-    next: Lit,
-    /// The constant-true literal (variable 1).
-    pub t: Lit,
-    and_cache: HashMap<(Lit, Lit), Lit>,
-    xor_cache: HashMap<(Lit, Lit), Lit>,
-}
-
-impl Gates {
-    pub fn new(mut sat: Box<dyn Sat>) -> Self {
-        sat.add_clause(&[1]);
-        Gates {
-            sat,
-            next: 2,
-            t: 1,
-            and_cache: HashMap::new(),
-            xor_cache: HashMap::new(),
-        }
-    }
-
-    pub fn f(&self) -> Lit {
-        -self.t
-    }
-
-    pub fn fresh(&mut self) -> Lit {
-        let v = self.next;
-        self.next += 1;
-        v
-    }
-
-    pub fn fresh_word(&mut self, w: u32) -> Word {
-        (0..w).map(|_| self.fresh()).collect()
-    }
-
+impl Aig {
     pub fn konst(&self, bits: impl IntoIterator<Item = bool>) -> Word {
         bits.into_iter()
-            .map(|b| if b { self.t } else { self.f() })
+            .map(|b| if b { TRUE } else { FALSE })
             .collect()
     }
 
-    pub fn and(&mut self, a: Lit, b: Lit) -> Lit {
-        let (t, f) = (self.t, self.f());
-        if a == f || b == f || a == -b {
-            return f;
-        }
-        if a == t || a == b {
-            return b;
-        }
-        if b == t {
-            return a;
-        }
-        let key = (a.min(b), a.max(b));
-        if let Some(&v) = self.and_cache.get(&key) {
-            return v;
-        }
-        let v = self.fresh();
-        self.sat.add_clause(&[-v, a]);
-        self.sat.add_clause(&[-v, b]);
-        self.sat.add_clause(&[v, -a, -b]);
-        self.and_cache.insert(key, v);
-        v
-    }
-
-    pub fn or(&mut self, a: Lit, b: Lit) -> Lit {
-        -self.and(-a, -b)
-    }
-
-    pub fn xor(&mut self, a: Lit, b: Lit) -> Lit {
-        let (t, f) = (self.t, self.f());
-        if a == f {
-            return b;
-        }
-        if b == f {
-            return a;
-        }
-        if a == t {
-            return -b;
-        }
-        if b == t {
-            return -a;
-        }
-        if a == b {
-            return f;
-        }
-        if a == -b {
-            return t;
-        }
-        // Normalise signs so x^y, !x^!y share one variable.
-        let neg = (a < 0) != (b < 0);
-        let (x, y) = (a.abs().min(b.abs()), a.abs().max(b.abs()));
-        let v = match self.xor_cache.get(&(x, y)) {
-            Some(&v) => v,
-            None => {
-                let v = self.fresh();
-                self.sat.add_clause(&[-v, x, y]);
-                self.sat.add_clause(&[-v, -x, -y]);
-                self.sat.add_clause(&[v, -x, y]);
-                self.sat.add_clause(&[v, x, -y]);
-                self.xor_cache.insert((x, y), v);
-                v
-            }
-        };
-        if neg {
-            -v
-        } else {
-            v
-        }
-    }
-
-    pub fn ite(&mut self, c: Lit, a: Lit, b: Lit) -> Lit {
-        if c == self.t || a == b {
-            return a;
-        }
-        if c == self.f() {
-            return b;
-        }
-        let x = self.and(c, a);
-        let y = self.and(-c, b);
-        self.or(x, y)
-    }
-
-    pub fn and_all(&mut self, ls: &[Lit]) -> Lit {
-        ls.iter().fold(self.t, |acc, &l| self.and(acc, l))
-    }
-
-    pub fn or_all(&mut self, ls: &[Lit]) -> Lit {
-        ls.iter().fold(self.f(), |acc, &l| self.or(acc, l))
-    }
-
-    // ---- words
-
     pub fn not_w(&self, a: &Word) -> Word {
-        a.iter().map(|l| -l).collect()
+        a.iter().map(|&l| neg(l)).collect()
     }
 
-    pub fn zip(&mut self, a: &Word, b: &Word, f: fn(&mut Gates, Lit, Lit) -> Lit) -> Word {
+    pub fn zip(&mut self, a: &Word, b: &Word, f: fn(&mut Aig, Lit, Lit) -> Lit) -> Word {
         a.iter().zip(b).map(|(&x, &y)| f(self, x, y)).collect()
     }
 
@@ -152,7 +26,11 @@ impl Gates {
     }
 
     pub fn eq_w(&mut self, a: &Word, b: &Word) -> Lit {
-        let bits: Vec<Lit> = a.iter().zip(b).map(|(&x, &y)| -self.xor(x, y)).collect();
+        let bits: Vec<Lit> = a
+            .iter()
+            .zip(b)
+            .map(|(&x, &y)| neg(self.xor(x, y)))
+            .collect();
         self.and_all(&bits)
     }
 
@@ -170,15 +48,13 @@ impl Gates {
     }
 
     pub fn add(&mut self, a: &Word, b: &Word) -> Word {
-        let f = self.f();
-        self.add_c(a, b, f).0
+        self.add_c(a, b, FALSE).0
     }
 
     /// a - b, and whether a >= b (unsigned; the carry out of a + !b + 1).
     pub fn sub_c(&mut self, a: &Word, b: &Word) -> (Word, Lit) {
         let nb = self.not_w(b);
-        let t = self.t;
-        self.add_c(a, &nb, t)
+        self.add_c(a, &nb, TRUE)
     }
 
     pub fn neg(&mut self, a: &Word) -> Word {
@@ -187,15 +63,15 @@ impl Gates {
     }
 
     pub fn ult(&mut self, a: &Word, b: &Word) -> Lit {
-        -self.sub_c(a, b).1
+        neg(self.sub_c(a, b).1)
     }
 
     pub fn slt(&mut self, a: &Word, b: &Word) -> Lit {
         // Flip the sign bits and compare unsigned.
         let (mut a, mut b) = (a.clone(), b.clone());
         let n = a.len() - 1;
-        a[n] = -a[n];
-        b[n] = -b[n];
+        a[n] = neg(a[n]);
+        b[n] = neg(b[n]);
         self.ult(&a, &b)
     }
 
@@ -216,11 +92,10 @@ impl Gates {
     /// all-ones and the dividend, as Btor2 (SMT-LIB) defines.
     pub fn udivrem(&mut self, a: &Word, b: &Word) -> (Word, Word) {
         let w = a.len();
-        let f = self.f();
         let mut b1 = b.clone();
-        b1.push(f);
-        let mut r: Word = vec![f; w + 1];
-        let mut q = vec![f; w];
+        b1.push(FALSE);
+        let mut r: Word = vec![FALSE; w + 1];
+        let mut q = vec![FALSE; w];
         for i in (0..w).rev() {
             r.insert(0, a[i]);
             r.truncate(w + 1);
@@ -308,11 +183,10 @@ impl Gates {
         let w = a.len();
         let wk = self.konst((0..b.len()).map(|i| i < 64 && (w as u64 >> i) & 1 == 1));
         let amt = self.udivrem(b, &wk).1;
-        let f = self.f();
-        let one = self.shift(a, &amt, left, f);
+        let one = self.shift(a, &amt, left, FALSE);
         let back = self.sub_c(&wk, &amt).0;
-        let two = self.shift(a, &back, !left, f);
+        let two = self.shift(a, &back, !left, FALSE);
         // amt == 0 shifts the second half by w, which yields 0: fine.
-        self.zip(&one, &two, Gates::or)
+        self.zip(&one, &two, Aig::or)
     }
 }

@@ -11,3 +11,4 @@ anyhow.workspace = true
 fdv-ir.workspace = true
 fdv-engine.workspace = true
 fdv-sat.workspace = true
+fdv-aig.workspace = true

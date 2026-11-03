@@ -1,40 +1,53 @@
 //! In-house engines on SAT: bounded model checking and k-induction.
 //!
-//! Both read Btor2, bit-blast the cone of influence with [`gates`] and
-//! unroll it frame by frame with [`unroll`], on CaDiCaL when it is linked
-//! (see `fdv-sat`). They are the phase-1 engines of the plan; IC3/PDR
-//! follows in phase 2. Arrays and liveness are not supported yet and
-//! report unknown.
+//! Both load the model at bit level (AIGER directly, Btor2 bit-blasted by
+//! `fdv-aig`), simplify it, and unroll it frame by frame into CaDiCaL (see
+//! `fdv-sat`) with [`unroll::Unroll`]. They are the stage-1 engines of the
+//! round-2 plan; IC3 follows in stage 2. Arrays and liveness are not
+//! supported at bit level yet and report unknown.
 
-pub mod gates;
 pub mod unroll;
 
 use anyhow::Context;
+use fdv_aig::Aig;
 use fdv_engine::{
     Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
 };
-use fdv_sat::Answer;
-use gates::Gates;
+use fdv_sat::{Answer, Sat};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use unroll::Unroller;
+use unroll::Unroll;
 
-fn read_model(req: &CheckRequest) -> anyhow::Result<fdv_ir::Model> {
-    if req.format != ModelFormat::Btor2 {
-        anyhow::bail!("only Btor2 models are supported");
+/// Load a model at bit level: AIGER as is, Btor2 bit-blasted.
+pub fn load_aig(path: &Path) -> anyhow::Result<Aig> {
+    match ModelFormat::of_path(path) {
+        Some(ModelFormat::Aiger) => fdv_aig::aiger::read_file(path),
+        Some(ModelFormat::Btor2) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            fdv_aig::btor::from_btor2(&fdv_ir::parse(&text)?)
+        }
+        None => anyhow::bail!("unknown model format: {}", path.display()),
     }
-    let text = std::fs::read_to_string(&req.model)
-        .with_context(|| format!("reading {}", req.model.display()))?;
-    Ok(fdv_ir::parse(&text)?)
 }
 
-fn solver(ctx: &RunContext) -> Gates {
+/// The simplified model, or the reason this engine cannot take it.
+fn prepare(req: &CheckRequest) -> Result<Aig, String> {
+    let g = load_aig(&req.model).map_err(|e| format!("{e:#}"))?;
+    if g.bads.is_empty() {
+        return Err("model has no bad-state property".into());
+    }
+    Ok(fdv_aig::preprocess::simplify(&g).0)
+}
+
+fn solver(ctx: &RunContext) -> Box<dyn Sat> {
     let mut sat = fdv_sat::best();
     let (cancel, deadline) = (ctx.cancel.clone(), ctx.deadline);
     sat.set_terminate(Box::new(move || {
         cancel.is_cancelled() || Instant::now() >= deadline
     }));
-    Gates::new(sat)
+    sat
 }
 
 fn unknown(reason: impl Into<String>) -> Verdict {
@@ -52,6 +65,8 @@ fn result(name: &str, verdict: Verdict, t0: Instant) -> EngineResult {
     }
 }
 
+const FORMATS: [ModelFormat; 2] = [ModelFormat::Aiger, ModelFormat::Btor2];
+
 /// Bounded model checking: is a bad state reachable in exactly k steps,
 /// for k = 0, 1, 2, ...? Finds the shortest counterexample; never proves.
 pub struct Bmc {
@@ -64,62 +79,53 @@ impl Engine for Bmc {
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            formats: vec![ModelFormat::Btor2],
+            formats: FORMATS.to_vec(),
             finds_bugs: true,
             ..Default::default()
         }
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let m = read_model(req)?;
-        let mut u = match Unroller::new(&m, false) {
-            Ok(u) => u,
-            Err(e) => return Ok(result(self.name(), unknown(format!("{e:#}")), t0)),
+        let g = match prepare(req) {
+            Ok(g) => g,
+            Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
-        let mut g = solver(ctx);
-        let v = bmc_loop(&mut u, &mut g, ctx, self.max_depth, self.name())?;
+        let mut u = Unroll::new(&g, solver(ctx), false);
+        let mut k = 0;
+        let v = loop {
+            if ctx.should_stop() {
+                break unknown("timeout");
+            }
+            if self.max_depth.is_some_and(|m| k > m) {
+                break unknown(format!("bound {} reached", k - 1));
+            }
+            u.add_frame();
+            let bad = u.bad(k);
+            match u.sat.solve(&[bad]) {
+                Answer::Sat => {
+                    break Verdict::Unsafe {
+                        depth: Some(k as u32),
+                    }
+                }
+                Answer::Unsat => u.sat.add_clause(&[-bad]),
+                Answer::Unknown => break unknown("timeout"),
+            }
+            ctx.report(Progress {
+                engine: self.name().into(),
+                bound: Some(k as u32),
+                note: String::new(),
+            });
+            k += 1;
+        };
         Ok(result(self.name(), v, t0))
     }
 }
 
-fn bmc_loop(
-    u: &mut Unroller,
-    g: &mut Gates,
-    ctx: &RunContext,
-    max: Option<usize>,
-    name: &str,
-) -> anyhow::Result<Verdict> {
-    let mut k = 0;
-    loop {
-        if ctx.should_stop() {
-            return Ok(unknown("timeout"));
-        }
-        if max.is_some_and(|m| k > m) {
-            return Ok(unknown(format!("bound {} reached", k - 1)));
-        }
-        u.add_frame(g)?;
-        let bad = g.or_all(&u.bads[k].clone());
-        match g.sat.solve(&[bad]) {
-            Answer::Sat => {
-                return Ok(Verdict::Unsafe {
-                    depth: Some(k as u32),
-                })
-            }
-            Answer::Unsat => g.sat.add_clause(&[-bad]),
-            Answer::Unknown => return Ok(unknown("timeout")),
-        }
-        ctx.report(Progress {
-            engine: name.into(),
-            bound: Some(k as u32),
-            note: String::new(),
-        });
-        k += 1;
-    }
-}
-
-/// k-induction with simple-path constraints: alongside BMC, checks whether
-/// k consecutive good, distinct states always lead to a good state. Sound,
-/// and complete for finite-state systems (given time).
+/// k-induction with lazy simple-path constraints: alongside BMC, checks
+/// whether k consecutive good states always lead to a good state. When the
+/// step finds a path that repeats a state, only that pair is constrained
+/// to differ and the step is retried (lazy, as the round-2 research
+/// recommends). Sound, and complete for finite-state systems.
 pub struct KInduction {
     pub max_depth: Option<usize>,
 }
@@ -130,7 +136,7 @@ impl Engine for KInduction {
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            formats: vec![ModelFormat::Btor2],
+            formats: FORMATS.to_vec(),
             proves: true,
             finds_bugs: true,
             ..Default::default()
@@ -138,16 +144,14 @@ impl Engine for KInduction {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let m = read_model(req)?;
-        let (mut base, mut step) = match (Unroller::new(&m, false), Unroller::new(&m, true)) {
-            (Ok(b), Ok(s)) => (b, s),
-            (Err(e), _) | (_, Err(e)) => {
-                return Ok(result(self.name(), unknown(format!("{e:#}")), t0))
-            }
+        let g = match prepare(req) {
+            Ok(g) => g,
+            Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
-        let (mut gb, mut gs) = (solver(ctx), solver(ctx));
+        let mut base = Unroll::new(&g, solver(ctx), false);
+        let mut step = Unroll::new(&g, solver(ctx), true);
         let mut k = 0;
-        let v = loop {
+        let v = 'outer: loop {
             if ctx.should_stop() {
                 break unknown("timeout");
             }
@@ -155,31 +159,31 @@ impl Engine for KInduction {
                 break unknown(format!("bound {} reached", k - 1));
             }
             // Base: no counterexample of length k.
-            base.add_frame(&mut gb)?;
-            let bad = gb.or_all(&base.bads[k].clone());
-            match gb.sat.solve(&[bad]) {
+            base.add_frame();
+            let bad = base.bad(k);
+            match base.sat.solve(&[bad]) {
                 Answer::Sat => {
                     break Verdict::Unsafe {
                         depth: Some(k as u32),
                     }
                 }
-                Answer::Unsat => gb.sat.add_clause(&[-bad]),
+                Answer::Unsat => base.sat.add_clause(&[-bad]),
                 Answer::Unknown => break unknown("timeout"),
             }
-            // Step: good, distinct frames 0..k-1, then bad at k?
-            step.add_frame(&mut gs)?;
-            let sk = step.state_bits(k);
-            for i in 0..k {
-                let si = step.state_bits(i);
-                let same = gs.eq_w(&si, &sk);
-                gs.sat.add_clause(&[-same]);
+            // Step: good frames 0..k-1, then bad at k?
+            step.add_frame();
+            let bad = step.bad(k);
+            loop {
+                match step.sat.solve(&[bad]) {
+                    Answer::Unsat => break 'outer Verdict::Safe,
+                    Answer::Unknown => break 'outer unknown("timeout"),
+                    Answer::Sat => match step.repeated_states(k) {
+                        Some((i, j)) => step.differ(i, j),
+                        None => break,
+                    },
+                }
             }
-            let bad = gs.or_all(&step.bads[k].clone());
-            match gs.sat.solve(&[bad]) {
-                Answer::Unsat => break Verdict::Safe,
-                Answer::Sat => gs.sat.add_clause(&[-bad]),
-                Answer::Unknown => break unknown("timeout"),
-            }
+            step.sat.add_clause(&[-bad]);
             ctx.report(Progress {
                 engine: self.name().into(),
                 bound: Some(k as u32),

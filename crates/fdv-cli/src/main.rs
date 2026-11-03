@@ -3,6 +3,7 @@
 //!   fdv info  <model.btor2>                      parse, validate, print features
 //!   fdv fmt   <model.btor2>                      print canonical Btor2
 //!   fdv check <model> [--engines F] [--timeout S]  run the portfolio
+//!   fdv simp  <model>                          bit-level model before / after preprocessing
 //!   fdv lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (slang)
 //!   fdv shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
 //!   fdv bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
@@ -41,6 +42,13 @@ enum Cmd {
         /// Only use these engines (comma-separated names).
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
+    },
+    /// Load a model at bit level (AIGER, or Btor2 bit-blasted), preprocess
+    /// it and print its size before and after; `--aag` prints the result.
+    Simp {
+        model: PathBuf,
+        #[arg(long)]
+        aag: bool,
     },
     /// Lower SystemVerilog to Btor2 with slang; immediate assertions become
     /// bad states (needs a build with slang).
@@ -170,6 +178,26 @@ fn main() -> anyhow::Result<()> {
                 Verdict::Safe => 20,
                 Verdict::Unknown { .. } => 0,
             });
+        }
+        Cmd::Simp { model, aag } => {
+            let t0 = std::time::Instant::now();
+            let g = fdv_bmc::load_aig(&model)?;
+            let t1 = t0.elapsed();
+            let (s, st) = fdv_aig::preprocess::simplify(&g);
+            eprintln!(
+                "loaded    {} ({:.1} ms)",
+                g.summary(),
+                t1.as_secs_f64() * 1e3
+            );
+            eprintln!(
+                "simplified {} ({:.1} ms, {} constant latches)",
+                s.summary(),
+                (t0.elapsed() - t1).as_secs_f64() * 1e3,
+                st.constant_latches
+            );
+            if aag {
+                print!("{}", fdv_aig::aiger::write_ascii(&s));
+            }
         }
         Cmd::Lower { files, top, define } => {
             let req = fdv_slang::Request {

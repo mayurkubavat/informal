@@ -17,7 +17,8 @@ Background research lives in `research/`.
 | `fdv-engines-ext` | Adapters that run external model checkers (rIC3, Pono, ABC, BtorMC) as child processes, described in `config/engines.toml`. |
 | `fdv-bench` | Benchmark harness. Appends one JSON line per engine run to the run database and scores engines by solved count and PAR-2, including a virtual-best row. |
 | `fdv-sat` | SAT interface: CaDiCaL through its C API, plus a small DPLL solver for tests. |
-| `fdv-bmc` | In-house engines: Btor2 bit-blasting, BMC and k-induction. |
+| `fdv-aig` | Bit-level model: AIG with structural hashing, AIGER reader and writer, Btor2 bit-blaster, preprocessing. |
+| `fdv-bmc` | In-house engines on the AIG: BMC and k-induction. |
 | `fdv-slang` | SystemVerilog front end on slang (C++ shim through FFI): diagnostics, top module, hierarchy, name checks for properties. |
 | `fdv-tcl` | Embedded Tcl 8.6 (the C library through FFI) for fdv scripts. |
 | `fdv-fpv` | FPV sessions: design setup, SVA subset compiler, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |

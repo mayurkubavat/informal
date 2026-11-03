@@ -25,6 +25,9 @@ pub trait Sat {
     /// Polled during search; returning true stops it with `Unknown`.
     fn set_terminate(&mut self, f: Box<dyn Fn() -> bool + Send>);
     fn name(&self) -> &'static str;
+    /// Announce `n` more variables before using them (CaDiCaL >= 2.2
+    /// wants this for incremental use).
+    fn reserve(&mut self, _n: i32) {}
 }
 
 /// The best solver available in this build.
@@ -57,6 +60,7 @@ mod ffi {
             f: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
         );
         pub fn ccadical_signature() -> *const c_char;
+        pub fn ccadical_declare_more_variables(s: *mut CCaDiCaL, n: c_int) -> c_int;
     }
 }
 
@@ -137,7 +141,8 @@ impl Sat for Cadical {
         }
     }
     fn value(&self, lit: Lit) -> bool {
-        unsafe { ffi::ccadical_val(self.raw, lit) > 0 }
+        // `val` returns `lit` when it is true and `-lit` when false.
+        unsafe { ffi::ccadical_val(self.raw, lit) == lit }
     }
     fn set_terminate(&mut self, f: Box<dyn Fn() -> bool + Send>) {
         let boxed = Box::new(f);
@@ -147,6 +152,11 @@ impl Sat for Cadical {
     }
     fn name(&self) -> &'static str {
         "cadical"
+    }
+    fn reserve(&mut self, n: i32) {
+        if n > 0 {
+            unsafe { ffi::ccadical_declare_more_variables(self.raw, n) };
+        }
     }
 }
 
@@ -317,7 +327,10 @@ mod tests {
         assert_eq!(s.solve(&[-3]), Answer::Unsat);
         // Assumptions do not stick.
         assert_eq!(s.solve(&[1]), Answer::Sat);
-        assert!(s.value(1) && s.value(3));
+        assert!(s.value(1) && s.value(3) && !s.value(-3));
+        assert_eq!(s.solve(&[-1, -2]), Answer::Unsat);
+        assert_eq!(s.solve(&[-1]), Answer::Sat);
+        assert!(s.value(-1) && s.value(2));
         s.add_clause(&[-3]);
         assert_eq!(s.solve(&[]), Answer::Unsat);
     }

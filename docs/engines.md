@@ -42,15 +42,20 @@ and a sample of HWMCC'24 models with published answers.
 ## In-house engines (phase 1)
 
 `fdv-bmc` and `fdv-kind` run in-process on CaDiCaL (crate `fdv-sat`,
-C API through FFI). They read Btor2, bit-blast the cone of influence of
-the bad and constraint lines, and unroll it one frame at a time.
+C API through FFI). They load the model at bit level with `fdv-aig`
+(AIGER directly, Btor2 bit-blasted), simplify it (cone of influence,
+sequential constant latches by ternary simulation, structural hashing),
+and unroll it one frame at a time, declaring variables to CaDiCaL ahead
+of use. `fdv simp <model>` shows a model's size before and after.
 
 | Engine | Proves | Finds bugs | Notes |
 | --- | --- | --- | --- |
 | `fdv-bmc` | no | yes | Shortest counterexample first |
-| `fdv-kind` | yes | yes | k-induction with simple-path constraints, BMC base case |
+| `fdv-kind` | yes | yes | k-induction with lazy simple-path constraints, BMC base case |
 
-Not supported yet (they report unknown): arrays, liveness, AIGER input.
+Not supported yet (they report unknown): arrays and liveness. Next:
+DAG-CNF variable elimination when encoding, and IC3 invariants fed into
+k-induction once our IC3 exists.
 Build CaDiCaL once (`./configure -fPIC && make` in
 `~/Silicon/DV/tools/cadical`, or point `FDV_CADICAL_DIR` at a checkout)
 and rebuild fdv; without it these engines are left out of the portfolio.

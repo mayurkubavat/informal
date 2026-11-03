@@ -1,0 +1,11 @@
+[package]
+name = "fdv-aig"
+description = "Bit-level model: and-inverter graphs with structural hashing, AIGER I/O, Btor2 bit-blasting and preprocessing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fdv-ir.workspace = true
