@@ -3,13 +3,16 @@
 //! Frame 0 latches take their reset value (free when uninitialized, or for
 //! the induction step); frame k+1 latches take frame k's next-state
 //! literal. Inputs are fresh in every frame and constraints hold in every
-//! frame. Each AND node gets a Tseitin variable per frame.
+//! frame. The AND logic comes from the CNF template ([`crate::cnf`]), with
+//! internal variables already eliminated, instantiated once per frame.
 
+use crate::cnf::{self, Template};
 use fdv_aig::{is_neg, var, Aig, Init, Node};
 use fdv_sat::{Lit, Sat};
 
 pub struct Unroll<'g> {
     g: &'g Aig,
+    template: Template,
     pub sat: Box<dyn Sat>,
     next_var: Lit,
     tru: Lit,
@@ -24,6 +27,7 @@ impl<'g> Unroll<'g> {
         sat.add_clause(&[1]);
         Unroll {
             g,
+            template: cnf::build(g),
             sat,
             next_var: 2,
             tru: 1,
@@ -51,8 +55,8 @@ impl<'g> Unroll<'g> {
     pub fn add_frame(&mut self) -> usize {
         let k = self.frames.len();
         let g = self.g;
-        // Inputs, uninitialized latches and ANDs each take one variable.
-        self.sat.reserve(g.nodes.len() as i32);
+        let live = self.template.live.iter().filter(|&&x| x).count();
+        self.sat.reserve(live as i32);
         let mut f = vec![0; g.nodes.len()];
         let mut late = Vec::new();
         let mut li = 0;
@@ -81,24 +85,24 @@ impl<'g> Unroll<'g> {
                         }
                     }
                 }
-                Node::And(a, b) => {
-                    let la = if is_neg(a) {
-                        -f[var(a) as usize]
-                    } else {
-                        f[var(a) as usize]
-                    };
-                    let lb = if is_neg(b) {
-                        -f[var(b) as usize]
-                    } else {
-                        f[var(b) as usize]
-                    };
-                    let x = self.fresh();
-                    self.sat.add_clause(&[-x, la]);
-                    self.sat.add_clause(&[-x, lb]);
-                    self.sat.add_clause(&[x, -la, -lb]);
-                    x
-                }
+                // Eliminated AND variables get no SAT variable.
+                Node::And(..) if self.template.live[v + 1] => self.fresh(),
+                Node::And(..) => 0,
             };
+        }
+        let rename = |t: cnf::TLit| -> Lit {
+            let x = f[t.unsigned_abs() as usize - 1];
+            if t < 0 {
+                -x
+            } else {
+                x
+            }
+        };
+        let mut buf = Vec::new();
+        for c in &self.template.clauses {
+            buf.clear();
+            buf.extend(c.iter().map(|&t| rename(t)));
+            self.sat.add_clause(&buf);
         }
         self.frames.push(f);
         for (x, e) in late {

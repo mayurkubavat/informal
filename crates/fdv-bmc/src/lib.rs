@@ -6,6 +6,7 @@
 //! round-2 plan; IC3 follows in stage 2. Arrays and liveness are not
 //! supported at bit level yet and report unknown.
 
+pub mod cnf;
 pub mod unroll;
 
 use anyhow::Context;
