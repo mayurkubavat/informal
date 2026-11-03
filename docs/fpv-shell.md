@@ -27,14 +27,22 @@ directory (`fdv_work/` by default).
    against the names the top module declares, so a typo is an error rather
    than an implicit net that makes the check vacuous. It then runs Yosys
    once, which builds the model.
-3. Each property is lowered by the SVA subset compiler (`fdv-fpv/src/sva.rs`)
+3. The models are built by slang's AST lowering (`crates/fdv-slang/cpp/lower.cpp`)
+   when fdv has slang, else by Yosys. `FDV_FRONTEND=yosys` forces Yosys,
+   and a design using something the lowering does not handle yet (memories,
+   loops, functions, interfaces) falls back to Yosys with a note. Both give
+   the same verdicts on `tests/fpv`; counterexample depths from the slang
+   path are one cycle shorter, since Yosys registers clocked assertions.
+   `fdv lower design.sv -D NAME` prints the slang Btor2 for a design whose
+   labelled immediate assertions become bad states.
+4. Each property is lowered by the SVA subset compiler (`fdv-fpv/src/sva.rs`)
    into an immediate assertion over `$past`, and the checker block is
    inserted before the top module's `endmodule`, so properties see every
    signal in the top module's scope (not yet signals inside sub-instances).
-4. Reset: the reset condition holds in cycle 0 and is released after, as
+5. Reset: the reset condition holds in cycle 0 and is released after, as
    both vendor tools do by default. Checks start once the property's whole
    window lies after reset.
-5. Each assertion and cover becomes its own Btor2 model, with every
+6. Each assertion and cover becomes its own Btor2 model, with every
    assumption as a constraint, and runs through the engine portfolio with
    the session time limit. A cover is checked as "never matches": a
    counterexample means covered, a proof means unreachable.
@@ -93,8 +101,8 @@ still builds and falls back to a regex guess of the top module.
 
 ## Known gaps
 
-- Properties can only name signals in the top module (no hierarchical
-  references, no `bind`).
+- With the slang front end, properties can name signals in sub-instances
+  (`u_wp.p`); with Yosys, only signals in the top module. No `bind` yet.
 - One clock; every register steps on each model step.
 - `-bbox_m` is recorded but not applied.
 - No counterexample waveforms yet (they come with UI v1).

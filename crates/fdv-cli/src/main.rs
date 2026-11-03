@@ -3,6 +3,7 @@
 //!   fdv info  <model.btor2>                      parse, validate, print features
 //!   fdv fmt   <model.btor2>                      print canonical Btor2
 //!   fdv check <model> [--engines F] [--timeout S]  run the portfolio
+//!   fdv lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (slang)
 //!   fdv shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
 //!   fdv bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
 
@@ -40,6 +41,16 @@ enum Cmd {
         /// Only use these engines (comma-separated names).
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
+    },
+    /// Lower SystemVerilog to Btor2 with slang; immediate assertions become
+    /// bad states (needs a build with slang).
+    Lower {
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        top: Option<String>,
+        /// Preprocessor defines (NAME or NAME=VALUE).
+        #[arg(short = 'D')]
+        define: Vec<String>,
     },
     /// Run a JasperGold or VC Formal style Tcl script (or an interactive
     /// shell when no script is given).
@@ -159,6 +170,28 @@ fn main() -> anyhow::Result<()> {
                 Verdict::Safe => 20,
                 Verdict::Unknown { .. } => 0,
             });
+        }
+        Cmd::Lower { files, top, define } => {
+            let req = fdv_slang::Request {
+                files,
+                top,
+                defines: define
+                    .iter()
+                    .map(|d| {
+                        d.split_once('=')
+                            .map_or((d.clone(), None), |(k, v)| (k.into(), Some(v.into())))
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            let l = fdv_slang::lower(&req).context("this fdv was built without slang")?;
+            for n in &l.notes {
+                eprintln!("note: {n}");
+            }
+            if !l.ok {
+                bail!("{}", l.errors.join("\n"));
+            }
+            print!("{}", l.btor2);
         }
         Cmd::Shell {
             script,

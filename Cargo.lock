@@ -207,6 +207,7 @@ dependencies = [
  "fdv-engines-ext",
  "fdv-fpv",
  "fdv-ir",
+ "fdv-slang",
  "fdv-tcl",
  "serde_json",
 ]

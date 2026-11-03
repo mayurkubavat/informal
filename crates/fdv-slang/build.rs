@@ -8,6 +8,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-env-changed=FDV_SLANG_DIR");
     println!("cargo:rerun-if-changed=cpp/shim.cpp");
+    println!("cargo:rerun-if-changed=cpp/lower.cpp");
     println!("cargo:rustc-check-cfg=cfg(fdv_slang)");
     let dir = std::env::var_os("FDV_SLANG_DIR")
         .map(PathBuf::from)
@@ -24,6 +25,7 @@ fn main() {
         .cpp(true)
         .std("c++20")
         .file("cpp/shim.cpp")
+        .file("cpp/lower.cpp")
         .include(dir.join("include"))
         .include(b.join("source"))
         .include(dir.join("external"))

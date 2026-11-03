@@ -78,8 +78,16 @@ impl Design {
             "posedge", "negedge", "edge", "disable", "iff", "or", "and", "not", "if", "else",
             "inside", "dist",
         ];
-        let known: std::collections::HashSet<&str> =
+        let prefix = format!("{top}.");
+        // Signals, plus instance names (the start of a hierarchical name).
+        let mut known: std::collections::HashSet<&str> =
             self.top_signals(top).into_iter().map(|(n, _)| n).collect();
+        known.extend(
+            self.instances
+                .iter()
+                .filter_map(|i| i.path.strip_prefix(&prefix))
+                .filter(|n| !n.contains('.')),
+        );
         let b = expr.as_bytes();
         let mut out = Vec::new();
         let mut i = 0;
@@ -165,8 +173,59 @@ impl Request {
 mod ffi {
     use std::ffi::c_char;
     extern "C" {
+        pub fn fdv_slang_lower(args: *const c_char) -> *mut c_char;
         pub fn fdv_slang_compile(args: *const c_char) -> *mut c_char;
         pub fn fdv_slang_free(p: *mut c_char);
+    }
+}
+
+/// A design lowered to Btor2 by slang (see `cpp/lower.cpp`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Lowered {
+    pub ok: bool,
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    #[serde(default)]
+    pub btor2: String,
+}
+
+#[cfg(fdv_slang)]
+fn call(
+    f: unsafe extern "C" fn(*const std::ffi::c_char) -> *mut std::ffi::c_char,
+    req: &Request,
+) -> String {
+    let mut buf = Vec::new();
+    for w in req.words() {
+        buf.extend(w.replace('\0', "").into_bytes());
+        buf.push(0);
+    }
+    buf.push(0);
+    unsafe {
+        let p = f(buf.as_ptr() as *const std::ffi::c_char);
+        let s = std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
+        ffi::fdv_slang_free(p);
+        s
+    }
+}
+
+/// Elaborate and lower the design to a Btor2 model: every labelled
+/// immediate assertion becomes a `bad` line named by its label, and
+/// immediate assumptions become constraints. `None` without slang.
+pub fn lower(req: &Request) -> Option<Lowered> {
+    #[cfg(fdv_slang)]
+    {
+        let json = call(ffi::fdv_slang_lower, req);
+        Some(serde_json::from_str(&json).unwrap_or_else(|e| Lowered {
+            ok: false,
+            errors: vec![format!("bad reply from the slang shim: {e}")],
+            ..Default::default()
+        }))
+    }
+    #[cfg(not(fdv_slang))]
+    {
+        let _ = req;
+        None
     }
 }
 
@@ -179,18 +238,7 @@ pub fn available() -> bool {
 pub fn compile(req: &Request) -> Option<Design> {
     #[cfg(fdv_slang)]
     {
-        let mut buf = Vec::new();
-        for w in req.words() {
-            buf.extend(w.replace('\0', "").into_bytes());
-            buf.push(0);
-        }
-        buf.push(0);
-        let json = unsafe {
-            let p = ffi::fdv_slang_compile(buf.as_ptr() as *const std::ffi::c_char);
-            let s = std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
-            ffi::fdv_slang_free(p);
-            s
-        };
+        let json = call(ffi::fdv_slang_compile, req);
         Some(serde_json::from_str(&json).unwrap_or_else(|e| Design {
             ok: false,
             diagnostics: vec![Diagnostic {

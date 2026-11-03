@@ -21,3 +21,4 @@ fdv-bench.workspace = true
 fdv-tcl.workspace = true
 fdv-fpv.workspace = true
 fdv-bmc.workspace = true
+fdv-slang.workspace = true

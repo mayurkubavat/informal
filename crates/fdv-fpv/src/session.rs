@@ -131,6 +131,8 @@ pub struct Session {
     /// Instance tree from slang, for the UI.
     pub hierarchy: Vec<fdv_slang::Instance>,
     pub yosys: PathBuf,
+    /// Front end that built the last prove's models (`slang` or `yosys`).
+    pub frontend: String,
 }
 
 impl Session {
@@ -150,6 +152,7 @@ impl Session {
             slang: None,
             hierarchy: Vec::new(),
             yosys: find_yosys(),
+            frontend: String::new(),
         }
     }
 
@@ -449,6 +452,8 @@ impl Session {
         };
         let files = self.injected_files()?;
         let engines = self.engines();
+        let lowered = self.lower_with_slang(&files, &targets);
+        self.frontend = if lowered.is_some() { "slang" } else { "yosys" }.into();
         for &i in &targets {
             // Properties added before elaboration are checked now.
             if let Err(e) = self.check_names(&self.props[i].expr) {
@@ -456,7 +461,12 @@ impl Session {
                 continue;
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
-            let status = match self.run_yosys(&files, &[format!("FDV_P{i}")], &out) {
+            let built = match &lowered {
+                Some(btor) => std::fs::write(&out, only_bad(btor, &format!("fdv_p{i}")))
+                    .map_err(anyhow::Error::from),
+                None => self.run_yosys(&files, &[format!("FDV_P{i}")], &out),
+            };
+            let status = match built {
                 Err(e) => Status::Error {
                     message: format!("{e:#}"),
                 },
@@ -465,6 +475,33 @@ impl Session {
             self.props[i].status = status;
         }
         Ok(targets)
+    }
+
+    /// One Btor2 model with every target's assertion (by slang), or `None`
+    /// to use the Yosys path: slang not linked, `FDV_FRONTEND=yosys`, or a
+    /// construct the lowering does not handle yet.
+    fn lower_with_slang(&self, files: &[PathBuf], targets: &[usize]) -> Option<String> {
+        if std::env::var("FDV_FRONTEND").is_ok_and(|v| v == "yosys") {
+            return None;
+        }
+        let mut defines = self.design.defines.clone();
+        defines.extend(targets.iter().map(|i| (format!("FDV_P{i}"), None)));
+        let req = fdv_slang::Request {
+            files: files.to_vec(),
+            defines,
+            incdirs: self.design.incdirs.clone(),
+            top: self.design.top.clone(),
+            params: self.design.params.clone(),
+        };
+        let l = fdv_slang::lower(&req)?;
+        if l.ok {
+            return Some(l.btor2);
+        }
+        eprintln!(
+            "fdv: slang lowering fell back to Yosys: {}",
+            l.errors.join("; ")
+        );
+        None
     }
 
     fn check_one(&self, engines: &[Arc<dyn Engine>], i: usize, model: &Path) -> Status {
@@ -551,6 +588,17 @@ impl Session {
         }
         s
     }
+}
+
+/// The Btor2 text with every `bad` line dropped except the one named `keep`.
+fn only_bad(btor: &str, keep: &str) -> String {
+    btor.lines()
+        .filter(|l| {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            w.get(1) != Some(&"bad") || w.get(3) == Some(&keep)
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect()
 }
 
 fn find_yosys() -> PathBuf {
