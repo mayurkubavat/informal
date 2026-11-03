@@ -227,6 +227,7 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
     vec![
         Arc::new(Bmc { max_depth: None }),
         Arc::new(KInduction { max_depth: None }),
+        Arc::new(Ic3Engine),
     ]
 }
 
