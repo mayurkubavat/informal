@@ -6,6 +6,8 @@
 pub mod compat;
 pub mod session;
 pub mod sva;
+pub mod worker;
 
 pub use compat::{detect_flavor, Flavor, Shell};
 pub use session::{Kind, Property, Session, Status};
+pub use worker::{Reply, Request, Worker};

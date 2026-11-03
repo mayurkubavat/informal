@@ -1,0 +1,21 @@
+# The Formal DV desktop app. Kept out of the main workspace because Tauri
+# needs the GTK / WebKitGTK development packages on Linux; build it from
+# ui/ with `npm run tauri dev` or `npm run tauri build`.
+[package]
+name = "fdv-app"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+publish = false
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2.2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.5.1", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+fdv-fpv = { path = "../../crates/fdv-fpv" }
+fdv-engines-ext = { path = "../../crates/fdv-engines-ext" }
