@@ -235,6 +235,7 @@ name = "fdv-engines-ext"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fdv-aig",
  "fdv-engine",
  "libc",
  "regex",

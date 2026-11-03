@@ -234,6 +234,19 @@ impl Aig {
     }
 }
 
+/// Load a model at bit level by its extension: AIGER (`.aig`, `.aag`) as
+/// is, Btor2 (`.btor2`, `.btor`) bit-blasted.
+pub fn load(path: &std::path::Path) -> anyhow::Result<Aig> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("aig" | "aag") => aiger::read_file(path),
+        Some("btor2" | "btor") => {
+            let text = std::fs::read_to_string(path)?;
+            btor::from_btor2(&fdv_ir::parse(&text)?)
+        }
+        _ => anyhow::bail!("unknown model format: {}", path.display()),
+    }
+}
+
 #[inline]
 pub fn lit_val(vals: &[bool], l: Lit) -> bool {
     vals[var(l) as usize] ^ is_neg(l)

@@ -39,6 +39,16 @@ and a sample of HWMCC'24 models with published answers.
   does accept them but misreads them, so do not switch to it.
 - ABC writes `abc.history` into the working directory (git-ignored).
 
+## Preprocessed models for external engines
+
+An `[[engine]]` entry with `preprocess = true` gets fdv's simplified model
+instead of the original file: cone of influence, constant latches and
+strash, written as binary AIGER into an anonymous in-memory file
+(`memfd_create`) that the engine opens as `/proc/self/fd/N`. Nothing is
+written to disk. `abc-pdr-pp` is ABC `pdr` this way; on
+`2024/hku/x-epic/a10-p06` it drops from 2.3 s to 0.2 s (41,262 latches
+become 89), though PDR's luck varies the other way on some models.
+
 ## In-house engines (phase 1)
 
 `fdv-bmc` and `fdv-kind` run in-process on CaDiCaL (crate `fdv-sat`,
@@ -52,6 +62,7 @@ of use. `fdv simp <model>` shows a model's size before and after.
 | --- | --- | --- | --- |
 | `fdv-bmc` | no | yes | Shortest counterexample first |
 | `fdv-kind` | yes | yes | k-induction with lazy simple-path constraints, BMC base case |
+| `fdv-ic3` | yes | yes | IC3 / PDR: lifting, core + MIC generalization, propagation (first cut) |
 
 Not supported yet (they report unknown): arrays and liveness. Next:
 DAG-CNF variable elimination when encoding, and IC3 invariants fed into

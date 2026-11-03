@@ -251,3 +251,108 @@ pub fn write_ascii(g: &Aig) -> String {
     }
     s
 }
+
+/// Binary AIGER 1.9 (the format ABC and rIC3 read fastest). Latches with
+/// an [`Init::Expr`] reset are written as uninitialized.
+pub fn write_binary(g: &Aig) -> Vec<u8> {
+    let mut map = vec![0u32; g.nodes.len()];
+    let mut next = 1;
+    for &i in &g.inputs {
+        map[(i >> 1) as usize] = next;
+        next += 1;
+    }
+    for l in &g.latches {
+        map[(l.lit >> 1) as usize] = next;
+        next += 1;
+    }
+    for (v, n) in g.nodes.iter().enumerate() {
+        if matches!(n, Node::And(..)) {
+            map[v] = next;
+            next += 1;
+        }
+    }
+    let m = |l: Lit| 2 * map[(l >> 1) as usize] + (l & 1);
+    let mut out = format!(
+        "aig {} {} {} 0 {} {} {}\n",
+        next - 1,
+        g.inputs.len(),
+        g.latches.len(),
+        g.num_ands(),
+        g.bads.len(),
+        g.constraints.len()
+    )
+    .into_bytes();
+    for l in &g.latches {
+        let r = match l.init {
+            Init::Zero => String::new(),
+            Init::One => " 1".into(),
+            Init::Free | Init::Expr(_) => format!(" {}", m(l.lit)),
+        };
+        out.extend(format!("{}{}\n", m(l.next), r).bytes());
+    }
+    for &b in g.bads.iter().chain(&g.constraints) {
+        out.extend(format!("{}\n", m(b)).bytes());
+    }
+    let mut varint = |out: &mut Vec<u8>, mut x: u32| {
+        while x >= 0x80 {
+            out.push((x as u8 & 0x7f) | 0x80);
+            x >>= 7;
+        }
+        out.push(x as u8);
+    };
+    for (v, n) in g.nodes.iter().enumerate() {
+        if let Node::And(a, b) = *n {
+            let lhs = 2 * map[v];
+            let (x, y) = (m(a), m(b));
+            let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+            varint(&mut out, lhs - hi);
+            varint(&mut out, hi - lo);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{lit_val, neg};
+
+    #[test]
+    fn binary_round_trip_keeps_behaviour() {
+        let mut g = Aig::new();
+        let (a, b) = (g.input(), g.input());
+        let l = g.latch(Init::One);
+        let x = g.xor(a, l);
+        let n = g.and(x, neg(b));
+        g.set_next(l, n);
+        let bad = g.and(l, b);
+        g.bads.push(bad);
+        g.constraints.push(neg(a));
+        let r = read(&write_binary(&g)).unwrap();
+        assert_eq!(
+            (
+                r.inputs.len(),
+                r.latches.len(),
+                r.bads.len(),
+                r.constraints.len()
+            ),
+            (2, 1, 1, 1)
+        );
+        assert_eq!(r.latches[0].init, Init::One);
+        for m in 0..8u32 {
+            let val = |g: &Aig, l: Lit| {
+                let vals = g.eval(|x| {
+                    let k = g
+                        .inputs
+                        .iter()
+                        .position(|&i| i == x)
+                        .map(|p| m >> p & 1 == 1);
+                    k.unwrap_or(m & 4 == 4)
+                });
+                lit_val(&vals, l)
+            };
+            assert_eq!(val(&g, g.latches[0].next), val(&r, r.latches[0].next));
+            assert_eq!(val(&g, g.bads[0]), val(&r, r.bads[0]));
+        }
+    }
+}

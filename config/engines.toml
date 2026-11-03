@@ -89,6 +89,21 @@ safe = 'Property proved\.'
 unsafe = 'was asserted in frame \d+'
 depth = 'was asserted in frame (\d+)'
 
+# The same, on fdv's preprocessed model (cone of influence, constant
+# latches, strash), handed over in memory through memfd.
+[[engine]]
+name = "abc-pdr-pp"
+program = "abc"
+args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; pdr"]
+formats = ["aiger"]
+proves = true
+finds_bugs = true
+preprocess = true
+[engine.patterns]
+safe = 'Property proved\.'
+unsafe = 'was asserted in frame \d+'
+depth = 'was asserted in frame (\d+)'
+
 [[engine]]
 name = "abc-bmc3"
 program = "abc"

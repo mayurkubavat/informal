@@ -40,6 +40,10 @@ pub struct EngineSpec {
     /// Keep stdout as the witness when the verdict is unsafe.
     #[serde(default)]
     pub witness_on_stdout: bool,
+    /// Give the engine fdv's preprocessed model (binary AIGER, passed in
+    /// memory through memfd on Linux) instead of the original file.
+    #[serde(default)]
+    pub preprocess: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -147,6 +151,59 @@ fn kill_tree(child: &mut std::process::Child) {
 }
 
 /// Load every `[[engine]]` from a TOML file.
+/// A preprocessed model held in memory for a child process.
+struct Staged {
+    path: String,
+    _file: std::fs::File,
+}
+
+/// Simplify the model and write it as binary AIGER to an anonymous
+/// in-memory file the child can open by `/proc/self/fd/N` (it inherits the
+/// descriptor). `None` (use the original file) when the model cannot be
+/// loaded or has resets AIGER cannot express.
+fn stage_preprocessed(model: &Path) -> Option<Staged> {
+    let g = fdv_aig::load(model).ok()?;
+    let (s, _) = fdv_aig::preprocess::simplify(&g);
+    if s.latches
+        .iter()
+        .any(|l| matches!(l.init, fdv_aig::Init::Expr(_)))
+    {
+        return None;
+    }
+    let bytes = fdv_aig::aiger::write_binary(&s);
+    stage_bytes(&bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn stage_bytes(bytes: &[u8]) -> Option<Staged> {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+    let name = std::ffi::CString::new("fdv-model").ok()?;
+    // No MFD_CLOEXEC: the engine process must inherit the descriptor.
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+    if fd < 0 {
+        return None;
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    file.write_all(bytes).ok()?;
+    Some(Staged {
+        path: format!("/proc/self/fd/{fd}"),
+        _file: file,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn stage_bytes(bytes: &[u8]) -> Option<Staged> {
+    let path =
+        std::env::temp_dir().join(format!("fdv-model-{}-{:p}.aig", std::process::id(), bytes));
+    std::fs::write(&path, bytes).ok()?;
+    let file = std::fs::File::open(&path).ok()?;
+    Some(Staged {
+        path: path.to_string_lossy().into_owned(),
+        _file: file,
+    })
+}
+
 pub fn load(path: &Path) -> anyhow::Result<Vec<Arc<dyn Engine>>> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -179,7 +236,16 @@ impl Engine for ExternalEngine {
 
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let start = Instant::now();
-        let model = req.model.to_string_lossy();
+        // Kept alive until the child exits: the engine reads it by path.
+        let staged = if self.spec.preprocess {
+            stage_preprocessed(&req.model)
+        } else {
+            None
+        };
+        let model = match &staged {
+            Some(s) => s.path.clone(),
+            None => req.model.to_string_lossy().into_owned(),
+        };
         let args: Vec<String> = self
             .spec
             .args

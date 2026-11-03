@@ -10,29 +10,16 @@ pub mod cnf;
 pub mod ic3;
 pub mod unroll;
 
-use anyhow::Context;
 use fdv_aig::Aig;
 use fdv_engine::{
     Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
 };
 use fdv_sat::{Answer, Sat};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use unroll::Unroll;
 
-/// Load a model at bit level: AIGER as is, Btor2 bit-blasted.
-pub fn load_aig(path: &Path) -> anyhow::Result<Aig> {
-    match ModelFormat::of_path(path) {
-        Some(ModelFormat::Aiger) => fdv_aig::aiger::read_file(path),
-        Some(ModelFormat::Btor2) => {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            fdv_aig::btor::from_btor2(&fdv_ir::parse(&text)?)
-        }
-        None => anyhow::bail!("unknown model format: {}", path.display()),
-    }
-}
+pub use fdv_aig::load as load_aig;
 
 /// The simplified model, or the reason this engine cannot take it.
 fn prepare(req: &CheckRequest) -> Result<Aig, String> {
@@ -246,7 +233,6 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use std::time::Duration;
 
     fn check(e: &dyn Engine, text: &str) -> Verdict {
