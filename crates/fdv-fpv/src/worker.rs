@@ -56,8 +56,13 @@ impl Worker {
                         }
                         Request::Snapshot => (true, String::new()),
                     };
-                    let session = serde_json::to_value(&*shell.session.borrow()).unwrap_or_default();
-                    let _ = back.send(Reply { ok, result, session });
+                    let session =
+                        serde_json::to_value(&*shell.session.borrow()).unwrap_or_default();
+                    let _ = back.send(Reply {
+                        ok,
+                        result,
+                        session,
+                    });
                 }
             })
             .expect("spawn shell thread");
@@ -95,7 +100,9 @@ mod tests {
 
     #[test]
     fn requests_from_other_threads() {
-        let w = Worker::spawn(Flavor::Jg, || Session::new(Vec::new(), std::env::temp_dir().join("fdv-worker")));
+        let w = Worker::spawn(Flavor::Jg, || {
+            Session::new(Vec::new(), std::env::temp_dir().join("fdv-worker"))
+        });
         let w2 = w.clone();
         let r = thread::spawn(move || w2.call(Request::Eval("assert -name a {x |=> y}".into())))
             .join()

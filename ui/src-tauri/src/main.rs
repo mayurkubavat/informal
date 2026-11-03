@@ -83,7 +83,10 @@ fn main() {
     let worker = Worker::spawn(flavor, move || {
         let engines = config
             .and_then(|c| fdv_engines_ext::load(&c).map_err(|e| eprintln!("fdv: {e:#}")).ok())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .chain(fdv_bmc::engines())
+            .collect();
         Session::new(engines, PathBuf::from("fdv_work"))
     });
     if let Some(p) = script {

@@ -176,12 +176,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fdv-bmc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fdv-engine",
+ "fdv-ir",
+ "fdv-sat",
+]
+
+[[package]]
 name = "fdv-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "fdv-bench",
+ "fdv-bmc",
  "fdv-engine",
  "fdv-engines-ext",
  "fdv-fpv",
@@ -230,6 +241,10 @@ dependencies = [
  "serde",
  "thiserror",
 ]
+
+[[package]]
+name = "fdv-sat"
+version = "0.1.0"
 
 [[package]]
 name = "fdv-tcl"

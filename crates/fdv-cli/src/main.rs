@@ -83,6 +83,7 @@ fn load_engines(
     only: &[String],
 ) -> anyhow::Result<Vec<std::sync::Arc<dyn fdv_engine::Engine>>> {
     let mut engines = fdv_engines_ext::load(path)?;
+    engines.extend(fdv_bmc::engines());
     if !only.is_empty() {
         engines.retain(|e| only.iter().any(|n| n == e.name()));
         if engines.is_empty() {
@@ -176,7 +177,8 @@ fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("unknown flavor {f} (jg or vcf)"))?,
                 None => fdv_fpv::detect_flavor(&text),
             };
-            let engines = fdv_engines_ext::load(&engines)?;
+            let mut engines = fdv_engines_ext::load(&engines)?;
+            engines.extend(fdv_bmc::engines());
             let session = fdv_fpv::Session::new(engines, workdir);
             let shell = fdv_fpv::Shell::new(session, flavor);
             for c in &commands {

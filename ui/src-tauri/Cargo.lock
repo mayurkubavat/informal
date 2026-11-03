@@ -744,12 +744,23 @@ dependencies = [
 name = "fdv-app"
 version = "0.1.0"
 dependencies = [
+ "fdv-bmc",
  "fdv-engines-ext",
  "fdv-fpv",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+]
+
+[[package]]
+name = "fdv-bmc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fdv-engine",
+ "fdv-ir",
+ "fdv-sat",
 ]
 
 [[package]]
@@ -783,6 +794,18 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "fdv-ir"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "fdv-sat"
+version = "0.1.0"
 
 [[package]]
 name = "fdv-tcl"

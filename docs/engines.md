@@ -39,6 +39,23 @@ and a sample of HWMCC'24 models with published answers.
   does accept them but misreads them, so do not switch to it.
 - ABC writes `abc.history` into the working directory (git-ignored).
 
+## In-house engines (phase 1)
+
+`fdv-bmc` and `fdv-kind` run in-process on CaDiCaL (crate `fdv-sat`,
+C API through FFI). They read Btor2, bit-blast the cone of influence of
+the bad and constraint lines, and unroll it one frame at a time.
+
+| Engine | Proves | Finds bugs | Notes |
+| --- | --- | --- | --- |
+| `fdv-bmc` | no | yes | Shortest counterexample first |
+| `fdv-kind` | yes | yes | k-induction with simple-path constraints, BMC base case |
+
+Not supported yet (they report unknown): arrays, liveness, AIGER input.
+Build CaDiCaL once (`./configure -fPIC && make` in
+`~/Silicon/DV/tools/cadical`, or point `FDV_CADICAL_DIR` at a checkout)
+and rebuild fdv; without it these engines are left out of the portfolio.
+Tests run them on a small built-in DPLL solver instead.
+
 ## Adding an engine
 
 1. Add an `[[engine]]` entry: `program`, `args` with `{model}`, `formats`.

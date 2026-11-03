@@ -19,3 +19,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fdv-fpv = { path = "../../crates/fdv-fpv" }
 fdv-engines-ext = { path = "../../crates/fdv-engines-ext" }
+fdv-bmc = { path = "../../crates/fdv-bmc" }
