@@ -44,6 +44,12 @@ pub struct EngineSpec {
     /// memory through memfd on Linux) instead of the original file.
     #[serde(default)]
     pub preprocess: bool,
+    /// Memory cap in MiB for the engine and every process it starts
+    /// (default: `FDV_ENGINE_MEM_MB`, else none). On Linux this runs the
+    /// engine in a systemd user scope with MemoryMax, so a runaway engine
+    /// is killed on its own instead of the kernel picking a victim.
+    #[serde(default)]
+    pub mem_limit_mb: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -151,6 +157,20 @@ fn kill_tree(child: &mut std::process::Child) {
 }
 
 /// Load every `[[engine]]` from a TOML file.
+/// True when `systemd-run --user --scope` works here (checked once).
+fn scopes_available() -> bool {
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OK.get_or_init(|| {
+        cfg!(target_os = "linux")
+            && Command::new("systemd-run")
+                .args(["--user", "--scope", "--quiet", "--collect", "true"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+    })
+}
+
 /// A preprocessed model held in memory for a child process.
 struct Staged {
     path: String,
@@ -252,7 +272,22 @@ impl Engine for ExternalEngine {
             .iter()
             .map(|a| a.replace("{model}", &model))
             .collect();
-        let mut cmd = Command::new(&self.spec.program);
+        let limit = self.spec.mem_limit_mb.or_else(|| {
+            std::env::var("FDV_ENGINE_MEM_MB")
+                .ok()
+                .and_then(|v| v.parse().ok())
+        });
+        let mut cmd = match limit.filter(|_| scopes_available()) {
+            Some(mb) => {
+                let mut c = Command::new("systemd-run");
+                c.args(["--user", "--scope", "--quiet", "--collect"])
+                    .arg(format!("-pMemoryMax={mb}M"))
+                    .arg("-pMemorySwapMax=0")
+                    .arg(&self.spec.program);
+                c
+            }
+            None => Command::new(&self.spec.program),
+        };
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

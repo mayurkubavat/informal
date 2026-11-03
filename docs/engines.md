@@ -39,6 +39,15 @@ and a sample of HWMCC'24 models with published answers.
   does accept them but misreads them, so do not switch to it.
 - ABC writes `abc.history` into the working directory (git-ignored).
 
+## Memory caps
+
+`mem_limit_mb` on an `[[engine]]` entry (or `FDV_ENGINE_MEM_MB` for all)
+runs the engine in a systemd user scope with `MemoryMax`, so the engine
+and every process it forks share one cap and only they die when it is
+exceeded (the run reads as unknown). The rIC3 portfolio is capped at
+14 GB: its 16 workers reached 18 GB together on HWMCC'24 models here, and
+the kernel then killed unrelated processes.
+
 ## Preprocessed models for external engines
 
 An `[[engine]]` entry with `preprocess = true` gets fdv's simplified model

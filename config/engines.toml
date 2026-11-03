@@ -39,6 +39,9 @@ depth = 'found a counterexample at depth (\d+)'
 name = "ric3"
 program = "ric3"
 args = ["check", "--ui", "false", "{model}", "portfolio"]
+# Its 16 workers can reach 18 GB together on some HWMCC models, which on a
+# 26 GB machine makes the kernel kill unrelated processes. Capped as a group.
+mem_limit_mb = 14000
 formats = ["aiger", "btor2"]
 proves = true
 finds_bugs = true
