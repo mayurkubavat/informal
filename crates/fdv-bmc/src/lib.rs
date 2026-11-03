@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn repo_models() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/models");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/models");
         let kind = KInduction {
             max_depth: Some(40),
         };
