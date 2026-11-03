@@ -18,3 +18,5 @@ fdv-ir.workspace = true
 fdv-engine.workspace = true
 fdv-engines-ext.workspace = true
 fdv-bench.workspace = true
+fdv-tcl.workspace = true
+fdv-fpv.workspace = true

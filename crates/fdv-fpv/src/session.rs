@@ -1,0 +1,591 @@
+//! An FPV session: the design setup, clocks, reset and properties that
+//! JasperGold and VC Formal scripts build up command by command, and the
+//! prove step that turns them into engine runs.
+//!
+//! Elaboration goes through Yosys for now (`read_verilog -sv -formal`,
+//! then Btor2): it is the interim front end until slang lands. Properties
+//! are lowered by [`crate::sva`] and injected as immediate assertions at
+//! the end of the top module, so they see every signal in its scope. Each
+//! assertion or cover gets its own Btor2 model with all assumptions, and
+//! runs through the engine portfolio on its own.
+
+use crate::sva;
+use anyhow::{anyhow, bail, Context};
+use fdv_engine::{portfolio, CheckRequest, Engine, ModelFormat, Verdict};
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Assert,
+    Assume,
+    Cover,
+}
+
+impl Kind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::Assert => "assert",
+            Kind::Assume => "assume",
+            Kind::Cover => "cover",
+        }
+    }
+}
+
+/// Result of proving one property, in the vendor tools' vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Status {
+    Unprocessed,
+    Proven {
+        engine: String,
+        ms: u128,
+    },
+    Cex {
+        engine: String,
+        depth: Option<u32>,
+        ms: u128,
+    },
+    Covered {
+        engine: String,
+        depth: Option<u32>,
+        ms: u128,
+    },
+    Unreachable {
+        engine: String,
+        ms: u128,
+    },
+    Undetermined {
+        reason: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+impl Status {
+    /// The short word JasperGold prints and `-include {status ...}` filters on.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Status::Unprocessed => "unprocessed",
+            Status::Proven { .. } => "proven",
+            Status::Cex { .. } => "cex",
+            Status::Covered { .. } => "covered",
+            Status::Unreachable { .. } => "unreachable",
+            Status::Undetermined { .. } => "undetermined",
+            Status::Error { .. } => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Property {
+    pub name: String,
+    pub kind: Kind,
+    pub expr: String,
+    pub enabled: bool,
+    pub status: Status,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Clock {
+    pub signal: String,
+    pub edge: &'static str,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Design {
+    pub files: Vec<PathBuf>,
+    pub defines: Vec<(String, Option<String>)>,
+    pub incdirs: Vec<PathBuf>,
+    pub top: Option<String>,
+    pub params: Vec<(String, String)>,
+    /// Modules to black-box (accepted for compatibility; not applied yet).
+    pub bbox: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct Session {
+    pub design: Design,
+    pub elaborated: bool,
+    pub clocks: Vec<Clock>,
+    /// Active-high "in reset" condition, held for the first cycle only.
+    pub reset: Option<String>,
+    pub props: Vec<Property>,
+    pub time_limit: Duration,
+    /// Engine names to use; empty means every loaded engine.
+    pub engine_filter: Vec<String>,
+    pub workdir: PathBuf,
+    #[serde(skip)]
+    pub engines: Vec<Arc<dyn Engine>>,
+    pub yosys: PathBuf,
+}
+
+impl Session {
+    pub fn new(engines: Vec<Arc<dyn Engine>>, workdir: PathBuf) -> Self {
+        Session {
+            design: Design::default(),
+            elaborated: false,
+            clocks: Vec::new(),
+            reset: None,
+            props: Vec::new(),
+            time_limit: Duration::from_secs(3600),
+            engine_filter: Vec::new(),
+            workdir,
+            engines,
+            yosys: find_yosys(),
+        }
+    }
+
+    /// `clear -all`: forget the design and properties, keep engines.
+    pub fn clear(&mut self) {
+        let engines = std::mem::take(&mut self.engines);
+        let workdir = std::mem::take(&mut self.workdir);
+        *self = Session::new(engines, workdir);
+    }
+
+    pub fn add_property(
+        &mut self,
+        kind: Kind,
+        name: Option<String>,
+        expr: &str,
+    ) -> Result<String, String> {
+        sva::parse(expr)?; // reject what the lowering can't handle up front
+        let name = name.unwrap_or_else(|| {
+            let n = self.props.iter().filter(|p| p.kind == kind).count();
+            format!("{}_{}", kind.label(), n)
+        });
+        if self.props.iter().any(|p| p.name == name) {
+            return Err(format!("property `{name}` already exists"));
+        }
+        self.props.push(Property {
+            name: name.clone(),
+            kind,
+            expr: expr.to_string(),
+            enabled: true,
+            status: Status::Unprocessed,
+        });
+        Ok(name)
+    }
+
+    /// Names matching a Tcl-style glob (`*`, `?`).
+    pub fn matching(&self, pattern: &str) -> Vec<usize> {
+        self.props
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| glob(pattern, &p.name))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    pub fn elaborate(&mut self, top: Option<String>) -> anyhow::Result<()> {
+        if let Some(t) = top {
+            self.design.top = Some(t);
+        }
+        if self.design.files.is_empty() {
+            bail!("no design files: run analyze / read_file first");
+        }
+        if self.design.top.is_none() {
+            self.design.top = Some(guess_top(&self.design.files)?);
+        }
+        // A plain elaboration, to report syntax errors now rather than at prove.
+        std::fs::create_dir_all(&self.workdir)?;
+        self.run_yosys(
+            &self.design.files.clone(),
+            &[],
+            &self.workdir.join("design.btor2"),
+        )?;
+        self.elaborated = true;
+        Ok(())
+    }
+
+    fn clock_for(&self, l: &sva::Lowered) -> anyhow::Result<(String, &'static str)> {
+        if let Some(c) = &l.clock {
+            return Ok((c.signal.clone(), c.edge));
+        }
+        let c = self
+            .clocks
+            .first()
+            .ok_or_else(|| anyhow!("no clock: declare one with `clock` / `create_clock`"))?;
+        Ok((c.signal.clone(), c.edge))
+    }
+
+    /// The generated checker text injected into the top module.
+    fn harness(&self) -> anyhow::Result<String> {
+        let (clk, edge) = match self.clocks.first() {
+            Some(c) => (c.signal.clone(), c.edge),
+            None => {
+                // A property with its own clocking event can supply it.
+                let l = self
+                    .props
+                    .iter()
+                    .find_map(|p| sva::parse(&p.expr).ok().and_then(|l| l.clock))
+                    .ok_or_else(|| {
+                        anyhow!("no clock: declare one with `clock` / `create_clock`")
+                    })?;
+                (l.signal, l.edge)
+            }
+        };
+        let first = u32::from(self.reset.is_some());
+        let mut v = String::from("\n// ---- fdv formal harness (generated) ----\n");
+        v += "reg [15:0] fdv_cyc = 16'd0;\n";
+        v += &format!(
+            "always @({edge} {clk}) if (fdv_cyc != 16'hffff) fdv_cyc <= fdv_cyc + 16'd1;\n"
+        );
+        if let Some(r) = &self.reset {
+            v += &format!("always @* if (fdv_cyc == 16'd0) assume ({r}); else assume (!({r}));\n");
+        }
+        for (i, p) in self.props.iter().enumerate() {
+            if !p.enabled {
+                continue;
+            }
+            let l = sva::parse(&p.expr).map_err(|e| anyhow!("{}: {e}", p.name))?;
+            let (pclk, pedge) = self.clock_for(&l)?;
+            let mut guard = format!("fdv_cyc >= 16'd{}", first + l.span);
+            if let Some(d) = l.not_disabled() {
+                guard += &format!(" && {d}");
+            }
+            let check = match p.kind {
+                Kind::Assert | Kind::Assume => format!("!({}) || ({})", l.enable(), l.body()),
+                // A cover is checked as "never matches"; a counterexample covers it.
+                Kind::Cover => format!("!({} && {})", l.enable(), l.body()),
+            };
+            let verb = if p.kind == Kind::Assume {
+                "assume"
+            } else {
+                "assert"
+            };
+            let label = format!("fdv_p{i}");
+            let line = format!(
+                "always @({pedge} {pclk}) if ({guard}) {label}: {verb} ({check}); // {} {}\n",
+                p.kind.label(),
+                p.name
+            );
+            if p.kind == Kind::Assume {
+                v += &line;
+            } else {
+                v += &format!("`ifdef FDV_P{i}\n{line}`endif\n");
+            }
+        }
+        v += "// ---- end fdv formal harness ----\n";
+        Ok(v)
+    }
+
+    /// Copy the file holding the top module with the harness inserted
+    /// before its `endmodule`; other files are used as they are.
+    fn injected_files(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let top = self
+            .design
+            .top
+            .as_deref()
+            .ok_or_else(|| anyhow!("no top module"))?;
+        let harness = self.harness()?;
+        let re = regex::Regex::new(&format!(r"(?m)\bmodule\s+{}\b", regex::escape(top)))?;
+        let end = regex::Regex::new(r"\bendmodule\b")?;
+        let mut out = Vec::new();
+        let mut found = false;
+        for f in &self.design.files {
+            let text =
+                std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?;
+            match re.find(&text) {
+                Some(m) if !found => {
+                    let e = end
+                        .find_at(&text, m.end())
+                        .ok_or_else(|| anyhow!("no endmodule for {top} in {}", f.display()))?;
+                    let name = f.file_name().unwrap_or_default().to_string_lossy();
+                    let copy = self.workdir.join(format!("fdv_{name}"));
+                    let mut s = String::with_capacity(text.len() + harness.len());
+                    s += &text[..e.start()];
+                    s += &harness;
+                    s += &text[e.start()..];
+                    std::fs::write(&copy, s)?;
+                    out.push(copy);
+                    found = true;
+                }
+                _ => out.push(f.clone()),
+            }
+        }
+        if !found {
+            bail!("top module `{top}` not found in the analyzed files");
+        }
+        Ok(out)
+    }
+
+    fn run_yosys(&self, files: &[PathBuf], defines: &[String], out: &Path) -> anyhow::Result<()> {
+        let top = self.design.top.as_deref().unwrap_or_default();
+        let mut read = String::from("read_verilog -sv -formal");
+        for (k, v) in &self.design.defines {
+            read += &match v {
+                Some(v) => format!(" -D{k}={v}"),
+                None => format!(" -D{k}"),
+            };
+        }
+        for d in defines {
+            read += &format!(" -D{d}");
+        }
+        for i in &self.design.incdirs {
+            read += &format!(" -I{}", i.display());
+        }
+        for f in files {
+            read += &format!(" {}", f.display());
+        }
+        let mut script = vec![read];
+        for (k, v) in &self.design.params {
+            script.push(format!("chparam -set {k} {v} {top}"));
+        }
+        script.push(format!("prep -top {top}"));
+        script.extend(
+            [
+                "flatten",
+                "async2sync",
+                "dffunmap",
+                "setundef -undriven -anyseq",
+                "opt_clean",
+            ]
+            .map(String::from),
+        );
+        script.push(format!("write_btor {}", out.display()));
+        let o = Command::new(&self.yosys)
+            .arg("-q")
+            .arg("-p")
+            .arg(script.join("; "))
+            .current_dir(&self.workdir)
+            .output()
+            .with_context(|| format!("running {}", self.yosys.display()))?;
+        if !o.status.success() {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let msg = String::from_utf8_lossy(&o.stdout);
+            bail!("yosys failed:\n{}{}", msg.trim(), err.trim());
+        }
+        Ok(())
+    }
+
+    fn engines(&self) -> Vec<Arc<dyn Engine>> {
+        let picked: Vec<_> = self
+            .engines
+            .iter()
+            .filter(|e| {
+                self.engine_filter.is_empty() || self.engine_filter.iter().any(|n| n == e.name())
+            })
+            .filter(|e| e.capabilities().formats.contains(&ModelFormat::Btor2))
+            .cloned()
+            .collect();
+        if picked.is_empty() {
+            // A filter naming engines that are not installed falls back to all.
+            return self.engines.clone();
+        }
+        picked
+    }
+
+    /// Prove the selected assertions and covers (all enabled ones when
+    /// `which` is empty). Returns their indices.
+    pub fn prove(&mut self, which: &[usize]) -> anyhow::Result<Vec<usize>> {
+        if !self.elaborated {
+            self.elaborate(None)?;
+        }
+        let targets: Vec<usize> = if which.is_empty() {
+            (0..self.props.len())
+                .filter(|&i| self.props[i].enabled && self.props[i].kind != Kind::Assume)
+                .collect()
+        } else {
+            which
+                .iter()
+                .copied()
+                .filter(|&i| self.props[i].kind != Kind::Assume)
+                .collect()
+        };
+        let files = self.injected_files()?;
+        let engines = self.engines();
+        for &i in &targets {
+            let out = self.workdir.join(format!("prop_{i}.btor2"));
+            let status = match self.run_yosys(&files, &[format!("FDV_P{i}")], &out) {
+                Err(e) => Status::Error {
+                    message: format!("{e:#}"),
+                },
+                Ok(()) => self.check_one(&engines, i, &out),
+            };
+            self.props[i].status = status;
+        }
+        Ok(targets)
+    }
+
+    fn check_one(&self, engines: &[Arc<dyn Engine>], i: usize, model: &Path) -> Status {
+        let kind = self.props[i].kind;
+        let bads = std::fs::read_to_string(model)
+            .map(|t| {
+                t.lines()
+                    .filter(|l| l.split_whitespace().nth(1) == Some("bad"))
+                    .count()
+            })
+            .unwrap_or(0);
+        if bads == 0 {
+            // Yosys folded the check to a constant true.
+            return match kind {
+                Kind::Cover => Status::Unreachable {
+                    engine: "elaboration".into(),
+                    ms: 0,
+                },
+                _ => Status::Proven {
+                    engine: "elaboration".into(),
+                    ms: 0,
+                },
+            };
+        }
+        let req = CheckRequest {
+            model: model.to_path_buf(),
+            format: ModelFormat::Btor2,
+            timeout: self.time_limit,
+        };
+        let o = portfolio::run(engines, &req, None);
+        let engine = o
+            .winner
+            .as_ref()
+            .map(|w| w.engine.clone())
+            .unwrap_or_default();
+        let ms = o.wall_ms;
+        match (portfolio::verdict(&o), kind) {
+            (Verdict::Safe, Kind::Cover) => Status::Unreachable { engine, ms },
+            (Verdict::Safe, _) => Status::Proven { engine, ms },
+            (Verdict::Unsafe { depth }, Kind::Cover) => Status::Covered { engine, depth, ms },
+            (Verdict::Unsafe { depth }, _) => Status::Cex { engine, depth, ms },
+            (Verdict::Unknown { reason }, _) => Status::Undetermined { reason },
+        }
+    }
+
+    /// A JasperGold-style summary table.
+    pub fn report(&self) -> String {
+        let mut s = format!(
+            "{:<28} {:<7} {:<13} {:<10} {}\n",
+            "property", "type", "status", "engine", "detail"
+        );
+        for p in &self.props {
+            let (engine, detail) = match &p.status {
+                Status::Proven { engine, ms } | Status::Unreachable { engine, ms } => {
+                    (engine.clone(), format!("{:.2} s", *ms as f64 / 1000.0))
+                }
+                Status::Cex { engine, depth, ms } | Status::Covered { engine, depth, ms } => (
+                    engine.clone(),
+                    format!(
+                        "depth {} in {:.2} s",
+                        depth.map_or("?".into(), |d| d.to_string()),
+                        *ms as f64 / 1000.0
+                    ),
+                ),
+                Status::Undetermined { reason } => (String::new(), reason.clone()),
+                Status::Error { message } => {
+                    (String::new(), message.lines().next().unwrap_or("").into())
+                }
+                Status::Unprocessed => (String::new(), String::new()),
+            };
+            let status = if p.enabled {
+                p.status.word()
+            } else {
+                "disabled"
+            };
+            s += &format!(
+                "{:<28} {:<7} {:<13} {:<10} {}\n",
+                p.name,
+                p.kind.label(),
+                status,
+                engine,
+                detail
+            );
+        }
+        s
+    }
+}
+
+fn find_yosys() -> PathBuf {
+    if let Some(p) = std::env::var_os("FDV_YOSYS") {
+        return p.into();
+    }
+    let on_path = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join("yosys").is_file()))
+        .unwrap_or(false);
+    if !on_path {
+        let fallback = Path::new("/tools/yosys/current/bin/yosys");
+        if fallback.is_file() {
+            return fallback.into();
+        }
+    }
+    "yosys".into()
+}
+
+/// The single module never instantiated by another, when there is one.
+fn guess_top(files: &[PathBuf]) -> anyhow::Result<String> {
+    let decl = regex::Regex::new(r"(?m)^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)")?;
+    let mut text = String::new();
+    for f in files {
+        text += &std::fs::read_to_string(f)?;
+    }
+    let names: Vec<String> = decl
+        .captures_iter(&text)
+        .map(|c| c[1].to_string())
+        .collect();
+    let roots: Vec<&String> = names
+        .iter()
+        .filter(|n| {
+            let inst = regex::Regex::new(&format!(
+                r"(?m)^\s*{}\s+(#\s*\(|[A-Za-z_])",
+                regex::escape(n)
+            ))
+            .unwrap();
+            !inst.is_match(&text)
+        })
+        .collect();
+    match roots.as_slice() {
+        [one] => Ok((*one).clone()),
+        _ => bail!("cannot tell the top module (candidates: {roots:?}); use -top"),
+    }
+}
+
+/// Tcl `string match` style glob.
+pub fn glob(pat: &str, s: &str) -> bool {
+    fn go(p: &[u8], s: &[u8]) -> bool {
+        match (p.first(), s.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => go(&p[1..], s) || (!s.is_empty() && go(p, &s[1..])),
+            (Some(b'?'), Some(_)) => go(&p[1..], &s[1..]),
+            (Some(a), Some(b)) if a == b => go(&p[1..], &s[1..]),
+            _ => false,
+        }
+    }
+    go(pat.as_bytes(), s.as_bytes())
+}
+
+/// `1h`, `30m`, `90s`, `2H`, or plain seconds.
+pub fn parse_duration(s: &str) -> Result<Duration, String> {
+    let s = s.trim();
+    let (num, unit) = s.split_at(
+        s.find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(s.len()),
+    );
+    let n: f64 = num.parse().map_err(|_| format!("bad time `{s}`"))?;
+    let secs = match unit.to_ascii_lowercase().as_str() {
+        "" | "s" => n,
+        "m" => n * 60.0,
+        "h" => n * 3600.0,
+        "d" => n * 86400.0,
+        _ => return Err(format!("bad time unit in `{s}`")),
+    };
+    Ok(Duration::from_secs_f64(secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn globs_and_durations() {
+        assert!(glob("a_*", "a_le9"));
+        assert!(!glob("a_?", "a_le9"));
+        assert_eq!(parse_duration("1h").unwrap().as_secs(), 3600);
+        assert_eq!(parse_duration("30M").unwrap().as_secs(), 1800);
+        assert_eq!(parse_duration("45").unwrap().as_secs(), 45);
+        assert!(parse_duration("3x").is_err());
+    }
+}

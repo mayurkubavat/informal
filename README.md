@@ -8,7 +8,7 @@ The plan this code follows is the research report and phased roadmap:
 Formal Verification Tool: Research Report & Architecture Plan (kept outside this repository).
 Background research lives in `research/`.
 
-## Status: phase 0 (foundations)
+## Status: phase 0 done, phase 1 (FPV MVP) started
 
 | Crate | What it does |
 | --- | --- |
@@ -16,11 +16,15 @@ Background research lives in `research/`.
 | `fdv-engine` | The engine plug-in API (`Engine` trait, capabilities, progress, cancellation) and the parallel portfolio runner, which takes the first definitive verdict, cancels the rest and flags engines that contradict each other. |
 | `fdv-engines-ext` | Adapters that run external model checkers (rIC3, Pono, ABC, BtorMC) as child processes, described in `config/engines.toml`. |
 | `fdv-bench` | Benchmark harness. Appends one JSON line per engine run to the run database and scores engines by solved count and PAR-2, including a virtual-best row. |
+| `fdv-tcl` | Embedded Tcl 8.6 (the C library through FFI) for fdv scripts. |
+| `fdv-fpv` | FPV sessions: design setup, SVA subset compiler, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
 | `fdv-cli` | The `fdv` command. |
 
 ## Build and test
 
-Needs a stable Rust toolchain (`rustup`, Rust 1.80 or newer).
+Needs a stable Rust toolchain (`rustup`, Rust 1.80 or newer), the Tcl 8.6
+development library (`tcl8.6-dev` on Ubuntu, `tcl-tk@8` from Homebrew on
+macOS) and, for `fdv shell`, Yosys.
 
 ```sh
 cargo build --release
@@ -40,7 +44,10 @@ target/release/fdv fmt tests/models/memory.btor2
 target/release/fdv check tests/models/toggle_unsafe.aag --timeout 60
 
 # Benchmark every engine on a model set and log to bench/runs.jsonl
-target/release/fdv bench path/to/hwmcc24 --each --timeout 300
+target/release/fdv bench path/to/hwmcc24 --each --timeout 300 --jobs 8
+
+# Run a JasperGold or VC Formal style FPV script
+target/release/fdv shell tests/fpv/counter/counter.jg.tcl
 ```
 
 Engines must be on `PATH` under the names in `config/engines.toml`

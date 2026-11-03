@@ -184,7 +184,9 @@ dependencies = [
  "fdv-bench",
  "fdv-engine",
  "fdv-engines-ext",
+ "fdv-fpv",
  "fdv-ir",
+ "fdv-tcl",
  "serde_json",
 ]
 
@@ -209,12 +211,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "fdv-fpv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fdv-engine",
+ "fdv-engines-ext",
+ "fdv-tcl",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fdv-ir"
 version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror",
 ]
+
+[[package]]
+name = "fdv-tcl"
+version = "0.1.0"
 
 [[package]]
 name = "generic-array"

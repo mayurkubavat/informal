@@ -3,6 +3,7 @@
 //!   fdv info  <model.btor2>                      parse, validate, print features
 //!   fdv fmt   <model.btor2>                      print canonical Btor2
 //!   fdv check <model> [--engines F] [--timeout S]  run the portfolio
+//!   fdv shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
 //!   fdv bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
 
 use anyhow::{bail, Context};
@@ -39,6 +40,22 @@ enum Cmd {
         /// Only use these engines (comma-separated names).
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
+    },
+    /// Run a JasperGold or VC Formal style Tcl script (or an interactive
+    /// shell when no script is given).
+    Shell {
+        script: Option<PathBuf>,
+        /// Command set: jg or vcf (default: detected from the script).
+        #[arg(long)]
+        flavor: Option<String>,
+        #[arg(long, default_value = "config/engines.toml")]
+        engines: PathBuf,
+        /// Scratch directory for generated models.
+        #[arg(long, default_value = "fdv_work")]
+        workdir: PathBuf,
+        /// Evaluate this Tcl before the script (repeatable).
+        #[arg(short = 'c', long = "command")]
+        commands: Vec<String>,
     },
     /// Run engines over every model in a directory and log to the run database.
     Bench {
@@ -142,6 +159,43 @@ fn main() -> anyhow::Result<()> {
                 Verdict::Unknown { .. } => 0,
             });
         }
+        Cmd::Shell {
+            script,
+            flavor,
+            engines,
+            workdir,
+            commands,
+        } => {
+            let text = match &script {
+                Some(p) => std::fs::read_to_string(p)
+                    .with_context(|| format!("reading {}", p.display()))?,
+                None => String::new(),
+            };
+            let flavor = match flavor.as_deref() {
+                Some(f) => fdv_fpv::Flavor::parse(f)
+                    .with_context(|| format!("unknown flavor {f} (jg or vcf)"))?,
+                None => fdv_fpv::detect_flavor(&text),
+            };
+            let engines = fdv_engines_ext::load(&engines)?;
+            let session = fdv_fpv::Session::new(engines, workdir);
+            let shell = fdv_fpv::Shell::new(session, flavor);
+            for c in &commands {
+                if let Err(e) = shell.eval(c) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            match &script {
+                Some(p) => {
+                    if let Err(e) = shell.source(p) {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                None if commands.is_empty() => repl(&shell)?,
+                None => {}
+            }
+        }
         Cmd::Bench {
             dir,
             engines,
@@ -201,4 +255,38 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A minimal interactive prompt: reads lines until a command is complete.
+fn repl(shell: &fdv_fpv::Shell) -> anyhow::Result<()> {
+    use std::io::{BufRead, Write};
+    let flavor = shell.interp.get_var("fdv_flavor").unwrap_or_default();
+    let stdin = std::io::stdin();
+    let mut buf = String::new();
+    loop {
+        print!(
+            "{}",
+            if buf.is_empty() {
+                format!("fdv[{flavor}]> ")
+            } else {
+                "... ".into()
+            }
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line)? == 0 {
+            println!();
+            return Ok(());
+        }
+        buf += &line;
+        if !fdv_tcl::Interp::is_complete(&buf) {
+            continue;
+        }
+        match shell.eval(&buf) {
+            Ok(r) if !r.is_empty() => println!("{r}"),
+            Ok(_) => {}
+            Err(e) => eprintln!("error: {}", e.message),
+        }
+        buf.clear();
+    }
 }
