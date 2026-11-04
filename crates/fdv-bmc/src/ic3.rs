@@ -26,6 +26,8 @@ pub struct Config {
     pub max_ctg_depth: usize,
     /// Try dropping literals from the highest variable down.
     pub reverse_drop: bool,
+    /// Counterexamples to propagation blocked per lemma when pushing it.
+    pub max_ctps: usize,
 }
 
 impl Default for Config {
@@ -34,6 +36,7 @@ impl Default for Config {
             max_ctgs: 3,
             max_ctg_depth: 1,
             reverse_drop: false,
+            max_ctps: 3,
         }
     }
 }
@@ -135,6 +138,7 @@ pub struct Ic3<'g> {
     share: Option<Share>,
     pub stats_lemmas: usize,
     pub stats_imported: usize,
+    pub stats_ctps: usize,
     pub stats_queries: usize,
     pub stats_query_time: std::time::Duration,
     pub stats_lift_time: std::time::Duration,
@@ -176,6 +180,7 @@ impl<'g> Ic3<'g> {
             share: None,
             stats_lemmas: 0,
             stats_imported: 0,
+            stats_ctps: 0,
             stats_queries: 0,
             stats_query_time: Default::default(),
             stats_lift_time: Default::default(),
@@ -627,6 +632,9 @@ impl<'g> Ic3<'g> {
     }
 
     /// Push lemmas forward; true when two frames become equal (proof).
+    /// A lemma that fails to push is retried after blocking, one frame
+    /// down, the state that stopped it (counterexample to propagation,
+    /// CTP), up to `max_ctps` times.
     fn propagate(&mut self, ctx: &RunContext) -> bool {
         for i in 1..self.top() {
             let lemmas = std::mem::take(&mut self.frames[i]);
@@ -636,7 +644,7 @@ impl<'g> Ic3<'g> {
                     stay.push(c);
                     continue;
                 }
-                if self.relative_inductive(&c, i + 1, false).is_ok() {
+                if self.push_lemma(&c, i, ctx) {
                     self.publish(&c, i + 1);
                     let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
                     self.solvers[i + 1].sat.add_clause(&clause);
@@ -645,12 +653,42 @@ impl<'g> Ic3<'g> {
                     stay.push(c);
                 }
             }
+            // Lemmas CTP added at level i while its list was taken.
+            stay.append(&mut self.frames[i]);
             self.frames[i] = stay;
             if self.frames[i].is_empty() {
                 return true;
             }
         }
         false
+    }
+
+    /// Does lemma `c` of frame `i` hold in frame `i + 1`?
+    fn push_lemma(&mut self, c: &Cube, i: usize, ctx: &RunContext) -> bool {
+        let mut ctps = 0;
+        loop {
+            let want = ctps < self.cfg.max_ctps;
+            match self.relative_inductive(c, i + 1, want) {
+                Ok(_) => return true,
+                Err(None) => return false,
+                Err(Some(p)) => {
+                    if ctx.should_stop() || self.intersects_init(&p) {
+                        return false;
+                    }
+                    // Block the predecessor in frame i, if it is not
+                    // reachable there; then the push may succeed.
+                    match self.relative_inductive(&p, i, false) {
+                        Ok(core) => {
+                            ctps += 1;
+                            self.stats_ctps += 1;
+                            let g = self.generalize(core, i, 1, ctx);
+                            self.add_lemma(g, i);
+                        }
+                        Err(_) => return false,
+                    }
+                }
+            }
+        }
     }
 
     pub fn check(&mut self, ctx: &RunContext) -> Verdict {
