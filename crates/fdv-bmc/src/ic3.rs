@@ -21,7 +21,7 @@ const MAX_CTGS: usize = 3;
 const MAX_CTG_DEPTH: usize = 1;
 
 /// A cube over latch literals (AIG literals), sorted.
-type Cube = Vec<Lit>;
+pub type Cube = Vec<Lit>;
 
 /// One SAT solver over the template: SAT variable = template variable.
 struct Solver {
@@ -619,6 +619,13 @@ impl<'g> Ic3<'g> {
                 };
             }
         }
+    }
+
+    /// Every lemma IC3 holds, at any level. Each excludes the initial
+    /// states but is only known to hold up to its frame: run them through
+    /// [`crate::invariant::houdini`] before treating them as invariants.
+    pub fn lemmas(&self) -> Vec<Cube> {
+        self.frames.iter().flatten().cloned().collect()
     }
 
     pub fn depth(&self) -> usize {

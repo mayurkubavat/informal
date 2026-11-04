@@ -36,6 +36,18 @@ impl<'g> Unroll<'g> {
         }
     }
 
+    /// A new SAT variable, reserved in the solver.
+    pub fn new_var(&mut self) -> Lit {
+        self.sat.reserve(1);
+        self.fresh()
+    }
+
+    /// Require clause `!cube` (AIG latch literals) in frame `k`.
+    pub fn block_cube(&mut self, k: usize, cube: &[fdv_aig::Lit]) {
+        let c: Vec<Lit> = cube.iter().map(|&l| -self.lit(k, l)).collect();
+        self.sat.add_clause(&c);
+    }
+
     fn fresh(&mut self) -> Lit {
         let v = self.next_var;
         self.next_var += 1;
