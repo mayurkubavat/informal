@@ -8,8 +8,8 @@ db=bench/runs-inhouse-sample60-$tag.jsonl
 log=bench/inhouse-sample60-$tag.log
 {
   echo "== start $(date -Is) timeout=${timeout}s jobs=$jobs"
-  target/release/fdv bench bench/hwmcc24/sample60 --each \
-    --only fdv-bmc,fdv-kind,fdv-ic3,fdv-wbmc,abc-pdr-pp \
+  target/release/fdv bench "${models:-bench/hwmcc24/sample60}" --each \
+    --only fdv-bmc,fdv-kind,fdv-ic3,fdv-kind-ic3,abc-pdr-pp \
     --timeout "$timeout" --jobs "$jobs" --db "$db"
   python3 -I scripts/hwmcc_check.py bench/hwmcc24/expected.json "$db"
   echo "== end $(date -Is)"
