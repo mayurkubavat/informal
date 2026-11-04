@@ -9,6 +9,7 @@
 pub mod cnf;
 pub mod ic3;
 pub mod invariant;
+pub mod scorr;
 pub mod unroll;
 
 use fdv_aig::Aig;
@@ -29,6 +30,37 @@ fn prepare(req: &CheckRequest) -> Result<Aig, String> {
         return Err("model has no bad-state property".into());
     }
     Ok(fdv_aig::preprocess::simplify(&g).0)
+}
+
+/// [`prepare`], then latch correspondence ([`scorr`]) within 5% of the
+/// time left (at most 10 s): on the big CPU models of HWMCC'24 1-induction
+/// peels off about one candidate per SAT call and never finishes, so the
+/// budget only bounds the waste. `FDV_NO_SCORR` turns it off.
+fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Aig, String> {
+    let g = prepare(req)?;
+    if std::env::var_os("FDV_NO_SCORR").is_some() {
+        return Ok(g);
+    }
+    let now = Instant::now();
+    let left = ctx.deadline.saturating_duration_since(now);
+    let mut c = ctx.clone();
+    c.deadline = now + (left / 20).min(std::time::Duration::from_secs(10));
+    match scorr::latch_correspondence(&g, solver(&c), &c) {
+        Some((h, st)) => {
+            if std::env::var_os("FDV_IC3_STATS").is_some() {
+                eprintln!(
+                    "scorr: merged {} latches ({} -> {}), {} refinements, {:.2} s",
+                    st.merged,
+                    g.latches.len(),
+                    h.latches.len(),
+                    st.refinements,
+                    now.elapsed().as_secs_f64()
+                );
+            }
+            Ok(h)
+        }
+        None => Ok(g),
+    }
 }
 
 fn solver(ctx: &RunContext) -> Box<dyn Sat> {
@@ -76,7 +108,7 @@ impl Engine for Bmc {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare(req) {
+        let g = match prepare_ctx(req, ctx) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -134,7 +166,7 @@ impl Engine for KInduction {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare(req) {
+        let g = match prepare_ctx(req, ctx) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -225,7 +257,7 @@ impl Engine for Ic3Engine {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare(req) {
+        let g = match prepare_ctx(req, ctx) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -291,7 +323,7 @@ impl Engine for KindIc3 {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare(req) {
+        let g = match prepare_ctx(req, ctx) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -371,7 +403,7 @@ impl Engine for Ic3Mt {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare(req) {
+        let g = match prepare_ctx(req, ctx) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -637,6 +669,44 @@ mod tests {
                 Verdict::Unsafe { depth: Some(4) }
             );
         }
+    }
+
+    /// Two copies of the wrapping counter, bad when they differ or when
+    /// the first reaches 7: scorr merges the copies (3 latches left) and
+    /// every engine still proves it; a reachable target stays unsafe.
+    #[test]
+    fn scorr_merges_copies() {
+        let twin = |target: u32| {
+            format!(
+                "1 sort bitvec 3\n2 sort bitvec 1\n3 zero 1\n4 state 1 a\n5 init 1 4 3\n\
+                 6 one 1\n7 add 1 4 6\n8 constd 1 5\n9 eq 2 4 8\n10 ite 1 9 3 7\n11 next 1 4 10\n\
+                 12 state 1 b\n13 init 1 12 3\n14 add 1 12 6\n15 eq 2 12 8\n16 ite 1 15 3 14\n\
+                 17 next 1 12 16\n18 neq 2 4 12\n19 constd 1 {target}\n20 eq 2 4 19\n21 or 2 18 20\n22 bad 21\n"
+            )
+        };
+        let dir = std::env::temp_dir().join(format!("fdv-scorr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("twin.btor2");
+        std::fs::write(&path, twin(7)).unwrap();
+        let req = CheckRequest {
+            model: path,
+            format: ModelFormat::Btor2,
+            timeout: Duration::from_secs(10),
+        };
+        let ctx = RunContext::new(req.timeout);
+        let g = prepare(&req).unwrap();
+        assert_eq!(g.latches.len(), 6);
+        let (h, st) = scorr::latch_correspondence(&g, solver(&ctx), &ctx).unwrap();
+        assert_eq!(st.merged, 3);
+        assert_eq!(h.latches.len(), 3);
+        let ic3 = Ic3Engine { mini: true };
+        let kind = KInduction {
+            max_depth: Some(20),
+        };
+        assert_eq!(check(&ic3, &twin(7)), Verdict::Safe);
+        assert_eq!(check(&kind, &twin(7)), Verdict::Safe);
+        assert_eq!(check(&ic3, &twin(4)), Verdict::Unsafe { depth: Some(4) });
+        assert_eq!(check(&kind, &twin(4)), Verdict::Unsafe { depth: Some(4) });
     }
 
     #[test]
