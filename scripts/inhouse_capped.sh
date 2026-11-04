@@ -8,19 +8,20 @@ list=$1; db=$2; timeout=${3:-60}; jobs=${4:-3}; mem=${5:-7G}
 engines=${engines:-fdv-bmc,fdv-kind,fdv-ic3,fdv-kind-ic3,abc-pdr-pp}
 # fdv stops its own engines at 90% of the cap; the scope kill is the backstop.
 budget=$(echo "${mem%G} * 0.9" | bc)
+fdv=${fdv:-$PWD/target/release/fdv}
 tmp=$(mktemp -d)
 one() {
   m=$1; d=$tmp/$(echo "$m" | md5sum | cut -c1-12)
   mkdir -p "$d/m"; ln -s "$PWD/$m" "$d/m/$(basename "$m")"
   systemd-run --user --scope -q -p MemoryMax="$mem" -p MemorySwapMax=0 \
-    target/release/fdv --mem-gb "$budget" bench "$d/m" --each --only "$engines" \
+    "$fdv" --mem-gb "$budget" bench "$d/m" --each --only "$engines" \
     --timeout "$timeout" --jobs 1 --db "$d/runs.jsonl" >"$d/out.log" 2>&1 \
     || echo "  memout/error  $m"
   # Report the real model path, not the temp link.
   [ -f "$d/runs.jsonl" ] && sed "s#\"model\":\"[^\"]*\"#\"model\":\"$m\"#" "$d/runs.jsonl" > "$d/fixed.jsonl"
   grep "ms  " "$d/out.log" || true
 }
-export -f one; export tmp timeout engines mem budget
+export -f one; export tmp timeout engines mem budget fdv
 xargs -a "$list" -P "$jobs" -I{} bash -c 'one "$@"' _ {}
 cat "$tmp"/*/fixed.jsonl >> "$db" 2>/dev/null || true
 echo "== end $(date -Is)"
