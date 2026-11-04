@@ -7,8 +7,10 @@
 //!
 //! It runs on the SAT interface (CaDiCaL today); the IC3-only solver of
 //! the round-2 plan replaces it underneath without changing this file's
-//! logic. Generalization uses CTGs. Not yet: CTP, EXCTG, DynAMic, lemma
-//! sharing.
+//! logic. Generalization uses CTGs. Several IC3s can share lemmas through
+//! a [`LemmaPool`]: a lemma of frame j excludes no state reachable in j
+//! steps, whichever IC3 found it, so another IC3 may add it to its own
+//! frames up to j. Not yet: CTP, EXCTG, DynAMic.
 
 use crate::cnf::{self, TLit, Template};
 use fdv_aig::{is_neg, neg, var, Aig, Init, Lit};
@@ -16,9 +18,47 @@ use fdv_engine::{RunContext, Verdict};
 use fdv_sat::{Answer, Sat};
 use std::collections::BinaryHeap;
 
-/// CTGs blocked per literal drop, and how deep CTG blocking may recurse.
-const MAX_CTGS: usize = 3;
-const MAX_CTG_DEPTH: usize = 1;
+/// How one IC3 generalizes; portfolio workers differ here.
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    /// CTGs blocked per literal drop, and how deep CTG blocking recurses.
+    pub max_ctgs: usize,
+    pub max_ctg_depth: usize,
+    /// Try dropping literals from the highest variable down.
+    pub reverse_drop: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            max_ctgs: 3,
+            max_ctg_depth: 1,
+            reverse_drop: false,
+        }
+    }
+}
+
+/// Lemmas published by several IC3s: (cube, frame, publisher).
+#[derive(Default)]
+pub struct LemmaPool {
+    lemmas: std::sync::Mutex<Vec<(Cube, usize, usize)>>,
+    len: std::sync::atomic::AtomicUsize,
+}
+
+impl LemmaPool {
+    fn publish(&self, cube: &Cube, level: usize, id: usize) {
+        let mut v = self.lemmas.lock().unwrap();
+        v.push((cube.clone(), level, id));
+        self.len
+            .store(v.len(), std::sync::atomic::Ordering::Release);
+    }
+}
+
+struct Share {
+    pool: std::sync::Arc<LemmaPool>,
+    id: usize,
+    seen: usize,
+}
 
 /// A cube over latch literals (AIG literals), sorted.
 pub type Cube = Vec<Lit>;
@@ -91,7 +131,10 @@ pub struct Ic3<'g> {
     /// DFS marks for domain computation (epoch-stamped).
     mark: Vec<u32>,
     epoch: u32,
+    cfg: Config,
+    share: Option<Share>,
     pub stats_lemmas: usize,
+    pub stats_imported: usize,
     pub stats_queries: usize,
     pub stats_query_time: std::time::Duration,
     pub stats_lift_time: std::time::Duration,
@@ -129,7 +172,10 @@ impl<'g> Ic3<'g> {
             make_sat,
             mark: vec![0; nvars + 2],
             epoch: 0,
+            cfg: Config::default(),
+            share: None,
             stats_lemmas: 0,
+            stats_imported: 0,
             stats_queries: 0,
             stats_query_time: Default::default(),
             stats_lift_time: Default::default(),
@@ -193,7 +239,52 @@ impl<'g> Ic3<'g> {
         })
     }
 
+    pub fn set_config(&mut self, cfg: Config) {
+        self.cfg = cfg;
+    }
+
+    /// Publish this IC3's lemmas to `pool` as `id` and take the others'.
+    pub fn share(&mut self, pool: std::sync::Arc<LemmaPool>, id: usize) {
+        self.share = Some(Share { pool, id, seen: 0 });
+    }
+
+    fn publish(&self, cube: &Cube, level: usize) {
+        if let Some(sh) = &self.share {
+            sh.pool.publish(cube, level, sh.id);
+        }
+    }
+
+    /// Add the other IC3s' new lemmas, each at its frame or our top.
+    fn import(&mut self) {
+        let Some(sh) = &mut self.share else { return };
+        if sh.pool.len.load(std::sync::atomic::Ordering::Acquire) == sh.seen {
+            return;
+        }
+        let new: Vec<(Cube, usize)> = {
+            let v = sh.pool.lemmas.lock().unwrap();
+            let new = v[sh.seen..]
+                .iter()
+                .filter(|(_, _, id)| *id != sh.id)
+                .map(|(c, l, _)| (c.clone(), *l))
+                .collect();
+            sh.seen = v.len();
+            new
+        };
+        for (c, l) in new {
+            let lvl = l.min(self.top());
+            if lvl >= 1 && !self.already_blocked(&c, lvl) {
+                self.add_lemma_quiet(c, lvl);
+                self.stats_imported += 1;
+            }
+        }
+    }
+
     fn add_lemma(&mut self, cube: Cube, level: usize) {
+        self.publish(&cube, level);
+        self.add_lemma_quiet(cube, level);
+    }
+
+    fn add_lemma_quiet(&mut self, cube: Cube, level: usize) {
         let clause: Vec<i32> = cube.iter().map(|&l| -t(l)).collect();
         for i in 1..=level {
             self.solvers[i].sat.add_clause(&clause);
@@ -397,20 +488,21 @@ impl<'g> Ic3<'g> {
     /// itself blocked one level down when it can be, then the drop is
     /// retried; otherwise the candidate shrinks to what it shares with it.
     fn generalize(&mut self, mut cube: Cube, i: usize, depth: usize, ctx: &RunContext) -> Cube {
-        let mut idx = 0;
-        while idx < cube.len() && !ctx.should_stop() {
+        let mut order = cube.clone();
+        if self.cfg.reverse_drop {
+            order.reverse();
+        }
+        for l in order {
+            if ctx.should_stop() {
+                break;
+            }
+            let Ok(pos) = cube.binary_search(&l) else {
+                continue; // already gone with an earlier core
+            };
             let mut cand = cube.clone();
-            cand.remove(idx);
-            match self.ctg_down(cand, i, depth, ctx) {
-                Some(core) => {
-                    // Keep scanning at the same position of the smaller cube.
-                    idx = core
-                        .iter()
-                        .position(|&l| l > cube[idx])
-                        .unwrap_or(core.len());
-                    cube = core;
-                }
-                None => idx += 1,
+            cand.remove(pos);
+            if let Some(core) = self.ctg_down(cand, i, depth, ctx) {
+                cube = core;
             }
         }
         cube
@@ -432,8 +524,8 @@ impl<'g> Ic3<'g> {
                 Ok(core) => return (!self.intersects_init(&core)).then_some(core),
                 Err(None) => return None,
                 Err(Some(ctg)) => {
-                    if depth < MAX_CTG_DEPTH
-                        && ctgs < MAX_CTGS
+                    if depth < self.cfg.max_ctg_depth
+                        && ctgs < self.cfg.max_ctgs
                         && i > 1
                         && !self.intersects_init(&ctg)
                     {
@@ -479,6 +571,7 @@ impl<'g> Ic3<'g> {
             if ctx.should_stop() {
                 return Ok(false);
             }
+            self.import();
             // Every state of an obligation's cube reaches a bad state, so a
             // cube that meets the initial states is a real counterexample.
             if ob.level == 0 || self.intersects_init(&ob.cube) {
@@ -544,6 +637,7 @@ impl<'g> Ic3<'g> {
                     continue;
                 }
                 if self.relative_inductive(&c, i + 1, false).is_ok() {
+                    self.publish(&c, i + 1);
                     let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
                     self.solvers[i + 1].sat.add_clause(&clause);
                     self.frames[i + 1].push(c);
@@ -579,6 +673,7 @@ impl<'g> Ic3<'g> {
                         reason: ctx.stop_reason().into(),
                     };
                 }
+                self.import();
                 let k = self.top();
                 let bad = self.bad;
                 let dom = self.domain(&[bad], k);

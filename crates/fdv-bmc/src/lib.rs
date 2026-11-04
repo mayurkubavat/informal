@@ -318,6 +318,132 @@ impl Engine for KindIc3 {
     }
 }
 
+/// Several IC3s with different generalization settings and solvers, on
+/// threads, sharing lemmas through one [`ic3::LemmaPool`]. The first
+/// definitive verdict wins and stops the rest.
+pub struct Ic3Mt {
+    pub workers: Vec<(bool, ic3::Config)>,
+}
+
+impl Default for Ic3Mt {
+    fn default() -> Self {
+        use ic3::Config;
+        let d = Config::default();
+        Ic3Mt {
+            workers: vec![
+                (true, d),
+                (false, d),
+                (
+                    true,
+                    Config {
+                        max_ctgs: 0,
+                        max_ctg_depth: 0,
+                        reverse_drop: true,
+                    },
+                ),
+                (
+                    true,
+                    Config {
+                        max_ctgs: 5,
+                        max_ctg_depth: 2,
+                        reverse_drop: true,
+                    },
+                ),
+            ],
+        }
+    }
+}
+
+impl Engine for Ic3Mt {
+    fn name(&self) -> &str {
+        "fdv-ic3-mt"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            formats: FORMATS.to_vec(),
+            proves: true,
+            finds_bugs: true,
+            ..Default::default()
+        }
+    }
+    fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
+        let t0 = Instant::now();
+        let g = match prepare(req) {
+            Ok(g) => g,
+            Err(e) => return Ok(result(self.name(), unknown(e), t0)),
+        };
+        let pool = Arc::new(ic3::LemmaPool::default());
+        // Workers stop on our token: cancelled by the winner or by `ctx`.
+        let mut inner = ctx.clone();
+        inner.cancel = fdv_engine::CancelToken::new();
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let stats = std::env::var_os("FDV_IC3_STATS").is_some();
+        let verdicts: Vec<Verdict> = std::thread::scope(|sc| {
+            let (g, inner, done) = (&g, &inner, &done);
+            sc.spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    if ctx.cancel.is_cancelled() {
+                        inner.cancel.cancel();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            });
+            let hs: Vec<_> = self
+                .workers
+                .iter()
+                .enumerate()
+                .map(|(id, &(mini, cfg))| {
+                    let pool = pool.clone();
+                    sc.spawn(move || {
+                        let c = inner.clone();
+                        let make = move || -> Box<dyn Sat> {
+                            if !mini {
+                                return solver(&c);
+                            }
+                            let mut s = fdv_sat::Mini::default();
+                            let (cancel, deadline) = (c.cancel.clone(), c.deadline);
+                            s.set_terminate(Box::new(move || {
+                                cancel.is_cancelled()
+                                    || Instant::now() >= deadline
+                                    || fdv_engine::memory::exceeded()
+                            }));
+                            Box::new(s)
+                        };
+                        let Some(mut ic3) = ic3::Ic3::new(g, Box::new(make)) else {
+                            return unknown("latch inits that are not constants");
+                        };
+                        ic3.set_config(cfg);
+                        ic3.share(pool, id);
+                        let v = ic3.check(inner);
+                        if !matches!(v, Verdict::Unknown { .. }) {
+                            inner.cancel.cancel();
+                        }
+                        if stats {
+                            eprintln!(
+                                "fdv-ic3-mt[{id}]: {:?} frames {} lemmas {} imported {}",
+                                v,
+                                ic3.depth(),
+                                ic3.stats_lemmas,
+                                ic3.stats_imported
+                            );
+                        }
+                        v
+                    })
+                })
+                .collect();
+            let vs = hs.into_iter().map(|h| h.join().unwrap()).collect();
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+            vs
+        });
+        let v = verdicts
+            .iter()
+            .find(|v| !matches!(v, Verdict::Unknown { .. }))
+            .cloned()
+            .unwrap_or_else(|| unknown(ctx.stop_reason()));
+        Ok(result(self.name(), v, t0))
+    }
+}
+
 /// The in-house engines, for adding to a portfolio. Empty when this build
 /// has no CaDiCaL: the fallback solver is too slow to be worth a thread.
 pub fn engines() -> Vec<Arc<dyn Engine>> {
@@ -330,6 +456,7 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
         Arc::new(Ic3Engine { mini: true }),
         Arc::new(Ic3Engine { mini: false }),
         Arc::new(KindIc3 { ic3_share: 0.5 }),
+        Arc::new(Ic3Mt::default()),
     ]
 }
 
@@ -488,6 +615,23 @@ mod tests {
             assert_eq!(
                 check(&e, &counter(0, false)),
                 Verdict::Unsafe { depth: Some(0) }
+            );
+        }
+    }
+
+    #[test]
+    fn ic3_mt_proves_and_refutes() {
+        let e = Ic3Mt::default();
+        for _ in 0..5 {
+            assert_eq!(check(&e, &counter(7, true)), Verdict::Safe);
+            assert_eq!(check(&e, &counter(6, true)), Verdict::Safe);
+            assert_eq!(
+                check(&e, &counter(5, true)),
+                Verdict::Unsafe { depth: Some(5) }
+            );
+            assert_eq!(
+                check(&e, &counter(4, false)),
+                Verdict::Unsafe { depth: Some(4) }
             );
         }
     }
