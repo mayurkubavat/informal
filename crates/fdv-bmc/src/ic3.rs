@@ -36,7 +36,9 @@ impl Default for Config {
             max_ctgs: 3,
             max_ctg_depth: 1,
             reverse_drop: false,
-            max_ctps: 3,
+            // Off: on the HWMCC'24 sample CTP lost more models than it
+            // won (frames converge later); one fdv-ic3-mt worker uses it.
+            max_ctps: 0,
         }
     }
 }
@@ -667,7 +669,9 @@ impl<'g> Ic3<'g> {
     fn push_lemma(&mut self, c: &Cube, i: usize, ctx: &RunContext) -> bool {
         let mut ctps = 0;
         loop {
-            let want = ctps < self.cfg.max_ctps;
+            // Only at the frontier: lower down, CTP lemmas cost more than
+            // the pushes they win (measured on the HWMCC'24 sample).
+            let want = ctps < self.cfg.max_ctps && i + 1 == self.top();
             match self.relative_inductive(c, i + 1, want) {
                 Ok(_) => return true,
                 Err(None) => return false,
@@ -682,7 +686,15 @@ impl<'g> Ic3<'g> {
                             ctps += 1;
                             self.stats_ctps += 1;
                             let g = self.generalize(core, i, 1, ctx);
-                            self.add_lemma(g, i);
+                            // As high as it holds: left at level i it would
+                            // keep frame i from emptying (convergence).
+                            let mut lvl = i;
+                            while lvl < self.top()
+                                && self.relative_inductive(&g, lvl + 1, false).is_ok()
+                            {
+                                lvl += 1;
+                            }
+                            self.add_lemma(g, lvl);
                         }
                         Err(_) => return false,
                     }

@@ -349,7 +349,7 @@ impl Default for Ic3Mt {
                         max_ctgs: 5,
                         max_ctg_depth: 2,
                         reverse_drop: true,
-                        ..d
+                        max_ctps: 3,
                     },
                 ),
             ],
