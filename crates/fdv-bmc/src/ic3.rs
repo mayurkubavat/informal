@@ -565,7 +565,7 @@ impl<'g> Ic3<'g> {
             Answer::Sat => return Verdict::Unsafe { depth: Some(0) },
             Answer::Unknown => {
                 return Verdict::Unknown {
-                    reason: "timeout".into(),
+                    reason: ctx.stop_reason().into(),
                 }
             }
             Answer::Unsat => {}
@@ -576,7 +576,7 @@ impl<'g> Ic3<'g> {
             loop {
                 if ctx.should_stop() {
                     return Verdict::Unknown {
-                        reason: "timeout".into(),
+                        reason: ctx.stop_reason().into(),
                     };
                 }
                 let k = self.top();
@@ -585,7 +585,7 @@ impl<'g> Ic3<'g> {
                 match self.solvers[k].sat.solve_domain(&[bad], &dom) {
                     Answer::Unknown => {
                         return Verdict::Unknown {
-                            reason: "timeout".into(),
+                            reason: ctx.stop_reason().into(),
                         }
                     }
                     Answer::Unsat => break,
@@ -601,7 +601,7 @@ impl<'g> Ic3<'g> {
                             }
                             Ok(false) => {
                                 return Verdict::Unknown {
-                                    reason: "timeout".into(),
+                                    reason: ctx.stop_reason().into(),
                                 }
                             }
                             Ok(true) => {}
@@ -615,7 +615,7 @@ impl<'g> Ic3<'g> {
             }
             if ctx.should_stop() {
                 return Verdict::Unknown {
-                    reason: "timeout".into(),
+                    reason: ctx.stop_reason().into(),
                 };
             }
         }

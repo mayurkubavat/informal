@@ -8,6 +8,7 @@
 //! the orchestrator checks it with an independent certificate checker
 //! (Certifaiger for invariants, BtorSim for witnesses) before reporting it.
 
+pub mod memory;
 pub mod portfolio;
 
 use serde::Serialize;
@@ -134,7 +135,15 @@ impl RunContext {
     }
     /// True once the run should stop: cancelled or out of time.
     pub fn should_stop(&self) -> bool {
-        self.cancel.is_cancelled() || Instant::now() >= self.deadline
+        self.cancel.is_cancelled() || Instant::now() >= self.deadline || memory::exceeded()
+    }
+    /// Why [`Self::should_stop`] said stop: "memory" or "timeout".
+    pub fn stop_reason(&self) -> &'static str {
+        if memory::exceeded() {
+            "memory"
+        } else {
+            "timeout"
+        }
     }
     pub fn report(&self, p: Progress) {
         if let Some(tx) = &self.progress {

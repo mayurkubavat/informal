@@ -23,6 +23,10 @@ use std::time::Duration;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// Memory budget for in-process engines, in GB (0 = none). Default:
+    /// 75% of physical memory. Over it, they stop with unknown "memory".
+    #[arg(long, global = true)]
+    mem_gb: Option<f64>,
 }
 
 #[derive(Subcommand)]
@@ -120,7 +124,13 @@ fn read_btor2(path: &Path) -> anyhow::Result<fdv_ir::Model> {
 }
 
 fn main() -> anyhow::Result<()> {
-    match Cli::parse().cmd {
+    let cli = Cli::parse();
+    let budget = match cli.mem_gb {
+        Some(gb) => (gb * 1e9) as u64,
+        None => fdv_engine::memory::total_bytes().map_or(0, |t| t / 4 * 3),
+    };
+    fdv_engine::memory::set_budget(budget);
+    match cli.cmd {
         Cmd::Info { model } => {
             let m = read_btor2(&model)?;
             println!(

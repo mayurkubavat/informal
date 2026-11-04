@@ -228,7 +228,7 @@ fn run(m: &Model, ctx: &RunContext, max: Option<usize>, name: &str) -> anyhow::R
         let (cancel, done, token) = (cancel.clone(), done.clone(), ctx.cancel.clone());
         std::thread::spawn(move || {
             while !done.load(Ordering::Relaxed) {
-                if token.is_cancelled() {
+                if token.is_cancelled() || fdv_engine::memory::exceeded() {
                     cancel.store(true, Ordering::Relaxed);
                     return;
                 }
@@ -279,7 +279,7 @@ fn unroll(
     loop {
         if ctx.should_stop() {
             return Ok(Verdict::Unknown {
-                reason: "timeout".into(),
+                reason: ctx.stop_reason().into(),
             });
         }
         if max.is_some_and(|d| k > d) {
@@ -390,7 +390,7 @@ fn unroll(
             }
             _ => {
                 return Ok(Verdict::Unknown {
-                    reason: "timeout".into(),
+                    reason: ctx.stop_reason().into(),
                 })
             }
         }

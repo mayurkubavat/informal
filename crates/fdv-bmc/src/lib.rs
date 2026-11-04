@@ -35,7 +35,7 @@ fn solver(ctx: &RunContext) -> Box<dyn Sat> {
     let mut sat = fdv_sat::best();
     let (cancel, deadline) = (ctx.cancel.clone(), ctx.deadline);
     sat.set_terminate(Box::new(move || {
-        cancel.is_cancelled() || Instant::now() >= deadline
+        cancel.is_cancelled() || Instant::now() >= deadline || fdv_engine::memory::exceeded()
     }));
     sat
 }
@@ -84,7 +84,7 @@ impl Engine for Bmc {
         let mut k = 0;
         let v = loop {
             if ctx.should_stop() {
-                break unknown("timeout");
+                break unknown(ctx.stop_reason());
             }
             if self.max_depth.is_some_and(|m| k > m) {
                 break unknown(format!("bound {} reached", k - 1));
@@ -98,7 +98,7 @@ impl Engine for Bmc {
                     }
                 }
                 Answer::Unsat => u.sat.add_clause(&[-bad]),
-                Answer::Unknown => break unknown("timeout"),
+                Answer::Unknown => break unknown(ctx.stop_reason()),
             }
             ctx.report(Progress {
                 engine: self.name().into(),
@@ -157,7 +157,7 @@ fn kind(
     let mut k = 0;
     let v = 'outer: loop {
         if ctx.should_stop() {
-            break unknown("timeout");
+            break unknown(ctx.stop_reason());
         }
         if max_depth.is_some_and(|m| k > m) {
             break unknown(format!("bound {} reached", k - 1));
@@ -172,7 +172,7 @@ fn kind(
                 }
             }
             Answer::Unsat => base.sat.add_clause(&[-bad]),
-            Answer::Unknown => break unknown("timeout"),
+            Answer::Unknown => break unknown(ctx.stop_reason()),
         }
         // Step: good frames 0..k-1, then bad at k?
         step.add_frame();
@@ -183,7 +183,7 @@ fn kind(
         loop {
             match step.sat.solve(&[bad]) {
                 Answer::Unsat => break 'outer Verdict::Safe,
-                Answer::Unknown => break 'outer unknown("timeout"),
+                Answer::Unknown => break 'outer unknown(ctx.stop_reason()),
                 Answer::Sat => match step.repeated_states(k) {
                     Some((i, j)) => step.differ(i, j),
                     None => break,
@@ -238,7 +238,9 @@ impl Engine for Ic3Engine {
             let mut s = fdv_sat::Mini::default();
             let (cancel, deadline) = (c.cancel.clone(), c.deadline);
             s.set_terminate(Box::new(move || {
-                cancel.is_cancelled() || Instant::now() >= deadline
+                cancel.is_cancelled()
+                    || Instant::now() >= deadline
+                    || fdv_engine::memory::exceeded()
             }));
             Box::new(s)
         };
