@@ -1,8 +1,9 @@
-// UI v2: a dense, calm EDA workbench over one fdv shell. Toolbar on top,
-// left dock (design hierarchy / tasks), document tabs in the centre
-// (properties / source), property inspector on the right, console + log
-// dock at the bottom and a status bar. Waveforms (Surfer) join the Trace
-// tab once the engines export counterexample traces.
+// UI v2: a quiet EDA workbench over one fdv shell, laid out the way
+// JasperGold / VC Formal users expect: menu bar, tool row, task tree on the
+// left, property table in the centre, a bottom dock with the Tcl console,
+// property details and messages, and a status bar. Colour is reserved for
+// status glyphs; the frame stays neutral. Waveforms (Surfer) arrive behind
+// "Visualize trace" once the engines export counterexample traces.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, Flavor, Property, Reply, SessionView, StatusWord } from "./backend";
@@ -10,9 +11,10 @@ import { backend, Flavor, Property, Reply, SessionView, StatusWord } from "./bac
 type LogLine = { kind: "in" | "out" | "err"; text: string };
 type Event = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
 type Theme = "system" | "light" | "dark";
-type Doc = "properties" | "source" | "trace";
-type LeftDock = "design" | "tasks";
-type SortKey = "name" | "kind" | "status" | "engine" | "result" | "time";
+type Center = "table" | "source";
+type BottomTab = "console" | "details" | "messages";
+type LeftTab = "tasks" | "design";
+type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time";
 
 const STATUS_LABEL: Record<StatusWord, string> = {
   unprocessed: "Unprocessed",
@@ -25,18 +27,18 @@ const STATUS_LABEL: Record<StatusWord, string> = {
 };
 const SUMMARY: StatusWord[] = ["proven", "cex", "covered", "unreachable", "undetermined", "error"];
 const STATUS_ORDER: StatusWord[] = ["error", "cex", "undetermined", "covered", "unreachable", "proven", "unprocessed"];
+const KIND_LETTER = { assert: "A", cover: "C", assume: "M" } as const;
+const TASK = "<embedded>";
 
-// Result column: the outcome without the run time (Time has its own column).
-function result(p: Property): string {
+function bound(p: Property): string {
   const s = p.status;
   switch (s.status) {
     case "cex":
     case "covered":
-      return `depth ${s.depth ?? "?"}`;
+      return String(s.depth ?? "?");
     case "proven":
-      return "full proof";
     case "unreachable":
-      return "unreachable";
+      return "∞";
     case "undetermined":
       return s.reason ?? "";
     case "error":
@@ -46,7 +48,7 @@ function result(p: Property): string {
   }
 }
 function time(p: Property): string {
-  return p.status.ms !== undefined ? `${(p.status.ms / 1000).toFixed(2)} s` : "";
+  return p.status.ms !== undefined ? `${(p.status.ms / 1000).toFixed(2)}s` : "";
 }
 function statusKey(p: Property): string {
   if (p.kind === "assume") return "assume";
@@ -57,7 +59,7 @@ function statusText(p: Property): string {
   return p.enabled ? STATUS_LABEL[p.status.status] : "Disabled";
 }
 
-function useTheme(): [Theme, () => void] {
+function useTheme(): [Theme, (t: Theme) => void] {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
       return (localStorage.getItem("fdv-theme") as Theme) || "system";
@@ -75,7 +77,7 @@ function useTheme(): [Theme, () => void] {
       /* storage unavailable */
     }
   }, [theme]);
-  return [theme, () => setTheme((t) => (t === "system" ? "light" : t === "light" ? "dark" : "system"))];
+  return [theme, setTheme];
 }
 
 export default function App() {
@@ -87,13 +89,15 @@ export default function App() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusWord | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusWord | "assume" | null>(null);
   const [source, setSource] = useState("");
-  const [doc, setDoc] = useState<Doc>("properties");
-  const [left, setLeft] = useState<LeftDock | null>("design");
-  const [bottomTab, setBottomTab] = useState<"console" | "log">("console");
-  const [bottomH, setBottomH] = useState(200);
-  const [theme, cycleTheme] = useTheme();
+  const [center, setCenter] = useState<Center>("table");
+  const [left, setLeft] = useState<LeftTab>("tasks");
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [bottomTab, setBottomTab] = useState<BottomTab>("console");
+  const [bottomH, setBottomH] = useState(250);
+  const [theme, setTheme] = useTheme();
+  const pathRef = useRef<HTMLInputElement>(null);
 
   const apply = useCallback((r: Reply, echo?: string) => {
     if (r.session) setSession(r.session);
@@ -110,10 +114,7 @@ export default function App() {
       const t0 = performance.now();
       const note = (ok: boolean, text: string) =>
         echo &&
-        setEvents((e) => [
-          ...e,
-          { at: new Date(), cmd: echo, ok, ms: performance.now() - t0, summary: text.split("\n")[0] },
-        ]);
+        setEvents((e) => [...e, { at: new Date(), cmd: echo, ok, ms: performance.now() - t0, summary: text.split("\n")[0] }]);
       try {
         const r = await f();
         apply(r, echo);
@@ -137,35 +138,56 @@ export default function App() {
     if (topFile) backend.readText(topFile).then(setSource, () => setSource(""));
   }, [topFile]);
 
-  const allProps = session?.props ?? [];
   // Recomputed every render (cheap): the browser mock mutates the session in
   // place, so memoising on the session reference would go stale.
+  const allProps = session?.props ?? [];
   const props = allProps.filter(
     (p) =>
       (p.name.includes(filter) || p.expr.includes(filter)) &&
-      (!statusFilter || (p.kind !== "assume" && p.status.status === statusFilter)),
+      (!statusFilter || statusKey(p) === statusFilter || (statusFilter !== "assume" && p.kind !== "assume" && p.status.status === statusFilter)),
   );
   const counts: Partial<Record<StatusWord, number>> = {};
   for (const p of allProps) if (p.kind !== "assume") counts[p.status.status] = (counts[p.status.status] ?? 0) + 1;
+  const assumes = allProps.filter((p) => p.kind === "assume").length;
+  const unprocessed = counts.unprocessed ?? 0;
+
   const current = allProps.find((p) => p.name === selected) ?? null;
   const proveCmd = flavor === "jg" ? "prove -all" : "check_fv";
-  const reproveCmd = (n: string) => (flavor === "jg" ? `prove -property ${n}` : `check_fv -property {${n}}`);
-  const runScript = () => scriptPath && run(() => backend.source(scriptPath), `source ${scriptPath}`);
+  const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${n}` : `check_fv -property {${n}}`);
+  const focusLine = locate(source, current);
+  const fileName = topFile?.split("/").pop();
+  const ports = useMemo(() => parsePorts(source), [source]);
+  const hasTrace = !!current && (current.status.status === "cex" || current.status.status === "covered");
+
+  const proveAll = () => allProps.length && !busy && run(() => backend.evalTcl(proveCmd), proveCmd);
+  const proveSelected = () => current && current.kind !== "assume" && !busy && run(() => backend.evalTcl(proveOne(current.name)), proveOne(current.name));
+  const runScript = () => {
+    if (!scriptPath) {
+      pathRef.current?.focus();
+      return;
+    }
+    if (!busy) run(() => backend.source(scriptPath), `source ${scriptPath}`);
+  };
   const changeFlavor = (f: Flavor) => {
     setFlavor(f);
     run(() => backend.setFlavor(f));
   };
+  const select = (n: string) => {
+    setSelected(n);
+    setBottomTab("details");
+  };
 
-  const highlight = current ? identifiers(current.expr) : [];
-  const focusLine = locate(source, current);
-  const fileName = topFile?.split("/").pop();
-  const ports = useMemo(() => parsePorts(source), [source]);
+  const summary = [
+    `${allProps.length} properties`,
+    ...SUMMARY.filter((s) => counts[s]).map((s) => `${counts[s]} ${STATUS_LABEL[s].toLowerCase()}`),
+    ...(unprocessed ? [`${unprocessed} unprocessed`] : []),
+    ...(assumes ? [`${assumes} assumed`] : []),
+  ].join(" · ");
 
-  // Bottom dock resize: drag the splitter; clamp to a sane range.
   const startResize = (e: React.PointerEvent) => {
     const y0 = e.clientY;
     const h0 = bottomH;
-    const move = (ev: PointerEvent) => setBottomH(Math.max(96, Math.min(window.innerHeight * 0.6, h0 + y0 - ev.clientY)));
+    const move = (ev: PointerEvent) => setBottomH(Math.max(120, Math.min(window.innerHeight * 0.65, h0 + y0 - ev.clientY)));
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -174,241 +196,254 @@ export default function App() {
     window.addEventListener("pointerup", up);
   };
 
-  const openSource = () => setDoc("source");
+  const menus: MenuDef[] = [
+    {
+      label: "File",
+      items: [
+        { label: "Source script…", onClick: runScript },
+        { label: "Edit script path", onClick: () => pathRef.current?.focus() },
+        { sep: true },
+        { label: "Close design", disabled: true },
+      ],
+    },
+    { label: "Edit", items: [{ label: "Find property", onClick: () => document.getElementById("prop-filter")?.focus() }, { label: "Clear filters", onClick: () => { setFilter(""); setStatusFilter(null); } }] },
+    {
+      label: "View",
+      items: [
+        { label: "Task / Design dock", checked: leftOpen, onClick: () => setLeftOpen((o) => !o) },
+        { label: "Property table", checked: center === "table", onClick: () => setCenter("table") },
+        { label: `Source (${fileName ?? "none"})`, checked: center === "source", onClick: () => setCenter("source"), disabled: !topFile },
+        { sep: true },
+        { label: "Console", onClick: () => setBottomTab("console") },
+        { label: "Messages", onClick: () => setBottomTab("messages") },
+        { sep: true },
+        { label: "Input mode: Tcl", checked: true },
+        { label: "Input mode: Ask (coming soon)", disabled: true },
+        { sep: true },
+        { label: "Theme: System", checked: theme === "system", onClick: () => setTheme("system") },
+        { label: "Theme: Light", checked: theme === "light", onClick: () => setTheme("light") },
+        { label: "Theme: Dark", checked: theme === "dark", onClick: () => setTheme("dark") },
+      ],
+    },
+    { label: "Design", items: [{ label: "Show hierarchy", onClick: () => { setLeftOpen(true); setLeft("design"); } }, { label: "Elaborate", disabled: true }] },
+    {
+      label: "Prove",
+      items: [
+        { label: "Prove all", hint: proveCmd, onClick: proveAll, disabled: busy || !allProps.length },
+        { label: "Prove selected", onClick: proveSelected, disabled: busy || !current || current.kind === "assume" },
+        { label: "Stop", disabled: true },
+      ],
+    },
+    {
+      label: "Debug",
+      items: [
+        { label: "Visualize trace", disabled: true },
+        { label: "Show source of selected", onClick: () => current && setBottomTab("details"), disabled: !current },
+      ],
+    },
+    { label: "Tools", items: [{ label: "Proof profiler (coming soon)", disabled: true }] },
+    { label: "Help", items: [{ label: "Formal DV v0.1", disabled: true }] },
+  ];
 
   return (
     <div className="app" style={{ "--bottom-h": `${bottomH}px` } as React.CSSProperties}>
-      {/* ---- toolbar ---- */}
-      <header className="toolbar">
-        <div className="brand">
-          <AppMark />
-          <span className="wordmark">Formal DV</span>
-        </div>
-        <span className="tb-sep" />
-        <span className="design-name" title="Top module">
-          {session?.design.top ?? "no design"}
-        </span>
-        <span className="tb-sep" />
-        <div className="tb-group">
-          <button className="tbtn" disabled={busy || !scriptPath} onClick={runScript} title="Source the script path">
-            <ScriptIcon /> Run script
-          </button>
-          <button
-            className="tbtn accent"
-            disabled={busy || !allProps.length}
-            onClick={() => run(() => backend.evalTcl(proveCmd), proveCmd)}
-            title={proveCmd}
-          >
-            <PlayIcon /> {busy ? "Running…" : "Prove all"}
-          </button>
-          <button className="tbtn" disabled title={busy ? "Stop is not wired to the backend yet" : "Nothing running"}>
-            <StopIcon /> Stop
-          </button>
-        </div>
-        <span className="tb-sep" />
-        <label className="select-wrap" title="Tcl flavor">
-          <select value={flavor} disabled={busy} onChange={(e) => changeFlavor(e.target.value as Flavor)} aria-label="Flavor">
-            <option value="jg">JasperGold</option>
-            <option value="vcf">VC Formal</option>
-          </select>
-          <ChevronIcon />
-        </label>
+      {/* ---- menu bar ---- */}
+      <MenuBar menus={menus}>
         <input
-          className="input mono path"
-          placeholder="Script path, e.g. tests/fpv/counter/counter.jg.tcl"
+          ref={pathRef}
+          className="menu-path mono"
+          placeholder="script path, e.g. tests/fpv/counter/counter.jg.tcl"
           value={scriptPath}
           onChange={(e) => setScriptPath(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && runScript()}
           aria-label="Script path"
+          title="Script path (Enter to source)"
         />
-        <span className="spacer" />
-        {!backend.inTauri && <span className="badge-muted">Browser preview</span>}
-        <button className="tbtn icon" onClick={cycleTheme} title={`Theme: ${theme} (click to cycle)`} aria-label="Toggle theme">
-          {theme === "dark" ? <MoonIcon /> : theme === "light" ? <SunIcon /> : <AutoIcon />}
+      </MenuBar>
+
+      {/* ---- tool row ---- */}
+      <div className="toolrow">
+        <label className="field">
+          <span>App</span>
+          <select aria-label="App" defaultValue="fpv">
+            <option value="fpv">FPV</option>
+            <option disabled>SEC (later)</option>
+            <option disabled>COV (later)</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Flavor</span>
+          <select value={flavor} disabled={busy} onChange={(e) => changeFlavor(e.target.value as Flavor)} aria-label="Flavor">
+            <option value="jg">JasperGold</option>
+            <option value="vcf">VC Formal</option>
+          </select>
+        </label>
+        <span className="vsep" />
+        <ToolBtn title={scriptPath ? `source ${scriptPath}` : "Run script (set a script path first)"} onClick={runScript} disabled={busy}>
+          <ScriptIcon />
+        </ToolBtn>
+        <button className="tool tool-text" onClick={proveAll} disabled={busy || !allProps.length} title={proveCmd}>
+          <PlayIcon /> {busy ? "Running…" : "Prove all"}
         </button>
-      </header>
+        <ToolBtn title="Stop (not wired to the backend yet)" disabled>
+          <StopIcon />
+        </ToolBtn>
+        <span className="vsep" />
+        <ToolBtn title={hasTrace ? "Visualize trace (coming soon)" : "Visualize trace: select a CEX or cover"} disabled>
+          <WaveIcon />
+        </ToolBtn>
+        <ToolBtn title="Source view" onClick={() => setCenter((c) => (c === "source" ? "table" : "source"))} disabled={!topFile} on={center === "source"}>
+          <CodeIcon />
+        </ToolBtn>
+        <span className="spacer" />
+        {!backend.inTauri && <span className="muted small">Browser preview</span>}
+      </div>
 
-      <div className={`workbench ${left ? "" : "left-closed"}`}>
-        {/* ---- icon rail ---- */}
-        <nav className="rail" aria-label="Docks">
-          <RailBtn label="Design" on={left === "design"} onClick={() => setLeft((l) => (l === "design" ? null : "design"))}>
-            <TreeIcon />
-          </RailBtn>
-          <RailBtn label="Tasks" on={left === "tasks"} onClick={() => setLeft((l) => (l === "tasks" ? null : "tasks"))}>
-            <ListIcon />
-          </RailBtn>
-        </nav>
-
+      <div className={`workbench ${leftOpen ? "" : "left-closed"}`}>
         {/* ---- left dock ---- */}
-        {left && (
-          <aside className="dock left-dock">
-            <div className="dock-tabs">
-              <button className={`dtab ${left === "design" ? "on" : ""}`} onClick={() => setLeft("design")}>Design</button>
-              <button className={`dtab ${left === "tasks" ? "on" : ""}`} onClick={() => setLeft("tasks")}>Tasks</button>
-            </div>
-            <div className="dock-body">
-              {left === "design" ? (
-                <DesignTree top={session?.design.top ?? null} files={session?.design.files ?? []} ports={ports} />
+        {leftOpen && (
+          <aside className="left">
+            <Tabs
+              tabs={[
+                ["tasks", "Tasks"],
+                ["design", "Design"],
+              ]}
+              value={left}
+              onChange={(t) => setLeft(t as LeftTab)}
+            />
+            <div className="pane-body">
+              {left === "tasks" ? (
+                <TaskTree total={allProps.length} counts={counts} assumes={assumes} filter={statusFilter} onFilter={setStatusFilter} />
               ) : (
-                <TaskList props={allProps} counts={counts} onPick={() => setStatusFilter(null)} />
+                <DesignTree top={session?.design.top ?? null} files={session?.design.files ?? []} ports={ports} />
               )}
             </div>
           </aside>
         )}
 
-        {/* ---- centre documents ---- */}
-        <main className="docs">
-          <div className="doc-tabs" role="tablist">
-            <DocTab on={doc === "properties"} onClick={() => setDoc("properties")}>
-              Properties <span className="tab-count">{allProps.length}</span>
-            </DocTab>
-            <DocTab on={doc === "source"} onClick={() => setDoc("source")}>
-              {fileName ?? "Source"}
-            </DocTab>
-            <DocTab on={false} disabled title="Waveforms arrive once engines export counterexample traces">
-              Trace
-            </DocTab>
+        {/* ---- centre ---- */}
+        <main className="center">
+          <div className="strip">
+            <Tabs
+              tabs={[
+                ["table", "Property Table"],
+                ...(topFile ? ([["source", fileName ?? "Source"]] as [string, string][]) : []),
+              ]}
+              value={center}
+              onChange={(t) => setCenter(t as Center)}
+            />
+            {center === "table" ? (
+              <>
+                <span className="strip-summary">{summary}</span>
+                <span className="spacer" />
+                {statusFilter && (
+                  <button className="link small" onClick={() => setStatusFilter(null)}>
+                    clear status filter
+                  </button>
+                )}
+                <input id="prop-filter" className="filter" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter properties" />
+              </>
+            ) : (
+              <span className="strip-summary mono">{topFile}</span>
+            )}
           </div>
-
-          {doc === "properties" ? (
-            <div className="doc">
-              <div className="doc-toolbar">
-                <label className="search">
-                  <SearchIcon />
-                  <input placeholder="Filter properties" value={filter} onChange={(e) => setFilter(e.target.value)} />
-                </label>
-                <div className="pills" role="toolbar" aria-label="Filter by status">
-                  {SUMMARY.map((s) => (
-                    <button
-                      key={s}
-                      className={`pill ${statusFilter === s ? "on" : ""}`}
-                      aria-pressed={statusFilter === s}
-                      onClick={() => setStatusFilter((f) => (f === s ? null : s))}
-                    >
-                      <span className={`dot st-${s}`} />
-                      {STATUS_LABEL[s]} <b>{counts[s] ?? 0}</b>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <PropTable props={props} total={allProps.length} selected={selected} onSelect={setSelected} />
-            </div>
+          {center === "table" ? (
+            <PropTable
+              props={props}
+              total={allProps.length}
+              selected={selected}
+              onSelect={select}
+              onOpen={(p) => {
+                select(p.name);
+              }}
+            />
           ) : (
-            <div className="doc">
-              <div className="doc-toolbar">
-                <span className="mono muted">{topFile ?? "No source loaded"}</span>
-              </div>
-              <SourceView text={source} highlight={highlight} focus={focusLine} />
-            </div>
+            <SourceView text={source} focus={focusLine} />
           )}
         </main>
 
-        {/* ---- right inspector ---- */}
-        <aside className="dock right-dock">
-          <div className="dock-head">Property</div>
-          {current ? (
-            <div className="dock-body inspector">
-              <div className="insp-head">
-                <span className="mono prop-name" title={current.name}>{current.name}</span>
-                <StatusChip p={current} />
-              </div>
-              <pre className="code-block">{current.expr}</pre>
-              <dl className="kv">
-                <dt>Type</dt>
-                <dd>{current.kind}</dd>
-                <dt>Engine</dt>
-                <dd className="mono">{current.status.engine ?? "—"}</dd>
-                <dt>Result</dt>
-                <dd>{result(current) || "—"}</dd>
-                <dt>Time</dt>
-                <dd className="mono">{time(current) || "—"}</dd>
-                <dt>Source</dt>
-                <dd>
-                  {fileName ? (
-                    <button className="link mono" onClick={openSource}>
-                      {fileName}
-                      {focusLine ? `:${focusLine}` : ""}
-                    </button>
-                  ) : (
-                    "—"
-                  )}
-                </dd>
-              </dl>
-              <div className="insp-actions">
-                {current.kind !== "assume" && (
-                  <button
-                    className="tbtn bordered"
-                    disabled={busy}
-                    onClick={() => run(() => backend.evalTcl(reproveCmd(current.name)), reproveCmd(current.name))}
-                  >
-                    <PlayIcon /> Re-prove
-                  </button>
-                )}
-                <button
-                  className="tbtn bordered"
-                  disabled
-                  title={
-                    current.status.status === "cex" || current.status.status === "covered"
-                      ? "Waveforms open once engines export counterexample traces"
-                      : "No trace for this result"
-                  }
-                >
-                  <WaveIcon /> Open trace
-                </button>
-              </div>
-              {source && (
-                <div className="preview">
-                  <div className="preview-head">
-                    <span>Source preview</span>
-                    <button className="link mono" onClick={openSource}>{fileName}{focusLine ? `:${focusLine}` : ""}</button>
-                  </div>
-                  <SourceView text={source} highlight={[]} focus={focusLine} window={4} />
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="empty-state">Select a property to see its expression and result.</p>
-          )}
-        </aside>
-
         {/* ---- bottom dock ---- */}
-        <section className="dock bottom-dock">
-          <div className="splitter" onPointerDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize console" />
-          <div className="dock-tabs">
-            <button className={`dtab ${bottomTab === "console" ? "on" : ""}`} onClick={() => setBottomTab("console")}>Console</button>
-            <button className={`dtab ${bottomTab === "log" ? "on" : ""}`} onClick={() => setBottomTab("log")}>
-              Log {events.length > 0 && <span className="tab-count">{events.length}</span>}
-            </button>
-          </div>
-          {bottomTab === "console" ? (
-            <Console log={log} busy={busy} flavor={flavor} onSubmit={(cmd) => run(() => backend.evalTcl(cmd), cmd)} />
-          ) : (
-            <EventLog events={events} />
-          )}
+        <section className="bottom">
+          <div className="splitter" onPointerDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize bottom dock" />
+          <Tabs
+            tabs={[
+              ["console", "Console"],
+              ["details", current ? `Details: ${current.name}` : "Details"],
+              ["messages", `Messages${events.some((e) => !e.ok) ? ` (${events.filter((e) => !e.ok).length})` : ""}`],
+            ]}
+            value={bottomTab}
+            onChange={(t) => setBottomTab(t as BottomTab)}
+          />
+          {/* kept mounted so history and scroll survive tab switches */}
+          <Console hidden={bottomTab !== "console"} log={log} busy={busy} flavor={flavor} onSubmit={(cmd) => run(() => backend.evalTcl(cmd), cmd)} />
+          {bottomTab === "details" &&
+            (current ? (
+              <div className="details">
+                <div className="details-left">
+                  <div className="details-title">
+                    <span className="mono strong">{current.name}</span>
+                    <Status p={current} />
+                  </div>
+                  <pre className="expr">{current.expr}</pre>
+                  <dl className="kv">
+                    <dt>Type</dt>
+                    <dd>{current.kind}</dd>
+                    <dt>Engine</dt>
+                    <dd className="mono">{current.status.engine ?? "—"}</dd>
+                    <dt>Bound</dt>
+                    <dd className="mono">{bound(current) || "—"}</dd>
+                    <dt>Time</dt>
+                    <dd className="mono">{time(current) || "—"}</dd>
+                    <dt>Task</dt>
+                    <dd className="mono">{TASK}</dd>
+                    <dt>Source</dt>
+                    <dd>
+                      {fileName ? (
+                        <button className="link mono" onClick={() => setCenter("source")}>
+                          {fileName}
+                          {focusLine ? `:${focusLine}` : ""}
+                        </button>
+                      ) : (
+                        "—"
+                      )}
+                    </dd>
+                  </dl>
+                  <div className="details-actions">
+                    {current.kind !== "assume" && (
+                      <button className="btn" disabled={busy} onClick={proveSelected}>
+                        Re-prove
+                      </button>
+                    )}
+                    <button className="btn" disabled title={hasTrace ? "Coming soon" : "No trace for this result"}>
+                      Visualize trace
+                    </button>
+                  </div>
+                </div>
+                <div className="details-right">
+                  <SourceView text={source} focus={focusLine} />
+                </div>
+              </div>
+            ) : (
+              <p className="empty">Select a property to see its expression, result and source.</p>
+            ))}
+          {bottomTab === "messages" && <Messages events={events} />}
         </section>
       </div>
 
       {/* ---- status bar ---- */}
       <footer className="statusbar">
+        <span>top: <span className="mono">{session?.design.top ?? "—"}</span></span>
+        <span>clock: <span className="mono">{session?.clocks.map((c) => c.signal).join(", ") || "—"}</span></span>
+        <span>reset: <span className="mono">{session?.reset ?? "—"}</span></span>
         <span>{flavor === "jg" ? "JasperGold" : "VC Formal"} flavor</span>
-        <span>top <b className="mono">{session?.design.top ?? "—"}</b></span>
-        <span>clock <b className="mono">{session?.clocks.map((c) => c.signal).join(", ") || "—"}</b></span>
-        <span>reset <b className="mono">{session?.reset ?? "—"}</b></span>
-        <span className="sb-counts">
-          {SUMMARY.filter((s) => counts[s]).map((s) => (
-            <span key={s}>
-              <span className={`dot st-${s}`} /> {counts[s]}
-            </span>
-          ))}
-        </span>
         <span className="spacer" />
-        <span className={busy ? "running" : ""}>{busy ? "Running…" : "Idle"}</span>
+        <span>{busy ? "Running…" : "Idle"}</span>
       </footer>
     </div>
   );
 }
 
-// ---- helpers ---------------------------------------------------------------
+// ---- helpers -----------------------------------------------------------------
 
 function identifiers(expr: string): string[] {
   const skip = new Set(["past", "rose", "fell", "stable", "changed", "posedge", "negedge", "disable", "iff"]);
@@ -438,9 +473,7 @@ function parsePorts(text: string): Port[] {
   let dir = "";
   let width = "";
   for (const seg of head[1].split(",")) {
-    const m = seg
-      .trim()
-      .match(/^(input|output|inout)?\s*(?:wire|logic|reg|bit)?\s*(?:signed\s*)?(\[[^\]]+\])?\s*([A-Za-z_]\w*)$/);
+    const m = seg.trim().match(/^(input|output|inout)?\s*(?:wire|logic|reg|bit)?\s*(?:signed\s*)?(\[[^\]]+\])?\s*([A-Za-z_]\w*)$/);
     if (!m) continue;
     if (m[1]) {
       dir = m[1];
@@ -451,50 +484,162 @@ function parsePorts(text: string): Port[] {
   return out;
 }
 
-// ---- components --------------------------------------------------------------
+// ---- components ----------------------------------------------------------------
 
-function RailBtn({ label, on, onClick, children }: { label: string; on: boolean; onClick: () => void; children: React.ReactNode }) {
+type MenuItem = { label: string; hint?: string; onClick?: () => void; disabled?: boolean; checked?: boolean } | { sep: true };
+type MenuDef = { label: string; items: MenuItem[] };
+
+function MenuBar({ menus, children }: { menus: MenuDef[]; children?: React.ReactNode }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !bar.current?.contains(e.target as Node) && setOpen(null);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(null);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
   return (
-    <button className={`rail-btn ${on ? "on" : ""}`} title={label} aria-label={label} aria-pressed={on} onClick={onClick}>
+    <div className="menubar" ref={bar} role="menubar">
+      {menus.map((m) => (
+        <div key={m.label} className="menu">
+          <button
+            className={`menu-title ${open === m.label ? "on" : ""}`}
+            role="menuitem"
+            aria-haspopup="true"
+            aria-expanded={open === m.label}
+            onClick={() => setOpen((o) => (o === m.label ? null : m.label))}
+            onMouseEnter={() => open && setOpen(m.label)}
+          >
+            {m.label}
+          </button>
+          {open === m.label && (
+            <div className="menu-pop" role="menu">
+              {m.items.map((it, i) =>
+                "sep" in it ? (
+                  <div key={i} className="menu-sep" />
+                ) : (
+                  <button
+                    key={i}
+                    role="menuitem"
+                    className="menu-item"
+                    disabled={it.disabled}
+                    onClick={() => {
+                      setOpen(null);
+                      it.onClick?.();
+                    }}
+                  >
+                    <span className="menu-check">{it.checked ? "✓" : ""}</span>
+                    <span>{it.label}</span>
+                    {it.hint && <span className="menu-hint mono">{it.hint}</span>}
+                  </button>
+                ),
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+      <span className="spacer" />
+      {children}
+    </div>
+  );
+}
+
+function ToolBtn({ title, onClick, disabled, on, children }: { title: string; onClick?: () => void; disabled?: boolean; on?: boolean; children: React.ReactNode }) {
+  return (
+    <button className={`tool ${on ? "on" : ""}`} title={title} aria-label={title} onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );
 }
 
-function DocTab({ on, onClick, disabled, title, children }: { on: boolean; onClick?: () => void; disabled?: boolean; title?: string; children: React.ReactNode }) {
+function Tabs({ tabs, value, onChange }: { tabs: [string, string][]; value: string; onChange: (v: string) => void }) {
   return (
-    <button role="tab" aria-selected={on} className={`doc-tab ${on ? "on" : ""}`} onClick={onClick} disabled={disabled} title={title}>
-      {children}
-    </button>
+    <div className="tabs" role="tablist">
+      {tabs.map(([k, label]) => (
+        <button key={k} role="tab" aria-selected={value === k} className={`tab ${value === k ? "on" : ""}`} onClick={() => onChange(k)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TaskTree({
+  total,
+  counts,
+  assumes,
+  filter,
+  onFilter,
+}: {
+  total: number;
+  counts: Partial<Record<StatusWord, number>>;
+  assumes: number;
+  filter: StatusWord | "assume" | null;
+  onFilter: (f: StatusWord | "assume" | null) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const groups: [StatusWord | "assume", string, number][] = [
+    ...SUMMARY.map((s) => [s, STATUS_LABEL[s], counts[s] ?? 0] as [StatusWord, string, number]),
+    ["unprocessed", "Unprocessed", counts.unprocessed ?? 0],
+    ["assume", "Assumed", assumes],
+  ];
+  return (
+    <div className="tree" role="tree">
+      <div className={`tree-row ${filter === null ? "sel" : ""}`} role="treeitem" aria-expanded={open} onClick={() => onFilter(null)}>
+        <button className={`twisty ${open ? "open" : ""}`} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }} aria-label="Expand">
+          <ChevronIcon />
+        </button>
+        <span className="mono">{TASK}</span>
+        <span className="tree-count">{total}</span>
+      </div>
+      {open &&
+        groups
+          .filter(([, , n]) => n > 0)
+          .map(([k, label, n]) => (
+            <div
+              key={k}
+              role="treeitem"
+              className={`tree-row child ${filter === k ? "sel" : ""}`}
+              onClick={() => onFilter(filter === k ? null : k)}
+            >
+              <Glyph k={k} />
+              <span>{label}</span>
+              <span className="tree-count">{n}</span>
+            </div>
+          ))}
+    </div>
   );
 }
 
 function DesignTree({ top, files, ports }: { top: string | null; files: string[]; ports: Port[] }) {
   const [open, setOpen] = useState(true);
-  if (!top) return <p className="empty-state">No design elaborated.</p>;
+  if (!top) return <p className="empty">No design elaborated.</p>;
   return (
-    <div className="tree">
-      <button className="tree-row" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+    <div className="tree" role="tree">
+      <div className="tree-row" role="treeitem" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <span className={`twisty ${open ? "open" : ""}`}><ChevronIcon /></span>
-        <ModuleIcon />
         <span className="mono">{top}</span>
-        <span className="muted tree-note">top</span>
-      </button>
+        <span className="tree-count">top</span>
+      </div>
       {open &&
         ports.map((p) => (
-          <div key={p.name} className="tree-row leaf" title={`${p.dir} ${p.width} ${p.name}`}>
-            <span className={`port-dir dir-${p.dir}`}>{p.dir === "input" ? "in" : p.dir === "output" ? "out" : "io"}</span>
+          <div key={p.name} className="tree-row child" role="treeitem" title={`${p.dir} ${p.width} ${p.name}`}>
+            <span className="port-dir mono">{p.dir === "input" ? "in" : p.dir === "output" ? "out" : "io"}</span>
             <span className="mono">{p.name}</span>
-            {p.width && <span className="muted mono tree-note">{p.width}</span>}
+            {p.width && <span className="tree-count mono">{p.width}</span>}
           </div>
         ))}
       {files.length > 0 && (
         <>
           <div className="tree-section">Files</div>
           {files.map((f) => (
-            <div key={f} className="tree-row leaf" title={f}>
-              <FileIcon />
-              <span className="mono ellipsis">{f.split("/").pop()}</span>
+            <div key={f} className="tree-row child" title={f}>
+              <span className="mono ellipsis">{f}</span>
             </div>
           ))}
         </>
@@ -503,73 +648,73 @@ function DesignTree({ top, files, ports }: { top: string | null; files: string[]
   );
 }
 
-function TaskList({ props, counts, onPick }: { props: Property[]; counts: Partial<Record<StatusWord, number>>; onPick: () => void }) {
-  const asserts = props.filter((p) => p.kind === "assert").length;
-  const covers = props.filter((p) => p.kind === "cover").length;
-  const assumes = props.filter((p) => p.kind === "assume").length;
-  return (
-    <div className="tree">
-      <button className="tree-row task on" onClick={onPick}>
-        <ListIcon />
-        <span className="mono">&lt;embedded&gt;</span>
-        <span className="muted tree-note">{props.length}</span>
-      </button>
-      <div className="task-stats">
-        <span>{asserts} assert</span>
-        <span>{covers} cover</span>
-        <span>{assumes} assume</span>
-      </div>
-      <div className="task-stats">
-        {SUMMARY.filter((s) => counts[s]).map((s) => (
-          <span key={s}>
-            <span className={`dot st-${s}`} /> {counts[s]} {STATUS_LABEL[s]}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
+// Small status glyphs, the only strong colour in the window.
+function Glyph({ k }: { k: string }) {
+  const c = `glyph st-${k}`;
+  const props = { className: c, width: 12, height: 12, viewBox: "0 0 12 12", "aria-hidden": true, fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (k) {
+    case "proven":
+      return <svg {...props}><path d="M2.5 6.3l2.3 2.3 4.7-5" /></svg>;
+    case "cex":
+      return <svg {...props}><path d="M3 3l6 6M9 3l-6 6" /></svg>;
+    case "covered":
+      return <svg {...props}><circle cx="6" cy="6" r="4" /><circle cx="6" cy="6" r="1.5" fill="currentColor" stroke="none" /></svg>;
+    case "unreachable":
+      return <svg {...props}><circle cx="6" cy="6" r="4" /><path d="M3.2 8.8l5.6-5.6" /></svg>;
+    case "undetermined":
+      return <svg {...props}><path d="M4.3 4.4a1.8 1.8 0 113 1.4c-.8.5-1.3.8-1.3 1.7" /><circle cx="6" cy="9.6" r=".5" fill="currentColor" /></svg>;
+    case "error":
+      return <svg {...props}><path d="M6 1.8l4.6 8.2H1.4z" /><path d="M6 5v2.2" /><circle cx="6" cy="8.6" r=".4" fill="currentColor" /></svg>;
+    case "assume":
+      return <svg {...props}><path d="M3 6h6" /></svg>;
+    default:
+      return <svg {...props}><circle cx="6" cy="6" r="3.5" /></svg>;
+  }
 }
 
-function StatusLabel({ p }: { p: Property }) {
-  const k = statusKey(p);
+function Status({ p }: { p: Property }) {
   return (
-    <span className={`status st-${k}`}>
-      <span className={`dot st-${k}`} />
-      {statusText(p)}
-    </span>
-  );
-}
-function StatusChip({ p }: { p: Property }) {
-  const k = statusKey(p);
-  return (
-    <span className={`chip st-${k}`}>
-      <span className={`dot st-${k}`} />
+    <span className="status">
+      <Glyph k={statusKey(p)} />
       {statusText(p)}
     </span>
   );
 }
 
-const COLS: { key: SortKey; label: string; cls?: string }[] = [
+const COLS: { key: SortKey | null; label: string; cls?: string }[] = [
+  { key: "kind", label: "", cls: "c-kind" },
   { key: "name", label: "Name" },
-  { key: "kind", label: "Type" },
   { key: "status", label: "Status" },
   { key: "engine", label: "Engine" },
-  { key: "result", label: "Result / Bound" },
+  { key: "bound", label: "Bound", cls: "num" },
   { key: "time", label: "Time", cls: "num" },
+  { key: null, label: "Task" },
 ];
 
 function sortValue(p: Property, k: SortKey): string | number {
   switch (k) {
-    case "name": return p.name;
     case "kind": return p.kind;
+    case "name": return p.name;
     case "status": return p.kind === "assume" ? 99 : STATUS_ORDER.indexOf(p.status.status);
     case "engine": return p.status.engine ?? "";
-    case "result": return result(p);
+    case "bound": return p.status.depth ?? (p.status.status === "proven" || p.status.status === "unreachable" ? 1e9 : -1);
     case "time": return p.status.ms ?? -1;
   }
 }
 
-function PropTable({ props, total, selected, onSelect }: { props: Property[]; total: number; selected: string | null; onSelect: (n: string) => void }) {
+function PropTable({
+  props,
+  total,
+  selected,
+  onSelect,
+  onOpen,
+}: {
+  props: Property[];
+  total: number;
+  selected: string | null;
+  onSelect: (n: string) => void;
+  onOpen: (p: Property) => void;
+}) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
   const body = useRef<HTMLTableSectionElement>(null);
   const rows = useMemo(() => {
@@ -589,21 +734,23 @@ function PropTable({ props, total, selected, onSelect }: { props: Property[]; to
     body.current?.children[n]?.scrollIntoView({ block: "nearest" });
   };
   return (
-    <div className="table-wrap" tabIndex={0} onKeyDown={onKey} aria-label="Properties (arrow keys move the selection)">
+    <div className="table-wrap" tabIndex={0} onKeyDown={onKey} aria-label="Property table (arrow keys move the selection)">
       <table className="grid">
         <thead>
           <tr>
             {COLS.map((c) => (
               <th
-                key={c.key}
+                key={c.label || "kind"}
                 className={c.cls}
-                aria-sort={sort?.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
+                aria-sort={c.key && sort?.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : undefined}
                 onClick={() =>
-                  setSort((s) => (s?.key !== c.key ? { key: c.key, dir: 1 } : s.dir === 1 ? { key: c.key, dir: -1 } : null))
+                  c.key &&
+                  setSort((s) => (s?.key !== c.key ? { key: c.key!, dir: 1 } : s.dir === 1 ? { key: c.key!, dir: -1 } : null))
                 }
+                title={c.key === "kind" ? "Type: A assert, C cover, M assume" : undefined}
               >
                 {c.label}
-                <span className="sort">{sort?.key === c.key ? (sort.dir === 1 ? "▲" : "▼") : ""}</span>
+                {c.key && sort?.key === c.key && <span className="sort">{sort.dir === 1 ? "▴" : "▾"}</span>}
               </th>
             ))}
           </tr>
@@ -615,21 +762,21 @@ function PropTable({ props, total, selected, onSelect }: { props: Property[]; to
               className={`${p.name === selected ? "sel" : ""} ${p.enabled ? "" : "off"}`}
               aria-selected={p.name === selected}
               onClick={() => onSelect(p.name)}
+              onDoubleClick={() => onOpen(p)}
             >
-              <td className="mono name">{p.name}</td>
-              <td className="muted">{p.kind}</td>
-              <td><StatusLabel p={p} /></td>
-              <td className="mono muted">{p.status.engine ?? ""}</td>
-              <td className="result">{result(p)}</td>
-              <td className="mono num muted">{time(p)}</td>
+              <td className="c-kind mono" title={p.kind}>{KIND_LETTER[p.kind]}</td>
+              <td className="mono">{p.name}</td>
+              <td><Status p={p} /></td>
+              <td className="mono dim">{p.status.engine ?? ""}</td>
+              <td className="mono num dim" title={bound(p)}>{bound(p)}</td>
+              <td className="mono num dim">{time(p)}</td>
+              <td className="mono dim">{TASK}</td>
             </tr>
           ))}
           {rows.length === 0 && (
             <tr className="empty-row">
               <td colSpan={COLS.length} className="empty">
-                {total
-                  ? "No properties match the current filter."
-                  : "No properties yet. Run a JasperGold or VC Formal script, or type commands in the console."}
+                {total ? "No properties match the current filter." : "No properties. Source a JasperGold or VC Formal script, or type commands in the console."}
               </td>
             </tr>
           )}
@@ -639,7 +786,7 @@ function PropTable({ props, total, selected, onSelect }: { props: Property[]; to
   );
 }
 
-function Console({ log, busy, flavor, onSubmit }: { log: LogLine[]; busy: boolean; flavor: Flavor; onSubmit: (c: string) => void }) {
+function Console({ hidden, log, busy, flavor, onSubmit }: { hidden: boolean; log: LogLine[]; busy: boolean; flavor: Flavor; onSubmit: (c: string) => void }) {
   const [cmd, setCmd] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [hi, setHi] = useState(-1);
@@ -647,43 +794,33 @@ function Console({ log, busy, flavor, onSubmit }: { log: LogLine[]; busy: boolea
   const prompt = `fdv[${flavor}]>`;
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
-  }, [log]);
-  const submit = () => {
-    if (!cmd.trim() || busy) return;
-    onSubmit(cmd);
-    setHistory((h) => [cmd, ...h]);
-    setHi(-1);
-    setCmd("");
-  };
+  }, [log, hidden]);
   return (
-    <div className="console">
+    <div className="console" hidden={hidden}>
       <div className="console-log mono">
-        {log.length === 0 && <div className="line hint">Type a Tcl command below. ↑/↓ walks history.</div>}
         {log.map((l, i) => (
           <div key={i} className={`line ${l.kind}`}>
-            {l.kind === "in" ? (
-              <>
-                <span className="prompt">{prompt}</span> {l.text}
-              </>
-            ) : (
-              l.text
-            )}
+            {l.kind === "in" ? `${prompt} ${l.text}` : l.text}
           </div>
         ))}
         <div ref={end} />
       </div>
-      <div className="composer">
-        <span className="prompt mono">{prompt}</span>
+      <label className="prompt-line mono">
+        <span className="prompt">{prompt}</span>
         <input
-          className="composer-input mono"
+          className="mono"
           value={cmd}
           disabled={busy}
           aria-label="Tcl command"
-          placeholder="Tcl command, e.g. assert -name a1 {req |-> ##1 ack}"
+          placeholder="assert -name a1 {req |-> ##1 ack}"
           onChange={(e) => setCmd(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
-            else if (e.key === "ArrowUp" && history.length) {
+            if (e.key === "Enter" && cmd.trim()) {
+              onSubmit(cmd);
+              setHistory((h) => [cmd, ...h]);
+              setHi(-1);
+              setCmd("");
+            } else if (e.key === "ArrowUp" && history.length) {
               e.preventDefault();
               const n = Math.min(hi + 1, history.length - 1);
               setHi(n);
@@ -696,36 +833,29 @@ function Console({ log, busy, flavor, onSubmit }: { log: LogLine[]; busy: boolea
             }
           }}
         />
-        <div className="segmented" role="group" aria-label="Input mode">
-          <button className="seg on" aria-pressed="true">Tcl</button>
-          <button className="seg" disabled title="Ask: coming soon">Ask</button>
-        </div>
-        <button className="send" disabled={busy || !cmd.trim()} onClick={submit} aria-label="Run command" title="Run (Enter)">
-          <ArrowUpIcon />
-        </button>
-      </div>
+      </label>
     </div>
   );
 }
 
-function EventLog({ events }: { events: Event[] }) {
-  if (!events.length) return <p className="empty-state">No commands run yet.</p>;
+function Messages({ events }: { events: Event[] }) {
+  if (!events.length) return <p className="empty">No messages.</p>;
   return (
-    <div className="event-log">
-      <table className="grid compact">
+    <div className="messages">
+      <table className="grid">
         <tbody>
           {[...events].reverse().map((e, i) => (
-            <tr key={i}>
-              <td className="mono muted">{e.at.toLocaleTimeString()}</td>
+            <tr key={i} className="static">
+              <td className="mono dim">{e.at.toLocaleTimeString()}</td>
               <td>
-                <span className={`status st-${e.ok ? "proven" : "error"}`}>
-                  <span className={`dot st-${e.ok ? "proven" : "error"}`} />
-                  {e.ok ? "ok" : "error"}
+                <span className="status">
+                  <Glyph k={e.ok ? "proven" : "error"} />
+                  {e.ok ? "Info" : "Error"}
                 </span>
               </td>
               <td className="mono">{e.cmd}</td>
-              <td className="muted ellipsis">{e.summary}</td>
-              <td className="mono num muted">{Math.round(e.ms)} ms</td>
+              <td className="dim msg-text">{e.summary}</td>
+              <td className="mono num dim">{Math.round(e.ms)} ms</td>
             </tr>
           ))}
         </tbody>
@@ -734,69 +864,41 @@ function EventLog({ events }: { events: Event[] }) {
   );
 }
 
-// Lines that mention a signal of the selected property are marked, a
-// first step toward cross-probing from property to RTL. `window` limits the
-// view to a few lines around the focus line (inspector preview).
-function SourceView({ text, highlight, focus, window: win }: { text: string; highlight: string[]; focus: number; window?: number }) {
-  const re = highlight.length ? new RegExp(`\\b(${highlight.join("|")})\\b`) : null;
+// Source with line numbers; only the property's own line is highlighted.
+function SourceView({ text, focus }: { text: string; focus: number }) {
   const focusRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (win === undefined) focusRef.current?.scrollIntoView({ block: "center" });
-  }, [focus, text, win]);
-  const lines = text.split("\n");
-  const from = win !== undefined && focus ? Math.max(0, focus - 1 - win) : 0;
-  const to = win !== undefined ? (focus ? Math.min(lines.length, focus + win) : Math.min(lines.length, win * 2 + 1)) : lines.length;
+    focusRef.current?.scrollIntoView({ block: "center" });
+  }, [focus, text]);
+  if (!text) return <p className="empty">No source loaded.</p>;
   return (
-    <pre className={`source ${win !== undefined ? "mini" : ""}`}>
-      {lines.slice(from, to).map((line, j) => {
-        const i = from + j;
-        return (
-          <div
-            key={i}
-            ref={i + 1 === focus ? focusRef : undefined}
-            className={`${re && re.test(line) ? "hit" : ""} ${i + 1 === focus ? "focus" : ""}`}
-          >
-            <span className="ln">{i + 1}</span>
-            <span className="code">{line || " "}</span>
-          </div>
-        );
-      })}
+    <pre className="source">
+      {text.split("\n").map((line, i) => (
+        <div key={i} ref={i + 1 === focus ? focusRef : undefined} className={i + 1 === focus ? "focus" : ""}>
+          <span className="ln">{i + 1}</span>
+          {line || " "}
+        </div>
+      ))}
     </pre>
   );
 }
 
-// ---- icons (inline SVG, currentColor) ----------------------------------------
+// ---- icons (inline SVG, currentColor) ------------------------------------------
 
-function AppMark() {
-  return (
-    <svg className="app-mark" width={20} height={20} viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="1" y="1" width="22" height="22" rx="6" fill="var(--accent)" />
-      <path d="M7 12.5l3 3 7-7" fill="none" stroke="var(--on-accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 const ico = {
-  width: 14,
-  height: 14,
+  width: 16,
+  height: 16,
   viewBox: "0 0 16 16",
   fill: "none",
   stroke: "currentColor",
-  strokeWidth: 1.6,
+  strokeWidth: 1.4,
   strokeLinecap: "round" as const,
   strokeLinejoin: "round" as const,
   "aria-hidden": true,
 };
-const PlayIcon = () => <svg {...ico}><path d="M5 3.5v9l7-4.5z" fill="currentColor" /></svg>;
-const StopIcon = () => <svg {...ico}><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" /></svg>;
-const ScriptIcon = () => <svg {...ico}><path d="M4 2.5h5.5L12 5v8.5H4z" /><path d="M6 8h4M6 10.5h4" /></svg>;
-const SearchIcon = () => <svg {...ico}><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></svg>;
-const ChevronIcon = () => <svg {...ico} width={12} height={12}><path d="M4 6l4 4 4-4" /></svg>;
-const ArrowUpIcon = () => <svg {...ico}><path d="M8 13V3M4 7l4-4 4 4" /></svg>;
-const TreeIcon = () => <svg {...ico} width={18} height={18}><rect x="2" y="2" width="5" height="4" rx="1" /><rect x="9" y="7" width="5" height="3" rx="1" /><rect x="9" y="11.5" width="5" height="3" rx="1" /><path d="M4.5 6v7h4.5M4.5 8.5H9" /></svg>;
-const ListIcon = () => <svg {...ico} width={16} height={16}><path d="M6 4h8M6 8h8M6 12h8" /><circle cx="2.8" cy="4" r=".8" fill="currentColor" /><circle cx="2.8" cy="8" r=".8" fill="currentColor" /><circle cx="2.8" cy="12" r=".8" fill="currentColor" /></svg>;
-const ModuleIcon = () => <svg {...ico}><rect x="2.5" y="3.5" width="11" height="9" rx="1.5" /><path d="M5 3.5v-1.5M8 3.5v-1.5M11 3.5v-1.5M5 14v-1.5M8 14v-1.5M11 14v-1.5" /></svg>;
-const FileIcon = () => <svg {...ico}><path d="M4 2.5h5.5L12 5v8.5H4z" /></svg>;
-const WaveIcon = () => <svg {...ico}><path d="M1.5 11h3V5h3v6h3V5h4" /></svg>;
-const SunIcon = () => <svg {...ico} width={16} height={16}><circle cx="8" cy="8" r="3" /><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1" /></svg>;
-const MoonIcon = () => <svg {...ico} width={16} height={16}><path d="M13 9.5A5.5 5.5 0 016.5 3a5.5 5.5 0 106.5 6.5z" /></svg>;
-const AutoIcon = () => <svg {...ico} width={16} height={16}><circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v11a5.5 5.5 0 000-11z" fill="currentColor" /></svg>;
+const PlayIcon = () => <svg {...ico} width={12} height={12} className="play"><path d="M4 2.5v11l9-5.5z" fill="currentColor" stroke="none" /></svg>;
+const StopIcon = () => <svg {...ico}><rect x="4" y="4" width="8" height="8" rx="1" /></svg>;
+const ScriptIcon = () => <svg {...ico}><path d="M4 2h5.5L12.5 5v9H4z" /><path d="M9.5 2v3h3M6 8h4.5M6 10.5h4.5" /></svg>;
+const WaveIcon = () => <svg {...ico}><path d="M1.5 11.5h2.5v-7h3v7h3v-7h2.5v7h2" /></svg>;
+const CodeIcon = () => <svg {...ico}><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" /></svg>;
+const ChevronIcon = () => <svg {...ico} width={10} height={10}><path d="M4 6l4 4 4-4" /></svg>;
