@@ -9,8 +9,9 @@
 //! the round-2 plan replaces it underneath without changing this file's
 //! logic. Generalization uses CTGs. Several IC3s can share lemmas through
 //! a [`LemmaPool`]: a lemma of frame j excludes no state reachable in j
-//! steps, whichever IC3 found it, so another IC3 may add it to its own
-//! frames up to j. Not yet: CTP, EXCTG, DynAMic.
+//! steps, whichever IC3 found it, but it is only relatively inductive to
+//! its finder's frames, so an importer re-checks it against its own
+//! frames and adds it at the highest level where it holds there. Not yet: CTP, EXCTG, DynAMic.
 
 use crate::cnf::{self, TLit, Template};
 use fdv_aig::{is_neg, neg, var, Aig, Init, Lit};
@@ -267,7 +268,7 @@ impl<'g> Ic3<'g> {
     }
 
     /// Add the other IC3s' new lemmas, each at its frame or our top.
-    fn import(&mut self) {
+    fn import(&mut self, ctx: &RunContext) {
         let Some(sh) = &mut self.share else { return };
         if sh.pool.len.load(std::sync::atomic::Ordering::Acquire) == sh.seen {
             return;
@@ -282,11 +283,23 @@ impl<'g> Ic3<'g> {
             sh.seen = v.len();
             new
         };
+        // A lemma is only relatively inductive to its publisher's frames.
+        // The convergence proof needs every lemma of level L to be
+        // inductive relative to *our* F_{L-1}, so each import is
+        // re-checked here and added at the highest level where it is.
+        // (Unchecked imports gave wrong "safe" verdicts on a03/a11.)
         for (c, l) in new {
-            let lvl = l.min(self.top());
-            if lvl >= 1 && !self.already_blocked(&c, lvl) {
-                self.add_lemma_quiet(c, lvl);
-                self.stats_imported += 1;
+            if ctx.should_stop() {
+                return;
+            }
+            let mut lvl = l.min(self.top());
+            while lvl >= 1 && !self.already_blocked(&c, lvl) {
+                if self.relative_inductive(&c, lvl, false).is_ok() {
+                    self.add_lemma_quiet(c, lvl);
+                    self.stats_imported += 1;
+                    break;
+                }
+                lvl -= 1;
             }
         }
     }
@@ -662,7 +675,7 @@ impl<'g> Ic3<'g> {
             if ctx.should_stop() {
                 return Ok(false);
             }
-            self.import();
+            self.import(ctx);
             // Every state of an obligation's cube reaches a bad state, so a
             // cube that meets the initial states is a real counterexample.
             if ob.level == 0 || self.intersects_init(&ob.cube) {
@@ -807,7 +820,7 @@ impl<'g> Ic3<'g> {
                         reason: ctx.stop_reason().into(),
                     };
                 }
-                self.import();
+                self.import(ctx);
                 let k = self.top();
                 let bad = self.bad;
                 let dom = self.domain(&[bad], k);
