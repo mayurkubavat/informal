@@ -65,6 +65,12 @@ impl<'g> Unroll<'g> {
     }
 
     pub fn add_frame(&mut self) -> usize {
+        self.add_frame_with(true)
+    }
+
+    /// [`Self::add_frame`], asserting the constraints in the new frame
+    /// only when `constraints` is set.
+    pub fn add_frame_with(&mut self, constraints: bool) -> usize {
         let k = self.frames.len();
         let g = self.g;
         let live = self.template.live.iter().filter(|&&x| x).count();
@@ -122,9 +128,11 @@ impl<'g> Unroll<'g> {
             self.sat.add_clause(&[-x, y]);
             self.sat.add_clause(&[x, -y]);
         }
-        for &c in &g.constraints {
-            let c = self.lit(k, c);
-            self.sat.add_clause(&[c]);
+        if constraints {
+            for &c in &g.constraints {
+                let c = self.lit(k, c);
+                self.sat.add_clause(&[c]);
+            }
         }
         k
     }

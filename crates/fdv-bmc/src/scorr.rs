@@ -8,7 +8,9 @@
 //! their frame-1 values, until no model exists. The surviving equalities
 //! hold initially (all inits are constants) and are inductive together, so
 //! they are invariants and merging keeps every verdict and counterexample
-//! depth. Uninitialized latches are simulated but never merged; runs that
+//! depth. The step assumes the constraints in frame 0 only: an equality
+//! that needs them in frame 1 too may fail exactly where merging makes a
+//! constraint hold that the original breaks. Uninitialized latches are simulated but never merged; runs that
 //! break a constraint stop counting. Models with Btor2 expression inits
 //! are left alone.
 
@@ -202,7 +204,11 @@ fn refine(
     let row = latch_rows(g);
     let mut u = Unroll::new(g, sat, true);
     u.add_frame();
-    u.add_frame();
+    // No constraints in frame 1: the equalities must follow from a valid
+    // frame 0 alone. Merging changes how constraints evaluate, so an
+    // equality that only holds when frame 1 also meets them is not safe to
+    // merge (that gave false counterexamples on x-epic a16).
+    u.add_frame_with(false);
     let t0 = std::time::Instant::now();
     let mut enc: HashMap<(Lit, Lit, bool), (i32, i32)> = HashMap::new();
     loop {
@@ -317,6 +323,9 @@ pub fn latch_correspondence(g: &Aig, sat: Box<dyn Sat>, ctx: &RunContext) -> Opt
         }
     }
     stats.merged = subst.len();
+    if std::env::var_os("FDV_SCORR_CHECK").is_some() {
+        bmc_check(g, &classes, 8);
+    }
     if subst.is_empty() {
         return None;
     }
@@ -370,4 +379,36 @@ fn substitute(g: &Aig, subst: &HashMap<u32, (Lit, bool)>) -> Aig {
     out.bads = g.bads.iter().map(|&b| m(&map, b)).collect();
     out.constraints = g.constraints.iter().map(|&c| m(&map, c)).collect();
     fdv_aig::preprocess::simplify(&out).0
+}
+
+/// Debug (FDV_SCORR_CHECK): BMC the equalities on `g` itself, from the
+/// initial states, up to `depth`; prints the first one that fails.
+fn bmc_check(g: &Aig, classes: &[Vec<Member>], depth: usize) {
+    let mut u = Unroll::new(g, fdv_sat::best(), false);
+    for k in 0..=depth {
+        u.add_frame();
+        for c in classes {
+            let r = c[0];
+            for m in &c[1..] {
+                let x = u.lit(k, m.lit);
+                let y = u.lit(k, r.lit);
+                let y = if m.phase { -y } else { y };
+                // Is x != y possible at frame k?
+                let d = u.new_var();
+                u.sat.add_clause(&[-d, x, y]);
+                u.sat.add_clause(&[-d, -x, -y]);
+                if u.sat.solve(&[d]) == Answer::Sat {
+                    eprintln!(
+                        "scorr check: latch {} != {}latch {} at depth {k}",
+                        m.lit,
+                        if m.phase { "!" } else { "" },
+                        r.lit
+                    );
+                    return;
+                }
+                u.sat.add_clause(&[-d]);
+            }
+        }
+    }
+    eprintln!("scorr check: all equalities hold to depth {depth}");
 }
