@@ -318,6 +318,21 @@ impl Engine for Ic3Engine {
                 fdv_sat::mini::PROPS.load(Relaxed) as f64 / n as f64,
                 0
             );
+            let dn = ic3::DIAG_N.load(Relaxed).max(1) as f64;
+            eprintln!(
+                "domain: latches+inputs {:.0}, live (not eliminated) {:.0} per query",
+                ic3::DIAG_LI.load(Relaxed) as f64 / dn,
+                ic3::DIAG_LIVE.load(Relaxed) as f64 / dn
+            );
+            let ns = fdv_sat::mini::SAT_SOLVES.load(Relaxed).max(1);
+            eprintln!(
+                "mini: SAT answers {} ({:.1} s, {:.0} decisions each); all solves {:.1} s; max vars {}",
+                ns,
+                fdv_sat::mini::SAT_NANOS.load(Relaxed) as f64 / 1e9,
+                fdv_sat::mini::SAT_DECISIONS.load(Relaxed) as f64 / ns as f64,
+                fdv_sat::mini::ALL_NANOS.load(Relaxed) as f64 / 1e9,
+                fdv_sat::mini::MAX_VARS.load(Relaxed)
+            );
         }
         Ok(result(self.name(), v, t0))
     }

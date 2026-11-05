@@ -84,6 +84,11 @@ pub static DECISIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 pub static DOMAIN_VARS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static SOLVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static PROPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SAT_SOLVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SAT_DECISIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SAT_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MAX_VARS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static ALL_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Default for Mini {
     fn default() -> Self {
@@ -644,6 +649,8 @@ impl Sat for Mini {
         if self.units_since_simplify > 64 {
             self.simplify();
         }
+        let t0 = std::time::Instant::now();
+        let d0 = DECISIONS.load(std::sync::atomic::Ordering::Relaxed);
         let mut restart = 0;
         let ans = loop {
             match self.search(assumptions, 100 * Mini::luby(restart)) {
@@ -653,6 +660,17 @@ impl Sat for Mini {
             }
         };
         SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let ns = t0.elapsed().as_nanos() as u64;
+            ALL_NANOS.fetch_add(ns, Relaxed);
+            MAX_VARS.fetch_max(self.assign.len() as u64, Relaxed);
+            if ans == Answer::Sat {
+                SAT_SOLVES.fetch_add(1, Relaxed);
+                SAT_NANOS.fetch_add(ns, Relaxed);
+                SAT_DECISIONS.fetch_add(DECISIONS.load(Relaxed) - d0, Relaxed);
+            }
+        }
         PROPS.fetch_add(
             self.trail.len() as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -684,9 +702,6 @@ impl Sat for Mini {
                 dom.push(v);
             }
         }
-        for &v in &dom {
-            self.in_domain[v] = false;
-        }
         // Decisions follow the caller's order (IC3 puts latches and
         // inputs first, so gates mostly follow by propagation).
         self.dom_head = 0;
@@ -695,6 +710,9 @@ impl Sat for Mini {
         self.restricted = true;
         let r = self.solve(assumptions);
         self.restricted = false;
+        for &v in &self.dom {
+            self.in_domain[v] = false;
+        }
         r
     }
 

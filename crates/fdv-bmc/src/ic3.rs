@@ -19,6 +19,10 @@ use fdv_engine::{RunContext, Verdict};
 use fdv_sat::{Answer, Sat};
 use std::collections::BinaryHeap;
 
+pub static DIAG_LI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DIAG_LIVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DIAG_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// How one IC3 generalizes; portfolio workers differ here.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -516,6 +520,11 @@ impl<'g> Ic3<'g> {
                 grow(&mut stack, &mut self.mark, &mut out);
             }
         }
+        // Variables the CNF template eliminated are in no clause: deciding
+        // them is pure waste (they were over half of each domain on the
+        // cv32e40x models).
+        let live = &self.t.live;
+        out.retain(|&tv| live.get(tv as usize).copied().unwrap_or(true));
         // Latches and inputs first: Mini decides in this order, and once
         // they are set the gates mostly follow by propagation.
         let nodes = &self.g.nodes;
@@ -525,6 +534,24 @@ impl<'g> Ic3<'g> {
                 && v - 1 < nodes.len()
                 && matches!(nodes[v - 1], fdv_aig::Node::Latch | fdv_aig::Node::Input))
         });
+        if std::env::var_os("FDV_DIAG_DOM").is_some() {
+            let li = out
+                .iter()
+                .filter(|&&tv| {
+                    let v = tv as usize;
+                    v >= 1
+                        && v - 1 < nodes.len()
+                        && matches!(nodes[v - 1], fdv_aig::Node::Latch | fdv_aig::Node::Input)
+                })
+                .count();
+            let live = out
+                .iter()
+                .filter(|&&tv| self.t.live.get(tv as usize).copied().unwrap_or(true))
+                .count();
+            DIAG_LI.fetch_add(li as u64, std::sync::atomic::Ordering::Relaxed);
+            DIAG_LIVE.fetch_add(live as u64, std::sync::atomic::Ordering::Relaxed);
+            DIAG_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         out
     }
 
