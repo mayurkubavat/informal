@@ -28,6 +28,8 @@ pub struct Config {
     pub reverse_drop: bool,
     /// Counterexamples to propagation blocked per lemma when pushing it.
     pub max_ctps: usize,
+    /// Close each query's decision domain over the frame's lemmas.
+    pub lemma_domain: bool,
 }
 
 impl Default for Config {
@@ -39,6 +41,7 @@ impl Default for Config {
             // Off: on the HWMCC'24 sample CTP lost more models than it
             // won (frames converge later); one fdv-ic3-mt worker uses it.
             max_ctps: 0,
+            lemma_domain: std::env::var_os("FDV_IC3_LEMMA_DOMAIN").is_some(),
         }
     }
 }
@@ -141,6 +144,7 @@ pub struct Ic3<'g> {
     pub stats_lemmas: usize,
     pub stats_imported: usize,
     pub stats_ctps: usize,
+    pub stats_lift_fallbacks: usize,
     pub stats_queries: usize,
     pub stats_query_time: std::time::Duration,
     pub stats_lift_time: std::time::Duration,
@@ -183,6 +187,7 @@ impl<'g> Ic3<'g> {
             stats_lemmas: 0,
             stats_imported: 0,
             stats_ctps: 0,
+            stats_lift_fallbacks: 0,
             stats_queries: 0,
             stats_query_time: Default::default(),
             stats_lift_time: Default::default(),
@@ -320,6 +325,69 @@ impl<'g> Ic3<'g> {
 
     /// Shrink a state by lifting: the part of `latches` that, with these
     /// inputs, still forces every `target` literal (and the constraints).
+    /// Template variables (by index) that justify `target` and the
+    /// constraints under the given latch and input values: an AND that is
+    /// true needs both inputs, a false one needs one false input (one
+    /// already needed if possible). Values come from simulating the AIG.
+    fn justify(&self, latches: &[Lit], inputs: &[TLit], target: &[TLit]) -> Vec<bool> {
+        let g = self.g;
+        let n = g.nodes.len();
+        let mut val = vec![false; n];
+        for &l in latches {
+            val[var(l) as usize] = !is_neg(l);
+        }
+        for &x in inputs {
+            val[x.unsigned_abs() as usize - 1] = x > 0;
+        }
+        let lv = |val: &[bool], l: Lit| val[var(l) as usize] ^ is_neg(l);
+        for v in 0..n {
+            if let fdv_aig::Node::And(a, b) = g.nodes[v] {
+                val[v] = lv(&val, a) && lv(&val, b);
+            }
+        }
+        let mut need = vec![false; self.nvars + 2];
+        // Roots: the target (or the bads that hold, for the extra bad
+        // variable) and every constraint.
+        let mut roots: Vec<u32> = Vec::new();
+        for &x in target {
+            let v = x.unsigned_abs() as usize;
+            if v - 1 < n {
+                roots.push(v as u32 - 1);
+            } else {
+                roots.extend(g.bads.iter().filter(|&&b| lv(&val, b)).map(|&b| var(b)));
+            }
+        }
+        roots.extend(g.constraints.iter().map(|&c| var(c)));
+        let mut mark = vec![false; n];
+        for r in roots {
+            mark[r as usize] = true;
+        }
+        for v in (0..n).rev() {
+            if !mark[v] {
+                continue;
+            }
+            need[v + 1] = true;
+            if let fdv_aig::Node::And(a, b) = g.nodes[v] {
+                let (va, vb) = (var(a) as usize, var(b) as usize);
+                if val[v] {
+                    mark[va] = true;
+                    mark[vb] = true;
+                } else {
+                    let fa = !lv(&val, a);
+                    let fb = !lv(&val, b);
+                    // One controlling (false) input is enough.
+                    let pick = match (fa, fb) {
+                        (true, true) if mark[vb] && !mark[va] => vb,
+                        (true, _) => va,
+                        _ => vb,
+                    };
+                    mark[pick] = true;
+                }
+            }
+        }
+        need
+    }
+
     fn lift(&mut self, latches: Cube, inputs: &[TLit], target: &[TLit]) -> Cube {
         let g = self.g;
         // The target and the constraints hold in the model; ask for one
@@ -330,19 +398,19 @@ impl<'g> Ic3<'g> {
         // constraints) can matter; the rest are left out of the query.
         let roots: Vec<TLit> = target.to_vec();
         let dom = self.domain(&roots, 0);
-        let ep = self.epoch;
-        let in_cone = |m: &Vec<u32>, x: TLit| m[x.unsigned_abs() as usize] == ep;
-        let latches: Cube = latches
-            .into_iter()
-            .filter(|&l| in_cone(&self.mark, t(l)))
-            .collect();
+        // Justification first: only latches and inputs that some path of
+        // controlling values needs go to the SAT core below.
+        let need = self.justify(&latches, inputs, target);
+        let in_cone = |x: TLit| need[x.unsigned_abs() as usize];
+        let all = latches.clone();
+        let latches: Cube = latches.into_iter().filter(|&l| in_cone(t(l))).collect();
         let act = self.lift.fresh();
         let mut clause = vec![-act];
         clause.extend(target.iter().map(|&x| -x));
         clause.extend(g.constraints.iter().map(|&c| -t(c)));
         self.lift.sat.add_clause(&clause);
         let mut assume = vec![act];
-        assume.extend(inputs.iter().copied().filter(|&x| in_cone(&self.mark, x)));
+        assume.extend(inputs.iter().copied().filter(|&x| in_cone(x)));
         assume.extend(latches.iter().map(|&l| t(l)));
         let t0 = std::time::Instant::now();
         let r = self.lift.sat.solve_domain(&assume, &dom);
@@ -354,7 +422,10 @@ impl<'g> Ic3<'g> {
                 .filter(|&l| self.lift.sat.failed(t(l)))
                 .collect()
         } else {
-            latches // should not happen; keep the full state
+            // Justification missed something (or the solver stopped):
+            // keep the full state, which always reaches the target.
+            self.stats_lift_fallbacks += 1;
+            all
         };
         self.lift.sat.add_clause(&[-act]);
         cube
@@ -407,7 +478,11 @@ impl<'g> Ic3<'g> {
             }
         };
         grow(&mut stack, &mut self.mark, &mut out);
-        if level >= 1 {
+        // Closing over lemmas keeps predecessors inside F_i; without it a
+        // predecessor may break a lemma outside the cone. Both are sound:
+        // UNSAT on part of the clauses is UNSAT, the cone holds the whole
+        // transition into the cube, and init units always propagate.
+        if level >= 1 && self.cfg.lemma_domain {
             loop {
                 let mut added = false;
                 for lemma in self.frames[level..].iter().flatten() {
@@ -428,6 +503,15 @@ impl<'g> Ic3<'g> {
                 grow(&mut stack, &mut self.mark, &mut out);
             }
         }
+        // Latches and inputs first: Mini decides in this order, and once
+        // they are set the gates mostly follow by propagation.
+        let nodes = &self.g.nodes;
+        out.sort_by_key(|&tv| {
+            let v = tv as usize;
+            !(v >= 1
+                && v - 1 < nodes.len()
+                && matches!(nodes[v - 1], fdv_aig::Node::Latch | fdv_aig::Node::Input))
+        });
         out
     }
 

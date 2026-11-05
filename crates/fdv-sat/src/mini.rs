@@ -69,11 +69,21 @@ pub struct Mini {
     /// Decision domain for the current solve (empty: every variable).
     in_domain: Vec<bool>,
     restricted: bool,
-    skipped: Vec<Var>,
+    /// The domain's variables by activity, highest first: restricted
+    /// solves decide only on these and leave the global heap alone.
+    dom: Vec<Var>,
+    /// Every `dom` entry before this index is assigned.
+    dom_head: usize,
     learnts: usize,
     max_learnts: f64,
     pub conflicts: u64,
 }
+
+/// Process-wide counters for profiling (FDV_IC3_STATS).
+pub static DECISIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DOMAIN_VARS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SOLVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static PROPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Default for Mini {
     fn default() -> Self {
@@ -99,7 +109,8 @@ impl Default for Mini {
             units_since_simplify: 0,
             in_domain: Vec::new(),
             restricted: false,
-            skipped: Vec::new(),
+            dom: Vec::new(),
+            dom_head: 0,
             learnts: 0,
             max_learnts: 2000.0,
             conflicts: 0,
@@ -398,6 +409,7 @@ impl Mini {
         if self.decision_level() <= lvl {
             return;
         }
+        self.dom_head = 0;
         let lim = self.trail_lim[lvl as usize];
         for i in (lim..self.trail.len()).rev() {
             let v = var(self.trail[i]);
@@ -412,12 +424,18 @@ impl Mini {
     }
 
     fn pick(&mut self) -> Option<Lit> {
-        while let Some(v) = self.heap.pop(&self.activity) {
-            if self.restricted && !self.in_domain.get(v).copied().unwrap_or(false) {
-                // Out of the domain: set aside, back in the heap after the solve.
-                self.skipped.push(v);
-                continue;
+        if self.restricted {
+            // IC3 queries make few decisions; a scan of the (small) domain
+            // beats draining a heap of every variable in the solver.
+            while self.dom_head < self.dom.len()
+                && self.assign[self.dom[self.dom_head]] != Val::Undef
+            {
+                self.dom_head += 1;
             }
+            let v = *self.dom.get(self.dom_head)? as Lit;
+            return Some(if self.phase[v as usize] { v } else { -v });
+        }
+        while let Some(v) = self.heap.pop(&self.activity) {
             if self.assign[v] == Val::Undef {
                 let v = v as Lit;
                 return Some(if self.phase[v as usize] { v } else { -v });
@@ -562,6 +580,7 @@ impl Mini {
                 },
             };
             self.trail_lim.push(self.trail.len());
+            DECISIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.enqueue(decision, None);
         }
     }
@@ -633,6 +652,11 @@ impl Sat for Mini {
                 Some(a) => break a,
             }
         };
+        SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        PROPS.fetch_add(
+            self.trail.len() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         if ans == Answer::Sat {
             self.model = self.assign.iter().map(|&v| v == Val::True).collect();
         }
@@ -645,31 +669,32 @@ impl Sat for Mini {
     }
 
     fn solve_domain(&mut self, assumptions: &[Lit], domain: &[Lit]) -> Answer {
-        for &d in domain {
+        for &d in domain.iter().chain(assumptions) {
             self.ensure(var(d));
         }
         if self.in_domain.len() < self.assign.len() {
             self.in_domain.resize(self.assign.len(), false);
         }
-        for &d in domain {
-            self.in_domain[var(d)] = true;
-        }
-        for &a in assumptions {
-            self.ensure(var(a));
-            if self.in_domain.len() < self.assign.len() {
-                self.in_domain.resize(self.assign.len(), false);
+        let mut dom = std::mem::take(&mut self.dom);
+        dom.clear();
+        for &d in domain.iter().chain(assumptions) {
+            let v = var(d);
+            if !self.in_domain[v] {
+                self.in_domain[v] = true;
+                dom.push(v);
             }
-            self.in_domain[var(a)] = true;
         }
+        for &v in &dom {
+            self.in_domain[v] = false;
+        }
+        // Decisions follow the caller's order (IC3 puts latches and
+        // inputs first, so gates mostly follow by propagation).
+        self.dom_head = 0;
+        DOMAIN_VARS.fetch_add(dom.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.dom = dom;
         self.restricted = true;
         let r = self.solve(assumptions);
         self.restricted = false;
-        for &d in domain.iter().chain(assumptions) {
-            self.in_domain[var(d)] = false;
-        }
-        for v in std::mem::take(&mut self.skipped) {
-            self.heap.insert(v, &self.activity);
-        }
         r
     }
 

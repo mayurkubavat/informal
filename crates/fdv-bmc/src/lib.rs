@@ -276,6 +276,18 @@ impl Engine for Ic3Engine {
             }));
             Box::new(s)
         };
+        if std::env::var_os("FDV_IC3_STATS").is_some() {
+            let t = cnf::build(&g);
+            eprintln!(
+                "template: {} latches {} inputs {} ands, {} live vars, {} clauses, {} lits",
+                g.latches.len(),
+                g.inputs.len(),
+                g.num_ands(),
+                t.live.iter().filter(|&&x| x).count(),
+                t.clauses.len(),
+                t.clauses.iter().map(|c| c.len()).sum::<usize>()
+            );
+        }
         let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(make)) else {
             return Ok(result(
                 self.name(),
@@ -286,14 +298,25 @@ impl Engine for Ic3Engine {
         let v = ic3.check(ctx);
         if std::env::var_os("FDV_IC3_STATS").is_some() {
             eprintln!(
-                "{}: frames {} lemmas {} ctps {} queries {} ({:.2} s) lift {:.2} s",
+                "{}: frames {} lemmas {} ctps {} queries {} ({:.2} s) lift {:.2} s ({} fallbacks)",
                 self.name(),
                 ic3.depth(),
                 ic3.stats_lemmas,
                 ic3.stats_ctps,
                 ic3.stats_queries,
                 ic3.stats_query_time.as_secs_f64(),
-                ic3.stats_lift_time.as_secs_f64()
+                ic3.stats_lift_time.as_secs_f64(),
+                ic3.stats_lift_fallbacks
+            );
+            use std::sync::atomic::Ordering::Relaxed;
+            let n = fdv_sat::mini::SOLVES.load(Relaxed).max(1);
+            eprintln!(
+                "mini: solves {} decisions/solve {:.1} domain/solve {:.0} trail-at-end/solve {:.0} conflicts {}",
+                n,
+                fdv_sat::mini::DECISIONS.load(Relaxed) as f64 / n as f64,
+                fdv_sat::mini::DOMAIN_VARS.load(Relaxed) as f64 / n as f64,
+                fdv_sat::mini::PROPS.load(Relaxed) as f64 / n as f64,
+                0
             );
         }
         Ok(result(self.name(), v, t0))
@@ -382,6 +405,7 @@ impl Default for Ic3Mt {
                         max_ctg_depth: 2,
                         reverse_drop: true,
                         max_ctps: 3,
+                        ..d
                     },
                 ),
             ],
