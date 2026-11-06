@@ -56,7 +56,9 @@ impl Default for Config {
             // Off by default: on the 75-model set it lost more models than
             // it won; parent-lemma alone does better (FDV_IC3_ACTIVITY on).
             activity_order: std::env::var_os("FDV_IC3_ACTIVITY").is_some(),
-            parent_lemma: std::env::var_os("FDV_IC3_NO_PARENT").is_none(),
+            // Off by default: on 75 models it traded 3 models for 2 and
+            // was slower; two fdv-ic3-mt workers use it for diversity.
+            parent_lemma: std::env::var_os("FDV_IC3_PARENT").is_some(),
         }
     }
 }

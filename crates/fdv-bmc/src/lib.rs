@@ -422,6 +422,7 @@ impl Default for Ic3Mt {
                         max_ctgs: 0,
                         max_ctg_depth: 0,
                         reverse_drop: true,
+                        parent_lemma: true,
                         ..d
                     },
                 ),
@@ -432,6 +433,7 @@ impl Default for Ic3Mt {
                         max_ctg_depth: 2,
                         reverse_drop: true,
                         max_ctps: 3,
+                        parent_lemma: true,
                         ..d
                     },
                 ),
