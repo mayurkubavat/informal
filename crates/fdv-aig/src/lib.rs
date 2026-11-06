@@ -63,6 +63,12 @@ pub struct Latch {
     pub init: Init,
 }
 
+/// One rewrite step of [`Aig::and`]'s two-level rules.
+enum Step {
+    Done(Lit),
+    Again(Lit, Lit),
+}
+
 /// Deterministic hashing (fixed keys), so runs are reproducible.
 type Fixed = BuildHasherDefault<std::collections::hash_map::DefaultHasher>;
 
@@ -126,15 +132,26 @@ impl Aig {
     }
 
     /// AND with constant folding and structural hashing.
-    pub fn and(&mut self, a: Lit, b: Lit) -> Lit {
-        if a == FALSE || b == FALSE || a == neg(b) {
-            return FALSE;
-        }
-        if a == TRUE || a == b {
-            return b;
-        }
-        if b == TRUE {
-            return a;
+    pub fn and(&mut self, mut a: Lit, mut b: Lit) -> Lit {
+        loop {
+            if a == FALSE || b == FALSE || a == neg(b) {
+                return FALSE;
+            }
+            if a == TRUE || a == b {
+                return b;
+            }
+            if b == TRUE {
+                return a;
+            }
+            // Two-level rules (as rIC3's aig-rs comb_simplify), with `o`
+            // one fanin and `i = (x & y)` or `!(x & y)` the other:
+            //   o & (o & y) = (o & y)      o & !(o & y) = o & !y
+            //   o & (!o & y) = 0           o & !(!o & y) = o
+            match self.two_level(a, b).or_else(|| self.two_level(b, a)) {
+                Some(Step::Done(l)) => return l,
+                Some(Step::Again(x, y)) => (a, b) = (x, y),
+                None => break,
+            }
         }
         let key = if a < b { (a, b) } else { (b, a) };
         if let Some(&l) = self.strash.get(&key) {
@@ -144,6 +161,25 @@ impl Aig {
         self.nodes.push(Node::And(key.0, key.1));
         self.strash.insert(key, l);
         l
+    }
+
+    fn two_level(&self, o: Lit, i: Lit) -> Option<Step> {
+        let Node::And(x, y) = self.nodes[var(i) as usize] else {
+            return None;
+        };
+        let positive = !is_neg(i);
+        if x == o || y == o {
+            let other = if x == o { y } else { x };
+            return Some(if positive {
+                Step::Done(i)
+            } else {
+                Step::Again(o, neg(other))
+            });
+        }
+        if x == neg(o) || y == neg(o) {
+            return Some(Step::Done(if positive { FALSE } else { o }));
+        }
+        None
     }
 
     /// Add an AND node exactly as given (readers that must keep variable

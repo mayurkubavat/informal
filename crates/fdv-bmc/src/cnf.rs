@@ -101,17 +101,81 @@ fn build_dag(g: &Aig) -> Template {
         }
         clauses.push(Some(c));
     };
-    for (v, node) in g.nodes.iter().enumerate() {
+    // Fanout of every node (AND inputs, next states, inits, outputs).
+    let mut fanout = vec![0u32; g.nodes.len()];
+    for node in &g.nodes {
         if let Node::And(a, b) = *node {
-            let (x, a, b) = (v as i32 + 1, tlit(a), tlit(b));
-            add(vec![-x, a], &mut clauses, &mut owned, &mut uses);
-            add(vec![-x, b], &mut clauses, &mut owned, &mut uses);
-            add(vec![x, -a, -b], &mut clauses, &mut owned, &mut uses);
+            fanout[var(a) as usize] += 1;
+            fanout[var(b) as usize] += 1;
         }
+    }
+    for l in &g.latches {
+        fanout[var(l.next) as usize] += 1;
+        if let Init::Expr(e) = l.init {
+            fanout[var(e) as usize] += 1;
+        }
+    }
+    for &b in g.bads.iter().chain(&g.constraints) {
+        fanout[var(b) as usize] += 1;
     }
     let mut live = vec![true; n];
     let mut eliminated = 0;
+    // Inner ANDs of a recognized gate that nothing else uses: no clauses.
+    let mut absorbed = vec![false; g.nodes.len()];
+    let compact = std::env::var_os("FDV_CNF_NO_XOR").is_none();
+    for v in (0..g.nodes.len()).rev() {
+        let Node::And(a, b) = g.nodes[v] else {
+            continue;
+        };
+        if absorbed[v] {
+            continue;
+        }
+        let x = v as i32 + 1;
+        if compact {
+            if let Some((c, t, e, inner)) = ite_of(g, a, b).filter(|(_, _, _, inner)| {
+                inner.iter().all(|&iv| fanout[iv] == 1 && !frozen[iv + 1])
+            }) {
+                // x = !ite(c, t, e)  <=>  m = ite(c, t, e) with m = -x.
+                let (c, t, e, m) = (tlit(c), tlit(t), tlit(e), -x);
+                if t == -e {
+                    // XOR: m = c ? t : !t  <=>  m = c XNOR t ... encoded directly.
+                    for cl in [
+                        vec![-c, -t, m],
+                        vec![-c, t, -m],
+                        vec![c, t, m],
+                        vec![c, -t, -m],
+                    ] {
+                        add(cl, &mut clauses, &mut owned, &mut uses);
+                    }
+                } else {
+                    for cl in [
+                        vec![-c, -t, m],
+                        vec![-c, t, -m],
+                        vec![c, -e, m],
+                        vec![c, e, -m],
+                    ] {
+                        add(cl, &mut clauses, &mut owned, &mut uses);
+                    }
+                }
+                for iv in inner {
+                    if fanout[iv] == 1 && !frozen[iv + 1] {
+                        absorbed[iv] = true;
+                        live[iv + 1] = false;
+                        eliminated += 1;
+                    }
+                }
+                continue;
+            }
+        }
+        let (a, b) = (tlit(a), tlit(b));
+        add(vec![-x, a], &mut clauses, &mut owned, &mut uses);
+        add(vec![-x, b], &mut clauses, &mut owned, &mut uses);
+        add(vec![x, -a, -b], &mut clauses, &mut owned, &mut uses);
+    }
     for v in 1..n {
+        if !live[v] {
+            continue;
+        }
         if frozen[v] {
             continue;
         }
@@ -166,6 +230,34 @@ fn build_dag(g: &Aig) -> Template {
         live,
         eliminated,
     }
+}
+
+/// `!ite(c, t, e)` pattern: an AND of two negated ANDs `(c & t)` and
+/// `(!c & e)`. Returns (c, t, e) and the two inner AND variables.
+fn ite_of(
+    g: &Aig,
+    a: fdv_aig::Lit,
+    b: fdv_aig::Lit,
+) -> Option<(fdv_aig::Lit, fdv_aig::Lit, fdv_aig::Lit, [usize; 2])> {
+    if !is_neg(a) || !is_neg(b) {
+        return None;
+    }
+    let (Node::And(a0, a1), Node::And(b0, b1)) =
+        (g.nodes[var(a) as usize], g.nodes[var(b) as usize])
+    else {
+        return None;
+    };
+    let inner = [var(a) as usize, var(b) as usize];
+    let neg = fdv_aig::neg;
+    // Find c in one inner AND and !c in the other.
+    for (c, t) in [(a0, a1), (a1, a0)] {
+        for (nc, e) in [(b0, b1), (b1, b0)] {
+            if nc == neg(c) {
+                return Some((c, t, e, inner));
+            }
+        }
+    }
+    None
 }
 
 /// Drop duplicate and subsumed clauses (small sets: quadratic).
@@ -363,6 +455,53 @@ mod tests {
                     })
                 });
                 assert_eq!(sat, bv == (m == 7), "m={m} bad={bv}");
+            }
+        }
+    }
+
+    /// ITE and XOR gates built from three ANDs: the compact encoding
+    /// must force `bad == ite(c, t, e)` (and the XOR case) for every input.
+    #[test]
+    fn ite_and_xor_encodings_keep_meaning() {
+        for xor in [false, true] {
+            let mut g = Aig::new();
+            let (c, t, e0) = (g.input(), g.input(), g.input());
+            let e = if xor { fdv_aig::neg(t) } else { e0 };
+            let ct = g.and(c, t);
+            let ce = g.and(fdv_aig::neg(c), e);
+            let x = g.and(fdv_aig::neg(ct), fdv_aig::neg(ce));
+            let bad = fdv_aig::neg(x); // ite(c, t, e)
+            g.bads.push(bad);
+            let tp = build(&g);
+            assert!(!tp.live[var(ct) as usize + 1] && !tp.live[var(ce) as usize + 1]);
+            for m in 0..8u32 {
+                let vals = [
+                    (var(c), m & 1 == 1),
+                    (var(t), m & 2 == 2),
+                    (var(e0), m & 4 == 4),
+                ];
+                let val = |l: TLit| -> Option<bool> {
+                    let v = l.unsigned_abs() - 1;
+                    vals.iter()
+                        .find(|(x, _)| *x == v)
+                        .map(|(_, b)| *b ^ (l < 0))
+                };
+                let (cv, tv) = (m & 1 == 1, m & 2 == 2);
+                let ev = if xor { !tv } else { m & 4 == 4 };
+                let want = if cv { tv } else { ev };
+                for xv in [false, true] {
+                    let sat = tp.clauses.iter().all(|cl| {
+                        cl.iter().any(|&l| {
+                            if l.unsigned_abs() == var(x) + 1 {
+                                xv ^ (l < 0)
+                            } else {
+                                val(l).unwrap_or(false)
+                            }
+                        })
+                    });
+                    // x = !ite: satisfiable exactly when xv == !want.
+                    assert_eq!(sat, xv == !want, "xor={xor} m={m} x={xv}");
+                }
             }
         }
     }
