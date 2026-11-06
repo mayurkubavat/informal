@@ -35,6 +35,12 @@ pub struct Config {
     pub max_ctps: usize,
     /// Close each query's decision domain over the frame's lemmas.
     pub lemma_domain: bool,
+    /// Try dropping the literals that occur least in recent lemmas first
+    /// (IC3ref / rIC3 ordering) instead of by variable index.
+    pub activity_order: bool,
+    /// Parent-lemma MIC (Xia et al., CAV'23): start from the lemma of
+    /// level i-1 that covers the cube, keep its literals for last.
+    pub parent_lemma: bool,
 }
 
 impl Default for Config {
@@ -47,6 +53,8 @@ impl Default for Config {
             // won (frames converge later); one fdv-ic3-mt worker uses it.
             max_ctps: 0,
             lemma_domain: std::env::var_os("FDV_IC3_LEMMA_DOMAIN").is_some(),
+            activity_order: std::env::var_os("FDV_IC3_NO_ACTIVITY").is_none(),
+            parent_lemma: std::env::var_os("FDV_IC3_NO_PARENT").is_none(),
         }
     }
 }
@@ -146,10 +154,21 @@ pub struct Ic3<'g> {
     epoch: u32,
     cfg: Config,
     share: Option<Share>,
+    /// Per AIG variable: how often it occurred in recent lemmas (decayed).
+    act: Vec<f64>,
+    act_inc: f64,
     pub stats_lemmas: usize,
     pub stats_imported: usize,
     pub stats_ctps: usize,
     pub stats_lift_fallbacks: usize,
+    /// MIC calls, total length of their results and inputs, and literal
+    /// drops that succeeded / failed.
+    pub stats_mic: usize,
+    pub stats_parent_hits: usize,
+    pub stats_mic_len: usize,
+    pub stats_mic_in_len: usize,
+    pub stats_drop_ok: usize,
+    pub stats_drop_fail: usize,
     pub stats_queries: usize,
     pub stats_query_time: std::time::Duration,
     pub stats_lift_time: std::time::Duration,
@@ -189,10 +208,18 @@ impl<'g> Ic3<'g> {
             epoch: 0,
             cfg: Config::default(),
             share: None,
+            act: vec![0.0; g.nodes.len()],
+            act_inc: 1.0,
             stats_lemmas: 0,
             stats_imported: 0,
             stats_ctps: 0,
             stats_lift_fallbacks: 0,
+            stats_mic: 0,
+            stats_parent_hits: 0,
+            stats_mic_len: 0,
+            stats_mic_in_len: 0,
+            stats_drop_ok: 0,
+            stats_drop_fail: 0,
             stats_queries: 0,
             stats_query_time: Default::default(),
             stats_lift_time: Default::default(),
@@ -314,6 +341,16 @@ impl<'g> Ic3<'g> {
     }
 
     fn add_lemma_quiet(&mut self, cube: Cube, level: usize) {
+        for &l in &cube {
+            self.act[var(l) as usize] += self.act_inc;
+        }
+        self.act_inc *= 1.0 / 0.99;
+        if self.act_inc > 1e100 {
+            for a in &mut self.act {
+                *a *= 1e-100;
+            }
+            self.act_inc *= 1e-100;
+        }
         let clause: Vec<i32> = cube.iter().map(|&l| -t(l)).collect();
         for i in 1..=level {
             self.solvers[i].sat.add_clause(&clause);
@@ -620,8 +657,43 @@ impl<'g> Ic3<'g> {
     /// retried; otherwise the candidate shrinks to what it shares with it.
     fn generalize(&mut self, mut cube: Cube, i: usize, depth: usize, ctx: &RunContext) -> Cube {
         let mut order = cube.clone();
-        if self.cfg.reverse_drop {
+        if self.cfg.activity_order {
+            // Least active first; reverse_drop breaks ties the other way.
+            let act = &self.act;
+            if self.cfg.reverse_drop {
+                order.reverse();
+            }
+            order.sort_by(|&a, &b| act[var(a) as usize].total_cmp(&act[var(b) as usize]));
+        } else if self.cfg.reverse_drop {
             order.reverse();
+        }
+        if depth == 0 {
+            self.stats_mic += 1;
+            self.stats_mic_in_len += cube.len();
+        }
+        // Parent lemma: a lemma of level i-1 whose literals all occur in
+        // the cube. If it holds at level i too, it is the result (already
+        // general); otherwise its literals are tried last.
+        let mut parent: Option<Cube> = None;
+        if self.cfg.parent_lemma && depth == 0 && i >= 2 {
+            parent = self.frames[i - 1]
+                .iter()
+                .filter(|p| p.iter().all(|l| cube.binary_search(l).is_ok()))
+                .min_by_key(|p| p.len())
+                .cloned();
+            if let Some(p) = &parent {
+                if p.len() < cube.len() {
+                    if let Ok(core) = self.relative_inductive(p, i, false) {
+                        self.stats_parent_hits += 1;
+                        self.stats_mic_len += core.len();
+                        return core;
+                    }
+                }
+            }
+        }
+        if let Some(p) = &parent {
+            // Stable: literals outside the parent first.
+            order.sort_by_key(|l| p.binary_search(l).is_ok());
         }
         for l in order {
             if ctx.should_stop() {
@@ -634,7 +706,13 @@ impl<'g> Ic3<'g> {
             cand.remove(pos);
             if let Some(core) = self.ctg_down(cand, i, depth, ctx) {
                 cube = core;
+                self.stats_drop_ok += 1;
+            } else {
+                self.stats_drop_fail += 1;
             }
+        }
+        if depth == 0 {
+            self.stats_mic_len += cube.len();
         }
         cube
     }
