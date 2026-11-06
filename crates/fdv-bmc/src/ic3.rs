@@ -53,7 +53,9 @@ impl Default for Config {
             // won (frames converge later); one fdv-ic3-mt worker uses it.
             max_ctps: 0,
             lemma_domain: std::env::var_os("FDV_IC3_LEMMA_DOMAIN").is_some(),
-            activity_order: std::env::var_os("FDV_IC3_NO_ACTIVITY").is_none(),
+            // Off by default: on the 75-model set it lost more models than
+            // it won; parent-lemma alone does better (FDV_IC3_ACTIVITY on).
+            activity_order: std::env::var_os("FDV_IC3_ACTIVITY").is_some(),
             parent_lemma: std::env::var_os("FDV_IC3_NO_PARENT").is_none(),
         }
     }
