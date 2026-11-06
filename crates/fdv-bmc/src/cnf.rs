@@ -123,6 +123,7 @@ fn build_dag(g: &Aig) -> Template {
     // Inner ANDs of a recognized gate that nothing else uses: no clauses.
     let mut absorbed = vec![false; g.nodes.len()];
     let compact = std::env::var_os("FDV_CNF_NO_XOR").is_none();
+    let mut implied: Vec<[Vec<TLit>; 2]> = Vec::new();
     for v in (0..g.nodes.len()).rev() {
         let Node::And(a, b) = g.nodes[v] else {
             continue;
@@ -156,6 +157,10 @@ fn build_dag(g: &Aig) -> Template {
                     ] {
                         add(cl, &mut clauses, &mut owned, &mut uses);
                     }
+                    // Implied (resolve on c), but unit propagation needs
+                    // them to set m when t = e: IC3 lost models without.
+                    // Added after elimination so they do not block it.
+                    implied.push([vec![-t, -e, m], vec![t, e, -m]]);
                 }
                 for iv in inner {
                     if fanout[iv] == 1 && !frozen[iv + 1] {
@@ -225,8 +230,16 @@ fn build_dag(g: &Aig) -> Template {
         live[v] = false;
         eliminated += 1;
     }
+    let mut out: Vec<Vec<TLit>> = clauses.into_iter().flatten().collect();
+    for pair in implied {
+        for cl in pair {
+            if cl.iter().all(|l| live[l.unsigned_abs() as usize]) {
+                out.push(cl);
+            }
+        }
+    }
     Template {
-        clauses: clauses.into_iter().flatten().collect(),
+        clauses: out,
         live,
         eliminated,
     }
