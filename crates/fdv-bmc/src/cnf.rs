@@ -83,15 +83,15 @@ fn build_dag(g: &Aig) -> Template {
         .unwrap_or(2000);
     let mut clauses: Vec<Option<Vec<TLit>>> = Vec::new();
     // owned[v]: clauses whose highest variable is v (v's definition).
-    let mut owned: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut owned: Vec<Vec<u32>> = vec![Vec::new(); n];
     // uses[lit]: clauses containing lit whose owner is another variable.
     let idx = |l: TLit| -> usize { 2 * l.unsigned_abs() as usize + usize::from(l < 0) };
-    let mut uses: Vec<Vec<usize>> = vec![Vec::new(); 2 * n + 2];
+    let mut uses: Vec<Vec<u32>> = vec![Vec::new(); 2 * n + 2];
     let add = |c: Vec<TLit>,
                clauses: &mut Vec<Option<Vec<TLit>>>,
-               owned: &mut Vec<Vec<usize>>,
-               uses: &mut Vec<Vec<usize>>| {
-        let ci = clauses.len();
+               owned: &mut Vec<Vec<u32>>,
+               uses: &mut Vec<Vec<u32>>| {
+        let ci = clauses.len() as u32;
         let o = c.iter().map(|l| l.unsigned_abs()).max().unwrap() as usize;
         owned[o].push(ci);
         for &l in &c {
@@ -177,15 +177,41 @@ fn build_dag(g: &Aig) -> Template {
         add(vec![-x, b], &mut clauses, &mut owned, &mut uses);
         add(vec![x, -a, -b], &mut clauses, &mut owned, &mut uses);
     }
+    let mut live_cls = clauses.len();
     for v in 1..n {
+        // Eliminations create and delete many clauses (113M created for
+        // 1.4M kept on sosylab Problem101): once dead clauses outnumber
+        // live ones 3 to 1, renumber the live ones and rebuild the lists,
+        // so memory stays proportional to the live CNF.
+        if clauses.len() > 3 * live_cls + (1 << 20) {
+            let old = std::mem::take(&mut clauses);
+            for o in owned.iter_mut() {
+                o.clear();
+            }
+            for u in uses.iter_mut() {
+                u.clear();
+            }
+            for c in old.into_iter().flatten() {
+                add(c, &mut clauses, &mut owned, &mut uses);
+            }
+            for o in owned.iter_mut() {
+                o.shrink_to_fit();
+            }
+            for u in uses.iter_mut() {
+                u.shrink_to_fit();
+            }
+        }
         if !live[v] {
             continue;
         }
         if frozen[v] {
             continue;
         }
-        let alive = |ids: &[usize], cl: &[Option<Vec<TLit>>]| -> Vec<usize> {
-            ids.iter().copied().filter(|&c| cl[c].is_some()).collect()
+        let alive = |ids: &[u32], cl: &[Option<Vec<TLit>>]| -> Vec<usize> {
+            ids.iter()
+                .map(|&c| c as usize)
+                .filter(|&c| cl[c].is_some())
+                .collect()
         };
         let def = alive(&owned[v], &clauses);
         let up = alive(&uses[idx(v as i32)], &clauses);
@@ -222,13 +248,28 @@ fn build_dag(g: &Aig) -> Template {
         }
         let res = subsume(res);
         for &c in def.iter().chain(&up).chain(&un) {
-            clauses[c] = None;
+            if clauses[c].take().is_some() {
+                live_cls -= 1;
+            }
         }
+        live_cls += res.len();
+        owned[v] = Vec::new();
+        uses[idx(v as i32)] = Vec::new();
+        uses[idx(-(v as i32))] = Vec::new();
         for r in res {
             add(r, &mut clauses, &mut owned, &mut uses);
         }
         live[v] = false;
         eliminated += 1;
+    }
+    if std::env::var_os("FDV_CNF_STATS").is_some() {
+        let hist_lits: usize = uses.iter().map(|u| u.len()).sum();
+        eprintln!(
+            "cnf: {} clauses created, {} use entries, {} live",
+            clauses.len(),
+            hist_lits,
+            clauses.iter().filter(|c| c.is_some()).count()
+        );
     }
     let mut out: Vec<Vec<TLit>> = clauses.into_iter().flatten().collect();
     for pair in implied {
