@@ -90,14 +90,23 @@ fn result(name: &str, verdict: Verdict, t0: Instant) -> EngineResult {
 const FORMATS: [ModelFormat; 2] = [ModelFormat::Aiger, ModelFormat::Btor2];
 
 /// Bounded model checking: is a bad state reachable in exactly k steps,
-/// for k = 0, 1, 2, ...? Finds the shortest counterexample; never proves.
+/// for k = 0, 1, 2, ...? Never proves. With `step` > 1 it unrolls `step`
+/// frames per SAT call and asks for a bad state in any of them (rIC3's
+/// `bmc --step N`): far fewer calls on deep bugs, and the depth reported
+/// is the first bad frame of the model found, not always the shortest.
 pub struct Bmc {
     pub max_depth: Option<usize>,
+    pub step: usize,
 }
 
 impl Engine for Bmc {
     fn name(&self) -> &str {
-        "fdv-bmc"
+        match self.step {
+            0 | 1 => "fdv-bmc",
+            10 => "fdv-bmc-10",
+            65 => "fdv-bmc-65",
+            _ => "fdv-bmc-n",
+        }
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -112,8 +121,9 @@ impl Engine for Bmc {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
+        let step = self.step.max(1);
         let mut u = Unroll::new(&g, solver(ctx), false);
-        let mut k = 0;
+        let mut k = 0; // first frame not yet checked
         let v = loop {
             if ctx.should_stop() {
                 break unknown(ctx.stop_reason());
@@ -121,23 +131,51 @@ impl Engine for Bmc {
             if self.max_depth.is_some_and(|m| k > m) {
                 break unknown(format!("bound {} reached", k - 1));
             }
-            u.add_frame();
-            let bad = u.bad(k);
-            match u.sat.solve(&[bad]) {
+            let mut last = k + step - 1;
+            if let Some(m) = self.max_depth {
+                last = last.min(m);
+            }
+            let mut bads = Vec::new();
+            for f in k..=last {
+                u.add_frame();
+                bads.push(u.bad(f));
+            }
+            // One call: is any of frames k..=last bad?
+            let assume = if let [b] = bads[..] {
+                b
+            } else {
+                let a = u.new_var();
+                let mut c = vec![-a];
+                c.extend(&bads);
+                u.sat.add_clause(&c);
+                a
+            };
+            match u.sat.solve(&[assume]) {
                 Answer::Sat => {
+                    let d = (k..=last)
+                        .zip(&bads)
+                        .find(|(_, &b)| u.sat.value(b))
+                        .map_or(last, |(f, _)| f);
                     break Verdict::Unsafe {
-                        depth: Some(k as u32),
+                        depth: Some(d as u32),
+                    };
+                }
+                Answer::Unsat => {
+                    for &b in &bads {
+                        u.sat.add_clause(&[-b]);
+                    }
+                    if assume != bads[0] || bads.len() > 1 {
+                        u.sat.add_clause(&[-assume]);
                     }
                 }
-                Answer::Unsat => u.sat.add_clause(&[-bad]),
                 Answer::Unknown => break unknown(ctx.stop_reason()),
             }
             ctx.report(Progress {
                 engine: self.name().into(),
-                bound: Some(k as u32),
+                bound: Some(last as u32),
                 note: String::new(),
             });
-            k += 1;
+            k = last + 1;
         };
         Ok(result(self.name(), v, t0))
     }
@@ -539,7 +577,18 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
         return Vec::new();
     }
     vec![
-        Arc::new(Bmc { max_depth: None }),
+        Arc::new(Bmc {
+            max_depth: None,
+            step: 1,
+        }),
+        Arc::new(Bmc {
+            max_depth: None,
+            step: 10,
+        }),
+        Arc::new(Bmc {
+            max_depth: None,
+            step: 65,
+        }),
         Arc::new(KInduction { max_depth: None }),
         Arc::new(Ic3Engine { mini: true }),
         Arc::new(Ic3Engine { mini: false }),
@@ -585,6 +634,7 @@ mod tests {
     fn bmc_finds_shortest_counterexample() {
         let bmc = Bmc {
             max_depth: Some(10),
+            step: 1,
         };
         assert_eq!(
             check(&bmc, &counter(4, false)),
@@ -592,6 +642,26 @@ mod tests {
         );
         assert!(matches!(
             check(&bmc, &counter(7, true)),
+            Verdict::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn stepped_bmc_finds_bugs_and_respects_bounds() {
+        let b = Bmc {
+            max_depth: Some(30),
+            step: 10,
+        };
+        assert_eq!(
+            check(&b, &counter(4, false)),
+            Verdict::Unsafe { depth: Some(4) }
+        );
+        assert_eq!(
+            check(&b, &counter(0, false)),
+            Verdict::Unsafe { depth: Some(0) }
+        );
+        assert!(matches!(
+            check(&b, &counter(7, true)),
             Verdict::Unknown { .. }
         ));
     }
@@ -617,7 +687,10 @@ mod tests {
     /// `bad = (a op b != expected)` must be unreachable at depth 0.
     #[test]
     fn operators_match_reference() {
-        let bmc = Bmc { max_depth: Some(0) };
+        let bmc = Bmc {
+            max_depth: Some(0),
+            step: 1,
+        };
         let w = 6u32;
         let mask = (1u64 << w) - 1;
         let sx = |v: u64| -> i64 { ((v << (64 - w)) as i64) >> (64 - w) };
