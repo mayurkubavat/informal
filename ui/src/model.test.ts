@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bound, groupOf, identifiers, matches, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
-  statusKey, statusText, clock, isProveCmd, withProgress,
+  statusKey, statusText, clock, isProveCmd, withProgress, guessKind,
 } from "./model";
 import type { ProveProgress } from "./backend";
 import { mockSource } from "./mock";
@@ -236,5 +236,38 @@ describe("withProgress", () => {
   });
   it("returns the session's properties untouched without progress", () => {
     expect(withProgress(props, null)).toBe(props);
+  });
+  it("keeps kind out of the overlaid status", () => {
+    const v = withProgress(props, { ...prog, props: [{ name: "a", kind: "assert", status: "running", depth: 2 }] });
+    expect(v[0].status).toEqual({ status: "running", depth: 2 });
+    expect(v[0].provisional).toBeUndefined();
+  });
+  it("appends run members the session does not have as provisional rows", () => {
+    const run: ProveProgress = {
+      kind: "start",
+      total: 3,
+      done: 0,
+      elapsed_ms: 0,
+      props: [
+        { name: "b", kind: "assert", status: "running", depth: 0 },
+        { name: "x_live", kind: "cover", status: "running", engine: "bmc", depth: 4, ms: 50 },
+        { name: "y_q", kind: "assert", status: "unprocessed" },
+      ],
+    };
+    const v = withProgress(props, run);
+    expect(v.map((p) => p.name)).toEqual(["a", "b", "c", "x_live", "y_q"]);
+    expect(v[1].provisional).toBeUndefined();
+    expect(v[3]).toEqual({
+      name: "x_live", kind: "cover", expr: "", enabled: true, provisional: true,
+      status: { status: "running", engine: "bmc", depth: 4, ms: 50 },
+    });
+    expect(v[4].kind).toBe("assert");
+    expect(withProgress([], run).map((p) => p.name)).toEqual(["b", "x_live", "y_q"]);
+  });
+  it("guesses kinds by name when the backend sends none", () => {
+    const v = withProgress([], { ...prog, props: [{ name: "c_seen", status: "running" }, { name: "cover_x", status: "running" }, { name: "a_ok", status: "unprocessed" }, { name: "foo", status: "unprocessed" }] });
+    expect(v.map((p) => p.kind)).toEqual(["cover", "cover", "assert", "assert"]);
+    expect(guessKind("assert_x")).toBe("assert");
+    expect(guessKind("C_UP")).toBe("cover");
   });
 });

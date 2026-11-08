@@ -88,7 +88,7 @@ export function PropTable({
           {rows.map((p) => (
             <tr
               key={p.name}
-              className={`${p.name === selected ? "sel" : ""} ${p.enabled ? "" : "off"}`}
+              className={`${p.name === selected ? "sel" : ""} ${p.enabled ? "" : "off"} ${p.provisional ? "prov" : ""}`}
               aria-selected={p.name === selected}
               onClick={() => onSelect(p.name)}
               onDoubleClick={() => onOpen(p)}
@@ -99,7 +99,7 @@ export function PropTable({
               }}
             >
               <td className="c-kind mono" title={p.kind}>{KIND_LETTER[p.kind]}</td>
-              <td className="mono">{p.name}</td>
+              <td className="mono" title={p.provisional ? "Added by the running script; details follow when it returns" : undefined}>{p.name}</td>
               <td><Status p={p} /></td>
               <td className="mono dim">{p.status.engine ?? ""}</td>
               <td className="mono num dim" title={bound(p)}>{bound(p)}</td>

@@ -48,10 +48,13 @@ export type Flavor = "jg" | "vcf";
 // of them. Per property, `status` is "unprocessed" while queued, "running"
 // while an engine works on it (depth = current k-bound, ms = time so far),
 // then its final word. A stopped run reports leftovers as "undetermined"
-// with reason "stopped".
+// with reason "stopped". Each entry also names the property's kind.
 export type ProgressKind = "start" | "update" | "done" | "stopped";
 export interface PropProgress {
   name: string;
+  // Sent by current backends; lets the UI list a property the session does
+  // not have yet. Optional so an older backend's events still parse.
+  kind?: "assert" | "cover";
   status: StatusWord | "running";
   engine?: string;
   depth?: number | null;

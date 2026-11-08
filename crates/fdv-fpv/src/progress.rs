@@ -16,6 +16,9 @@ use std::time::Instant;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PropProgress {
     pub name: String,
+    /// "assert" or "cover", so a front end can list a property the session
+    /// it last saw does not have yet (one added by the same script).
+    pub kind: &'static str,
     /// "unprocessed" while queued, "running", then the final status word.
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,9 +74,10 @@ pub struct Tracker {
     slots: Mutex<Vec<Slot>>,
 }
 
-fn queued(name: String) -> PropProgress {
+fn queued(name: String, kind: &'static str) -> PropProgress {
     PropProgress {
         name,
+        kind,
         status: "unprocessed",
         engine: None,
         depth: None,
@@ -84,8 +88,8 @@ fn queued(name: String) -> PropProgress {
 }
 
 /// A finished property's entry, from its session status.
-pub fn from_status(name: &str, s: &Status) -> PropProgress {
-    let mut p = queued(name.to_string());
+pub fn from_status(name: &str, kind: &'static str, s: &Status) -> PropProgress {
+    let mut p = queued(name.to_string(), kind);
     p.status = s.word();
     match s {
         Status::Unprocessed => {}
@@ -128,12 +132,16 @@ fn is_final(p: &PropProgress) -> bool {
 }
 
 impl Tracker {
-    /// Start a run over `names` (in run order) and report it.
-    pub fn start(sink: Arc<dyn ProveSink>, names: impl IntoIterator<Item = String>) -> Tracker {
-        let slots = names
+    /// Start a run over `props` (name and kind label, in run order) and
+    /// report it.
+    pub fn start(
+        sink: Arc<dyn ProveSink>,
+        props: impl IntoIterator<Item = (String, &'static str)>,
+    ) -> Tracker {
+        let slots = props
             .into_iter()
-            .map(|n| Slot {
-                p: queued(n),
+            .map(|(n, k)| Slot {
+                p: queued(n, k),
                 since: None,
             })
             .collect();
@@ -198,7 +206,7 @@ impl Tracker {
         let line = {
             let mut slots = self.slots.lock().unwrap();
             let Some(s) = slots.get_mut(slot) else { return };
-            s.p = from_status(&s.p.name, status);
+            s.p = from_status(&s.p.name, s.p.kind, status);
             s.since = None;
             line_for(&s.p)
         };
@@ -222,7 +230,11 @@ impl Tracker {
                     left += 1;
                     let engine = s.p.engine.take();
                     let ms = s.since.map(|t| t.elapsed().as_millis());
-                    s.p = from_status(&s.p.name, &Status::Undetermined { reason: "stopped".into() });
+                    s.p = from_status(
+                        &s.p.name,
+                        s.p.kind,
+                        &Status::Undetermined { reason: "stopped".into() },
+                    );
                     s.p.engine = engine;
                     s.p.ms = ms;
                     s.since = None;
@@ -257,7 +269,7 @@ mod tests {
     #[test]
     fn reports_start_running_bound_finish_and_done() {
         let rec = Arc::new(Rec::default());
-        let t = Tracker::start(rec.clone(), ["a".to_string(), "b".to_string()]);
+        let t = Tracker::start(rec.clone(), [("a".to_string(), "assert"), ("b".to_string(), "cover")]);
         t.running(0);
         t.bound(0, "bmc", Some(5));
         t.bound(0, "bmc", Some(3)); // not deeper: ignored
@@ -271,17 +283,22 @@ mod tests {
         assert_eq!(ev[1].props[0].status, "running");
         assert_eq!(ev[2].props[0].depth, Some(5));
         assert_eq!(ev[3].props[0].status, "cex");
+        assert_eq!((ev[0].props[1].kind, ev[3].props[0].kind), ("cover", "assert"));
         assert_eq!((ev[4].done, ev[4].total), (1, 2));
         assert_eq!(*rec.lines.lock().unwrap(), ["a: cex at depth 7 [bmc, 12 ms]"]);
         let json = serde_json::to_value(&ev[4]).unwrap();
         assert_eq!(json["kind"], "done");
         assert!(json["props"][1].get("engine").is_none());
+        assert_eq!(json["props"][1]["kind"], "cover");
     }
 
     #[test]
     fn stopping_marks_unfinished_properties() {
         let rec = Arc::new(Rec::default());
-        let t = Tracker::start(rec.clone(), ["a".to_string(), "b".to_string(), "c".to_string()]);
+        let t = Tracker::start(
+            rec.clone(),
+            [("a".to_string(), "assert"), ("b".to_string(), "assert"), ("c".to_string(), "cover")],
+        );
         t.running(0);
         t.finished(0, &Status::Proven { engine: "ic3".into(), ms: 3 });
         t.running(1);
@@ -294,6 +311,7 @@ mod tests {
         for p in &last.props[1..] {
             assert_eq!((p.status, p.reason.as_deref()), ("undetermined", Some("stopped")));
         }
+        assert_eq!(last.props[2].kind, "cover");
         assert_eq!(rec.lines.lock().unwrap().last().unwrap(), "prove stopped: 2 properties left undetermined");
     }
 }

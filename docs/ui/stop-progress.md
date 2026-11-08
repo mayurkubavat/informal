@@ -18,9 +18,14 @@ browser it subscribes to `ui/src/mock.ts` instead.
   total: number,       // properties in this run
   done: number,        // of them, finished (any final status)
   elapsed_ms: number,  // since the run started
-  props: [{ name, status, engine?, depth?, ms?, reason?, message? }]
+  props: [{ name, kind, status, engine?, depth?, ms?, reason?, message? }]
 }
 ```
+
+`kind` is `"assert"` or `"cover"` (assumes are never in a run). It lets the UI
+list a property that its last session does not have yet; see "Rows the
+session does not know yet" below. The UI treats it as optional and guesses
+from the name prefix if an older backend leaves it out.
 
 - Every event carries **all** properties in the run, in run order, so the
   UI can redraw from any single event. Properties outside the run are not
@@ -68,9 +73,19 @@ prove. It sets the session's stop flag. The UI shows "Stopping…" until the
   - rows show the turning accent ring and "Running";
   - Bound shows `k=<depth>` and Time shows `m:ss`;
   - the task tree has a Running group.
-- In the tool row, Prove all is disabled and Stop is enabled (with an Esc
-  hint). To its right sit a 6 px progress bar and "`done` of `total` ·
-  `m:ss`". The status bar shows "Proving · done/total".
+- In the tool row, Prove all is disabled and Stop is enabled (its tooltip
+  names Esc, like the other tool buttons). At the right end sit a 120 px
+  progress bar and "`done` of `total` · `m:ss`" in a fixed-width,
+  tabular-figure box, so the readout ticking never moves the tools. The tool
+  row does not wrap or squeeze its buttons; under 1000 px only the bar is
+  shown. The status bar shows "Proving · done/total".
+- Rows the session does not know yet: a `source` of a script that adds
+  properties and proves them in the same call gets progress events naming
+  properties the UI's session (from before the call) does not have.
+  `withProgress` (`model.ts`) appends those as provisional rows (name in
+  italics, kind from the event) after the session's own, and keeps them
+  until the script's reply brings the session, which replaces them. The
+  mock reproduces this with `source mock/prove-on-source.tcl`.
 - Esc stops the prove, unless a menu is open or the filter uses the key
   first. Prove > Stop does the same.
 - Only Prove actions (and Flavor, Run script, Disable/Enable) are blocked
