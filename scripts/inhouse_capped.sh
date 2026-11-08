@@ -27,7 +27,28 @@ fdv=${fdv:-$PWD/target/release/fdv}
 # each=1 (default): every engine alone; each=0: all engines as one
 # in-process portfolio per model (first definitive verdict wins).
 each=$([ "${each:-1}" = 0 ] && echo "" || echo "--each")
-tmp=$(mktemp -d)
+# Work files live next to the db (not /tmp, which a reboot wipes), and
+# each model's rows are appended to the db as soon as it finishes, so a
+# crash or reboot loses at most the models in flight. Models already in
+# the db are skipped: rerunning the same command resumes.
+tmp="$PWD/bench/.work/$(basename "$db" .jsonl)"
+mkdir -p "$tmp"
+touch "$db"
+todo="$tmp/todo.txt"
+python3 -I - "$list" "$db" "$todo" <<'PY'
+import json, sys
+lst, db, out = sys.argv[1:]
+done = set()
+for l in open(db):
+    try:
+        done.add(json.loads(l)["model"])
+    except Exception:
+        pass
+ms = [m.strip() for m in open(lst) if m.strip()]
+left = [m for m in ms if m not in done]
+open(out, "w").write("".join(m + "\n" for m in left))
+print(f"{len(ms) - len(left)} of {len(ms)} models already in {db}; {len(left)} to run", file=sys.stderr)
+PY
 one() {
   m=$1; d=$tmp/$(echo "$m" | md5sum | cut -c1-12)
   mkdir -p "$d/m"; ln -s "$PWD/$m" "$d/m/$(basename "$m")"
@@ -37,10 +58,13 @@ one() {
     --timeout "$timeout" --jobs 1 --db "$d/runs.jsonl" >"$d/out.log" 2>&1 \
     || echo "  memout/error  $m"
   # Report the real model path, not the temp link.
-  [ -f "$d/runs.jsonl" ] && sed "s#\"model\":\"[^\"]*\"#\"model\":\"$m\"#" "$d/runs.jsonl" > "$d/fixed.jsonl"
+  if [ -f "$d/runs.jsonl" ]; then
+    sed "s#\"model\":\"[^\"]*\"#\"model\":\"$m\"#" "$d/runs.jsonl" > "$d/fixed.jsonl"
+    flock "$db" cat "$d/fixed.jsonl" >> "$db"
+  fi
   grep "ms  " "$d/out.log" || true
+  rm -rf "$d"
 }
-export -f one; export tmp timeout engines mem budget fdv each slice high
-xargs -a "$list" -P "$jobs" -I{} bash -c 'one "$@"' _ {}
-cat "$tmp"/*/fixed.jsonl >> "$db" 2>/dev/null || true
+export -f one; export tmp timeout engines mem budget fdv each slice high db
+xargs -a "$todo" -P "$jobs" -I{} bash -c 'one "$@"' _ {}
 echo "== end $(date -Is)"
