@@ -17,6 +17,7 @@
 // properties and proves them in the same call: progress events name them
 // before the session has them, which joins them on the reply.
 
+import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
 import type { ConsoleLine, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
@@ -54,6 +55,13 @@ const mockResults: Record<string, PropStatus> = {
   a_src_ok: { status: "proven", engine: "ric3-ic3", ms: 44 },
   c_src_hit: { status: "covered", engine: "ric3-bmc", depth: 4, ms: 22 },
 };
+
+// Properties whose result comes with a trace: both get the counter's 12
+// cycle fixture (q reaches 9, so done rises, in cycle 11).
+export const MOCK_TRACES: Record<string, string> = { a_never9: "fdv_work/a_never9.vcd", c_done: "fdv_work/c_done.vcd" };
+export function mockTrace(path: string): string | null {
+  return Object.values(MOCK_TRACES).includes(path) ? counterTrace : null;
+}
 
 // What `source mock/prove-on-source.tcl` adds (and then proves).
 export const PROVE_ON_SOURCE = "mock/prove-on-source.tcl";
@@ -156,7 +164,9 @@ function step(run: Run) {
     run.ran.set(p.name, n);
     if (n >= (MOCK_TICKS[p.name] ?? 2)) {
       const final: PropStatus = mockResults[p.name] ?? { status: "undetermined", reason: "mock" };
-      run.props.find((q) => q.name === p.name)!.status = { ...final };
+      const prop = run.props.find((q) => q.name === p.name)!;
+      prop.status = { ...final };
+      prop.trace = MOCK_TRACES[p.name] ?? null;
       reset(p, final);
       mockEvents.emit("console-line", { kind: "out", text: lineFor(p.name, final) });
     } else Object.assign(p, { depth: 1 + n * 5, ms: n * TICK_MS });
@@ -188,7 +198,7 @@ function startProve(props: Property[], onEnd?: () => void): Promise<Reply> {
       timer: null,
       resolve,
     };
-    for (const p of props) p.status = { status: "unprocessed" };
+    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null });
     active = run;
     if (!props.length) return finish(run, "done");
     fill(run);
@@ -218,7 +228,7 @@ export function resetMock() {
   active = null;
   mockFlavor = "jg";
   mockSession.props.length = BASE_PROPS;
-  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" } });
+  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null });
   Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false });
 }
 

@@ -111,6 +111,27 @@ for (const s of sizes)
         await shot(page, n("stopping"));
       });
 
+      test("trace tab", async ({ page }) => {
+        await ready(page);
+        await proveAll(page);
+        await page.locator("table.grid tbody tr").filter({ hasText: "a_never9" }).dblclick();
+        await expect(page.getByRole("status", { name: "Cursor" })).toHaveText("cycle 11");
+        await shot(page, n("trace"));
+      });
+
+      test("trace tab, cover with an added signal", async ({ page }) => {
+        await ready(page);
+        await proveAll(page);
+        await page.locator("table.grid tbody tr").filter({ hasText: "c_done" }).dblclick();
+        await page.getByRole("button", { name: "Add signal…" }).click();
+        await page.getByLabel("Filter signals").fill("cyc");
+        await page.getByLabel("Filter signals").press("Enter");
+        await page.getByLabel("Radix of counter.q").selectOption("bin");
+        await page.getByRole("img", { name: /^Waveforms/ }).click({ position: { x: 60 * 4 + 20, y: 40 } });
+        await expect(page.getByRole("status", { name: "Cursor" })).toHaveText("cycle 4");
+        await shot(page, n("trace-cover"));
+      });
+
       test("prove menu with shortcuts", async ({ page }) => {
         await ready(page);
         await page.getByRole("menuitem", { name: "Prove", exact: true }).click();

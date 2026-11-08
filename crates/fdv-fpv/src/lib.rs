@@ -7,6 +7,7 @@ pub mod compat;
 pub mod progress;
 pub mod session;
 pub mod sva;
+pub mod trace;
 pub mod worker;
 
 pub use compat::{detect_flavor, Flavor, Shell};

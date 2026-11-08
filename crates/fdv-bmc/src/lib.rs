@@ -136,6 +136,7 @@ impl Engine for Bmc {
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
         let step = self.step.max(1);
+        let mut witness = None;
         let mut u = Unroll::new(&g, solver(ctx), false);
         let mut k = 0; // first frame not yet checked
         let v = loop {
@@ -176,6 +177,7 @@ impl Engine for Bmc {
                             "internal error: counterexample does not replay: {e}"
                         ));
                     }
+                    witness = Some(named_witness(&g, &u, d));
                     break Verdict::Unsafe {
                         depth: Some(d as u32),
                     };
@@ -197,8 +199,39 @@ impl Engine for Bmc {
             });
             k = last + 1;
         };
-        Ok(result(self.name(), v, t0))
+        let mut r = result(self.name(), v, t0);
+        r.witness = witness;
+        Ok(r)
     }
+}
+
+/// The solver's counterexample, frames 0..=d, by signal name: free initial
+/// latch values (`init`) and input values per frame (`@f`), for every input
+/// and latch the model names (Btor2 symbols survive bit-blasting,
+/// simplification and scorr as `name` or `name[i]`). Unnamed ones are left
+/// out. Format `fdvw 1`, read by fdv-fpv to build a VCD on the original
+/// model (docs/ui/trace-format.md). Export only: nothing here is searched.
+fn named_witness(g: &Aig, u: &Unroll, d: usize) -> String {
+    let bit = |b: bool| if b { '1' } else { '0' };
+    let mut s = format!("fdvw 1\ndepth {d}\ninit");
+    for l in &g.latches {
+        if matches!(l.init, fdv_aig::Init::Zero | fdv_aig::Init::One) {
+            continue;
+        }
+        if let Some(name) = g.names.get(&fdv_aig::var(l.lit)) {
+            s += &format!(" {name}={}", bit(u.sat.value(u.lit(0, l.lit))));
+        }
+    }
+    for f in 0..=d {
+        s += &format!("\n@{f}");
+        for &i in &g.inputs {
+            if let Some(name) = g.names.get(&fdv_aig::var(i)) {
+                s += &format!(" {name}={}", bit(u.sat.value(u.lit(f, i))));
+            }
+        }
+    }
+    s.push('\n');
+    s
 }
 
 /// Simulate `g` with the inputs (and free initial latch values) of the

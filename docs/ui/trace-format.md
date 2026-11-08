@@ -1,0 +1,65 @@
+# Counterexample and cover traces: witness to VCD
+
+Status: implemented 2026-11-08: the survey (T0) and plan below, now built
+(T2). Code: `named_witness` in `crates/fdv-bmc/src/lib.rs`,
+`crates/fdv-fpv/src/trace.rs`, `Session::write_trace`, and the app's
+`read_trace` command. Tests: `crates/fdv-fpv/tests/trace.rs`, `flow.rs`, and
+`trace.rs` unit tests.
+
+## What exists today
+
+| Piece | Has a witness? | Notes |
+|---|---|---|
+| `fdv_engine::EngineResult` | field `witness: Option<String>` | Free text. Only `fdv-engines-ext` fills it. `fdv-cli check` prints it. Nothing else reads it. |
+| External engines (`fdv-engines-ext`) | only with `witness_on_stdout = true` | Then it keeps the engine's whole stdout. The pono entries set this (Btor2 witness format), but pono isn't installed. rIC3 and ABC entries don't set it. rIC3 1.5.2 `check` has no witness option in `--help`. ABC can `write_cex`, but the entry doesn't ask for it. So in practice: no witness from external engines. |
+| `fdv-bmc` (`fdv-bmc`, `-10`, `-65`) | values exist, not exported | After SAT it runs `replay()`. That simulates the simplified AIG with the solver's input values for frames 0..=d and its free initial latch values. Everything a trace needs is in `u.sat` at that point. `result()` sets `witness: None`. |
+| `fdv-kind`, `fdv-ic3*`, `fdv-kind-ic3`, `fdv-wbmc` | no | IC3 finds a CEX as a chain of proof obligations. It doesn't keep the inputs. k-ind's base case is BMC. |
+| `fdv_fpv::Session` / `Status` | no | `Cex`/`Covered` carry `engine`, `depth`, `ms`. The winner's `witness` is dropped in `check_one`. |
+| Name mapping | yes, at bit level | The slang lowering (and the Yosys fallback) writes Btor2 `input`/`state` lines with hierarchical symbols, e.g. `counter.q`, `counter.en`, `counter.rst_n`. `fdv_aig::btor::from_btor2` stores them in `Aig::names` (var to `counter.q[2]`). `preprocess::simplify` and `scorr::substitute` copy names for every input or latch they keep. So the simplified AIG that BMC solves still names its inputs and latches. |
+
+Gaps in the names:
+
+- **Combinational nets have no symbol.** Examples: `done = (q == 9)` and `nxt`. The Btor2 has only unnamed `eq`/`add` nodes. A trace therefore shows ports that are inputs, plus registers, but not wires or outputs that are pure logic.
+- **The clock isn't in the model.** One Btor2 step is one cycle of the `clock` signal. The VCD adds a synthetic `clk`.
+- **FPV helper state shows up.** Examples: `counter.fdv_cyc`, `fdv_past_N`. The VCD puts it under an `fdv` scope that the UI hides by default.
+- **Simplify can drop inputs and latches.** Dropped means unused, constant, or merged by scorr. Their witness bits are missing. That's harmless for the property: missing inputs are don't-cares and get 0. The full model is re-simulated (below), so registers still get correct values.
+
+Depth convention: `Unsafe { depth: d }` means the bad output is true in frame `d`, counting from 0. The trace has `d + 1` cycles. On the counter, `a_never9` is `cex depth 10` (q = 9 in frame 10, 11 cycles), found by `fdv-bmc-10`. `c_done` is `covered depth 10` by `fdv-bmc`.
+
+## Proposed path
+
+1. **fdv-bmc fills `witness`.** This is export plumbing only; no algorithm changes. After `replay()` succeeds, the same solver model is written out as text, by name:
+
+   ```
+   fdvw 1
+   depth 10
+   init counter.q[0]=0 counter.q[1]=0 ...      # free initial latch values that have names
+   @0 counter.en=1 counter.rst_n=0 ...         # named inputs, one line per frame
+   @1 ...
+   ```
+
+   Only named inputs and latches appear. Unnamed ones only come from AIGER models with no symbol table, which FPV never produces.
+
+2. **fdv-fpv `trace.rs`** turns a witness into a VCD:
+   - Load the property's own `prop_<i>.btor2` with `fdv_aig::load`, unsimplified, so every input and register is present.
+   - Simulate frames 0..=d. Named witness bits set the inputs and free inits; missing bits are 0.
+   - Check that the bad output is true at frame d. If it isn't, write no trace and log why. We never show a trace that doesn't replay.
+   - Group the `name[i]` bits into words and split dotted names into `$scope`s.
+   - Add `clk` (high in the first half of each cycle) and the property lane `fdv.<prop>`: the bad/cover bit per cycle.
+   - Write the result to `<workdir>/<prop>.vcd` (e.g. `fdv_work/a_never9.vcd`), timescale 1 ns, one cycle = 10 ns.
+3. **The winner has no witness.** An external engine, IC3 or k-ind can win. fdv-fpv then runs `fdv_bmc::Bmc { max_depth: Some(d), step: 1 }` on the same model just to get the trace. It takes milliseconds at the shallow depths FPV sees, and JasperGold also builds traces in a separate step. It's limited to the remaining time budget. If the depth is unknown, it searches up to 64 frames, then gives up.
+4. **The session exposes the path.** `Property` gains `trace: Option<String>`, the VCD path. It goes into the snapshot JSON (`props[i].trace`) and is cleared when the property is re-proven. Status words don't change.
+5. **The app reads the file.** A Tauri command `read_trace(path)` returns the text only if the path canonicalises inside the session workdir. `backend.ts readTrace(prop)` calls it. The browser mock serves `ui/tests/fixtures/a_never9.vcd`.
+
+## As built
+
+- **Names.** Witness bits carry RTL names (`counter.q[2]`). The VCD has `counter.clk` (synthetic), `counter.rst_n`, `counter.en` and `counter.q[3:0]`, plus `fdv.fdv_cyc`, `fdv.fdv_past_N` and the property lane `fdv.<prop>`. AIG-style names (`i3`/`s7`) appear only for Btor2 lines without a symbol. FPV models don't have any, so nothing falls back today.
+- **Before reset.** Registers show their free value in cycle 0, the reset cycle. On the real counter, `q` is `1111` in cycle 0, then 0 from cycle 1. That is the model's semantics: reset is asserted in cycle 0 only.
+- **Which engine.** On the counter, `fdv-bmc`, `fdv-bmc-10` and `fdv-bmc-65` give the witness directly. With rIC3, IC3 or k-induction winning, the BMC re-run produces the trace. `flow.rs` covers that case with rIC3 only.
+- **Failures.** If the trace can't be built (BMC can't reproduce the result in time, or the replay misses the bad state), the console gets `<prop>: no trace: <why>`. The property keeps its verdict and has no `trace`.
+
+## Later
+
+- **Named wires and ports in the lowering.** `fdv-slang/cpp/lower.cpp` would emit Btor2 `output` lines with symbols, e.g. `counter.done`. `from_btor2` would keep them as named AIG outputs, and the VCD writer would sample them. Needed for `done` and `nxt` in the trace.
+- **Witnesses from rIC3 and ABC.** Mapping them back needs their AIGER witness on our AIGER export, plus the AIGER symbol table. Step 3 covers it for now.
+- **Certificate check.** Step 2's re-simulation on the unsimplified model is already the independent witness check the fdv-engine docs plan for phase 2 (BtorSim's role).

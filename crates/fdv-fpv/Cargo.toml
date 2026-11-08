@@ -12,6 +12,8 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 fdv-engine.workspace = true
+fdv-aig.workspace = true
+fdv-bmc.workspace = true
 fdv-tcl.workspace = true
 fdv-slang.workspace = true
 
