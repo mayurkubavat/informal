@@ -12,6 +12,8 @@
 //   ?tick=<ms>   tick period, default 300
 //   ?freeze=<n>  stop ticking after n ticks, leaving the run mid-way
 //   ?holdStop=1  shell_stop never completes, so "Stopping…" stays up
+//   ?props=<n>   add n generated properties (p_00000 ...) after the six,
+//                for the virtualized table tests
 //
 // `source mock/prove-on-source.tcl` stands for a script that adds two
 // properties and proves them in the same call: progress events name them
@@ -98,6 +100,19 @@ const sourcedProps = (): Property[] => [
 ];
 const BASE_PROPS = mockSession.props.length;
 
+// `?props=n`: n extra properties, mostly asserts with a cover every 7th, all
+// unprocessed (a prove resolves them to undetermined).
+export function generatedProps(n: number): Property[] {
+  const w = String(Math.max(0, n - 1)).length;
+  return Array.from({ length: n }, (_, i) => ({
+    name: `p_${String(i).padStart(Math.max(5, w), "0")}`,
+    kind: i % 7 === 6 ? ("cover" as const) : ("assert" as const),
+    expr: `q != 4'd${i % 16}`,
+    enabled: true,
+    status: { status: "unprocessed" as const },
+  }));
+}
+
 // Ticks each property runs for before it resolves (default 2).
 export const MOCK_TICKS: Record<string, number> = { a_max: 2, a_step: 3, a_never9: 2, c_done: 2, c_10: 1 };
 // Reported times use a nominal tick, so frames are identical at any speed.
@@ -111,6 +126,8 @@ if (typeof location !== "undefined") {
   if (q.has("tick")) mockOptions.tick = Math.max(0, Number(q.get("tick")) || 0);
   if (q.has("freeze")) mockOptions.freeze = Number(q.get("freeze"));
   if (q.get("holdStop") === "1") mockOptions.holdStop = true;
+  const extra = Math.min(100_000, Math.max(0, Number(q.get("props")) || 0));
+  if (extra) mockSession.props.push(...generatedProps(extra));
 }
 
 type Ev = "prove-progress" | "console-line" | "engine-log";

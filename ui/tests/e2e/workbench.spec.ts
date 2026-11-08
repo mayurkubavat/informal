@@ -391,6 +391,104 @@ test.describe("engine log", () => {
   });
 });
 
+test.describe("virtualized table (5,000 properties)", () => {
+  const N = 5006;
+  const wrap = (page: Page) => page.locator(".table-wrap");
+  const domRows = (page: Page) => page.locator("table.grid tbody tr:not(.spacer):not(.empty-row)");
+  const selectedName = (page: Page) => page.locator("table.grid tbody tr.sel td:nth-child(2)");
+  // The selected row lies fully inside the scrolled pane, below the header.
+  const selInView = (page: Page) =>
+    page.evaluate(() => {
+      const w = document.querySelector(".table-wrap")!.getBoundingClientRect();
+      const r = document.querySelector("table.grid tbody tr.sel")?.getBoundingClientRect();
+      return !!r && r.top >= w.top + 22 && r.bottom <= w.bottom + 0.5;
+    });
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/?fast=1&props=5000");
+    await expect(summary(page)).toContainText(`${N} properties`);
+  });
+
+  test("only the visible rows are in the DOM; the scrollbar spans all of them", async ({ page }) => {
+    expect(await domRows(page).count()).toBeLessThan(100);
+    const sizes = await wrap(page).evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }));
+    expect(sizes.scroll).toBeGreaterThanOrEqual(N * 22);
+    expect(sizes.scroll).toBeLessThan(N * 22 + 200);
+    const h = await domRows(page).first().evaluate((el) => el.getBoundingClientRect().height);
+    expect(h).toBe(22);
+    // Scrolling to the middle renders the rows there, still fewer than 100.
+    await wrap(page).evaluate((el) => (el.scrollTop = 2500 * 22));
+    await expect(page.getByRole("cell", { name: "p_02494", exact: true })).toBeVisible();
+    expect(await domRows(page).count()).toBeLessThan(100);
+  });
+
+  test("End, Home and PageDown move the selection and keep it in view", async ({ page }) => {
+    await row(page, "a_max").click();
+    await page.keyboard.press("End");
+    await expect(selectedName(page)).toHaveText("p_04999");
+    expect(await selInView(page)).toBe(true);
+    expect(await domRows(page).count()).toBeLessThan(100);
+    await page.keyboard.press("Home");
+    await expect(selectedName(page)).toHaveText("a_max");
+    expect(await wrap(page).evaluate((el) => el.scrollTop)).toBe(0);
+    await page.keyboard.press("PageDown");
+    const afterPage = await selectedName(page).textContent();
+    expect(afterPage).toMatch(/^p_000\d\d$/);
+    expect(await selInView(page)).toBe(true);
+    await page.keyboard.press("PageDown");
+    await page.keyboard.press("ArrowDown");
+    expect(await selInView(page)).toBe(true);
+    await expect(page.getByRole("tab", { name: /^Details: p_0/ })).toBeVisible();
+  });
+
+  test("sort, filter, context menu and double-click work on the virtual rows", async ({ page }) => {
+    await page.getByRole("columnheader", { name: "Name" }).click();
+    await page.getByRole("columnheader", { name: "Name" }).click();
+    await expect(domRows(page).first().locator("td").nth(1)).toHaveText("p_04999");
+    await page.getByLabel("Filter properties").fill("p_0412");
+    await expect(page.locator(".filter-count")).toHaveText(`10 of ${N}`);
+    await expect(domRows(page)).toHaveCount(10);
+    await row(page, "p_04123").click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await row(page, "p_04123").dblclick();
+    await expect(page.getByRole("tab", { name: "Details: p_04123" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("a task-tree group lists 200 leaves and a 'more' row that filters the table", async ({ page }) => {
+    const group = page.locator(".tree").getByRole("group").filter({ hasText: "Unprocessed" });
+    await expect(group.locator(".tree-row.leaf:not(.more)")).toHaveCount(200);
+    await group.locator(".tree-row.more").click();
+    await expect(page.locator(".filter-count")).toHaveText(`5005 of ${N}`);
+  });
+
+  test("a selection change renders in under 16 ms", async ({ page }) => {
+    await row(page, "a_max").click();
+    const times = await page.evaluate(async () => {
+      const wrap = document.querySelector<HTMLElement>(".table-wrap")!;
+      const body = wrap.querySelector("tbody")!;
+      const out: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        const done = new Promise<number>((resolve) => {
+          const mo = new MutationObserver(() => {
+            mo.disconnect();
+            resolve(performance.now());
+          });
+          mo.observe(body, { attributes: true, subtree: true, attributeFilter: ["aria-selected"] });
+        });
+        const t0 = performance.now();
+        wrap.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        out.push((await done) - t0);
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+      }
+      return out.sort((a, b) => a - b);
+    });
+    const median = times[Math.floor(times.length / 2)];
+    console.log(`selection change: median ${median.toFixed(2)} ms, max ${times[times.length - 1].toFixed(2)} ms`);
+    expect(median).toBeLessThan(16);
+  });
+});
+
 test.describe("filter", () => {
   const box = (page: Page) => page.getByLabel("Filter properties");
   const count = (page: Page) => page.locator(".filter-count");

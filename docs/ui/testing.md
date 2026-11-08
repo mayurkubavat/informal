@@ -22,7 +22,8 @@ The mock proves asynchronously (see `docs/ui/stop-progress.md`). Query
 parameters steer it: `?fast=1` finishes a prove in one step (most tests use
 it), `?tick=<ms>` sets the tick, `?freeze=<n>` holds a run after n ticks (a
 deterministic mid-run frame for the running/stopping baselines and Stop
-tests), `?holdStop=1` keeps "Stopping…" up. Sourcing `mock/prove-on-source.tcl`
+tests), `?holdStop=1` keeps "Stopping…" up, `?props=<n>` adds n generated
+properties (p_00000 ...) for the virtualized-table tests (5,000 in e2e). Sourcing `mock/prove-on-source.tcl`
 adds two properties and proves them in the same call (the session only gets
 them with the reply), for the provisional-row path. Unit tests set `mockOptions`
 and call `resetMock()` instead.

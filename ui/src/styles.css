@@ -327,7 +327,9 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .grid th:last-child { border-right: 0; }
 .grid th .sort { margin-left: 4px; color: var(--muted); }
 .grid td {
-  height: 24px;
+  /* 22px rows, border included: PropTable's virtual scrolling (ROW_H) relies on it */
+  box-sizing: border-box;
+  height: 22px;
   padding: 0 8px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -339,6 +341,7 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .grid tbody tr.sel td { background: var(--accent-soft); }
 .grid tbody tr.off td { opacity: 0.5; }
 .grid tbody tr.prov td:nth-child(2) { font-style: italic; }
+.grid tbody tr.spacer td { height: auto; padding: 0; border: 0; background: none !important; }
 .grid tr.empty-row td { height: auto; padding: 20px; text-align: center; white-space: normal; background: none !important; }
 .grid td.msg-text { max-width: 1px; width: 100%; overflow: hidden; text-overflow: ellipsis; }
 

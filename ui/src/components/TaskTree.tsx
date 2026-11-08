@@ -5,6 +5,11 @@ import { ChevronIcon } from "./icons";
 
 type Group = ViewStatus | "assume";
 
+// Leaves listed per group; a larger group ends in a "N more" row that
+// filters the table to it (the table scrolls thousands of rows, a tree
+// does not). The selected property is always listed.
+export const LEAF_CAP = 200;
+
 // <embedded> task > status groups > properties. Clicking a group filters the
 // table; clicking a property selects it, double-click opens its Details.
 export function TaskTree({
@@ -57,6 +62,10 @@ export function TaskTree({
           .map(([k, label, n]) => {
             const members = props.filter((p) => groupOf(p) === k);
             const isOpen = !closed.has(k);
+            const shown = members.length > LEAF_CAP
+              ? members.filter((p, i) => i < LEAF_CAP || p.name === selected)
+              : members;
+            const more = members.length - shown.length;
             return (
               <div key={k} role="group">
                 <div
@@ -79,7 +88,7 @@ export function TaskTree({
                   <span className="tree-count">{n}</span>
                 </div>
                 {isOpen &&
-                  members.map((p) => (
+                  shown.map((p) => (
                     <div
                       key={p.name}
                       role="treeitem"
@@ -93,6 +102,17 @@ export function TaskTree({
                       <span className="mono ellipsis">{p.name}</span>
                     </div>
                   ))}
+                {isOpen && more > 0 && (
+                  <div
+                    role="treeitem"
+                    className="tree-row leaf more"
+                    title="Show the whole group in the property table"
+                    onClick={() => onFilter(k)}
+                  >
+                    <span className="leaf-kind" />
+                    <span className="muted">{more} more…</span>
+                  </div>
+                )}
               </div>
             );
           })}
