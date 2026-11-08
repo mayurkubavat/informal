@@ -2,13 +2,13 @@
 // JasperGold / VC Formal users expect: menu bar, tool row, task tree on the
 // left, property table in the centre, a bottom dock with the Tcl console,
 // property details and messages, and a status bar. Colour is reserved for
-// status glyphs; the frame stays neutral. Waveforms (Surfer) arrive behind
-// "Visualize trace" once the engines export counterexample traces.
+// status glyphs; the frame stays neutral. A CEX or cover with a trace opens
+// as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import {
-  bound, clock, isProveCmd, locate, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time, withProgress,
+  bound, clock, isProveCmd, locate, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
@@ -24,13 +24,15 @@ import { PropTable } from "./components/PropTable";
 import { Console } from "./components/Console";
 import { Messages } from "./components/Messages";
 import { SourceView } from "./components/SourceView";
+import { TraceView } from "./components/TraceView";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
 const SHORTCUTS: [string, string][] = [
   ["F5", "Prove all"],
   ["F6", "Prove selected"],
   ["F3", "Toggle source view"],
-  ["Enter", "Open details of the selected property (table)"],
+  ["Enter", "Open the trace of a CEX / cover, else its details (table)"],
+  ["Left / Right", "Move the trace cursor a cycle (Home / End: first / last)"],
   ["Up / Down", "Move the selection (table)"],
   ["Shift+F10", "Row actions menu (table)"],
   ["Esc", "Close menu; otherwise stop the running prove"],
@@ -57,6 +59,9 @@ export default function App() {
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
   const [source, setSource] = useState("");
+  // The property shown in the trace tab (null: no trace tab), and its VCD.
+  const [traceName, setTraceName] = useState<string | null>(null);
+  const [trace, setTrace] = useState<{ path: string; text: string | null; error: string | null } | null>(null);
   const { layout, set } = useLayout();
   const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW } = layout;
   const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW] = useMemo(
@@ -184,7 +189,40 @@ export default function App() {
   const focusLine = locate(source, current);
   const fileName = topFile?.split("/").pop();
   const ports = useMemo(() => parsePorts(source), [source]);
-  const hasTrace = !!current && (current.status.status === "cex" || current.status.status === "covered");
+  const currentTrace = traceOf(current);
+  const hasTrace = !!currentTrace;
+  const traceProp = traceName ? allProps.find((p) => p.name === traceName) ?? null : null;
+  const tracePath = traceOf(traceProp);
+  const openTrace = (name: string) => {
+    setSelected(name);
+    setTraceName(name);
+    setCenter("trace");
+  };
+  const closeTrace = () => {
+    setTraceName(null);
+    setTrace(null);
+    setCenter((c) => (c === "trace" ? "table" : c));
+  };
+  // With the trace tab open, selecting another property that has a trace
+  // shows that one; selecting one without keeps the current trace.
+  useEffect(() => {
+    if (traceName && selected && selected !== traceName && currentTrace) setTraceName(selected);
+  }, [selected, traceName, currentTrace]);
+  // Load the VCD when the trace tab's path changes. A re-prove clears the
+  // path while it runs; the last trace stays on screen until a new one.
+  useEffect(() => {
+    if (!tracePath) return;
+    let live = true;
+    setTrace((t) => (t?.path === tracePath ? t : { path: tracePath, text: null, error: null }));
+    backend.readTrace(tracePath).then(
+      (text) => live && setTrace({ path: tracePath, text, error: null }),
+      (e) => live && setTrace({ path: tracePath, text: null, error: String(e) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [tracePath]);
+  const showTrace = center === "trace" && !!traceProp;
 
   const idle = !busy && !running;
   const proveAll = () => allProps.length && idle && prove(proveCmd);
@@ -265,7 +303,13 @@ export default function App() {
           title: ctxProp.kind === "assume" ? "Assumptions are not proved" : undefined,
           onClick: () => prove(proveOne(ctxProp.name)),
         },
-        { label: "Visualize trace", disabled: true, title: "Coming soon: waveforms for CEX and cover traces" },
+        {
+          label: "Visualize trace",
+          hint: traceOf(ctxProp) ?? undefined,
+          disabled: !traceOf(ctxProp),
+          title: traceOf(ctxProp) ? undefined : "Only a CEX or cover result has a trace",
+          onClick: () => openTrace(ctxProp.name),
+        },
         { label: "Show source", disabled: !topFile, onClick: () => { setSelected(ctxProp.name); setCenter("source"); } },
         { sep: true },
         { label: "Copy name", onClick: () => copy(ctxProp.name, ctxProp.name) },
@@ -370,7 +414,7 @@ export default function App() {
     {
       label: "Debug",
       items: [
-        { label: "Visualize trace", disabled: true },
+        { label: "Visualize trace", disabled: !hasTrace, onClick: () => current && hasTrace && openTrace(current.name) },
         { label: "Show source of selected", keys: "F3", onClick: () => current && setCenter("source"), disabled: !current || !topFile },
       ],
     },
@@ -390,6 +434,18 @@ export default function App() {
       ],
     },
   ];
+
+  const centerTabs = (
+    <Tabs
+      tabs={[
+        ["table", "Property Table"],
+        ...(topFile ? ([["source", fileName ?? "Source"]] as [string, string][]) : []),
+        ...(traceName ? ([["trace", `Trace: ${traceName}`, closeTrace]] as [string, string, () => void][]) : []),
+      ]}
+      value={center === "trace" && !traceName ? "table" : center}
+      onChange={(t) => setCenter(t as Center)}
+    />
+  );
 
   return (
     <div
@@ -438,7 +494,12 @@ export default function App() {
           <StopIcon /> {stopping ? "Stopping…" : "Stop"}
         </button>
         <span className="vsep" />
-        <ToolBtn title={hasTrace ? "Visualize trace (coming soon)" : "Visualize trace: select a CEX or cover"} disabled>
+        <ToolBtn
+          title={hasTrace ? `Visualize trace (${currentTrace})` : "Visualize trace: select a CEX or cover"}
+          disabled={!hasTrace}
+          on={showTrace && traceName === current?.name}
+          onClick={() => current && openTrace(current.name)}
+        >
           <WaveIcon />
         </ToolBtn>
         <ToolBtn title="Source view (F3)" onClick={toggleSource} disabled={!topFile} on={center === "source"}>
@@ -513,16 +574,19 @@ export default function App() {
 
         {/* ---- centre ---- */}
         <main className="center">
-          <div className="strip">
-            <Tabs
-              tabs={[
-                ["table", "Property Table"],
-                ...(topFile ? ([["source", fileName ?? "Source"]] as [string, string][]) : []),
-              ]}
-              value={center}
-              onChange={(t) => setCenter(t as Center)}
+          {showTrace ? (
+            <TraceView
+              tabs={centerTabs}
+              prop={traceProp}
+              path={trace?.path ?? tracePath ?? ""}
+              text={trace?.text ?? null}
+              error={trace?.error}
             />
-            {center === "table" ? (
+          ) : (
+          <>
+          <div className="strip">
+            {centerTabs}
+            {center !== "source" ? (
               <>
                 <span className="strip-summary">{summary}</span>
                 <span className="spacer" />
@@ -556,15 +620,13 @@ export default function App() {
               <span className="strip-summary mono">{topFile}</span>
             )}
           </div>
-          {center === "table" ? (
+          {center !== "source" ? (
             <PropTable
               props={props}
               total={allProps.length}
               selected={selected}
               onSelect={select}
-              onOpen={(p) => {
-                select(p.name);
-              }}
+              onOpen={(p) => (traceOf(p) ? openTrace(p.name) : select(p.name))}
               onContext={(p, x, y) => {
                 setSelected(p.name);
                 setCtx({ name: p.name, x, y });
@@ -572,6 +634,8 @@ export default function App() {
             />
           ) : (
             <SourceView text={source} focus={focusLine} />
+          )}
+          </>
           )}
         </main>
 
@@ -620,6 +684,17 @@ export default function App() {
                     <dd className="mono">{time(current) || "—"}</dd>
                     <dt>Task</dt>
                     <dd className="mono">{TASK}</dd>
+                    <dt>Trace</dt>
+                    <dd>
+                      {currentTrace ? (
+                        <button className="link mono" onClick={() => openTrace(current.name)} title="Open in the trace tab">
+                          Trace: {currentTrace}
+                          {current.status.depth != null ? ` · ${current.status.depth + 1} cycles` : ""}
+                        </button>
+                      ) : (
+                        "—"
+                      )}
+                    </dd>
                     <dt>Source</dt>
                     <dd>
                       {fileName ? (
@@ -638,7 +713,12 @@ export default function App() {
                         Re-prove
                       </button>
                     )}
-                    <button className="btn" disabled title={hasTrace ? "Coming soon" : "No trace for this result"}>
+                    <button
+                      className="btn"
+                      disabled={!hasTrace}
+                      title={hasTrace ? `Open ${currentTrace}` : "No trace for this result"}
+                      onClick={() => openTrace(current.name)}
+                    >
                       Visualize trace
                     </button>
                   </div>

@@ -585,3 +585,107 @@ test.describe("a script that adds properties and proves them", () => {
     await expect(page.locator(".details")).toContainText("q == 4'd4");
   });
 });
+
+test.describe("trace tab", () => {
+  const traceTab = (page: Page) => page.getByRole("tab", { name: /^Trace: / });
+  const cursor = (page: Page) => page.getByRole("status", { name: "Cursor" });
+  const visualize = (page: Page) => page.locator(".toolrow").getByRole("button", { name: /^Visualize trace/ });
+
+  test.beforeEach(async ({ page }) => {
+    await proveAll(page);
+  });
+
+  test("double-click or Enter on a CEX row opens it; the tab closes", async ({ page }) => {
+    await row(page, "a_never9").dblclick();
+    await expect(traceTab(page)).toHaveText("Trace: a_never9");
+    await expect(traceTab(page)).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".strip-summary")).toHaveText("CEX · depth 11 · ric3-bmc · 12 cycles");
+    await expect(cursor(page)).toHaveText("cycle 11");
+    await page.getByRole("button", { name: "Close Trace: a_never9" }).click();
+    await expect(traceTab(page)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Property Table" })).toHaveAttribute("aria-selected", "true");
+    // Enter on the selected covered row
+    await row(page, "c_done").click();
+    await page.locator(".table-wrap").press("Enter");
+    await expect(traceTab(page)).toHaveText("Trace: c_done");
+    await expect(page.locator(".strip-summary")).toHaveText("Covered · depth 11 · ric3-bmc · 12 cycles");
+  });
+
+  test("Enter on a proven row still opens details, not a trace", async ({ page }) => {
+    await row(page, "a_max").click();
+    await page.locator(".table-wrap").press("Enter");
+    await expect(traceTab(page)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Details: a_max" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("context menu, toolbar button and the Details link open it", async ({ page }) => {
+    await row(page, "a_max").click();
+    await expect(visualize(page)).toBeDisabled();
+    await expect(visualize(page)).toHaveAttribute("title", "Visualize trace: select a CEX or cover");
+    await row(page, "a_never9").click({ button: "right" });
+    await page.getByRole("menuitem", { name: /Visualize trace/ }).click();
+    await expect(traceTab(page)).toHaveText("Trace: a_never9");
+    await page.getByRole("button", { name: "Close Trace: a_never9" }).click();
+
+    await row(page, "c_done").click();
+    await expect(visualize(page)).toBeEnabled();
+    await visualize(page).click();
+    await expect(traceTab(page)).toHaveText("Trace: c_done");
+    await page.getByRole("button", { name: "Close Trace: c_done" }).click();
+
+    await row(page, "a_never9").click();
+    await page.getByRole("button", { name: "Trace: fdv_work/a_never9.vcd · 12 cycles" }).click();
+    await expect(traceTab(page)).toHaveText("Trace: a_never9");
+  });
+
+  test("selecting another property with a trace switches the tab", async ({ page }) => {
+    await row(page, "a_never9").dblclick();
+    await page.locator(".tree-row.leaf").filter({ hasText: "c_done" }).click();
+    await expect(traceTab(page)).toHaveText("Trace: c_done");
+    await page.locator(".tree-row.leaf").filter({ hasText: "a_max" }).click();
+    await expect(traceTab(page)).toHaveText("Trace: c_done");
+    await expect(visualize(page)).toBeDisabled();
+  });
+
+  test("cursor follows clicks and arrow keys; zoom changes the scale", async ({ page }) => {
+    await row(page, "a_never9").dblclick();
+    const svg = page.getByRole("img", { name: "Waveforms, 12 cycles" });
+    await svg.click({ position: { x: 60 * 3 + 10, y: 60 } });
+    await expect(cursor(page)).toHaveText("cycle 3");
+    await expect(page.locator(".trace-name", { hasText: "counter.en" }).locator(".trace-val")).toHaveText("0");
+    await page.keyboard.press("ArrowRight");
+    await expect(cursor(page)).toHaveText("cycle 4");
+    await expect(page.locator(".trace-name", { hasText: "counter.q" }).locator(".trace-val")).toHaveText("2");
+    await page.keyboard.press("Home");
+    await expect(cursor(page)).toHaveText("cycle 0");
+    await page.keyboard.press("End");
+    await expect(cursor(page)).toHaveText("cycle 11");
+    await page.getByRole("button", { name: "Zoom in" }).click();
+    await expect(svg).toHaveAttribute("width", String(12 * 80));
+  });
+
+  test("Add signal… adds a hidden signal", async ({ page }) => {
+    await row(page, "a_never9").dblclick();
+    await expect(page.locator(".trace-names .trace-name")).toHaveCount(1 + 1 + 5);
+    await page.getByRole("button", { name: "Add signal…" }).click();
+    await page.getByLabel("Filter signals").fill("cyc");
+    await page.getByLabel("Filter signals").press("Enter");
+    await expect(page.locator(".trace-names .trace-name")).toHaveCount(1 + 1 + 6);
+    await expect(page.locator(".trace-name", { hasText: "fdv.fdv_cyc" }).locator(".trace-val")).toHaveText("b");
+  });
+
+  test("Export VCD downloads the trace", async ({ page }) => {
+    await row(page, "a_never9").dblclick();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export VCD" }).click()]);
+    expect(download.suggestedFilename()).toBe("a_never9.vcd");
+    const text = await (await download.createReadStream()).toArray();
+    expect(Buffer.concat(text).toString()).toContain("$var reg 4 $ q [3:0] $end");
+  });
+
+  test("trace tab has no axe violations", async ({ page }) => {
+    await row(page, "a_never9").dblclick();
+    await expect(cursor(page)).toBeVisible();
+    const r = await new AxeBuilder({ page }).include(".center").analyze();
+    expect(r.violations.map((v) => v.id)).toEqual([]);
+  });
+});

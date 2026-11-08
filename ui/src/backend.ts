@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockEvents, mockSource } from "./mock";
+import { mock, mockEvents, mockSource, mockTrace } from "./mock";
 
 export type StatusWord =
   | "unprocessed" | "proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
@@ -22,6 +22,10 @@ export interface Property {
   expr: string;
   enabled: boolean;
   status: PropStatus;
+  // Path of the VCD written for a CEX or cover (inside the session's
+  // workdir, e.g. "fdv_work/a_never9.vcd"); absent or null when there is
+  // none. See docs/ui/trace-format.md.
+  trace?: string | null;
 }
 
 export interface SessionView {
@@ -117,5 +121,16 @@ export const backend = {
       return invoke<string>("read_text", { path });
     }
     return mockSource;
+  },
+  // The VCD text of a property's trace. The app only reads files inside the
+  // session's workdir; the mock serves tests/fixtures/a_never9.vcd.
+  readTrace: async (path: string): Promise<string> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<string>("read_trace", { path });
+    }
+    const t = mockTrace(path);
+    if (t === null) throw new Error(`${path}: no such trace`);
+    return t;
   },
 };

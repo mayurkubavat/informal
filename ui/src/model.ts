@@ -16,7 +16,7 @@ export type ViewProp = Omit<Property, "status"> & {
 export type LogLine = { kind: "in" | "out" | "err"; text: string };
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
 export type Theme = "system" | "light" | "dark";
-export type Center = "table" | "source";
+export type Center = "table" | "source" | "trace";
 export type BottomTab = "console" | "details" | "messages";
 export type LeftTab = "tasks" | "design";
 export type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time";
@@ -118,6 +118,12 @@ export function withProgress(props: Property[], prog: ProveProgress | null): Vie
     return q ? { ...p, status: statusOf(q) } : p;
   });
   return extra.length ? [...merged, ...extra] : merged;
+}
+
+// The VCD path of a property's trace: only a finished CEX or cover has one.
+export function traceOf(p: ViewProp | null): string | null {
+  if (!p || (p.status.status !== "cex" && p.status.status !== "covered")) return null;
+  return p.trace ?? null;
 }
 
 // Commands that start a prove (one at a time; the UI refuses a second).
