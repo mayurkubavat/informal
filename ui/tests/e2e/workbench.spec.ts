@@ -424,7 +424,8 @@ test.describe("live progress", () => {
     await expect(page.locator(".progress-text")).toHaveText(/^\d of 5 · 0:0\d$/);
     await expect(proveBtn(page)).toBeDisabled();
     await expect(stopBtn(page)).toBeEnabled();
-    await expect(stopBtn(page)).toContainText("Esc");
+    await expect(stopBtn(page)).toHaveText("Stop");
+    await expect(stopBtn(page)).toHaveAttribute("title", "Stop the running prove (Esc)");
     await expect(summary(page)).toHaveText("6 properties · 2 proven · 1 cex · 1 covered · 1 unreachable · 1 assumed");
     await expect(statusbar(page)).toContainText("Idle");
     await expect(bar(page)).toHaveCount(0);
@@ -511,5 +512,76 @@ test.describe("live progress", () => {
     await page.keyboard.press("F5");
     await expect(statusbar(page)).toContainText("Proving · 3/5");
     await expect(log.locator(".line.in").filter({ hasText: "prove -all" })).toHaveCount(2);
+  });
+
+  test("at 1000x700 the tool row stays on one line while a prove runs", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await start(page, "freeze=2");
+    await expect(statusbar(page)).toContainText("Proving · 1/5");
+    await expect(bar(page)).toBeVisible();
+    // Under 1000 px only the bar shows; at 1000 px the readout fits too.
+    const prove = (await proveBtn(page).boundingBox())!;
+    const stop = (await stopBtn(page).boundingBox())!;
+    const track = (await bar(page).boundingBox())!;
+    for (const b of [prove, stop]) expect(b.height).toBeLessThanOrEqual(28);
+    expect(Math.abs(prove.y - stop.y)).toBeLessThan(1);
+    expect(stop.x).toBeGreaterThanOrEqual(prove.x + prove.width);
+    expect(track.x).toBeGreaterThan(stop.x + stop.width);
+    const rowBox = (await page.locator(".toolrow").boundingBox())!;
+    expect(track.x + track.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
+    await page.setViewportSize({ width: 960, height: 700 });
+    await expect(page.locator(".progress-text")).toBeHidden();
+    await expect(bar(page)).toBeVisible();
+    // Narrower still, the buttons keep their size and line rather than wrap.
+    await page.setViewportSize({ width: 820, height: 700 });
+    const prove2 = (await proveBtn(page).boundingBox())!;
+    const stop2 = (await stopBtn(page).boundingBox())!;
+    for (const b of [prove2, stop2]) expect(b.height).toBeLessThanOrEqual(28);
+    expect(Math.abs(prove2.y - stop2.y)).toBeLessThan(1);
+    expect(stop2.width).toBeCloseTo(stop.width, 0);
+  });
+});
+
+test.describe("a script that adds properties and proves them", () => {
+  const path = "mock/prove-on-source.tcl";
+  async function source(page: Page, query: string) {
+    await page.goto(`/?${query}`);
+    await expect(rows(page)).toHaveCount(6);
+    const input = page.getByRole("textbox", { name: "Script path" });
+    await input.fill(path);
+    await input.press("Enter");
+  }
+
+  test("shows the new properties as Running rows during the run", async ({ page }) => {
+    await source(page, "freeze=1");
+    await expect(rows(page)).toHaveCount(8);
+    for (const [n, letter] of [["a_src_ok", "A"], ["c_src_hit", "C"]]) {
+      await expect(row(page, n)).toContainText("Running");
+      await expect(row(page, n)).toHaveClass(/\bprov\b/);
+      await expect(row(page, n).locator("td").first()).toHaveText(letter);
+    }
+    await expect(row(page, "c_src_hit")).toContainText("k=6");
+    await expect(summary(page)).toContainText("2 running");
+    await expect(statusbar(page)).toContainText("Proving · 0/2");
+    await expect(page.getByRole("button", { name: /^Stop/ })).toBeEnabled();
+    await page.getByRole("button", { name: /^Stop/ }).click();
+    await expect(statusbar(page)).toContainText("Idle");
+    await expect(rows(page)).toHaveCount(8);
+    for (const n of ["a_src_ok", "c_src_hit"]) {
+      await expect(row(page, n)).toContainText("stopped");
+      await expect(row(page, n)).not.toHaveClass(/\bprov\b/);
+    }
+  });
+
+  test("the reply's session replaces the provisional rows", async ({ page }) => {
+    await source(page, "tick=150");
+    await expect(row(page, "a_src_ok")).toContainText("Running");
+    await expect(statusbar(page)).toContainText("Idle");
+    await expect(rows(page)).toHaveCount(8);
+    await expect(row(page, "a_src_ok")).toContainText("Proven");
+    await expect(row(page, "c_src_hit")).toContainText("Covered");
+    await expect(page.locator("table.grid tr.prov")).toHaveCount(0);
+    await row(page, "c_src_hit").click();
+    await expect(page.locator(".details")).toContainText("q == 4'd4");
   });
 });

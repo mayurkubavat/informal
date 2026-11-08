@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mock, mockEvents, mockOptions, mockRunning, resetMock, TICK_MS } from "./mock";
+import { mock, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
 import type { ConsoleLine, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
@@ -97,7 +97,7 @@ describe("browser mock: live progress and stop", () => {
     mockOptions.tick = 0;
     await mock("shell_eval", { script: "prove -property c_10" });
     expect(events.map((e) => e.kind)).toEqual(["start", "done"]);
-    expect(events[1].props).toEqual([{ name: "c_10", status: "unreachable", engine: "ric3-ic3", ms: 29 }]);
+    expect(events[1].props).toEqual([{ name: "c_10", kind: "cover", status: "unreachable", engine: "ric3-ic3", ms: 29 }]);
   });
 
   it("stops mid-run: unfinished properties become undetermined (stopped)", async () => {
@@ -114,13 +114,37 @@ describe("browser mock: live progress and stop", () => {
     const last = events[events.length - 1];
     expect(last).toMatchObject({ kind: "stopped", done: 5, total: 5 });
     expect(last.props.find((p) => p.name === "a_step")).toEqual({
-      name: "a_step", status: "undetermined", reason: "stopped", engine: "ric3", ms: 2 * TICK_MS,
+      name: "a_step", kind: "assert", status: "undetermined", reason: "stopped", engine: "ric3", ms: 2 * TICK_MS,
     });
-    expect(last.props.find((p) => p.name === "c_10")).toEqual({ name: "c_10", status: "undetermined", reason: "stopped" });
+    expect(last.props.find((p) => p.name === "c_10")).toEqual({ name: "c_10", kind: "cover", status: "undetermined", reason: "stopped" });
     expect(lines[lines.length - 1]).toEqual({ kind: "err", text: "prove stopped: 4 properties left undetermined" });
     expect((await status("a_step")).status).toMatchObject({ status: "undetermined", reason: "stopped" });
     expect((await status("a_max")).status.status).toBe("proven");
     expect(mockRunning()).toBe(false);
+  });
+
+  it("names each property's kind in every event", async () => {
+    await mock("shell_eval", { script: "prove -all" });
+    expect(events[0].props.map((p) => [p.name, p.kind])).toEqual([
+      ["a_max", "assert"], ["a_step", "assert"], ["a_never9", "assert"], ["c_done", "cover"], ["c_10", "cover"],
+    ]);
+    for (const e of events) expect(e.props.every((p) => p.kind)).toBe(true);
+  });
+
+  it("source prove-on-source.tcl proves properties the session gets only with the reply", async () => {
+    mockOptions.freeze = 1;
+    const pending = mock("shell_source", { path: PROVE_ON_SOURCE });
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[0].props.map((p) => [p.name, p.kind, p.status])).toEqual([
+      ["a_src_ok", "assert", "running"], ["c_src_hit", "cover", "running"],
+    ]);
+    expect((await mock("snapshot", {})).session!.props).toHaveLength(6);
+    await mock("shell_stop", {});
+    const r = await pending;
+    expect(r.session!.props.map((p) => p.name).slice(6)).toEqual(["a_src_ok", "c_src_hit"]);
+    expect(r.session!.props[7]).toMatchObject({ kind: "cover", status: { status: "undetermined", reason: "stopped" } });
+    resetMock();
+    expect((await mock("snapshot", {})).session!.props).toHaveLength(6);
   });
 
   it("answers shell_stop when idle without events", async () => {

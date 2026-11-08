@@ -6,7 +6,12 @@ import type { PropStatus, Property, ProveProgress, StatusWord } from "./backend"
 // What a row shows: the backend's status words plus "running", which only
 // exists in the view while a prove's progress events say so.
 export type ViewStatus = StatusWord | "running";
-export type ViewProp = Omit<Property, "status"> & { status: Omit<PropStatus, "status"> & { status: ViewStatus } };
+// `provisional`: known only from a running prove's progress (the script that
+// added it has not returned yet); the session replaces it when it does.
+export type ViewProp = Omit<Property, "status"> & {
+  status: Omit<PropStatus, "status"> & { status: ViewStatus };
+  provisional?: boolean;
+};
 
 export type LogLine = { kind: "in" | "out" | "err"; text: string };
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
@@ -91,18 +96,28 @@ export function sortValue(p: ViewProp, k: SortKey): string | number {
   }
 }
 
+// Kind of a property seen only in progress events from an older backend
+// that does not send `kind`: by name prefix, assert when in doubt.
+export const guessKind = (name: string): "assert" | "cover" => (/^(c_|cover)/i.test(name) ? "cover" : "assert");
+
 // Overlay a prove's progress on the session's properties: properties in the
 // run show their live status (queued, running with k-bound and elapsed, or
-// final); the rest keep the session's status.
+// final); the rest keep the session's status. Run members the session does
+// not have yet (a sourced script that adds properties and proves them in one
+// call) are appended as provisional rows until its reply brings the session.
 export function withProgress(props: Property[], prog: ProveProgress | null): ViewProp[] {
   if (!prog) return props;
   const live = new Map(prog.props.map((q) => [q.name, q]));
-  return props.map((p) => {
+  const statusOf = ({ name: _, kind: __, ...status }: ProveProgress["props"][number]) => status;
+  const known = new Set(props.map((p) => p.name));
+  const extra: ViewProp[] = prog.props
+    .filter((q) => !known.has(q.name))
+    .map((q) => ({ name: q.name, kind: q.kind ?? guessKind(q.name), expr: "", enabled: true, status: statusOf(q), provisional: true }));
+  const merged: ViewProp[] = props.map((p) => {
     const q = live.get(p.name);
-    if (!q) return p;
-    const { name: _, ...status } = q;
-    return { ...p, status };
+    return q ? { ...p, status: statusOf(q) } : p;
   });
+  return extra.length ? [...merged, ...extra] : merged;
 }
 
 // Commands that start a prove (one at a time; the UI refuses a second).

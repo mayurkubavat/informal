@@ -186,7 +186,10 @@ select {
   background: var(--chrome);
   border-bottom: 1px solid var(--border-strong);
   min-width: 0;
+  flex-wrap: nowrap;
 }
+.toolrow > * { flex-shrink: 0; }
+.toolrow > .spacer { flex: 1 1 0; min-width: 0; }
 .field { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; color: var(--text-2); }
 .vsep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 6px; }
 .tool {
@@ -200,13 +203,13 @@ select {
 }
 .tool:hover:not(:disabled) { background: var(--hover); border-color: var(--border); }
 .tool.on { background: var(--hover); border-color: var(--border-strong); }
-.tool-text { display: inline-flex; gap: 6px; padding: 0 8px; color: var(--text); }
+.tool-text { display: inline-flex; gap: 6px; padding: 0 8px; color: var(--text); white-space: nowrap; }
 .play { color: var(--st-play); }
-.tool-text .kbd { color: var(--muted); font-size: 11px; }
-.tool-text:disabled .kbd { color: inherit; }
 /* prove progress, right of the tool row: thin neutral track, accent fill */
+/* fixed width, so the readout changing does not shift the tools */
 .progress { display: inline-flex; align-items: center; gap: 8px; margin-right: 12px; color: var(--text-2); font-size: 11.5px; white-space: nowrap; }
-.progress-track { width: 120px; height: 6px; border-radius: 3px; background: var(--border-strong); overflow: hidden; }
+.progress-track { flex: none; width: 120px; height: 6px; border-radius: 3px; background: var(--border-strong); overflow: hidden; }
+.progress-text { display: inline-block; min-width: 13ch; font-variant-numeric: tabular-nums; }
 .progress-fill { display: block; height: 100%; background: var(--accent); transition: width 0.2s linear; }
 .statusbar .run { display: inline-flex; align-items: center; gap: 6px; }
 
@@ -335,6 +338,7 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .grid tbody tr:hover td { background: var(--hover); }
 .grid tbody tr.sel td { background: var(--accent-soft); }
 .grid tbody tr.off td { opacity: 0.5; }
+.grid tbody tr.prov td:nth-child(2) { font-style: italic; }
 .grid tr.empty-row td { height: auto; padding: 20px; text-align: center; white-space: normal; background: none !important; }
 .grid td.msg-text { max-width: 1px; width: 100%; overflow: hidden; text-overflow: ellipsis; }
 
@@ -422,6 +426,10 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 @media (max-width: 1000px) {
   .workbench { grid-template-columns: var(--left-w, 200px) minmax(0, 1fr); }
   .menu-path { width: 200px; }
+}
+/* narrow windows: the bar alone; the status bar still says done/total */
+@media (max-width: 999.98px) {
+  .progress-text { display: none; }
 }
 
 /* ---- context menu (same look as menu bar pop-ups) ---- */

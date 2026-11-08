@@ -12,6 +12,10 @@
 //   ?tick=<ms>   tick period, default 300
 //   ?freeze=<n>  stop ticking after n ticks, leaving the run mid-way
 //   ?holdStop=1  shell_stop never completes, so "Stopping…" stays up
+//
+// `source mock/prove-on-source.tcl` stands for a script that adds two
+// properties and proves them in the same call: progress events name them
+// before the session has them, which joins them on the reply.
 
 import type { ConsoleLine, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 
@@ -47,7 +51,17 @@ const mockResults: Record<string, PropStatus> = {
   a_never9: { status: "cex", engine: "ric3-bmc", depth: 11, ms: 30 },
   c_done: { status: "covered", engine: "ric3-bmc", depth: 11, ms: 31 },
   c_10: { status: "unreachable", engine: "ric3-ic3", ms: 29 },
+  a_src_ok: { status: "proven", engine: "ric3-ic3", ms: 44 },
+  c_src_hit: { status: "covered", engine: "ric3-bmc", depth: 4, ms: 22 },
 };
+
+// What `source mock/prove-on-source.tcl` adds (and then proves).
+export const PROVE_ON_SOURCE = "mock/prove-on-source.tcl";
+const sourcedProps = (): Property[] => [
+  { name: "a_src_ok", kind: "assert", expr: "done |-> q == 4'd9", enabled: true, status: { status: "unprocessed" } },
+  { name: "c_src_hit", kind: "cover", expr: "q == 4'd4", enabled: true, status: { status: "unprocessed" } },
+];
+const BASE_PROPS = mockSession.props.length;
 
 // Ticks each property runs for before it resolves (default 2).
 export const MOCK_TICKS: Record<string, number> = { a_max: 2, a_step: 3, a_never9: 2, c_done: 2, c_10: 1 };
@@ -83,15 +97,17 @@ interface Run {
   ticks: number;
   timer: ReturnType<typeof setTimeout> | null;
   resolve: (r: Reply) => void;
+  // Runs before the reply: a sourced script's properties join the session.
+  onEnd?: () => void;
 }
 let active: Run | null = null;
 
 const isFinal = (p: PropProgress) => p.status !== "running" && p.status !== "unprocessed";
 const summaryOf = (props: Property[]) =>
   WORDS.map((w) => `${w} ${props.filter((p) => p.status.status === w).length}`).join(" ");
-// Replace a progress entry's fields, keeping its name.
-const reset = (p: PropProgress, to: Omit<PropProgress, "name">) => {
-  for (const k of Object.keys(p)) if (k !== "name") delete (p as unknown as Record<string, unknown>)[k];
+// Replace a progress entry's fields, keeping its name and kind.
+const reset = (p: PropProgress, to: Omit<PropProgress, "name" | "kind">) => {
+  for (const k of Object.keys(p)) if (k !== "name" && k !== "kind") delete (p as unknown as Record<string, unknown>)[k];
   Object.assign(p, to);
 };
 
@@ -126,6 +142,7 @@ function finish(run: Run, kind: "done" | "stopped") {
   if (run.timer) clearTimeout(run.timer);
   active = null;
   emit(run, kind);
+  run.onEnd?.();
   run.resolve({ ok: true, result: summaryOf(run.props), session: mockSession });
 }
 
@@ -160,11 +177,12 @@ function schedule(run: Run) {
 }
 const frozen = (run: Run) => mockOptions.freeze !== null && run.ticks >= mockOptions.freeze;
 
-function startProve(props: Property[]): Promise<Reply> {
+function startProve(props: Property[], onEnd?: () => void): Promise<Reply> {
   return new Promise((resolve) => {
     const run: Run = {
       props,
-      prog: props.map((p) => ({ name: p.name, status: "unprocessed" })),
+      onEnd,
+      prog: props.map((p) => ({ name: p.name, kind: p.kind === "cover" ? "cover" : "assert", status: "unprocessed" })),
       ran: new Map(),
       ticks: 0,
       timer: null,
@@ -199,6 +217,7 @@ export function resetMock() {
   if (active?.timer) clearTimeout(active.timer);
   active = null;
   mockFlavor = "jg";
+  mockSession.props.length = BASE_PROPS;
   for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" } });
   Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false });
 }
@@ -220,6 +239,11 @@ export async function mock(cmd: string, args: Record<string, unknown>): Promise<
     if (active) return { ok: false, result: "a prove is already running; stop it first", session: mockSession };
     const only = /-property/.test(script) ? names(script) : null;
     return startProve(mockSession.props.filter((p) => p.kind !== "assume" && p.enabled && (!only || only.includes(p.name))));
+  }
+  if (cmd === "shell_source" && String(args.path ?? "").endsWith(PROVE_ON_SOURCE)) {
+    if (active) return { ok: false, result: "a prove is already running; stop it first", session: mockSession };
+    const added = sourcedProps().filter((p) => !mockSession.props.some((q) => q.name === p.name));
+    return startProve(added, () => mockSession.props.push(...added));
   }
   if (cmd === "shell_stop") {
     const run = active;

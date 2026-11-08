@@ -476,7 +476,12 @@ impl Session {
                 .collect()
         };
         let tracker = self.sink.clone().map(|sink| {
-            Tracker::start(sink, targets.iter().map(|&i| self.props[i].name.clone()))
+            Tracker::start(
+                sink,
+                targets
+                    .iter()
+                    .map(|&i| (self.props[i].name.clone(), self.props[i].kind.label())),
+            )
         });
         let files = match self.injected_files() {
             Ok(f) => f,

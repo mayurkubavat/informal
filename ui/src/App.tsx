@@ -92,7 +92,12 @@ export default function App() {
         setLog((l) => [...l, { kind: "err", text: String(e) }]);
         note(false, String(e));
       } finally {
-        if (!isProve) setPending((n) => n - 1);
+        if (!isProve) {
+          setPending((n) => n - 1);
+          // A prove run by this call (a sourced script) has ended and its
+          // session is in: drop the finished progress so it stops overlaying.
+          setProgress((p) => (p && (p.kind === "done" || p.kind === "stopped") ? null : p));
+        }
       }
     },
     [apply],
@@ -160,7 +165,9 @@ export default function App() {
   // place, so memoising on the session reference would go stale.
   // While a prove runs, its progress overlays the session (running rows,
   // k-bound, elapsed); the reply's session takes over when it returns.
-  const allProps = withProgress(session?.props ?? [], live || proving ? progress : null);
+  // A script's prove (`source` that adds properties and proves them) keeps
+  // its rows from the last progress event until the script's reply lands.
+  const allProps = withProgress(session?.props ?? [], live || proving || busy ? progress : null);
   const props = allProps.filter(
     (p) =>
       matches(p, filter) &&
@@ -428,7 +435,7 @@ export default function App() {
           <PlayIcon /> Prove all
         </button>
         <button className="tool tool-text" onClick={stop} disabled={!running || stopping} title="Stop the running prove (Esc)">
-          <StopIcon /> {stopping ? "Stopping…" : "Stop"} {!stopping && <span className="kbd">Esc</span>}
+          <StopIcon /> {stopping ? "Stopping…" : "Stop"}
         </button>
         <span className="vsep" />
         <ToolBtn title={hasTrace ? "Visualize trace (coming soon)" : "Visualize trace: select a CEX or cover"} disabled>
