@@ -24,7 +24,7 @@ describe("TaskTree", () => {
     render(<TaskTree total={props.length} counts={{ unprocessed: props.length }} assumes={0} filter={null} onFilter={onFilter} props={props} selected="p240" />);
     const leaves = screen.getAllByRole("treeitem").filter((r) => r.classList.contains("leaf") && !r.classList.contains("more"));
     expect(leaves).toHaveLength(LEAF_CAP + 1);
-    expect(leaves.at(-1)).toHaveTextContent("p240");
+    expect(leaves[leaves.length - 1]).toHaveTextContent("p240");
     await userEvent.click(screen.getByText("49 more…"));
     expect(onFilter).toHaveBeenCalledWith("unprocessed");
   });
