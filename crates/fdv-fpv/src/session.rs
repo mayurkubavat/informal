@@ -289,6 +289,7 @@ impl Session {
             incdirs: self.design.incdirs.clone(),
             top: self.design.top.clone(),
             params: self.design.params.clone(),
+            trace_outputs: false,
         };
         if let Some(d) = fdv_slang::compile(&req) {
             let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
@@ -602,9 +603,21 @@ impl Session {
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
             let built = match lowered {
-                Some(btor) => std::fs::write(&out, only_bad(btor, &format!("fdv_p{i}")))
-                    .map_err(anyhow::Error::from),
-                None => self.run_yosys(files, &[format!("FDV_P{i}")], &out),
+                Some(btor) => {
+                    let keep = format!("fdv_p{i}");
+                    let (model, section) = fdv_slang::split_trace(btor);
+                    let mut r = std::fs::write(&out, only_bad(model, &keep));
+                    // The same model plus `output` lines naming the
+                    // combinational nets, for the VCD (trace_model).
+                    if r.is_ok() && !section.is_empty() {
+                        r = std::fs::write(trace_model(&out), only_bad(btor, &keep));
+                    }
+                    r.map_err(anyhow::Error::from)
+                }
+                None => {
+                    let _ = std::fs::remove_file(trace_model(&out));
+                    self.run_yosys(files, &[format!("FDV_P{i}")], &out)
+                }
             };
             self.props[i].trace = None;
             let (mut status, trace) = match built {
@@ -649,6 +662,10 @@ impl Session {
             incdirs: self.design.incdirs.clone(),
             top: self.design.top.clone(),
             params: self.design.params.clone(),
+            // Appends named outputs for combinational nets after
+            // fdv_slang::TRACE_MARKER: engines get the text before it
+            // (unchanged), the trace replay all of it.
+            trace_outputs: true,
         };
         let l = fdv_slang::lower(&req)?;
         if l.ok {
@@ -763,7 +780,10 @@ impl Session {
             },
         };
         let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
-        let vcd = match trace::vcd_from_witness(model, &w, name, clock) {
+        // Replay on the copy with named combinational nets when there is one.
+        let with_nets = trace_model(model);
+        let replay = if with_nets.is_file() { with_nets.as_path() } else { model };
+        let vcd = match trace::vcd_from_witness(replay, &w, name, clock) {
             Ok(v) => v,
             Err(e) => {
                 self.log(&format!("{name}: no trace: {e:#}"));
@@ -855,6 +875,12 @@ impl Session {
 }
 
 /// The Btor2 text with every `bad` line dropped except the one named `keep`.
+/// `prop_N.trace.btor2` next to `prop_N.btor2`: the property's model with
+/// the slang lowering's named-output section, used only to replay traces.
+fn trace_model(model: &Path) -> PathBuf {
+    model.with_extension("trace.btor2")
+}
+
 fn only_bad(btor: &str, keep: &str) -> String {
     btor.lines()
         .filter(|l| {

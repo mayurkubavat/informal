@@ -15,6 +15,15 @@
 // add history states. All registers step on every model step (one clock),
 // asynchronous resets act synchronously, and X / Z read as 0.
 //
+// With `--fdv-trace-outputs` (an fdv option, not slang's), a section after
+// the line `; fdv-trace-outputs` names the combinational nets: every net
+// or variable driven by a continuous assign, a port connection or a
+// combinational block gets an `output <node> <path>` line (nets nothing
+// read are lowered there too, when the lowering can; others are skipped).
+// The section only appends, so the text before the marker is exactly the
+// model without the flag: engines get that part, and the trace replay the
+// whole (docs/ui/trace-format.md).
+//
 // Not supported yet (reported as errors): unpacked arrays and memories,
 // loops, functions and tasks, interfaces, real numbers, latches with
 // feedback, concurrent assertions in the RTL.
@@ -35,6 +44,7 @@
 #include "slang/text/SourceManager.h"
 
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
@@ -139,6 +149,10 @@ struct Btor {
     void constraint(int cond) {
         int id = next++;
         text += std::to_string(id) + " constraint " + std::to_string(cond) + "\n";
+    }
+    void output(int node, const std::string& name) {
+        int id = next++;
+        text += std::to_string(id) + " output " + std::to_string(node) + " " + name + "\n";
     }
 
     // ---- word helpers
@@ -252,6 +266,7 @@ struct Lowerer {
     std::map<std::pair<int, int>, int> pastRegs;
     std::vector<std::pair<int, int>> pendingNext; // state, next value
     int pastCount = 0;
+    bool traceOutputs = false;
 
     // ---- classification
 
@@ -1147,7 +1162,43 @@ struct Lowerer {
             b.nextOf(pendingNext[i].first, pendingNext[i].second);
         if (bads == 0)
             notes.push_back("the design has no assertions");
+        if (traceOutputs)
+            namedOutputs();
         return b.text;
+    }
+
+    // The `--fdv-trace-outputs` section (see the file comment).
+    void namedOutputs() {
+        b.text += "; fdv-trace-outputs\n";
+        std::vector<const ValueSymbol*> syms;
+        auto want = [&](const ValueSymbol* s) {
+            return (s->kind == SymbolKind::Net || s->kind == SymbolKind::Variable) &&
+                   !topInputs.count(s) && !ffDriver.count(s);
+        };
+        for (auto& [s, _] : contAssigns)
+            if (want(s))
+                syms.push_back(s);
+        for (auto& [s, _] : combDriver)
+            if (want(s) && !contAssigns.count(s))
+                syms.push_back(s);
+        std::vector<std::pair<std::string, const ValueSymbol*>> named;
+        for (auto s : syms)
+            named.emplace_back(pathOf(*s), s);
+        std::sort(named.begin(), named.end(),
+                  [](auto& x, auto& y) { return x.first < y.first; });
+        for (auto& [name, s] : named) {
+            int n;
+            try {
+                n = value(*s);
+            }
+            catch (const Unsupported&) {
+                // Left half-lowered; nothing after this reads that state.
+                inProgress.clear();
+                combBusy.clear();
+                continue;
+            }
+            b.output(n, name);
+        }
     }
 };
 
@@ -1187,8 +1238,13 @@ extern "C" {
 // {"ok", "errors": [...], "btor2": "...", "notes": [...]}.
 char* fdv_slang_lower(const char* args) {
     std::vector<std::string> words{"slang"};
-    for (const char* p = args; *p; p += std::strlen(p) + 1)
-        words.emplace_back(p);
+    bool traceOutputs = false;
+    for (const char* p = args; *p; p += std::strlen(p) + 1) {
+        if (std::string_view(p) == "--fdv-trace-outputs")
+            traceOutputs = true;
+        else
+            words.emplace_back(p);
+    }
     std::vector<const char*> argv;
     for (auto& w : words)
         argv.push_back(w.c_str());
@@ -1227,6 +1283,7 @@ char* fdv_slang_lower(const char* args) {
             ASTContext ctx(root.topInstances[0]->body, LookupLocation::max);
             Lowerer l;
             l.astCtx = &ctx;
+            l.traceOutputs = traceOutputs;
             btor = l.run(root);
             notes = l.notes;
         }

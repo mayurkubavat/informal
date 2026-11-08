@@ -19,7 +19,7 @@ Status: implemented 2026-11-08: the survey (T0) and plan below, now built
 
 Gaps in the names:
 
-- **Combinational nets have no symbol.** Examples: `done = (q == 9)` and `nxt`. The Btor2 has only unnamed `eq`/`add` nodes. A trace therefore shows ports that are inputs, plus registers, but not wires or outputs that are pure logic.
+- **Combinational nets have no symbol** in the engine model. Examples: `done = (q == 9)` and `nxt`. The Btor2 has only unnamed `eq`/`add` nodes. Since P2d the trace gets them from a separate trace model (see "Named combinational nets" below).
 - **The clock isn't in the model.** One Btor2 step is one cycle of the `clock` signal. The VCD adds a synthetic `clk`.
 - **FPV helper state shows up.** Examples: `counter.fdv_cyc`, `fdv_past_N`. The VCD puts it under an `fdv` scope that the UI hides by default.
 - **Simplify can drop inputs and latches.** Dropped means unused, constant, or merged by scorr. Their witness bits are missing. That's harmless for the property: missing inputs are don't-cares and get 0. The full model is re-simulated (below), so registers still get correct values.
@@ -58,8 +58,8 @@ Depth convention: `Unsafe { depth: d }` means the bad output is true in frame `d
 - **Which engine.** On the counter, `fdv-bmc`, `fdv-bmc-10` and `fdv-bmc-65` give the witness directly. With rIC3, IC3 or k-induction winning, the BMC re-run produces the trace. `flow.rs` covers that case with rIC3 only.
 - **Failures.** If the trace can't be built (BMC can't reproduce the result in time, or the replay misses the bad state), the console gets `<prop>: no trace: <why>`. The property keeps its verdict and has no `trace`.
 
-## Later
+- **Named combinational nets.** With `fdv_slang::Request::trace_outputs` (the shim option `--fdv-trace-outputs`), `lower.cpp` appends a section after the comment line `; fdv-trace-outputs`: one `output <node> <path>` line per net or variable driven by a continuous assign, a port connection or a combinational block, sorted by path (e.g. `counter.done`, `counter.nxt`, `counter.wrap`). Nets nothing reads are lowered there too when the lowering can; others are skipped. The section only appends, so the text before the marker is exactly the model without the flag. The FPV session always asks for it, writes the part before the marker to `prop_N.btor2` for the engines (byte-identical to before; checked on the counter's jg and vcf scripts), and the whole text to `prop_N.trace.btor2`, which only the trace replay reads. `from_btor2` keeps named outputs as `Aig::outputs` (engines and preprocessing ignore them), and the VCD writer samples them like registers. The emission is opt-in this way so `output` lines can never change what external engines (rIC3, ABC) see. The Yosys fallback writes no trace model; its traces stay without combinational nets.
 
-- **Named wires and ports in the lowering.** `fdv-slang/cpp/lower.cpp` would emit Btor2 `output` lines with symbols, e.g. `counter.done`. `from_btor2` would keep them as named AIG outputs, and the VCD writer would sample them. Needed for `done` and `nxt` in the trace.
+## Later
 - **Witnesses from rIC3 and ABC.** Mapping them back needs their AIGER witness on our AIGER export, plus the AIGER symbol table. Step 3 covers it for now.
 - **Certificate check.** Step 2's re-simulation on the unsimplified model is already the independent witness check the fdv-engine docs plan for phase 2 (BtorSim's role).
