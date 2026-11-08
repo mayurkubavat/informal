@@ -502,7 +502,7 @@ impl Session {
                     while looping.load(Ordering::SeqCst) {
                         std::thread::sleep(Duration::from_millis(100));
                         n += 1;
-                        if n % 5 == 0 && looping.load(Ordering::SeqCst) {
+                        if n.is_multiple_of(5) && looping.load(Ordering::SeqCst) {
                             t.tick();
                         }
                     }
