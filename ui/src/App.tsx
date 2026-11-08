@@ -504,7 +504,9 @@ function MenuBar({ menus, children }: { menus: MenuDef[]; children?: React.React
     };
   }, [open]);
   return (
-    <div className="menubar" ref={bar} role="menubar">
+    <div className="menubar" ref={bar}>
+      {/* role lives on a layout-neutral wrapper: a menubar may only own menu items, not the script path field */}
+      <div role="menubar" aria-label="Main menu" style={{ display: "contents" }}>
       {menus.map((m) => (
         <div key={m.label} className="menu">
           <button
@@ -543,6 +545,7 @@ function MenuBar({ menus, children }: { menus: MenuDef[]; children?: React.React
           )}
         </div>
       ))}
+      </div>
       <span className="spacer" />
       {children}
     </div>
