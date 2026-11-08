@@ -6,7 +6,8 @@ import type { MenuItem } from "./MenuBar";
 // resize close it. Scrolls of panes marked `data-scroll-quiet` (the source
 // view following the selection) leave it open: they do not move its row. Disabled items stay focusable (aria-disabled) so their
 // tooltip explains why.
-export function ContextMenu({ x, y, items, label, onClose }: { x: number; y: number; items: MenuItem[]; label: string; onClose: () => void }) {
+// `above`: open upwards from (x, y), for menus anchored on the status bar.
+export function ContextMenu({ x, y, items, label, onClose, above = false }: { x: number; y: number; items: MenuItem[]; label: string; onClose: () => void; above?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
 
@@ -25,10 +26,10 @@ export function ContextMenu({ x, y, items, label, onClose }: { x: number; y: num
     if (!r) return;
     setPos({
       left: Math.max(4, Math.min(x, window.innerWidth - r.width - 4)),
-      top: Math.max(4, Math.min(y, window.innerHeight - r.height - 4)),
+      top: Math.max(4, Math.min(above ? y - r.height : y, window.innerHeight - r.height - 4)),
     });
     ref.current?.querySelector<HTMLButtonElement>(".menu-item")?.focus();
-  }, [x, y]);
+  }, [x, y, above]);
 
   useEffect(() => {
     const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && onClose();

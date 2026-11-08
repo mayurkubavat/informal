@@ -4,7 +4,8 @@
 // placed next to their tab with flex `order`.
 export type TabDef = [key: string, label: string, onClose?: () => void];
 
-export function Tabs({ tabs, value, onChange }: { tabs: TabDef[]; value: string; onChange: (v: string) => void }) {
+// `extra` sits at the far right of the strip (the console's input-mode switch).
+export function Tabs({ tabs, value, onChange, extra }: { tabs: TabDef[]; value: string; onChange: (v: string) => void; extra?: React.ReactNode }) {
   return (
     <div className="tabs">
       <div role="tablist" className="tablist">
@@ -38,6 +39,7 @@ export function Tabs({ tabs, value, onChange }: { tabs: TabDef[]; value: string;
             </button>
           ),
       )}
+      {extra && <div className="tabs-extra" style={{ order: 2 * tabs.length + 1 }}>{extra}</div>}
     </div>
   );
 }

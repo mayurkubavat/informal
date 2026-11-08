@@ -18,6 +18,12 @@
 //                the Design tab instead of the counter's
 //   ?surfer=1    report the Surfer viewer as installed (tool_available);
 //                "Open in Surfer" then succeeds without opening anything
+//   ?llm=offline start with the LLM provider unreachable (Ask disabled)
+//
+// Ask mode: a Fake provider ("fake/scripted") streams a scripted answer a
+// word at a time. A question about failures is answered from the session
+// with no command; anything else gets `prove -property a_never9`. The
+// second provider, "ollama-gemma", is always offline in the browser.
 //   ?design=scan no hierarchy, as with the Yosys front end: the Design tab
 //                falls back to scanning the top file's ports
 //
@@ -27,6 +33,7 @@
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
 import type { ConsoleLine, DesignScope, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import { splitAnswer, type AskDelta, type AskDone, type LlmProviderEntry, type LlmStatus } from "./ask";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
                 output logic [3:0] q, output logic done);
@@ -174,7 +181,7 @@ export const MOCK_TICKS: Record<string, number> = { a_max: 2, a_step: 3, a_never
 export const TICK_MS = 300;
 const PARALLEL = 2;
 
-export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false, surfer: false };
+export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false, surfer: false, llmOffline: false };
 if (typeof location !== "undefined") {
   const q = new URLSearchParams(location.search);
   if (q.get("fast") === "1") mockOptions.tick = 0;
@@ -182,20 +189,27 @@ if (typeof location !== "undefined") {
   if (q.has("freeze")) mockOptions.freeze = Number(q.get("freeze"));
   if (q.get("holdStop") === "1") mockOptions.holdStop = true;
   if (q.get("surfer") === "1") mockOptions.surfer = true;
+  if (q.get("llm") === "offline") mockOptions.llmOffline = true;
   if (q.get("design") === "fifo") mockSession.design.hierarchy = MOCK_FIFO;
   if (q.get("design") === "scan") mockSession.design.hierarchy = [];
   const extra = Math.min(100_000, Math.max(0, Number(q.get("props")) || 0));
   if (extra) mockSession.props.push(...generatedProps(extra));
 }
 
-type Ev = "prove-progress" | "console-line" | "engine-log";
-const listeners: Record<Ev, Set<(p: unknown) => void>> = { "prove-progress": new Set(), "console-line": new Set(), "engine-log": new Set() };
+type Ev = "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done";
+const listeners: Record<Ev, Set<(p: unknown) => void>> = {
+  "prove-progress": new Set(),
+  "console-line": new Set(),
+  "engine-log": new Set(),
+  "ask-delta": new Set(),
+  "ask-done": new Set(),
+};
 export const mockEvents = {
   on(ev: Ev, cb: (p: unknown) => void) {
     listeners[ev].add(cb);
     return () => void listeners[ev].delete(cb);
   },
-  emit(ev: Ev, payload: ProveProgress | ConsoleLine | EngineLine) {
+  emit(ev: Ev, payload: ProveProgress | ConsoleLine | EngineLine | AskDelta | AskDone) {
     for (const cb of [...listeners[ev]]) cb(payload);
   },
 };
@@ -357,8 +371,79 @@ export function resetMock() {
   mockFlavor = "jg";
   mockSession.props.length = BASE_PROPS;
   for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null, engines: [] });
-  Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false, surfer: false });
+  Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false, surfer: false, llmOffline: false });
   mockSurferOpened.length = 0;
+  mockLlm.selected = "fake";
+  for (const t of mockAsks.values()) clearTimeout(t);
+  mockAsks.clear();
+}
+
+// ---- Ask mode: a scripted Fake provider ----
+
+export const MOCK_ASK_REPLY = "Proving only that property:\n```tcl\nprove -property a_never9\n```";
+const OLLAMA_DOWN = "http://localhost:11434/v1: Connection refused (browser preview)";
+export const mockLlm = {
+  selected: "fake",
+  providers: [
+    { name: "fake", kind: "fake", model: "scripted", base_url: "" },
+    { name: "ollama-gemma", kind: "openai-compat", model: "gemma3:12b", base_url: "http://localhost:11434/v1" },
+  ],
+};
+const mockAsks = new Map<number, ReturnType<typeof setTimeout>>();
+
+export function mockLlmStatus(): LlmStatus {
+  const p = mockLlm.providers.find((q) => q.name === mockLlm.selected)!;
+  const down = mockOptions.llmOffline ? OLLAMA_DOWN : p.name === "ollama-gemma" ? OLLAMA_DOWN : undefined;
+  return { provider: p.name, model: p.model, ok: !down, ...(down ? { error: down } : {}) };
+}
+export function mockLlmProviders(): LlmProviderEntry[] {
+  return mockLlm.providers.map((p) => ({ ...p, selected: p.name === mockLlm.selected }));
+}
+export function mockLlmSelect(name: string): LlmStatus {
+  if (!mockLlm.providers.some((p) => p.name === name)) throw new Error(`no LLM provider ${name}`);
+  mockLlm.selected = name;
+  return mockLlmStatus();
+}
+
+// The scripted answer: failures are listed from the session; any other
+// question gets the a_never9 prove.
+function mockAnswer(prompt: string): string {
+  if (/fail|cex|wrong/i.test(prompt)) {
+    const failed = mockSession.props.filter((p) => p.status.status === "cex").map((p) => p.name);
+    if (!failed.length) return "No property has failed yet; none has a CEX in this session.";
+    return `${failed.length === 1 ? "One property failed" : `${failed.length} properties failed`}: ${failed.join(", ")} (CEX).`;
+  }
+  return MOCK_ASK_REPLY;
+}
+
+export function mockAsk(id: number, prompt: string): number {
+  const st = mockLlmStatus();
+  if (!st.ok) throw new Error(st.error);
+  const text = mockAnswer(prompt);
+  const words = text.match(/\S+\s*/g) ?? [];
+  const step = mockOptions.tick ? 30 : 0;
+  let i = 0;
+  const next = () => {
+    if (i < words.length) {
+      mockEvents.emit("ask-delta", { id, text: words[i++] });
+      mockAsks.set(id, setTimeout(next, step));
+      return;
+    }
+    mockAsks.delete(id);
+    const { explanation, command } = splitAnswer(text);
+    mockEvents.emit("ask-done", { id, command, explanation, model: "scripted", first_token_ms: 0, total_ms: words.length * step });
+  };
+  mockAsks.set(id, setTimeout(next, step));
+  return id;
+}
+
+export function mockAskCancel(id: number): boolean {
+  const t = mockAsks.get(id);
+  if (t === undefined) return false;
+  clearTimeout(t);
+  mockAsks.delete(id);
+  mockEvents.emit("ask-done", { id, command: null, explanation: "", error: "cancelled", total_ms: 0 });
+  return true;
 }
 
 let mockFlavor = "jg";

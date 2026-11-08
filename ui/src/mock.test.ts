@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MOCK_ENGINES, mockOpenInSurfer, mockSurferOpened, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
+import { MOCK_ASK_REPLY, MOCK_ENGINES, mockAsk, mockAskCancel, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockSurferOpened, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
 import type { ConsoleLine, EngineLine, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
@@ -199,5 +199,67 @@ describe("browser mock: Surfer hand-off", () => {
     await mockOpenInSurfer("fdv_work/a_never9.vcd");
     await expect(mockOpenInSurfer("fdv_work/prop_0.btor2")).rejects.toThrow(/not a trace/);
     expect(mockSurferOpened).toEqual(["fdv_work/a_never9.vcd"]);
+  });
+});
+
+describe("browser mock: Ask mode (Fake provider)", () => {
+  beforeEach(() => resetMock());
+
+  const collect = (id: number) =>
+    new Promise<{ text: string; done: import("./ask").AskDone }>((resolve) => {
+      let text = "";
+      const offD = mockEvents.on("ask-delta", (d) => {
+        const e = d as import("./ask").AskDelta;
+        if (e.id === id) text += e.text;
+      });
+      const offE = mockEvents.on("ask-done", (d) => {
+        const e = d as import("./ask").AskDone;
+        if (e.id !== id) return;
+        offD();
+        offE();
+        resolve({ text, done: e });
+      });
+    });
+
+  it("streams the scripted answer and suggests prove -property a_never9", async () => {
+    mockOptions.tick = 0;
+    expect(mockLlmStatus()).toEqual({ provider: "fake", model: "scripted", ok: true });
+    const got = collect(7);
+    expect(mockAsk(7, "prove only the a_never9 property")).toBe(7);
+    const { text, done } = await got;
+    expect(text).toBe(MOCK_ASK_REPLY);
+    expect(done.command).toBe("prove -property a_never9");
+    expect(done.explanation).toBe("Proving only that property:");
+  });
+
+  it("answers which properties failed from the session, with no command", async () => {
+    mockOptions.tick = 0;
+    await mock("shell_eval", { script: "prove -all" });
+    const got = collect(8);
+    mockAsk(8, "which properties failed?");
+    const { done } = await got;
+    expect(done.command ?? null).toBeNull();
+    expect(done.explanation).toBe("One property failed: a_never9 (CEX).");
+  });
+
+  it("cancels a streaming answer with one cancelled ask-done", async () => {
+    mockOptions.tick = 300;
+    const got = collect(9);
+    mockAsk(9, "prove it");
+    expect(mockAskCancel(9)).toBe(true);
+    expect((await got).done.error).toBe("cancelled");
+    expect(mockAskCancel(9)).toBe(false);
+  });
+
+  it("lists two providers; ollama-gemma is offline and ask then refuses", () => {
+    expect(mockLlmProviders().map((p) => [p.name, p.selected])).toEqual([["fake", true], ["ollama-gemma", false]]);
+    const st = mockLlmSelect("ollama-gemma");
+    expect(st.ok).toBe(false);
+    expect(st.error).toContain("Connection refused");
+    expect(() => mockAsk(1, "x")).toThrow(/Connection refused/);
+    expect(() => mockLlmSelect("nope")).toThrow();
+    mockLlmSelect("fake");
+    mockOptions.llmOffline = true;
+    expect(mockLlmStatus().ok).toBe(false);
   });
 });

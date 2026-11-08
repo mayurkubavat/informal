@@ -119,3 +119,72 @@ describe("Console", () => {
     });
   });
 });
+
+describe("Console in Ask mode", () => {
+  const base = { hidden: false, log: [], busy: false, flavor: "jg" as const, onSubmit: () => {} };
+
+  it("reads ask>, sends the question to onAsk and does not Tab-complete", async () => {
+    const onAsk = vi.fn();
+    const onSubmit = vi.fn();
+    const complete = vi.fn(async () => ["prove"]);
+    render(<Console {...base} mode="ask" onAsk={onAsk} onSubmit={onSubmit} complete={complete} />);
+    expect(screen.getByText("ask>")).toBeInTheDocument();
+    const input = screen.getByLabelText("Ask a question");
+    await userEvent.type(input, "pro{Tab}");
+    expect(complete).not.toHaveBeenCalled();
+    await userEvent.clear(screen.getByLabelText("Ask a question"));
+    await userEvent.type(screen.getByLabelText("Ask a question"), "prove only a_never9{Enter}");
+    expect(onAsk).toHaveBeenCalledWith("prove only a_never9");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("shows the question and the answer as plain ask: lines", () => {
+    const log = [
+      { kind: "ask-in" as const, text: "which properties failed?" },
+      { kind: "ask" as const, text: "One failed:\na_never9" },
+    ];
+    const { container } = render(<Console {...base} mode="ask" log={log} />);
+    const lines = [...container.querySelectorAll(".line")].map((l) => l.textContent);
+    expect(lines).toEqual(["ask> which properties failed?", "ask: One failed:\nask: a_never9"]);
+    expect(container.querySelector(".line.ask")).not.toBeNull();
+  });
+
+  it("pre-fills a suggestion as a Tcl prompt; Enter runs it", async () => {
+    const onSubmit = vi.fn();
+    const onSuggestion = vi.fn();
+    render(<Console {...base} mode="ask" suggestion="prove -property a_never9" onSubmit={onSubmit} onSuggestion={onSuggestion} />);
+    expect(screen.getByText("fdv[jg]>")).toBeInTheDocument();
+    expect(screen.getByText("Enter runs · Esc discards")).toBeInTheDocument();
+    const input = screen.getByLabelText("Suggested Tcl command");
+    expect(input).toHaveValue("prove -property a_never9");
+    expect(onSubmit).not.toHaveBeenCalled();
+    await userEvent.type(input, "{Enter}");
+    expect(onSubmit).toHaveBeenCalledWith("prove -property a_never9");
+    expect(onSuggestion).toHaveBeenCalledWith("run");
+  });
+
+  it("Esc discards a suggestion without running it, and is marked handled", async () => {
+    const onSubmit = vi.fn();
+    const onSuggestion = vi.fn();
+    const seen = vi.fn();
+    window.addEventListener("keydown", seen);
+    render(<Console {...base} mode="ask" suggestion="prove -all" onSubmit={onSubmit} onSuggestion={onSuggestion} />);
+    await userEvent.type(screen.getByLabelText("Suggested Tcl command"), "{Escape}");
+    expect(onSuggestion).toHaveBeenCalledWith("discard");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(seen.mock.calls[seen.mock.calls.length - 1][0].defaultPrevented).toBe(true);
+    window.removeEventListener("keydown", seen);
+  });
+
+  it("Esc cancels a streaming answer; Enter is ignored meanwhile", async () => {
+    const onAsk = vi.fn();
+    const onCancelAsk = vi.fn();
+    render(<Console {...base} mode="ask" asking onAsk={onAsk} onCancelAsk={onCancelAsk} />);
+    const input = screen.getByLabelText("Ask a question");
+    expect(input).toHaveAttribute("readonly");
+    expect(input).toHaveAttribute("placeholder", "answering… (Esc cancels)");
+    await userEvent.type(input, "{Escape}");
+    expect(onCancelAsk).toHaveBeenCalled();
+    expect(onAsk).not.toHaveBeenCalled();
+  });
+});

@@ -168,4 +168,33 @@ for (const s of sizes)
         await expect(page.locator(".menu-pop")).toBeVisible();
         await shot(page, n("prove-menu"));
       });
+
+      // Ask mode (Fake provider): an answered question, then a suggested
+      // command waiting on the prompt.
+      test("ask mode with a suggested command", async ({ page }) => {
+        await ready(page);
+        await proveAll(page);
+        await page.getByRole("group", { name: "Console input mode" }).getByRole("button", { name: "Ask" }).click();
+        const q = page.getByLabel("Ask a question");
+        await q.fill("which properties failed?");
+        await q.press("Enter");
+        await expect(page.locator(".line.ask").last()).toContainText("One property failed");
+        await page.getByLabel("Ask a question").fill("prove only the a_never9 property");
+        await page.getByLabel("Ask a question").press("Enter");
+        await expect(page.getByLabel("Suggested Tcl command")).toHaveValue("prove -property a_never9");
+        await shot(page, n("ask-suggested"));
+      });
+
+      test("ask offline", async ({ page }) => {
+        await ready(page, "fast=1&llm=offline");
+        await expect(page.locator("footer.statusbar")).toContainText("LLM: offline");
+        await shot(page, n("ask-offline"));
+      });
+
+      test("llm provider menu", async ({ page }) => {
+        await ready(page);
+        await page.locator("footer.statusbar").getByRole("button", { name: /LLM:/ }).click();
+        await expect(page.getByRole("menu", { name: "LLM provider" })).toBeVisible();
+        await shot(page, n("llm-menu"));
+      });
     });

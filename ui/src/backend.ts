@@ -2,7 +2,8 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockComplete, mockEvents, mockOpenInSurfer, mockOptions, mockText, mockTrace } from "./mock";
+import { mock, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace } from "./mock";
+import type { AskDelta, AskDone, LlmProviderEntry, LlmStatus } from "./ask";
 
 export type StatusWord =
   | "unprocessed" | "proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
@@ -150,7 +151,7 @@ async function call(cmd: string, args: Record<string, unknown> = {}): Promise<Re
 
 // Subscribe to a backend event; returns an unsubscribe function that is safe
 // to call before the Tauri listener has finished registering.
-function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log", cb: (payload: T) => void): () => void {
+function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done", cb: (payload: T) => void): () => void {
   if (!inTauri) return mockEvents.on(event, cb as (p: unknown) => void);
   let off: (() => void) | null = null;
   let dead = false;
@@ -161,6 +162,16 @@ function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log", c
     dead = true;
     off?.();
   };
+}
+
+// A Tauri command, or the mock's answer in the browser.
+async function invokeOr<T>(cmd: string, args: Record<string, unknown>, mocked: () => T): Promise<T> {
+  if (inTauri) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<T>(cmd, args);
+  }
+  await new Promise((r) => setTimeout(r, 0));
+  return mocked();
 }
 
 export const backend = {
@@ -175,6 +186,20 @@ export const backend = {
   onProgress: (cb: (p: ProveProgress) => void) => subscribe("prove-progress", cb),
   onConsole: (cb: (l: ConsoleLine) => void) => subscribe("console-line", cb),
   onEngineLog: (cb: (l: EngineLine) => void) => subscribe("engine-log", cb),
+  // ---- Ask mode (docs/ui/ask-mode.md) ----
+  // The LLM provider in use and whether it answers.
+  llmStatus: () => invokeOr<LlmStatus>("llm_status", {}, () => mockLlmStatus()),
+  llmProviders: () => invokeOr<LlmProviderEntry[]>("llm_providers", {}, () => mockLlmProviders()),
+  // Switch provider for this run of the app (config/llm.toml is not written).
+  llmSelect: (name: string) => invokeOr<LlmStatus>("llm_select", { name }, () => mockLlmSelect(name)),
+  // Start an answer; it streams as onAskDelta events and ends with one
+  // onAskDone, both tagged with `id` (chosen here, so no event is missed).
+  // The backend never runs the suggested command.
+  ask: (id: number, prompt: string, context?: string) =>
+    invokeOr<number>("ask", { id, prompt, context: context ?? null }, () => mockAsk(id, prompt)),
+  askCancel: (id: number) => invokeOr<boolean>("ask_cancel", { id }, () => mockAskCancel(id)),
+  onAskDelta: (cb: (d: AskDelta) => void) => subscribe("ask-delta", cb),
+  onAskDone: (cb: (d: AskDone) => void) => subscribe("ask-done", cb),
   // Tab completion: the active flavor's command names, then property names,
   // starting with `prefix`. Answered without the shell thread, so it works
   // while a prove runs.
