@@ -5,12 +5,47 @@
 //! returns the Tcl result together with the session, which the property
 //! table redraws from. Commands are `async` so a long prove never blocks
 //! the window.
+//!
+//! While a prove runs, the session's progress sink emits "prove-progress"
+//! and "console-line" events to the window, and `shell_stop` sets the
+//! shell's stop flag directly (the shell thread is busy with the prove).
+//! The event contract is in docs/ui/stop-progress.md.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use fdv_fpv::{Flavor, Reply, Request, Session, Worker};
+use fdv_fpv::{Flavor, ProveProgress, ProveSink, Reply, Request, Session, Worker};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::State;
+use std::sync::{Arc, OnceLock};
+use tauri::{AppHandle, Emitter, State};
+
+/// Set once the window exists; events before that (a start-up script's
+/// prove can begin first) are dropped.
+static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// Payload of "console-line".
+#[derive(Clone, Serialize)]
+struct ConsoleLine<'a> {
+    text: &'a str,
+    kind: &'static str,
+}
+
+/// Forwards prove progress from the shell to the window as Tauri events.
+struct EventSink;
+
+impl ProveSink for EventSink {
+    fn progress(&self, p: &ProveProgress) {
+        if let Some(app) = APP.get() {
+            let _ = app.emit("prove-progress", p);
+        }
+    }
+    fn line(&self, text: &str, err: bool) {
+        if let Some(app) = APP.get() {
+            let kind = if err { "err" } else { "out" };
+            let _ = app.emit("console-line", ConsoleLine { text, kind });
+        }
+    }
+}
 
 /// `config/engines.toml` from `FDV_ENGINES`, or the nearest one above the
 /// working directory (the repo root when run with `npm run tauri dev`).
@@ -58,6 +93,15 @@ async fn shell_flavor(w: State<'_, Worker>, flavor: String) -> Result<Reply, Str
     Ok(ask(&w, Request::Flavor(f)).await)
 }
 
+/// Stop the running prove. Not sent through the shell thread, which is
+/// busy proving: this sets the shared stop flag and returns at once. The
+/// prove's own `shell_eval` then returns, after a "stopped" event.
+#[tauri::command]
+async fn shell_stop(w: State<'_, Worker>) -> Result<Reply, String> {
+    w.stop();
+    Ok(Reply { ok: true, result: String::new(), session: serde_json::Value::Null })
+}
+
 /// Design source text for the source view.
 #[tauri::command]
 fn read_text(path: String) -> Result<String, String> {
@@ -87,7 +131,9 @@ fn main() {
             .into_iter()
             .chain(fdv_bmc::engines())
             .collect();
-        Session::new(engines, PathBuf::from("fdv_work"))
+        let mut session = Session::new(engines, PathBuf::from("fdv_work"));
+        session.sink = Some(Arc::new(EventSink));
+        session
     });
     if let Some(p) = script {
         let w = worker.clone();
@@ -99,8 +145,19 @@ fn main() {
         });
     }
     tauri::Builder::default()
+        .setup(|app| {
+            let _ = APP.set(app.handle().clone());
+            Ok(())
+        })
         .manage(worker)
-        .invoke_handler(tauri::generate_handler![snapshot, shell_eval, shell_source, shell_flavor, read_text])
+        .invoke_handler(tauri::generate_handler![
+            snapshot,
+            shell_eval,
+            shell_source,
+            shell_flavor,
+            shell_stop,
+            read_text
+        ])
         .run(tauri::generate_context!())
         .expect("error while running the Formal DV app");
 }

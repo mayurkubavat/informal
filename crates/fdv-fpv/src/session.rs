@@ -12,13 +12,15 @@
 //! assertion or cover gets its own Btor2 model with all assumptions, and
 //! runs through the engine portfolio on its own.
 
+use crate::progress::{ProveSink, Tracker};
 use crate::sva;
 use anyhow::{anyhow, bail, Context};
-use fdv_engine::{portfolio, CheckRequest, Engine, ModelFormat, Verdict};
+use fdv_engine::{portfolio, CheckRequest, Engine, ModelFormat, Progress, Verdict};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -133,6 +135,15 @@ pub struct Session {
     pub yosys: PathBuf,
     /// Front end that built the last prove's models (`slang` or `yosys`).
     pub frontend: String,
+    /// Set from another thread (the app's Stop) to end a running prove:
+    /// checked between properties and forwarded to the engine portfolio,
+    /// whose external engines then kill their process groups. Cleared when
+    /// a prove starts.
+    #[serde(skip)]
+    pub stop: Arc<AtomicBool>,
+    /// Receives live progress while a prove runs (the desktop app).
+    #[serde(skip)]
+    pub sink: Option<Arc<dyn ProveSink>>,
 }
 
 impl Session {
@@ -153,14 +164,20 @@ impl Session {
             hierarchy: Vec::new(),
             yosys: find_yosys(),
             frontend: String::new(),
+            stop: Arc::default(),
+            sink: None,
         }
     }
 
-    /// `clear -all`: forget the design and properties, keep engines.
+    /// `clear -all`: forget the design and properties, keep engines (and
+    /// the front end's stop flag and progress sink).
     pub fn clear(&mut self) {
         let engines = std::mem::take(&mut self.engines);
         let workdir = std::mem::take(&mut self.workdir);
+        let (stop, sink) = (self.stop.clone(), self.sink.take());
         *self = Session::new(engines, workdir);
+        self.stop = stop;
+        self.sink = sink;
     }
 
     pub fn add_property(
@@ -435,7 +452,15 @@ impl Session {
 
     /// Prove the selected assertions and covers (all enabled ones when
     /// `which` is empty). Returns their indices.
+    ///
+    /// Stop (`self.stop`) ends the run: the running property's portfolio is
+    /// cancelled, and it and every property not reached yet become
+    /// undetermined with reason "stopped". Elaboration and model building
+    /// (slang, Yosys) are not interrupted; a Stop during them takes effect
+    /// at the first engine run.
     pub fn prove(&mut self, which: &[usize]) -> anyhow::Result<Vec<usize>> {
+        // A Stop pressed while nothing ran must not cancel this prove.
+        self.stop.store(false, Ordering::SeqCst);
         if !self.elaborated {
             self.elaborate(None)?;
         }
@@ -450,31 +475,107 @@ impl Session {
                 .filter(|&i| self.props[i].kind != Kind::Assume)
                 .collect()
         };
-        let files = self.injected_files()?;
+        let tracker = self.sink.clone().map(|sink| {
+            Tracker::start(sink, targets.iter().map(|&i| self.props[i].name.clone()))
+        });
+        let files = match self.injected_files() {
+            Ok(f) => f,
+            Err(e) => {
+                if let Some(t) = &tracker {
+                    t.end(false);
+                }
+                return Err(e);
+            }
+        };
         let engines = self.engines();
         let lowered = self.lower_with_slang(&files, &targets);
         self.frontend = if lowered.is_some() { "slang" } else { "yosys" }.into();
-        for &i in &targets {
+
+        // Heartbeat for the UI while the loop runs, so elapsed times move
+        // between property events.
+        let looping = AtomicBool::new(true);
+        let reached = std::thread::scope(|sc| {
+            if let Some(t) = &tracker {
+                let looping = &looping;
+                sc.spawn(move || {
+                    let mut n = 0u32;
+                    while looping.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(100));
+                        n += 1;
+                        if n.is_multiple_of(5) && looping.load(Ordering::SeqCst) {
+                            t.tick();
+                        }
+                    }
+                });
+            }
+            let r = self.prove_targets(&targets, &files, lowered.as_deref(), &engines, tracker.as_ref());
+            looping.store(false, Ordering::SeqCst);
+            r
+        });
+        // A Stop that came while the last property finished still counts.
+        let stopped = reached < targets.len() || self.stop.load(Ordering::SeqCst);
+        for &i in &targets[reached..] {
+            self.props[i].status = Status::Undetermined { reason: "stopped".into() };
+        }
+        if let Some(t) = &tracker {
+            t.end(stopped);
+        }
+        Ok(targets)
+    }
+
+    /// The per-property loop of [`Self::prove`]. Returns how many targets
+    /// it got through; fewer than all means a Stop ended it.
+    fn prove_targets(
+        &mut self,
+        targets: &[usize],
+        files: &[PathBuf],
+        lowered: Option<&str>,
+        engines: &[Arc<dyn Engine>],
+        tracker: Option<&Tracker>,
+    ) -> usize {
+        for (slot, &i) in targets.iter().enumerate() {
+            if self.stop.load(Ordering::SeqCst) {
+                return slot;
+            }
+            if let Some(t) = tracker {
+                t.running(slot);
+            }
             // Properties added before elaboration are checked now.
             if let Err(e) = self.check_names(&self.props[i].expr) {
-                self.props[i].status = Status::Error { message: e };
+                let status = Status::Error { message: e };
+                if let Some(t) = tracker {
+                    t.finished(slot, &status);
+                }
+                self.props[i].status = status;
                 continue;
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
-            let built = match &lowered {
+            let built = match lowered {
                 Some(btor) => std::fs::write(&out, only_bad(btor, &format!("fdv_p{i}")))
                     .map_err(anyhow::Error::from),
-                None => self.run_yosys(&files, &[format!("FDV_P{i}")], &out),
+                None => self.run_yosys(files, &[format!("FDV_P{i}")], &out),
             };
-            let status = match built {
+            let mut status = match built {
                 Err(e) => Status::Error {
                     message: format!("{e:#}"),
                 },
-                Ok(()) => self.check_one(&engines, i, &out),
+                Ok(()) => self.check_one(engines, i, &out, tracker.map(|t| (t, slot))),
             };
+            // Stopped mid-run: the portfolio came back without a verdict.
+            // A verdict that landed just before the Stop is kept.
+            let halt = self.stop.load(Ordering::SeqCst);
+            if halt && matches!(status, Status::Undetermined { .. }) {
+                status = Status::Undetermined { reason: "stopped".into() };
+            }
+            if let Some(t) = tracker {
+                t.finished(slot, &status);
+            }
             self.props[i].status = status;
+            if halt {
+                return slot + 1;
+            }
         }
-        Ok(targets)
+        targets.len()
     }
 
     /// One Btor2 model with every target's assertion (by slang), or `None`
@@ -504,7 +605,15 @@ impl Session {
         None
     }
 
-    fn check_one(&self, engines: &[Arc<dyn Engine>], i: usize, model: &Path) -> Status {
+    /// Run the portfolio on one property's model. With a tracker, engine
+    /// progress (k-bound) is forwarded to it for `slot`.
+    fn check_one(
+        &self,
+        engines: &[Arc<dyn Engine>],
+        i: usize,
+        model: &Path,
+        tracker: Option<(&Tracker, usize)>,
+    ) -> Status {
         let kind = self.props[i].kind;
         let bads = std::fs::read_to_string(model)
             .map(|t| {
@@ -531,7 +640,20 @@ impl Session {
             format: ModelFormat::Btor2,
             timeout: self.time_limit,
         };
-        let o = portfolio::run(engines, &req, None);
+        let stop = Some(self.stop.as_ref());
+        let o = match tracker {
+            None => portfolio::run_until(engines, &req, None, stop),
+            Some((t, slot)) => std::thread::scope(|sc| {
+                let (tx, rx) = mpsc::channel::<Progress>();
+                // Ends when the portfolio returns and drops the last sender.
+                sc.spawn(move || {
+                    for p in rx {
+                        t.bound(slot, &p.engine, p.bound);
+                    }
+                });
+                portfolio::run_until(engines, &req, Some(tx), stop)
+            }),
+        };
         let engine = o
             .winner
             .as_ref()

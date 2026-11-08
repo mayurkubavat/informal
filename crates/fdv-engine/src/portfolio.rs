@@ -6,9 +6,10 @@
 
 use crate::{CheckRequest, Engine, EngineResult, Progress, RunContext, Verdict};
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize)]
 pub struct PortfolioOutcome {
@@ -29,6 +30,19 @@ pub fn run(
     req: &CheckRequest,
     progress: Option<mpsc::Sender<Progress>>,
 ) -> PortfolioOutcome {
+    run_until(engines, req, progress, None)
+}
+
+/// [`run`], also cancelled when `stop` becomes true (a user's Stop). The
+/// flag belongs to the caller and is only read here: the run's own
+/// [`crate::CancelToken`] is still what engines see, so taking a winner does
+/// not set `stop`. External engines poll it and kill their process group.
+pub fn run_until(
+    engines: &[Arc<dyn Engine>],
+    req: &CheckRequest,
+    progress: Option<mpsc::Sender<Progress>>,
+    stop: Option<&AtomicBool>,
+) -> PortfolioOutcome {
     let start = Instant::now();
     let mut ctx = RunContext::new(req.timeout);
     ctx.progress = progress;
@@ -40,7 +54,21 @@ pub fn run(
         .cloned()
         .collect();
 
+    let finished = AtomicBool::new(false);
     std::thread::scope(|s| {
+        if let Some(stop) = stop {
+            // Forward the caller's flag to this run's token until it ends.
+            let (cancel, finished) = (ctx.cancel.clone(), &finished);
+            s.spawn(move || {
+                while !finished.load(Ordering::SeqCst) {
+                    if stop.load(Ordering::SeqCst) {
+                        cancel.cancel();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+        }
         for engine in &eligible {
             let (tx, ctx, engine) = (tx.clone(), ctx.clone(), engine.clone());
             s.spawn(move || {
@@ -81,6 +109,7 @@ pub fn run(
             }
             out.runs.push(r);
         }
+        finished.store(true, Ordering::SeqCst);
         out.wall_ms = start.elapsed().as_millis();
         out
     })
@@ -176,6 +205,35 @@ mod tests {
             o.wall_ms
         );
         assert_eq!(o.runs.len(), 2);
+    }
+
+    #[test]
+    fn a_stop_flag_cancels_the_run_and_is_left_alone() {
+        let engines: Vec<Arc<dyn Engine>> = vec![Arc::new(Fake {
+            name: "slow",
+            delay_ms: 5_000,
+            verdict: Verdict::Safe,
+        })];
+        let stop = AtomicBool::new(false);
+        let o = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                stop.store(true, Ordering::SeqCst);
+            });
+            run_until(&engines, &req(), None, Some(&stop))
+        });
+        assert!(o.winner.is_none());
+        assert!(o.wall_ms < 2_000, "stop was not honoured: {} ms", o.wall_ms);
+        assert!(matches!(verdict(&o), Verdict::Unknown { .. }));
+        // A winner cancelling its rivals must not raise the caller's flag.
+        let stop = AtomicBool::new(false);
+        let fast: Vec<Arc<dyn Engine>> = vec![Arc::new(Fake {
+            name: "fast",
+            delay_ms: 0,
+            verdict: Verdict::Safe,
+        })];
+        run_until(&fast, &req(), None, Some(&stop));
+        assert!(!stop.load(Ordering::SeqCst));
     }
 
     #[test]
