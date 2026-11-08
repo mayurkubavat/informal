@@ -15,6 +15,7 @@
 use crate::progress::{ProveSink, Tracker};
 use crate::sva;
 use anyhow::{anyhow, bail, Context};
+use fdv_engine::portfolio::EngineRun;
 use fdv_engine::{portfolio, CheckRequest, Engine, ModelFormat, Progress, Verdict};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -104,6 +105,10 @@ pub struct Property {
     /// that created it, when that ran from a sourced file. `None` for
     /// properties typed at the console.
     pub source: Option<SourceLoc>,
+    /// The last prove's per-engine record: each portfolio engine's outcome
+    /// (won/lost/timeout/killed/error), time and depth reached. Empty
+    /// before a prove, or when no engine ran (elaboration, errors).
+    pub engines: Vec<EngineRun>,
 }
 
 /// A file and 1-based line (absolute path).
@@ -246,6 +251,7 @@ impl Session {
             status: Status::Unprocessed,
             trace: None,
             source: None,
+            engines: Vec::new(),
         });
         Ok(name)
     }
@@ -568,6 +574,7 @@ impl Session {
         for &i in &targets[reached..] {
             self.props[i].status = Status::Undetermined { reason: "stopped".into() };
             self.props[i].trace = None;
+            self.props[i].engines.clear();
         }
         if let Some(t) = &tracker {
             t.end(stopped);
@@ -596,9 +603,10 @@ impl Session {
             if let Err(e) = self.check_names(&self.props[i].expr) {
                 let status = Status::Error { message: e };
                 if let Some(t) = tracker {
-                    t.finished(slot, &status);
+                    t.finished(slot, &status, &[]);
                 }
                 self.props[i].status = status;
+                self.props[i].engines.clear();
                 continue;
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
@@ -620,12 +628,13 @@ impl Session {
                 }
             };
             self.props[i].trace = None;
-            let (mut status, trace) = match built {
+            let (mut status, trace, runs) = match built {
                 Err(e) => (
                     Status::Error {
                         message: format!("{e:#}"),
                     },
                     None,
+                    Vec::new(),
                 ),
                 Ok(()) => self.check_one(engines, i, &out, tracker.map(|t| (t, slot))),
             };
@@ -636,10 +645,11 @@ impl Session {
                 status = Status::Undetermined { reason: "stopped".into() };
             }
             if let Some(t) = tracker {
-                t.finished(slot, &status);
+                t.finished(slot, &status, &runs);
             }
             self.props[i].status = status;
             self.props[i].trace = trace;
+            self.props[i].engines = runs;
             if halt {
                 return slot + 1;
             }
@@ -680,14 +690,15 @@ impl Session {
 
     /// Run the portfolio on one property's model. With a tracker, engine
     /// progress (k-bound) is forwarded to it for `slot`. A CEX or cover
-    /// also gets its trace written (the path is returned with the status).
+    /// also gets its trace written (the path is returned with the status),
+    /// and every engine's run is returned for the proof profiler.
     fn check_one(
         &self,
         engines: &[Arc<dyn Engine>],
         i: usize,
         model: &Path,
         tracker: Option<(&Tracker, usize)>,
-    ) -> (Status, Option<String>) {
+    ) -> (Status, Option<String>, Vec<EngineRun>) {
         let kind = self.props[i].kind;
         let bads = std::fs::read_to_string(model)
             .map(|t| {
@@ -708,7 +719,7 @@ impl Session {
                     ms: 0,
                 },
             };
-            return (status, None);
+            return (status, None, Vec::new());
         }
         let req = CheckRequest {
             model: model.to_path_buf(),
@@ -758,7 +769,7 @@ impl Session {
                 }
             }
         }
-        (status, trace)
+        (status, trace, o.profile)
     }
 
     /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the

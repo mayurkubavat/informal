@@ -71,6 +71,15 @@ for (const s of sizes)
         await shot(page, n("completion"));
       });
 
+      test("profiler tab", async ({ page }) => {
+        await ready(page);
+        await proveAll(page);
+        await page.locator("table.grid tbody tr").filter({ hasText: "a_never9" }).click();
+        await page.keyboard.press("Control+5");
+        await expect(page.locator(".profiler tbody tr")).toHaveCount(7);
+        await shot(page, n("profiler"));
+      });
+
       test("source tab", async ({ page }) => {
         await ready(page);
         await page.getByRole("tab", { name: "counter.sv" }).click();

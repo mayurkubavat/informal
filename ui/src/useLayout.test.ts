@@ -23,8 +23,8 @@ describe("parseLayout", () => {
     expect(parseLayout('"x"', 900)).toEqual(DEFAULT_LAYOUT);
   });
   it("restores valid fields, clamping sizes", () => {
-    const raw = JSON.stringify({ leftW: 900, bottomH: 50, leftOpen: false, left: "design", center: "source", bottom: "messages" });
-    expect(parseLayout(raw, 900)).toEqual({ leftW: 480, bottomH: 120, leftOpen: false, left: "design", center: "source", bottom: "messages" });
+    const raw = JSON.stringify({ leftW: 900, bottomH: 50, leftOpen: false, left: "design", center: "source", bottom: "messages", profiler: false });
+    expect(parseLayout(raw, 900)).toEqual({ leftW: 480, bottomH: 120, leftOpen: false, left: "design", center: "source", bottom: "messages", profiler: false });
   });
   it("drops invalid fields one by one", () => {
     const raw = JSON.stringify({ leftW: "wide", bottomH: null, leftOpen: "yes", left: "files", center: 3, bottom: "details" });

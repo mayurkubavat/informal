@@ -8,6 +8,7 @@
 //! event carries the whole run, so a listener can redraw from any one.
 
 use crate::session::Status;
+use fdv_engine::portfolio::EngineRun;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -33,6 +34,10 @@ pub struct PropProgress {
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Every portfolio engine's run once the property finished (the proof
+    /// profiler); empty, and left out, before that.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub engines: Vec<EngineRun>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -97,6 +102,7 @@ fn queued(name: String, kind: &'static str) -> PropProgress {
         ms: None,
         reason: None,
         message: None,
+        engines: Vec::new(),
     }
 }
 
@@ -228,12 +234,14 @@ impl Tracker {
         self.emit(ProgressKind::Update);
     }
 
-    /// The property in `slot` finished with `status`.
-    pub fn finished(&self, slot: usize, status: &Status) {
+    /// The property in `slot` finished with `status`; `engines` is the
+    /// portfolio's per-engine record (empty when no engine ran).
+    pub fn finished(&self, slot: usize, status: &Status, engines: &[EngineRun]) {
         let line = {
             let mut slots = self.slots.lock().unwrap();
             let Some(s) = slots.get_mut(slot) else { return };
             s.p = from_status(&s.p.name, s.p.kind, status);
+            s.p.engines = engines.to_vec();
             s.since = None;
             line_for(&s.p)
         };
@@ -300,7 +308,13 @@ mod tests {
         t.running(0);
         t.bound(0, "bmc", Some(5));
         t.bound(0, "bmc", Some(3)); // not deeper: ignored
-        t.finished(0, &Status::Cex { engine: "bmc".into(), depth: Some(7), ms: 12 });
+        let runs = [EngineRun {
+            engine: "bmc".into(),
+            outcome: fdv_engine::portfolio::RunOutcome::Won,
+            ms: 12,
+            depth: Some(7),
+        }];
+        t.finished(0, &Status::Cex { engine: "bmc".into(), depth: Some(7), ms: 12 }, &runs);
         t.end(false);
         let ev = rec.events.lock().unwrap();
         let kinds: Vec<_> = ev.iter().map(|e| e.kind).collect();
@@ -317,6 +331,8 @@ mod tests {
         assert_eq!(json["kind"], "done");
         assert!(json["props"][1].get("engine").is_none());
         assert_eq!(json["props"][1]["kind"], "cover");
+        assert_eq!(json["props"][0]["engines"][0]["outcome"], "won");
+        assert!(json["props"][1].get("engines").is_none());
     }
 
     #[test]
@@ -327,7 +343,7 @@ mod tests {
             [("a".to_string(), "assert"), ("b".to_string(), "assert"), ("c".to_string(), "cover")],
         );
         t.running(0);
-        t.finished(0, &Status::Proven { engine: "ic3".into(), ms: 3 });
+        t.finished(0, &Status::Proven { engine: "ic3".into(), ms: 3 }, &[]);
         t.running(1);
         t.end(true);
         let ev = rec.events.lock().unwrap();

@@ -31,6 +31,22 @@ export interface Property {
   // in the design. Absent or null for properties typed at the console; the
   // UI then falls back to searching the top file (model.ts locate).
   source?: SourceLoc | null;
+  // The last prove's portfolio record, one entry per engine that ran (the
+  // proof profiler). Absent or empty before a prove.
+  engines?: EngineRun[];
+}
+
+// How one portfolio engine's run on a property ended (fdv-engine
+// portfolio::EngineRun): the winner, a loser that finished, one out of
+// time, one cancelled by the winner or a Stop, or one that failed to run.
+export type RunOutcome = "won" | "lost" | "timeout" | "killed" | "error";
+export interface EngineRun {
+  engine: string;
+  outcome: RunOutcome;
+  // Wall time from the start of the portfolio until the engine returned.
+  ms: number;
+  // CEX depth for an unsafe verdict, else the deepest bound it reported.
+  depth?: number | null;
 }
 
 export interface SourceLoc {
@@ -75,6 +91,8 @@ export interface PropProgress {
   ms?: number;
   reason?: string;
   message?: string;
+  // Present once the property finished (the portfolio's per-engine record).
+  engines?: EngineRun[];
 }
 export interface ProveProgress {
   kind: ProgressKind;

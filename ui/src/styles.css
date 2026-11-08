@@ -516,3 +516,14 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .log-lines .stdout { color: var(--text); }
 .log-lines .stderr { color: var(--muted); }
 .log-tag { display: inline-block; min-width: 22ch; padding-right: 1ch; color: var(--muted); user-select: none; }
+
+/* ---- proof profiler (bottom dock): plain grey bars, the winner's in --text ---- */
+.profiler { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); flex: 1; min-height: 0; }
+.prof-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; }
+.prof-pane + .prof-pane { border-left: 1px solid var(--border); }
+.prof-head { padding: 4px 8px; border-bottom: 1px solid var(--border); color: var(--text-2); flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prof-table .prof-barcol { width: 34%; min-width: 80px; }
+.prof-track { display: block; height: 8px; background: transparent; }
+.prof-bar { display: block; height: 100%; min-width: 1px; background: var(--border-strong); border-radius: 1px; }
+.prof-bar.win { background: var(--text); }
+.prof-won td:first-child { font-weight: 600; }

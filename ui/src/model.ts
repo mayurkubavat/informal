@@ -1,7 +1,7 @@
 // Pure view-model helpers shared by the workbench components: status words,
 // table cell text, sort keys, and light source scanning. No React here.
 
-import type { PropStatus, Property, ProveProgress, StatusWord } from "./backend";
+import type { EngineRun, PropStatus, Property, ProveProgress, StatusWord } from "./backend";
 
 // What a row shows: the backend's status words plus "running", which only
 // exists in the view while a prove's progress events say so.
@@ -17,7 +17,7 @@ export type LogLine = { kind: "in" | "out" | "err"; text: string };
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
 export type Theme = "system" | "light" | "dark";
 export type Center = "table" | "source" | "trace";
-export type BottomTab = "console" | "details" | "messages" | "log";
+export type BottomTab = "console" | "details" | "messages" | "log" | "profiler";
 export type LeftTab = "tasks" | "design";
 export type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time";
 export type StatusFilter = ViewStatus | "assume" | null;
@@ -108,14 +108,15 @@ export const guessKind = (name: string): "assert" | "cover" => (/^(c_|cover)/i.t
 export function withProgress(props: Property[], prog: ProveProgress | null): ViewProp[] {
   if (!prog) return props;
   const live = new Map(prog.props.map((q) => [q.name, q]));
-  const statusOf = ({ name: _, kind: __, ...status }: ProveProgress["props"][number]) => status;
+  const statusOf = ({ name: _, kind: __, engines: ___, ...status }: ProveProgress["props"][number]) => status;
   const known = new Set(props.map((p) => p.name));
   const extra: ViewProp[] = prog.props
     .filter((q) => !known.has(q.name))
-    .map((q) => ({ name: q.name, kind: q.kind ?? guessKind(q.name), expr: "", enabled: true, status: statusOf(q), provisional: true }));
+    .map((q) => ({ name: q.name, kind: q.kind ?? guessKind(q.name), expr: "", enabled: true, status: statusOf(q), engines: q.engines ?? [], provisional: true }));
+  // A property in the run shows the run's engine record (none until it ends).
   const merged: ViewProp[] = props.map((p) => {
     const q = live.get(p.name);
-    return q ? { ...p, status: statusOf(q) } : p;
+    return q ? { ...p, status: statusOf(q), engines: q.engines ?? [] } : p;
   });
   return extra.length ? [...merged, ...extra] : merged;
 }
@@ -206,3 +207,29 @@ export function parsePorts(text: string): Port[] {
   }
   return out;
 }
+
+// ---- proof profiler ----
+// Per engine over a set of properties: how many it ran on and won, its total
+// time, and its mean time-to-win (over wins only; null without any).
+export type EngineSummary = { engine: string; runs: number; wins: number; totalMs: number; meanWinMs: number | null };
+export function profileSummary(props: { engines?: EngineRun[] }[]): EngineSummary[] {
+  const by = new Map<string, { runs: number; wins: number; totalMs: number; winMs: number }>();
+  for (const p of props)
+    for (const r of p.engines ?? []) {
+      const e = by.get(r.engine) ?? { runs: 0, wins: 0, totalMs: 0, winMs: 0 };
+      e.runs++;
+      e.totalMs += r.ms;
+      if (r.outcome === "won") {
+        e.wins++;
+        e.winMs += r.ms;
+      }
+      by.set(r.engine, e);
+    }
+  return [...by]
+    .map(([engine, e]) => ({ engine, runs: e.runs, wins: e.wins, totalMs: e.totalMs, meanWinMs: e.wins ? e.winMs / e.wins : null }))
+    .sort((a, b) => b.wins - a.wins || a.totalMs - b.totalMs || a.engine.localeCompare(b.engine));
+}
+// A bar's share of the longest time in its table, 0..1 (0 for an empty set).
+export const barShare = (ms: number, maxMs: number) => (maxMs > 0 ? Math.max(0, Math.min(1, ms / maxMs)) : 0);
+// Milliseconds as the profiler shows them: "41 ms" under a second, else seconds.
+export const msText = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`);

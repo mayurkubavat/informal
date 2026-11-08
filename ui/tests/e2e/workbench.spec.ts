@@ -319,7 +319,7 @@ test.describe("keyboard model", () => {
   test("Help > Keyboard shortcuts prints the list in the console", async ({ page }) => {
     await page.getByRole("menuitem", { name: "Help", exact: true }).click();
     await page.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
-    await expect(page.locator(".console-log")).toContainText("Ctrl+1..4");
+    await expect(page.locator(".console-log")).toContainText("Ctrl+1..5");
     await expect(page.locator(".console-log")).toContainText("Prove selected");
   });
 });
@@ -388,6 +388,51 @@ test.describe("engine log", () => {
     await expect(log(page).locator(".line")).not.toHaveCount(0);
     await expect(page.getByRole("checkbox", { name: "Autoscroll" })).not.toBeChecked();
     await expect.poll(() => log(page).evaluate((el) => el.scrollTop)).toBe(0);
+  });
+});
+
+test.describe("proof profiler", () => {
+  const profTab = (page: Page) => page.getByRole("tab", { name: "Profiler", exact: true });
+  const selPane = (page: Page) => page.getByRole("region", { name: "Engines on the selected property" });
+  const runPane = (page: Page) => page.getByRole("region", { name: "Engines over the run" });
+
+  test("Tools > Proof profiler adds the tab; × removes it", async ({ page }) => {
+    await expect(profTab(page)).toHaveCount(0);
+    await page.getByRole("menuitem", { name: "Tools", exact: true }).click();
+    await page.getByRole("menuitem", { name: /Proof profiler/ }).click();
+    await expect(profTab(page)).toHaveAttribute("aria-selected", "true");
+    await expect(runPane(page)).toContainText("No profile yet");
+    await page.getByRole("button", { name: "Close Profiler" }).click();
+    await expect(profTab(page)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Console" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("Ctrl+5 shows each engine on the selected property and the run summary", async ({ page }) => {
+    await proveAll(page);
+    await page.keyboard.press("Control+5");
+    await expect(profTab(page)).toHaveAttribute("aria-selected", "true");
+    await expect(runPane(page)).toContainText("5 properties profiled");
+    const summaryRows = runPane(page).locator("tbody tr");
+    await expect(summaryRows).toHaveCount(4);
+    await expect(summaryRows.first()).toContainText("ric3-bmc");
+    await row(page, "a_never9").click();
+    // Selecting a row opens Details; come back to the profiler.
+    await page.keyboard.press("Control+5");
+    await expect(selPane(page)).toContainText("Engines on a_never9");
+    const runs = selPane(page).locator("tbody tr");
+    await expect(runs).toHaveCount(3);
+    await expect(runs.nth(1)).toHaveText(/ric3-bmc\s*Won\s*30 ms\s*11/);
+    await expect(runs.nth(0)).toContainText("Killed");
+    await expect(selPane(page).locator(".prof-bar.win")).toHaveCount(1);
+  });
+
+  test("the tab persists across reloads and has no axe violations", async ({ page }) => {
+    await page.keyboard.press("Control+5");
+    await page.reload();
+    await expect(profTab(page)).toHaveAttribute("aria-selected", "true");
+    await proveAll(page);
+    const r = await new AxeBuilder({ page }).include(".profiler").analyze();
+    expect(r.violations.filter((v) => v.impact === "serious" || v.impact === "critical")).toEqual([]);
   });
 });
 

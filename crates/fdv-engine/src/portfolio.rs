@@ -6,7 +6,9 @@
 
 use crate::{CheckRequest, Engine, EngineResult, Progress, RunContext, Verdict};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +23,43 @@ pub struct PortfolioOutcome {
     /// Engines that gave contradicting definitive verdicts. Non-empty
     /// means an engine is unsound and the result must not be trusted.
     pub conflicts: Vec<String>,
+    /// One record per engine that ran, in the order the engines were given:
+    /// how it ended, its time and the depth it reached (the proof profiler).
+    pub profile: Vec<EngineRun>,
 }
+
+/// How one engine's run in a portfolio ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunOutcome {
+    /// Gave the verdict the portfolio reported.
+    Won,
+    /// Finished without winning: a later definitive verdict, or it gave up.
+    Lost,
+    /// Ran out of the time budget.
+    Timeout,
+    /// Cancelled because another engine won or the user stopped the run.
+    Killed,
+    /// Failed to run (the engine's error text is in `runs`).
+    Error,
+}
+
+/// One engine's part in a portfolio run (see [`PortfolioOutcome::profile`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EngineRun {
+    pub engine: String,
+    pub outcome: RunOutcome,
+    /// Wall time from the portfolio's start until the engine returned.
+    pub ms: u128,
+    /// The CEX depth for an unsafe verdict, else the deepest bound (BMC
+    /// depth, IC3 frame) the engine reported while it ran, when it did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
+}
+
+/// An engine's run as received: its slot, name, ms, outcome when already
+/// known (definitive verdicts are sorted out once the winner is), depth.
+type RawRun = (usize, String, u128, Option<RunOutcome>, Option<u32>);
 
 /// Run `engines` on `req` in parallel threads. Engines that do not accept
 /// the model format are skipped. `progress` receives every engine's reports.
@@ -45,7 +83,11 @@ pub fn run_until(
 ) -> PortfolioOutcome {
     let start = Instant::now();
     let mut ctx = RunContext::new(req.timeout);
-    ctx.progress = progress;
+    // Engines report to this run; a forwarder keeps each engine's deepest
+    // bound for the profile and passes reports on to the caller.
+    let (ptx, prx) = mpsc::channel::<Progress>();
+    ctx.progress = Some(ptx);
+    let bounds: Mutex<HashMap<String, u32>> = Mutex::default();
     let (tx, rx) = mpsc::channel();
 
     let eligible: Vec<_> = engines
@@ -55,7 +97,20 @@ pub fn run_until(
         .collect();
 
     let finished = AtomicBool::new(false);
-    std::thread::scope(|s| {
+    let (mut out, mut profile) = std::thread::scope(|s| {
+        let bounds_w = &bounds;
+        s.spawn(move || {
+            for p in prx {
+                if let (Some(b), None) = (p.bound, &p.output) {
+                    let mut m = bounds_w.lock().unwrap();
+                    let e = m.entry(p.engine.clone()).or_insert(b);
+                    *e = (*e).max(b);
+                }
+                if let Some(out) = &progress {
+                    let _ = out.send(p);
+                }
+            }
+        });
         if let Some(stop) = stop {
             // Forward the caller's flag to this run's token until it ends.
             let (cancel, finished) = (ctx.cancel.clone(), &finished);
@@ -69,24 +124,48 @@ pub fn run_until(
                 }
             });
         }
-        for engine in &eligible {
+        for (slot, engine) in eligible.iter().enumerate() {
             let (tx, ctx, engine) = (tx.clone(), ctx.clone(), engine.clone());
             s.spawn(move || {
                 let r = engine
                     .check(req, &ctx)
                     .map_err(|e| format!("{}: {e:#}", engine.name()));
-                let _ = tx.send(r);
+                let _ = tx.send((slot, engine.name().to_string(), start.elapsed().as_millis(), r));
             });
         }
         drop(tx);
+        // Only the engines' clones keep the forwarder alive now.
+        ctx.progress = None;
 
         let mut out = PortfolioOutcome {
             winner: None,
             runs: Vec::new(),
             wall_ms: 0,
             conflicts: Vec::new(),
+            profile: Vec::new(),
         };
-        for r in rx {
+        let mut profile: Vec<RawRun> = Vec::new();
+        for (slot, name, ms, r) in rx {
+            // Decided before this result can cancel the others.
+            let cancelled = ctx.cancel.is_cancelled();
+            let (outcome, depth) = match &r {
+                Err(_) => (Some(RunOutcome::Error), None),
+                Ok(res) => match &res.verdict {
+                    Verdict::Unsafe { depth } => (None, *depth),
+                    Verdict::Safe => (None, None),
+                    Verdict::Unknown { reason } => {
+                        let o = if cancelled {
+                            RunOutcome::Killed
+                        } else if Instant::now() >= ctx.deadline || reason.contains("timeout") {
+                            RunOutcome::Timeout
+                        } else {
+                            RunOutcome::Lost
+                        };
+                        (Some(o), None)
+                    }
+                },
+            };
+            profile.push((slot, name, ms, outcome, depth));
             if let Ok(res) = &r {
                 if res.verdict.is_definitive() {
                     match &out.winner {
@@ -110,9 +189,27 @@ pub fn run_until(
             out.runs.push(r);
         }
         finished.store(true, Ordering::SeqCst);
-        out.wall_ms = start.elapsed().as_millis();
-        out
-    })
+        (out, profile)
+    });
+    // Every thread has joined, so the forwarder has seen every bound.
+    out.wall_ms = start.elapsed().as_millis();
+    let winner = out.winner.as_ref().map(|w| w.engine.clone());
+    let bounds = bounds.into_inner().unwrap();
+    profile.sort_by_key(|p| p.0);
+    out.profile = profile
+        .into_iter()
+        .map(|(_, engine, ms, outcome, depth)| {
+            // Definitive verdicts: the winner won, the rest lost.
+            let outcome = outcome.unwrap_or(if winner.as_deref() == Some(engine.as_str()) {
+                RunOutcome::Won
+            } else {
+                RunOutcome::Lost
+            });
+            let depth = depth.or_else(|| bounds.get(&engine).copied());
+            EngineRun { engine, outcome, ms, depth }
+        })
+        .collect();
+    out
 }
 
 /// Convenience: the verdict to report for a portfolio outcome.
@@ -152,7 +249,16 @@ mod tests {
             }
         }
         fn check(&self, _req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
+            if self.name == "broken" {
+                anyhow::bail!("cannot start");
+            }
             let t = Instant::now();
+            ctx.report(Progress {
+                engine: self.name.into(),
+                bound: Some(3),
+                note: String::new(),
+                output: None,
+            });
             while t.elapsed() < Duration::from_millis(self.delay_ms) {
                 if ctx.should_stop() {
                     let reason = "cancelled".to_string();
@@ -205,6 +311,40 @@ mod tests {
             o.wall_ms
         );
         assert_eq!(o.runs.len(), 2);
+    }
+
+    #[test]
+    fn the_profile_records_each_engines_outcome_time_and_depth() {
+        let engines: Vec<Arc<dyn Engine>> = vec![
+            Arc::new(Fake { name: "slow", delay_ms: 5_000, verdict: Verdict::Safe }),
+            Arc::new(Fake { name: "fast", delay_ms: 20, verdict: Verdict::Unsafe { depth: Some(7) } }),
+            Arc::new(Fake { name: "broken", delay_ms: 0, verdict: Verdict::Safe }),
+        ];
+        let (tx, rx) = mpsc::channel();
+        let o = run(&engines, &req(), Some(tx));
+        let p: Vec<_> = o.profile.iter().map(|r| (r.engine.as_str(), r.outcome, r.depth)).collect();
+        assert_eq!(
+            p,
+            [
+                ("slow", RunOutcome::Killed, Some(3)),
+                ("fast", RunOutcome::Won, Some(7)),
+                ("broken", RunOutcome::Error, None),
+            ]
+        );
+        assert!(o.profile[1].ms >= 20 && o.profile[1].ms <= o.wall_ms);
+        // Reports still reach the caller.
+        assert_eq!(rx.iter().filter(|p| p.bound == Some(3)).count(), 2);
+        let json = serde_json::to_value(&o.profile[2]).unwrap();
+        assert_eq!(json, serde_json::json!({"engine": "broken", "outcome": "error", "ms": o.profile[2].ms}));
+    }
+
+    #[test]
+    fn engines_out_of_time_are_timeouts() {
+        let engines: Vec<Arc<dyn Engine>> = vec![Arc::new(Fake { name: "slow", delay_ms: 5_000, verdict: Verdict::Safe })];
+        let mut r = req();
+        r.timeout = Duration::from_millis(50);
+        let o = run(&engines, &r, None);
+        assert_eq!(o.profile[0].outcome, RunOutcome::Timeout);
     }
 
     #[test]

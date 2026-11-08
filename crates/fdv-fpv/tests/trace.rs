@@ -61,7 +61,7 @@ fn prove_counter(engine: &str, tag: &str) -> Option<Shell> {
     Some(sh)
 }
 
-fn check_counter_traces(sh: &Shell) {
+fn check_counter_traces(sh: &Shell, engine: &str) {
     let s = sh.session.borrow();
     let get = |n: &str| s.props.iter().find(|p| p.name == n).unwrap();
     for name in ["a_never9", "c_done"] {
@@ -92,12 +92,18 @@ fn check_counter_traces(sh: &Shell) {
     assert_eq!(get("m_en_burst").trace, None);
     let json = serde_json::to_value(&*s).unwrap();
     assert!(json["props"][0]["trace"].as_str().unwrap().ends_with("a_never9.vcd"));
+    // The proof profiler's record: the one engine ran and won.
+    let runs = json["props"][0]["engines"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0]["engine"], *engine);
+    assert_eq!(runs[0]["outcome"], "won");
+    assert!(runs[0]["ms"].as_u64().is_some());
 }
 
 #[test]
 fn counter_traces_from_bmc_witness() {
     let Some(sh) = prove_counter("fdv-bmc", "bmc") else { return };
-    check_counter_traces(&sh);
+    check_counter_traces(&sh, "fdv-bmc");
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
 }
 
@@ -106,6 +112,6 @@ fn counter_traces_when_the_winner_has_no_witness() {
     // fdv-kind finds the counterexamples in its base case but exports no
     // witness, so the session re-runs BMC for the trace.
     let Some(sh) = prove_counter("fdv-kind", "kind") else { return };
-    check_counter_traces(&sh);
+    check_counter_traces(&sh, "fdv-kind");
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
+import { MOCK_ENGINES, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
 import type { ConsoleLine, EngineLine, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
@@ -115,7 +115,9 @@ describe("browser mock: live progress and stop", () => {
     mockOptions.tick = 0;
     await mock("shell_eval", { script: "prove -property c_10" });
     expect(events.map((e) => e.kind)).toEqual(["start", "done"]);
-    expect(events[1].props).toEqual([{ name: "c_10", kind: "cover", status: "unreachable", engine: "ric3-ic3", ms: 29 }]);
+    expect(events[1].props).toEqual([{ name: "c_10", kind: "cover", status: "unreachable", engine: "ric3-ic3", ms: 29, engines: MOCK_ENGINES.c_10 }]);
+    // The session's property carries the same portfolio record.
+    expect((await mock("snapshot", {})).session!.props.find((p) => p.name === "c_10")!.engines).toEqual(MOCK_ENGINES.c_10);
   });
 
   it("stops mid-run: unfinished properties become undetermined (stopped)", async () => {

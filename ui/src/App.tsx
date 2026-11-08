@@ -26,6 +26,7 @@ import { Messages } from "./components/Messages";
 import { EngineLog } from "./components/EngineLog";
 import { SourceView } from "./components/SourceView";
 import { TraceView } from "./components/TraceView";
+import { Profiler } from "./components/Profiler";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
 // Lines the Log tab keeps; older ones are dropped (and counted).
@@ -42,7 +43,7 @@ const SHORTCUTS: [string, string][] = [
   ["Esc", "Close menu; otherwise stop the running prove"],
   ["Ctrl+F", "Filter properties"],
   ["Ctrl+L", "Console prompt"],
-  ["Ctrl+1..4", "Console / Details / Messages / Log"],
+  ["Ctrl+1..5", "Console / Details / Messages / Log / Profiler"],
   ["Tab", "Complete a command or property name (console; again to cycle)"],
 ];
 
@@ -72,11 +73,21 @@ export default function App() {
   const [traceName, setTraceName] = useState<string | null>(null);
   const [trace, setTrace] = useState<{ path: string; text: string | null; error: string | null } | null>(null);
   const { layout, set } = useLayout();
-  const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW } = layout;
-  const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW] = useMemo(
-    () => [set("center"), set("left"), set("leftOpen"), set("bottom"), set("bottomH"), set("leftW")],
+  const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW, profiler } = layout;
+  const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW, setProfiler] = useMemo(
+    () => [set("center"), set("left"), set("leftOpen"), set("bottom"), set("bottomH"), set("leftW"), set("profiler")],
     [set],
   );
+  // Tools > Proof profiler (or Ctrl+5) adds the Profiler dock tab and shows
+  // it; its × removes it again.
+  const openProfiler = useCallback(() => {
+    setProfiler(true);
+    setBottomTab("profiler");
+  }, [setProfiler, setBottomTab]);
+  const closeProfiler = useCallback(() => {
+    setProfiler(false);
+    setBottomTab((t) => (t === "profiler" ? "console" : t));
+  }, [setProfiler, setBottomTab]);
   const [theme, setTheme] = useTheme();
   const [focusReq, setFocusReq] = useState<{ id: string; n: number } | null>(null);
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -297,7 +308,7 @@ export default function App() {
     setFocusReq((r) => ({ id: "console-input", n: (r?.n ?? 0) + 1 }));
   };
   const toggleSource = () => topFile && setCenter((c) => (c === "source" ? "table" : "source"));
-  const DOCK: BottomTab[] = ["console", "details", "messages", "log"];
+  const DOCK: BottomTab[] = ["console", "details", "messages", "log", "profiler"];
 
   // Workbench shortcuts (Help > Keyboard shortcuts lists them). Read through a
   // ref so the listener is installed once but always sees current state.
@@ -309,6 +320,7 @@ export default function App() {
     else if (e.key === "F3" && !mod) toggleSource();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
+    else if (mod && !e.shiftKey && !e.altKey && e.key === "5") openProfiler();
     else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3", "4"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
     // Esc closes an open menu first (the context menu stops its Esc, the
     // menu bar marks it handled) and a field may use it (the filter clears
@@ -424,6 +436,7 @@ export default function App() {
         { label: "Details", keys: "Ctrl+2", checked: bottomTab === "details", onClick: () => setBottomTab("details") },
         { label: "Messages", keys: "Ctrl+3", checked: bottomTab === "messages", onClick: () => setBottomTab("messages") },
         { label: "Log", keys: "Ctrl+4", checked: bottomTab === "log", onClick: () => setBottomTab("log") },
+        { label: "Profiler", keys: "Ctrl+5", checked: profiler && bottomTab === "profiler", onClick: openProfiler },
         { sep: true },
         { label: "Input mode: Tcl", checked: true },
         { label: "Input mode: Ask (coming soon)", disabled: true },
@@ -449,7 +462,10 @@ export default function App() {
         { label: "Show source of selected", keys: "F3", onClick: () => current && setCenter("source"), disabled: !current || !topFile },
       ],
     },
-    { label: "Tools", items: [{ label: "Proof profiler (coming soon)", disabled: true }] },
+    {
+      label: "Tools",
+      items: [{ label: "Proof profiler", keys: "Ctrl+5", checked: profiler, onClick: () => (profiler ? closeProfiler() : openProfiler()) }],
+    },
     {
       label: "Help",
       items: [
@@ -690,6 +706,7 @@ export default function App() {
               ["details", current ? `Details: ${current.name}` : "Details"],
               ["messages", `Messages${events.some((e) => !e.ok) ? ` (${events.filter((e) => !e.ok).length})` : ""}`],
               ["log", "Log"],
+              ...(profiler ? ([["profiler", "Profiler", closeProfiler]] as [string, string, () => void][]) : []),
             ]}
             value={bottomTab}
             onChange={(t) => setBottomTab(t as BottomTab)}
@@ -778,6 +795,7 @@ export default function App() {
               <p className="empty">Select a property to see its expression, result and source.</p>
             ))}
           {bottomTab === "messages" && <Messages events={events} />}
+          {bottomTab === "profiler" && profiler && <Profiler prop={current} props={allProps} />}
         </section>
       </div>
 

@@ -20,7 +20,7 @@
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { ConsoleLine, EngineLine, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { ConsoleLine, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
                 output logic [3:0] q, output logic done);
@@ -83,6 +83,20 @@ const mockResults: Record<string, PropStatus> = {
   c_10: { status: "unreachable", engine: "ric3-ic3", ms: 29 },
   a_src_ok: { status: "proven", engine: "ric3-ic3", ms: 44 },
   c_src_hit: { status: "covered", engine: "ric3-bmc", depth: 4, ms: 22 },
+};
+
+// The portfolio's per-engine record for each result (the proof profiler):
+// the winner first as in mockResults, the rest cancelled when it won.
+const run = (engine: string, outcome: EngineRun["outcome"], ms: number, depth?: number): EngineRun =>
+  depth === undefined ? { engine, outcome, ms } : { engine, outcome, ms, depth };
+export const MOCK_ENGINES: Record<string, EngineRun[]> = {
+  a_max: [run("ric3-ic3", "won", 41, 3), run("ric3-bmc", "killed", 42, 24), run("fdv-kind", "killed", 43, 6)],
+  a_step: [run("ric3-ic3", "killed", 56, 4), run("ric3-bmc", "killed", 56, 31), run("ric3", "won", 55, 2)],
+  a_never9: [run("ric3-ic3", "killed", 31, 2), run("ric3-bmc", "won", 30, 11), run("fdv-kind", "killed", 31, 9)],
+  c_done: [run("ric3-ic3", "killed", 32, 2), run("ric3-bmc", "won", 31, 11), run("fdv-kind", "error", 2)],
+  c_10: [run("ric3-ic3", "won", 29, 5), run("ric3-bmc", "timeout", 29, 20), run("fdv-kind", "lost", 12, 4)],
+  a_src_ok: [run("ric3-ic3", "won", 44, 3), run("ric3-bmc", "killed", 45, 26)],
+  c_src_hit: [run("ric3-ic3", "killed", 23, 1), run("ric3-bmc", "won", 22, 4)],
 };
 
 // Properties whose result comes with a trace: both get the counter's 12
@@ -232,7 +246,8 @@ function step(run: Run) {
       const prop = run.props.find((q) => q.name === p.name)!;
       prop.status = { ...final };
       prop.trace = MOCK_TRACES[p.name] ?? null;
-      reset(p, final);
+      prop.engines = (MOCK_ENGINES[p.name] ?? []).map((e) => ({ ...e }));
+      reset(p, { ...final, engines: prop.engines.map((e) => ({ ...e })) });
       engineLine(p.name, final.engine ?? "ric3", final.status === "proven" || final.status === "unreachable" ? "unsat" : "sat", false);
       mockEvents.emit("console-line", { kind: "out", text: lineFor(p.name, final) });
     } else {
@@ -267,7 +282,7 @@ function startProve(props: Property[], onEnd?: () => void): Promise<Reply> {
       timer: null,
       resolve,
     };
-    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null });
+    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null, engines: [] });
     active = run;
     if (!props.length) return finish(run, "done");
     fill(run);
@@ -297,7 +312,7 @@ export function resetMock() {
   active = null;
   mockFlavor = "jg";
   mockSession.props.length = BASE_PROPS;
-  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null });
+  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null, engines: [] });
   Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false });
 }
 
