@@ -74,6 +74,15 @@ for (const s of sizes)
         await shot(page, n("filtered"));
       });
 
+      test("restored custom layout", async ({ page }) => {
+        await page.addInitScript(() =>
+          localStorage.setItem("fdv-layout", JSON.stringify({ leftW: 320, bottomH: 320, left: "design", center: "table", bottom: "console", leftOpen: true })),
+        );
+        await ready(page);
+        await expect(page.getByRole("tab", { name: "Design" })).toHaveAttribute("aria-selected", "true");
+        await shot(page, n("layout"));
+      });
+
       test("file menu open", async ({ page }) => {
         await ready(page);
         await page.getByRole("menuitem", { name: "File", exact: true }).click();

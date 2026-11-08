@@ -328,3 +328,69 @@ test.describe("filter", () => {
     await expect(count(page)).toHaveText("2 of 6");
   });
 });
+
+test.describe("layout", () => {
+  const leftSplit = (page: Page) => page.getByRole("separator", { name: "Resize left dock" });
+  const leftWidth = (page: Page) => page.locator("aside.left").evaluate((e) => Math.round(e.getBoundingClientRect().width));
+  const bottomHeight = (page: Page) => page.locator("section.bottom").evaluate((e) => Math.round(e.getBoundingClientRect().height));
+  async function dragBy(page: Page, name: string, dx: number, dy: number) {
+    const box = (await page.getByRole("separator", { name }).boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx / 2, y + dy / 2);
+    await page.mouse.move(x + dx, y + dy);
+    await page.mouse.up();
+  }
+
+  test("left dock resizes by drag within 160-480px", async ({ page }) => {
+    expect(await leftWidth(page)).toBe(236);
+    await dragBy(page, "Resize left dock", 100, 0);
+    await expect.poll(() => leftWidth(page)).toBe(336);
+    await dragBy(page, "Resize left dock", 1000, 0);
+    await expect.poll(() => leftWidth(page)).toBe(480);
+    await dragBy(page, "Resize left dock", -1000, 0);
+    await expect.poll(() => leftWidth(page)).toBe(160);
+    await expect(leftSplit(page)).toHaveAttribute("aria-valuenow", "160");
+  });
+
+  test("splitters work from the keyboard and reset on double-click", async ({ page }) => {
+    await leftSplit(page).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => leftWidth(page)).toBe(252);
+    await leftSplit(page).dblclick();
+    await expect.poll(() => leftWidth(page)).toBe(236);
+    const bottom = page.getByRole("separator", { name: "Resize bottom dock" });
+    const h0 = await bottomHeight(page);
+    await bottom.focus();
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(() => bottomHeight(page)).toBe(h0 + 16);
+  });
+
+  test("sizes and open tabs persist across reloads in fdv-layout", async ({ page }) => {
+    await dragBy(page, "Resize left dock", 64, 0);
+    await dragBy(page, "Resize bottom dock", 0, -100);
+    await page.getByRole("tab", { name: "Design" }).click();
+    await page.getByRole("tab", { name: "counter.sv" }).click();
+    await page.getByRole("tab", { name: "Messages" }).click();
+    const h = await bottomHeight(page);
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("fdv-layout") ?? "{}"))).toMatchObject({
+      leftW: 300, left: "design", center: "source", bottom: "messages", leftOpen: true,
+    });
+    await page.reload();
+    await expect.poll(() => leftWidth(page)).toBe(300);
+    await expect.poll(() => bottomHeight(page)).toBe(h);
+    await expect(page.getByRole("tab", { name: "Design" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "counter.sv" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Messages" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("a corrupt fdv-layout falls back to the default layout", async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem("fdv-layout", "{oops"));
+    await page.reload();
+    await expect(rows(page)).toHaveCount(6);
+    expect(await leftWidth(page)).toBe(236);
+    await expect(page.getByRole("tab", { name: "Tasks" })).toHaveAttribute("aria-selected", "true");
+  });
+});

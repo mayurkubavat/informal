@@ -12,6 +12,7 @@ import {
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter,
 } from "./model";
 import { useTheme } from "./useTheme";
+import { BOTTOM_DEFAULT, clampBottom, clampLeft, LEFT_MAX, LEFT_MIN, useLayout } from "./useLayout";
 import { MenuBar, type MenuDef, type MenuItem } from "./components/MenuBar";
 import { ContextMenu } from "./components/ContextMenu";
 import { ToolBtn } from "./components/ToolBtn";
@@ -49,11 +50,12 @@ export default function App() {
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
   const [source, setSource] = useState("");
-  const [center, setCenter] = useState<Center>("table");
-  const [left, setLeft] = useState<LeftTab>("tasks");
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [bottomTab, setBottomTab] = useState<BottomTab>("console");
-  const [bottomH, setBottomH] = useState(250);
+  const { layout, set } = useLayout();
+  const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW } = layout;
+  const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW] = useMemo(
+    () => [set("center"), set("left"), set("leftOpen"), set("bottom"), set("bottomH"), set("leftW")],
+    [set],
+  );
   const [theme, setTheme] = useTheme();
   const [focusReq, setFocusReq] = useState<{ id: string; n: number } | null>(null);
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -220,16 +222,40 @@ export default function App() {
     ...(assumes ? [`${assumes} assumed`] : []),
   ].join(" · ");
 
-  const startResize = (e: React.PointerEvent) => {
-    const y0 = e.clientY;
-    const h0 = bottomH;
-    const move = (ev: PointerEvent) => setBottomH(Math.max(120, Math.min(window.innerHeight * 0.65, h0 + y0 - ev.clientY)));
+  // Splitters: drag, arrow keys (16px steps), double-click to reset.
+  const drag = (e: React.PointerEvent, onMove: (ev: PointerEvent) => void) => {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => onMove(ev);
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  };
+  const startResize = (e: React.PointerEvent) => {
+    const y0 = e.clientY;
+    const h0 = bottomH;
+    drag(e, (ev) => setBottomH(clampBottom(h0 + y0 - ev.clientY, window.innerHeight)));
+  };
+  const leftRef = useRef<HTMLElement>(null);
+  const curLeftW = () => leftW ?? leftRef.current?.getBoundingClientRect().width ?? 236;
+  const startLeftResize = (e: React.PointerEvent) => {
+    const x0 = e.clientX;
+    const w0 = curLeftW();
+    drag(e, (ev) => setLeftW(clampLeft(w0 + ev.clientX - x0)));
+  };
+  const leftKeys = (e: React.KeyboardEvent) => {
+    const d = e.key === "ArrowRight" ? 16 : e.key === "ArrowLeft" ? -16 : 0;
+    if (!d) return;
+    e.preventDefault();
+    setLeftW(clampLeft(curLeftW() + d));
+  };
+  const bottomKeys = (e: React.KeyboardEvent) => {
+    const d = e.key === "ArrowUp" ? 16 : e.key === "ArrowDown" ? -16 : 0;
+    if (!d) return;
+    e.preventDefault();
+    setBottomH(clampBottom(bottomH + d, window.innerHeight));
   };
 
   const menus: MenuDef[] = [
@@ -296,7 +322,10 @@ export default function App() {
   ];
 
   return (
-    <div className="app" style={{ "--bottom-h": `${bottomH}px` } as React.CSSProperties}>
+    <div
+      className="app"
+      style={{ "--bottom-h": `${bottomH}px`, ...(leftW ? { "--left-w": `${leftW}px` } : {}) } as React.CSSProperties}
+    >
       {/* ---- menu bar ---- */}
       <MenuBar menus={menus}>
         <input
@@ -352,7 +381,21 @@ export default function App() {
       <div className={`workbench ${leftOpen ? "" : "left-closed"}`}>
         {/* ---- left dock ---- */}
         {leftOpen && (
-          <aside className="left">
+          <aside className="left" ref={leftRef}>
+            <div
+              className="vsplitter"
+              onPointerDown={startLeftResize}
+              onDoubleClick={() => setLeftW(null)}
+              onKeyDown={leftKeys}
+              tabIndex={0}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize left dock"
+              aria-valuemin={LEFT_MIN}
+              aria-valuemax={LEFT_MAX}
+              aria-valuenow={Math.round(leftW ?? (window.innerWidth <= 1000 ? 200 : 236))}
+              title="Drag to resize; double-click to reset"
+            />
             <Tabs
               tabs={[
                 ["tasks", "Tasks"],
@@ -447,7 +490,18 @@ export default function App() {
 
         {/* ---- bottom dock ---- */}
         <section className="bottom">
-          <div className="splitter" onPointerDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize bottom dock" />
+          <div
+            className="splitter"
+            onPointerDown={startResize}
+            onDoubleClick={() => setBottomH(BOTTOM_DEFAULT)}
+            onKeyDown={bottomKeys}
+            tabIndex={0}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize bottom dock"
+            aria-valuenow={bottomH}
+            title="Drag to resize; double-click to reset"
+          />
           <Tabs
             tabs={[
               ["console", "Console"],
