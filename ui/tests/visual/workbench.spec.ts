@@ -10,7 +10,7 @@ const sizes = [
 const schemes = ["light", "dark"] as const;
 
 async function ready(page: Page) {
-  await page.goto("/");
+  await page.goto("/?fast=1");
   await expect(page.locator("table.grid tbody tr")).toHaveCount(6);
   await expect(page.locator("footer.statusbar")).toContainText("Idle");
 }

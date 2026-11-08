@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { mock } from "./mock";
+import { beforeEach, describe, expect, it } from "vitest";
+import { mock, mockOptions, resetMock } from "./mock";
 
 // The mock is module state shared across tests, so each test leaves it as
 // it found it where that matters.
 const status = async (name: string) => (await mock("snapshot", {})).session!.props.find((p) => p.name === name)!;
 
 describe("browser mock", () => {
+  beforeEach(() => {
+    resetMock();
+    mockOptions.tick = 0; // the run finishes inside the call
+  });
+
   it("snapshots the counter design with six properties", async () => {
     const r = await mock("snapshot", {});
     expect(r.ok).toBe(true);

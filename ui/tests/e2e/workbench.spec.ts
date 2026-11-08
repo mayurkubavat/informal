@@ -4,6 +4,8 @@ import AxeBuilder from "@axe-core/playwright";
 // Drives the workbench against the browser mock in src/backend.ts: six
 // properties on counter.sv; `prove`/`check_fv` resolve them to 2 proven,
 // 1 cex, 1 covered, 1 unreachable; any other Tcl returns an error line.
+// Most tests load /?fast=1 so a prove finishes in one step; the "live
+// progress" block runs the ticking mock.
 
 const rows = (page: Page) => page.locator("table.grid tbody tr:not(.empty-row)");
 const row = (page: Page, name: string) => rows(page).filter({ has: page.getByRole("cell", { name, exact: true }) });
@@ -18,7 +20,7 @@ async function proveAll(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?fast=1");
   await expect(rows(page)).toHaveCount(6);
 });
 
