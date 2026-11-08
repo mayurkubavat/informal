@@ -57,6 +57,14 @@ for (const s of sizes)
         await shot(page, n("source"));
       });
 
+      test("row context menu", async ({ page }) => {
+        await ready(page);
+        await proveAll(page);
+        await page.locator("table.grid tbody tr").filter({ hasText: "a_never9" }).click({ button: "right", position: { x: 120, y: 12 } });
+        await expect(page.getByRole("menu", { name: "Actions for a_never9" })).toBeVisible();
+        await shot(page, n("context-menu"));
+      });
+
       test("file menu open", async ({ page }) => {
         await ready(page);
         await page.getByRole("menuitem", { name: "File", exact: true }).click();

@@ -94,4 +94,18 @@ describe("PropTable", () => {
     rerender(<PropTable props={[]} total={3} selected={null} onSelect={() => {}} onOpen={() => {}} />);
     expect(screen.getByText("No properties match the current filter.")).toBeInTheDocument();
   });
+
+  it("reports right-click and Shift+F10 / Menu key for the context menu", () => {
+    const onContext = vi.fn();
+    const { rerender } = table({ onContext });
+    fireEvent.contextMenu(screen.getByText("a_max"), { clientX: 30, clientY: 40 });
+    expect(onContext).toHaveBeenLastCalledWith(expect.objectContaining({ name: "a_max" }), 30, 40);
+    const wrap = screen.getByLabelText(/Property table/);
+    onContext.mockClear();
+    fireEvent.keyDown(wrap, { key: "F10", shiftKey: true });
+    expect(onContext).not.toHaveBeenCalled();
+    rerender(<PropTable props={props} total={3} selected="c_cov" onSelect={() => {}} onOpen={() => {}} onContext={onContext} />);
+    fireEvent.keyDown(wrap, { key: "ContextMenu" });
+    expect(onContext).toHaveBeenLastCalledWith(expect.objectContaining({ name: "c_cov" }), expect.any(Number), expect.any(Number));
+  });
 });

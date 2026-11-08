@@ -146,3 +146,82 @@ test.describe("task tree properties", () => {
     await expect(page.locator(".details pre.expr")).toHaveText("$rose(done)");
   });
 });
+
+test.describe("row context menu", () => {
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+  const menu = (page: Page) => page.getByRole("menu", { name: /^Actions for/ });
+  const item = (page: Page, name: string | RegExp) => menu(page).getByRole("menuitem", { name });
+
+  test("offers the row actions and selects the row", async ({ page }) => {
+    await row(page, "a_never9").click({ button: "right" });
+    await expect(menu(page)).toHaveAccessibleName("Actions for a_never9");
+    await expect(menu(page).getByRole("menuitem")).toHaveText([
+      /Prove\s*prove -property a_never9/, "Visualize trace", "Show source", "Copy name", "Copy expression", /Disable/,
+    ]);
+    await expect(row(page, "a_never9")).toHaveAttribute("aria-selected", "true");
+    await expect(item(page, "Visualize trace")).toHaveAttribute("aria-disabled", "true");
+    await expect(item(page, /Disable/)).toHaveAttribute("aria-disabled", "true");
+    await expect(item(page, /Disable/)).toHaveAttribute("title", /no disable command/);
+    await page.keyboard.press("Escape");
+    await expect(menu(page)).toHaveCount(0);
+  });
+
+  test("Prove runs only that property", async ({ page }) => {
+    await row(page, "c_done").click({ button: "right" });
+    await item(page, /^Prove/).click();
+    await expect(row(page, "c_done")).toContainText("Covered");
+    await expect(row(page, "a_max")).toContainText("Unprocessed");
+    await expect(page.locator(".console-log")).toContainText("fdv[jg]> prove -property c_done");
+  });
+
+  test("Show source opens the source tab at the property's line", async ({ page }) => {
+    await row(page, "a_never9").click({ button: "right" });
+    await item(page, "Show source").click();
+    await expect(page.getByRole("tab", { name: "counter.sv" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("main pre.source .focus")).toContainText("output logic [3:0] q");
+  });
+
+  test("Copy name and Copy expression use the clipboard", async ({ page }) => {
+    await row(page, "a_step").click({ button: "right" });
+    await item(page, "Copy name").click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("a_step");
+    await row(page, "a_step").click({ button: "right" });
+    await item(page, "Copy expression").click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("en && !done |=> q == $past(q) + 4'd1");
+  });
+
+  test("VC Formal disables and re-enables via fvdisable/fvenable", async ({ page }) => {
+    await page.getByLabel("Flavor").selectOption("vcf");
+    await expect(page.locator(".prompt")).toHaveText("fdv[vcf]>");
+    await row(page, "a_max").click({ button: "right" });
+    await expect(item(page, /Disable/)).toContainText("fvdisable {a_max}");
+    await item(page, /Disable/).click();
+    await expect(row(page, "a_max")).toContainText("Disabled");
+    await expect(row(page, "a_max")).toHaveClass(/off/);
+    await row(page, "a_max").click({ button: "right" });
+    await item(page, /Enable/).click();
+    await expect(row(page, "a_max")).toContainText("Unprocessed");
+    await expect(page.locator(".console-log")).toContainText("fdv[vcf]> fvenable {a_max}");
+  });
+
+  test("Shift+F10 opens it from the keyboard; arrows move; focus returns", async ({ page }) => {
+    await row(page, "a_max").click();
+    const wrap = page.locator(".table-wrap");
+    await wrap.press("Shift+F10");
+    await expect(menu(page)).toHaveAccessibleName("Actions for a_max");
+    await expect(item(page, /^Prove/)).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(item(page, "Visualize trace")).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(item(page, /Disable/)).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu(page)).toHaveCount(0);
+    await expect(wrap).toBeFocused();
+  });
+
+  test("an outside click closes it", async ({ page }) => {
+    await row(page, "a_max").click({ button: "right" });
+    await page.locator("footer.statusbar").click();
+    await expect(menu(page)).toHaveCount(0);
+  });
+});

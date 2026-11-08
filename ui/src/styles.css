@@ -404,3 +404,8 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
   .workbench { grid-template-columns: 200px minmax(0, 1fr); }
   .menu-path { width: 200px; }
 }
+
+/* ---- context menu (same look as menu bar pop-ups) ---- */
+.context-menu { position: fixed; z-index: 30; }
+.menu-item[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+.menu-item[aria-disabled="true"]:hover { background: none; }

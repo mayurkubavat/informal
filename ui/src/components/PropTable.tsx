@@ -19,12 +19,15 @@ export function PropTable({
   selected,
   onSelect,
   onOpen,
+  onContext,
 }: {
   props: Property[];
   total: number;
   selected: string | null;
   onSelect: (n: string) => void;
   onOpen: (p: Property) => void;
+  /** Right-click, the Menu key or Shift+F10 on a row; x/y are viewport coordinates. */
+  onContext?: (p: Property, x: number, y: number) => void;
 }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
   const body = useRef<HTMLTableSectionElement>(null);
@@ -37,6 +40,14 @@ export function PropTable({
     });
   }, [props, sort]);
   const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      const i = rows.findIndex((p) => p.name === selected);
+      if (i < 0 || !onContext) return;
+      e.preventDefault();
+      const r = body.current?.children[i]?.getBoundingClientRect();
+      onContext(rows[i], (r?.left ?? 0) + 40, r?.bottom ?? 0);
+      return;
+    }
     if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || !rows.length) return;
     e.preventDefault();
     const i = rows.findIndex((p) => p.name === selected);
@@ -74,6 +85,11 @@ export function PropTable({
               aria-selected={p.name === selected}
               onClick={() => onSelect(p.name)}
               onDoubleClick={() => onOpen(p)}
+              onContextMenu={(e) => {
+                if (!onContext) return;
+                e.preventDefault();
+                onContext(p, e.clientX, e.clientY);
+              }}
             >
               <td className="c-kind mono" title={p.kind}>{KIND_LETTER[p.kind]}</td>
               <td className="mono">{p.name}</td>

@@ -12,7 +12,8 @@ import {
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter,
 } from "./model";
 import { useTheme } from "./useTheme";
-import { MenuBar, type MenuDef } from "./components/MenuBar";
+import { MenuBar, type MenuDef, type MenuItem } from "./components/MenuBar";
+import { ContextMenu } from "./components/ContextMenu";
 import { ToolBtn } from "./components/ToolBtn";
 import { Tabs } from "./components/Tabs";
 import { TaskTree } from "./components/TaskTree";
@@ -41,6 +42,8 @@ export default function App() {
   const [bottomTab, setBottomTab] = useState<BottomTab>("console");
   const [bottomH, setBottomH] = useState(250);
   const [theme, setTheme] = useTheme();
+  const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
+  const closeCtx = useCallback(() => setCtx(null), []);
   const pathRef = useRef<HTMLInputElement>(null);
 
   const apply = useCallback((r: Reply, echo?: string) => {
@@ -120,6 +123,42 @@ export default function App() {
     setSelected(n);
     setBottomTab("details");
   };
+  const copy = (text: string, what: string) =>
+    navigator.clipboard
+      .writeText(text)
+      .then(() => setEvents((e) => [...e, { at: new Date(), cmd: "copy", ok: true, ms: 0, summary: `Copied ${what}` }]))
+      .catch((err) => setLog((l) => [...l, { kind: "err", text: `copy failed: ${err}` }]));
+  // Only the VC Formal command map has fvdisable/fvenable today.
+  const toggleCmd = (p: { name: string; enabled: boolean }) => (flavor === "vcf" ? `${p.enabled ? "fvdisable" : "fvenable"} {${p.name}}` : null);
+
+  const ctxProp = ctx ? allProps.find((p) => p.name === ctx.name) ?? null : null;
+  const ctxItems: MenuItem[] = ctxProp
+    ? [
+        {
+          label: "Prove",
+          hint: proveOne(ctxProp.name),
+          disabled: busy || ctxProp.kind === "assume",
+          title: ctxProp.kind === "assume" ? "Assumptions are not proved" : undefined,
+          onClick: () => run(() => backend.evalTcl(proveOne(ctxProp.name)), proveOne(ctxProp.name)),
+        },
+        { label: "Visualize trace", disabled: true, title: "Coming soon: waveforms for CEX and cover traces" },
+        { label: "Show source", disabled: !topFile, onClick: () => { setSelected(ctxProp.name); setCenter("source"); } },
+        { sep: true },
+        { label: "Copy name", onClick: () => copy(ctxProp.name, ctxProp.name) },
+        { label: "Copy expression", onClick: () => copy(ctxProp.expr, `expression of ${ctxProp.name}`) },
+        { sep: true },
+        (() => {
+          const cmd = toggleCmd(ctxProp);
+          return {
+            label: ctxProp.enabled ? "Disable" : "Enable",
+            hint: cmd ?? undefined,
+            disabled: !cmd || busy,
+            title: cmd ? undefined : "The JasperGold flavor of the fdv shell has no disable command yet; switch to VC Formal (fvdisable)",
+            onClick: () => cmd && run(() => backend.evalTcl(cmd), cmd),
+          };
+        })(),
+      ]
+    : [];
 
   const summary = [
     `${allProps.length} properties`,
@@ -310,6 +349,10 @@ export default function App() {
               onOpen={(p) => {
                 select(p.name);
               }}
+              onContext={(p, x, y) => {
+                setSelected(p.name);
+                setCtx({ name: p.name, x, y });
+              }}
             />
           ) : (
             <SourceView text={source} focus={focusLine} />
@@ -393,6 +436,8 @@ export default function App() {
         <span className="spacer" />
         <span>{busy ? "Running…" : "Idle"}</span>
       </footer>
+
+      {ctx && ctxProp && <ContextMenu x={ctx.x} y={ctx.y} items={ctxItems} label={`Actions for ${ctxProp.name}`} onClose={closeCtx} />}
     </div>
   );
 }

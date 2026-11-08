@@ -1,6 +1,7 @@
 // Browser mock for `npm run dev` and the Playwright suites: one counter
-// design with six properties. `prove`/`check_fv` resolve them to fixed
-// results; any other Tcl answers with an error line.
+// design with six properties. `prove`/`check_fv` (all, or `-property`)
+// resolve them to fixed results; under VC Formal `fvdisable`/`fvenable`
+// toggle properties; any other Tcl answers with an error line.
 
 import type { PropStatus, Reply, SessionView } from "./backend";
 
@@ -38,14 +39,34 @@ const mockResults: Record<string, PropStatus> = {
   c_10: { status: "unreachable", engine: "ric3-ic3", ms: 29 },
 };
 
+let mockFlavor = "jg";
+const WORDS = ["proven", "cex", "covered", "unreachable", "undetermined", "error"] as const;
+
+// Property names from `-property name`, `-property {a b}`, or a bare `{a b}`.
+function names(script: string): string[] {
+  const m = script.match(/-property\s+(?:\{([^}]*)\}|(\S+))/) ?? script.match(/^\s*\S+\s+(?:\{([^}]*)\}|(\S+))/);
+  return m ? (m[1] ?? m[2]).split(/\s+/).filter(Boolean) : [];
+}
+
 export async function mock(cmd: string, args: Record<string, unknown>): Promise<Reply> {
   await new Promise((r) => setTimeout(r, 150));
+  if (cmd === "shell_flavor") mockFlavor = String(args.flavor);
   const script = String(args.script ?? "");
   if (cmd === "shell_eval" && /^\s*(prove|check_fv)\b/.test(script)) {
-    for (const p of mockSession.props) {
-      if (p.kind !== "assume" && p.enabled) p.status = mockResults[p.name] ?? { status: "undetermined", reason: "mock" };
-    }
-    return { ok: true, result: "proven 2 cex 1 covered 1 unreachable 1 undetermined 0 error 0", session: mockSession };
+    const only = /-property/.test(script) ? names(script) : null;
+    const done = mockSession.props.filter((p) => p.kind !== "assume" && p.enabled && (!only || only.includes(p.name)));
+    for (const p of done) p.status = mockResults[p.name] ?? { status: "undetermined", reason: "mock" };
+    const n = (w: string) => done.filter((p) => p.status.status === w).length;
+    return { ok: true, result: WORDS.map((w) => `${w} ${n(w)}`).join(" "), session: mockSession };
+  }
+  // VC Formal only, as in crates/fdv-fpv/src/compat.rs.
+  const toggle = script.match(/^\s*(fvdisable|fvenable)\b/);
+  if (cmd === "shell_eval" && toggle && mockFlavor === "vcf") {
+    const want = names(script);
+    const hit = mockSession.props.filter((p) => want.includes(p.name));
+    if (!hit.length) return { ok: false, result: `no property matches \`${want.join(" ")}\``, session: mockSession };
+    for (const p of hit) p.enabled = toggle[1] === "fvenable";
+    return { ok: true, result: "", session: mockSession };
   }
   if (cmd === "shell_eval" && script.trim() !== "") {
     return { ok: false, result: "browser preview: Tcl runs only in the desktop app", session: mockSession };

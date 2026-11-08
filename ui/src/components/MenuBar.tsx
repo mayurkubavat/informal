@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
-export type MenuItem = { label: string; hint?: string; onClick?: () => void; disabled?: boolean; checked?: boolean } | { sep: true };
+export type MenuItem =
+  | { label: string; hint?: string; title?: string; onClick?: () => void; disabled?: boolean; checked?: boolean }
+  | { sep: true };
 export type MenuDef = { label: string; items: MenuItem[] };
 
 export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: React.ReactNode }) {
