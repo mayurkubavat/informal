@@ -1,12 +1,15 @@
 //! A shell on its own thread, for front ends that call from many threads
 //! (the desktop app's command handlers). Tcl interpreters belong to the
 //! thread that made them, so every request is sent to that one thread.
+//! The one exception is [`Worker::stop`], which must reach a prove that is
+//! occupying that thread, so it sets a flag shared with the session instead.
 
 use crate::compat::{Flavor, Shell};
 use crate::session::Session;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 
 /// What a front end can ask for.
@@ -36,16 +39,22 @@ type Job = (Request, mpsc::Sender<Reply>);
 #[derive(Clone)]
 pub struct Worker {
     tx: mpsc::Sender<Job>,
+    /// The session's stop flag (`Session::stop`), shared.
+    stop: Arc<AtomicBool>,
 }
 
 impl Worker {
     /// Start the thread. `make` builds the session on that thread.
     pub fn spawn(flavor: Flavor, make: impl FnOnce() -> Session + Send + 'static) -> Worker {
         let (tx, rx) = mpsc::channel::<Job>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let shared = stop.clone();
         thread::Builder::new()
             .name("fdv-shell".into())
             .spawn(move || {
-                let shell = Shell::new(make(), flavor);
+                let mut session = make();
+                session.stop = shared;
+                let shell = Shell::new(session, flavor);
                 for (req, back) in rx {
                     let (ok, result) = match req {
                         Request::Eval(s) => split(shell.eval(&s)),
@@ -66,7 +75,15 @@ impl Worker {
                 }
             })
             .expect("spawn shell thread");
-        Worker { tx }
+        Worker { tx, stop }
+    }
+
+    /// Ask a running prove to stop, from any thread, without queueing
+    /// behind it. The prove's own `call` then returns with the session,
+    /// unfinished properties undetermined ("stopped"). Harmless when idle:
+    /// the next prove clears the flag before it starts.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
     }
 
     /// Send a request and wait for its reply.
@@ -115,5 +132,8 @@ mod tests {
         let r = w.call(Request::Flavor(Flavor::Vcf));
         assert!(r.ok);
         assert!(w.call(Request::Eval("fvcover c -expr {y}".into())).ok);
+        // Stop while idle is a no-op for later requests.
+        w.stop();
+        assert!(w.call(Request::Snapshot).ok);
     }
 }

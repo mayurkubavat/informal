@@ -57,6 +57,7 @@ export interface PropProgress {
   depth?: number | null;
   ms?: number;
   reason?: string;
+  message?: string;
 }
 export interface ProveProgress {
   kind: ProgressKind;
