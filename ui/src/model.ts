@@ -1,7 +1,12 @@
 // Pure view-model helpers shared by the workbench components: status words,
 // table cell text, sort keys, and light source scanning. No React here.
 
-import type { Property, StatusWord } from "./backend";
+import type { PropStatus, Property, ProveProgress, StatusWord } from "./backend";
+
+// What a row shows: the backend's status words plus "running", which only
+// exists in the view while a prove's progress events say so.
+export type ViewStatus = StatusWord | "running";
+export type ViewProp = Omit<Property, "status"> & { status: Omit<PropStatus, "status"> & { status: ViewStatus } };
 
 export type LogLine = { kind: "in" | "out" | "err"; text: string };
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
@@ -10,9 +15,10 @@ export type Center = "table" | "source";
 export type BottomTab = "console" | "details" | "messages";
 export type LeftTab = "tasks" | "design";
 export type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time";
-export type StatusFilter = StatusWord | "assume" | null;
+export type StatusFilter = ViewStatus | "assume" | null;
 
-export const STATUS_LABEL: Record<StatusWord, string> = {
+export const STATUS_LABEL: Record<ViewStatus, string> = {
+  running: "Running",
   unprocessed: "Unprocessed",
   proven: "Proven",
   cex: "CEX",
@@ -22,13 +28,15 @@ export const STATUS_LABEL: Record<StatusWord, string> = {
   error: "Error",
 };
 export const SUMMARY: StatusWord[] = ["proven", "cex", "covered", "unreachable", "undetermined", "error"];
-export const STATUS_ORDER: StatusWord[] = ["error", "cex", "undetermined", "covered", "unreachable", "proven", "unprocessed"];
+export const STATUS_ORDER: ViewStatus[] = ["error", "cex", "running", "undetermined", "covered", "unreachable", "proven", "unprocessed"];
 export const KIND_LETTER = { assert: "A", cover: "C", assume: "M" } as const;
 export const TASK = "<embedded>";
 
-export function bound(p: Property): string {
+export function bound(p: ViewProp): string {
   const s = p.status;
   switch (s.status) {
+    case "running":
+      return `k=${s.depth ?? 0}`;
     case "cex":
     case "covered":
       return String(s.depth ?? "?");
@@ -43,30 +51,36 @@ export function bound(p: Property): string {
       return "";
   }
 }
-export function time(p: Property): string {
+// Elapsed time as m:ss (running rows, the progress readout).
+export function clock(ms: number): string {
+  const t = Math.floor(Math.max(0, ms) / 1000);
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+}
+export function time(p: ViewProp): string {
+  if (p.status.status === "running") return clock(p.status.ms ?? 0);
   return p.status.ms !== undefined ? `${(p.status.ms / 1000).toFixed(2)}s` : "";
 }
-export function statusKey(p: Property): string {
+export function statusKey(p: ViewProp): string {
   if (p.kind === "assume") return "assume";
   return p.enabled ? p.status.status : "unprocessed";
 }
 // Text filter: case-insensitive substring of name, expression or engine.
-export function matches(p: Property, query: string): boolean {
+export function matches(p: ViewProp, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return [p.name, p.expr, p.status.engine ?? ""].some((s) => s.toLowerCase().includes(q));
 }
 
 // Task-tree group: assumes together, everything else by raw status.
-export function groupOf(p: Property): StatusWord | "assume" {
+export function groupOf(p: ViewProp): ViewStatus | "assume" {
   return p.kind === "assume" ? "assume" : p.status.status;
 }
-export function statusText(p: Property): string {
+export function statusText(p: ViewProp): string {
   if (p.kind === "assume") return "Assumed";
   return p.enabled ? STATUS_LABEL[p.status.status] : "Disabled";
 }
 
-export function sortValue(p: Property, k: SortKey): string | number {
+export function sortValue(p: ViewProp, k: SortKey): string | number {
   switch (k) {
     case "kind": return p.kind;
     case "name": return p.name;
@@ -77,6 +91,23 @@ export function sortValue(p: Property, k: SortKey): string | number {
   }
 }
 
+// Overlay a prove's progress on the session's properties: properties in the
+// run show their live status (queued, running with k-bound and elapsed, or
+// final); the rest keep the session's status.
+export function withProgress(props: Property[], prog: ProveProgress | null): ViewProp[] {
+  if (!prog) return props;
+  const live = new Map(prog.props.map((q) => [q.name, q]));
+  return props.map((p) => {
+    const q = live.get(p.name);
+    if (!q) return p;
+    const { name: _, ...status } = q;
+    return { ...p, status };
+  });
+}
+
+// Commands that start a prove (one at a time; the UI refuses a second).
+export const isProveCmd = (script: string) => /^\s*(prove|check_fv)\b/.test(script);
+
 export function identifiers(expr: string): string[] {
   const skip = new Set(["past", "rose", "fell", "stable", "changed", "posedge", "negedge", "disable", "iff"]);
   return [...new Set(expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [])].filter((w) => !skip.has(w) && !/^\d/.test(w));
@@ -84,7 +115,7 @@ export function identifiers(expr: string): string[] {
 
 // Best-effort source line for a property: where its name appears, else the
 // first line that mentions one of its signals. 1-based; 0 when unknown.
-export function locate(text: string, p: Property | null): number {
+export function locate(text: string, p: ViewProp | null): number {
   if (!p || !text) return 0;
   const lines = text.split("\n");
   const byName = lines.findIndex((l) => new RegExp(`\\b${p.name}\\b`).test(l));

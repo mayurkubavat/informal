@@ -1,5 +1,4 @@
-import type { Property } from "../backend";
-import { statusKey, statusText } from "../model";
+import { statusKey, statusText, type ViewProp } from "../model";
 
 // Small status glyphs, the only strong colour in the window.
 export function Glyph({ k }: { k: string }) {
@@ -18,6 +17,9 @@ export function Glyph({ k }: { k: string }) {
       return <svg {...props}><path d="M4.3 4.4a1.8 1.8 0 113 1.4c-.8.5-1.3.8-1.3 1.7" /><circle cx="6" cy="9.6" r=".5" fill="currentColor" /></svg>;
     case "error":
       return <svg {...props}><path d="M6 1.8l4.6 8.2H1.4z" /><path d="M6 5v2.2" /><circle cx="6" cy="8.6" r=".4" fill="currentColor" /></svg>;
+    case "running":
+      // Dashed ring in the accent colour; CSS spins it unless motion is reduced.
+      return <svg {...props}><circle cx="6" cy="6" r="4.2" strokeDasharray="4.6 2" /></svg>;
     case "assume":
       return <svg {...props}><path d="M3 6h6" /></svg>;
     default:
@@ -25,7 +27,7 @@ export function Glyph({ k }: { k: string }) {
   }
 }
 
-export function Status({ p }: { p: Property }) {
+export function Status({ p }: { p: ViewProp }) {
   return (
     <span className="status">
       <Glyph k={statusKey(p)} />

@@ -8,12 +8,12 @@ import { prop } from "./test/fixtures";
 
 describe("constants", () => {
   it("labels every status word", () => {
-    expect(Object.keys(STATUS_LABEL).sort()).toEqual(["cex", "covered", "error", "proven", "undetermined", "unprocessed", "unreachable"]);
+    expect(Object.keys(STATUS_LABEL).sort()).toEqual(["cex", "covered", "error", "proven", "running", "undetermined", "unprocessed", "unreachable"]);
     expect(STATUS_LABEL.cex).toBe("CEX");
   });
   it("orders failures first and lists every status once", () => {
     expect(STATUS_ORDER[0]).toBe("error");
-    expect(new Set(STATUS_ORDER).size).toBe(7);
+    expect(new Set(STATUS_ORDER).size).toBe(8);
     expect(SUMMARY).not.toContain("unprocessed");
   });
   it("uses JasperGold kind letters and the embedded task", () => {

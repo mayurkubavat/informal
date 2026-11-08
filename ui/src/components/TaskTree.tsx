@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { groupOf, KIND_LETTER, STATUS_LABEL, SUMMARY, TASK, type StatusFilter } from "../model";
-import type { Property, StatusWord } from "../backend";
+import { groupOf, KIND_LETTER, STATUS_LABEL, SUMMARY, TASK, type StatusFilter, type ViewProp as Property, type ViewStatus } from "../model";
 import { Glyph } from "./Glyph";
 import { ChevronIcon } from "./icons";
 
-type Group = StatusWord | "assume";
+type Group = ViewStatus | "assume";
 
 // <embedded> task > status groups > properties. Clicking a group filters the
 // table; clicking a property selects it, double-click opens its Details.
@@ -20,7 +19,7 @@ export function TaskTree({
   onOpen,
 }: {
   total: number;
-  counts: Partial<Record<StatusWord, number>>;
+  counts: Partial<Record<ViewStatus, number>>;
   assumes: number;
   filter: StatusFilter;
   onFilter: (f: StatusFilter) => void;
@@ -32,7 +31,8 @@ export function TaskTree({
   const [open, setOpen] = useState(true);
   const [closed, setClosed] = useState<Set<Group>>(() => new Set());
   const groups: [Group, string, number][] = [
-    ...SUMMARY.map((s) => [s, STATUS_LABEL[s], counts[s] ?? 0] as [StatusWord, string, number]),
+    ["running", STATUS_LABEL.running, counts.running ?? 0],
+    ...SUMMARY.map((s) => [s, STATUS_LABEL[s], counts[s] ?? 0] as [ViewStatus, string, number]),
     ["unprocessed", "Unprocessed", counts.unprocessed ?? 0],
     ["assume", "Assumed", assumes],
   ];

@@ -202,6 +202,13 @@ select {
 .tool.on { background: var(--hover); border-color: var(--border-strong); }
 .tool-text { display: inline-flex; gap: 6px; padding: 0 8px; color: var(--text); }
 .play { color: var(--st-play); }
+.tool-text .kbd { color: var(--muted); font-size: 11px; }
+.tool-text:disabled .kbd { color: inherit; }
+/* prove progress, right of the tool row: thin neutral track, accent fill */
+.progress { display: inline-flex; align-items: center; gap: 8px; margin-right: 12px; color: var(--text-2); font-size: 11.5px; white-space: nowrap; }
+.progress-track { width: 120px; height: 6px; border-radius: 3px; background: var(--border-strong); overflow: hidden; }
+.progress-fill { display: block; height: 100%; background: var(--accent); transition: width 0.2s linear; }
+.statusbar .run { display: inline-flex; align-items: center; gap: 6px; }
 
 /* ---- workbench ---- */
 .workbench {
@@ -341,6 +348,10 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .st-undetermined { color: var(--st-undetermined); }
 .st-error { color: var(--st-error); }
 .st-unprocessed, .st-assume { color: var(--st-assume); }
+/* running: accent dashed ring, turning; the only moving thing in the window */
+.st-running { color: var(--accent); transform-origin: 50% 50%; animation: fdv-spin 1.4s linear infinite; }
+@keyframes fdv-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .st-running { animation: none; } }
 
 /* ---- console ---- */
 .console[hidden] { display: none; }

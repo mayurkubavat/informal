@@ -6,10 +6,10 @@
 // "Visualize trace" once the engines export counterexample traces.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, Flavor, Reply, SessionView, StatusWord } from "./backend";
+import { backend, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import {
-  bound, locate, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time,
-  type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter,
+  bound, clock, isProveCmd, locate, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time, withProgress,
+  type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
 import { BOTTOM_DEFAULT, clampBottom, clampLeft, LEFT_MAX, LEFT_MIN, useLayout } from "./useLayout";
@@ -19,7 +19,7 @@ import { ToolBtn } from "./components/ToolBtn";
 import { Tabs } from "./components/Tabs";
 import { TaskTree } from "./components/TaskTree";
 import { DesignTree } from "./components/DesignTree";
-import { Status } from "./components/Glyph";
+import { Glyph, Status } from "./components/Glyph";
 import { PropTable } from "./components/PropTable";
 import { Console } from "./components/Console";
 import { Messages } from "./components/Messages";
@@ -33,7 +33,7 @@ const SHORTCUTS: [string, string][] = [
   ["Enter", "Open details of the selected property (table)"],
   ["Up / Down", "Move the selection (table)"],
   ["Shift+F10", "Row actions menu (table)"],
-  ["Esc", "Close menu (Stop once the backend supports it)"],
+  ["Esc", "Close menu; otherwise stop the running prove"],
   ["Ctrl+F", "Filter properties"],
   ["Ctrl+L", "Console prompt"],
   ["Ctrl+1..3", "Console / Details / Messages"],
@@ -43,7 +43,14 @@ export default function App() {
   const [session, setSession] = useState<SessionView | null>(null);
   const [flavor, setFlavor] = useState<Flavor>("jg");
   const [scriptPath, setScriptPath] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Requests in flight other than a prove: they disable Prove, not the console.
+  const [pending, setPending] = useState(0);
+  const busy = pending > 0;
+  // Our prove call is in flight (set before its first progress event).
+  const [proving, setProving] = useState(false);
+  const provingRef = useRef(false);
+  const [progress, setProgress] = useState<ProveProgress | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [log, setLog] = useState<LogLine[]>([]);
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -62,35 +69,83 @@ export default function App() {
   const closeCtx = useCallback(() => setCtx(null), []);
   const pathRef = useRef<HTMLInputElement>(null);
 
-  const apply = useCallback((r: Reply, echo?: string) => {
+  const apply = useCallback((r: Reply) => {
     if (r.session) setSession(r.session);
-    setLog((l) => [
-      ...l,
-      ...(echo ? [{ kind: "in" as const, text: echo }] : []),
-      ...(r.result ? [{ kind: r.ok ? ("out" as const) : ("err" as const), text: r.result }] : []),
-    ]);
+    if (r.result) setLog((l) => [...l, { kind: r.ok ? "out" : "err", text: r.result }]);
   }, []);
 
+  // One backend request. The command is echoed up front so live console
+  // lines from a prove land under it; the result follows when it returns.
   const run = useCallback(
-    async (f: () => Promise<Reply>, echo?: string) => {
-      setBusy(true);
+    async (f: () => Promise<Reply>, echo?: string, isProve = false) => {
+      if (!isProve) setPending((n) => n + 1);
+      if (echo) setLog((l) => [...l, { kind: "in", text: echo }]);
       const t0 = performance.now();
       const note = (ok: boolean, text: string) =>
         echo &&
         setEvents((e) => [...e, { at: new Date(), cmd: echo, ok, ms: performance.now() - t0, summary: text.split("\n")[0] }]);
       try {
         const r = await f();
-        apply(r, echo);
+        apply(r);
         note(r.ok, r.result);
       } catch (e) {
         setLog((l) => [...l, { kind: "err", text: String(e) }]);
         note(false, String(e));
       } finally {
-        setBusy(false);
+        if (!isProve) setPending((n) => n - 1);
       }
     },
     [apply],
   );
+
+  // Live progress and console lines pushed by the backend during a prove.
+  useEffect(() => {
+    const offProgress = backend.onProgress((p) => {
+      setProgress(p);
+      if (p.kind === "done" || p.kind === "stopped") setStopping(false);
+    });
+    const offConsole = backend.onConsole((l) => setLog((log) => [...log, { kind: l.kind, text: l.text }]));
+    return () => {
+      offProgress();
+      offConsole();
+    };
+  }, []);
+  const live = progress?.kind === "start" || progress?.kind === "update";
+  const running = proving || live;
+  // The Running group disappears with the run; do not leave its filter behind.
+  useEffect(() => {
+    if (!running) setStatusFilter((f) => (f === "running" ? null : f));
+  }, [running]);
+
+  // One prove at a time: a second one (button, key or console) is refused.
+  const prove = async (cmd: string) => {
+    if (provingRef.current || live) {
+      setLog((l) => [...l, { kind: "in", text: cmd }, { kind: "err", text: "a prove is already running; stop it first (Esc)" }]);
+      return;
+    }
+    provingRef.current = true;
+    setProving(true);
+    setProgress(null);
+    try {
+      await run(() => backend.evalTcl(cmd), cmd, true);
+    } finally {
+      provingRef.current = false;
+      setProving(false);
+      setProgress(null);
+      setStopping(false);
+    }
+  };
+  const stop = () => {
+    if (!running || stopping) return;
+    setStopping(true);
+    backend
+      .stop()
+      .then((r) => !r.ok && setLog((l) => [...l, { kind: "err", text: r.result }]))
+      .catch((e) => {
+        setStopping(false);
+        setLog((l) => [...l, { kind: "err", text: `stop failed: ${e}` }]);
+      });
+  };
 
   useEffect(() => {
     run(() => backend.snapshot());
@@ -103,13 +158,15 @@ export default function App() {
 
   // Recomputed every render (cheap): the browser mock mutates the session in
   // place, so memoising on the session reference would go stale.
-  const allProps = session?.props ?? [];
+  // While a prove runs, its progress overlays the session (running rows,
+  // k-bound, elapsed); the reply's session takes over when it returns.
+  const allProps = withProgress(session?.props ?? [], live || proving ? progress : null);
   const props = allProps.filter(
     (p) =>
       matches(p, filter) &&
       (!statusFilter || statusKey(p) === statusFilter || (statusFilter !== "assume" && p.kind !== "assume" && p.status.status === statusFilter)),
   );
-  const counts: Partial<Record<StatusWord, number>> = {};
+  const counts: Partial<Record<ViewStatus, number>> = {};
   for (const p of allProps) if (p.kind !== "assume") counts[p.status.status] = (counts[p.status.status] ?? 0) + 1;
   const assumes = allProps.filter((p) => p.kind === "assume").length;
   const unprocessed = counts.unprocessed ?? 0;
@@ -122,14 +179,15 @@ export default function App() {
   const ports = useMemo(() => parsePorts(source), [source]);
   const hasTrace = !!current && (current.status.status === "cex" || current.status.status === "covered");
 
-  const proveAll = () => allProps.length && !busy && run(() => backend.evalTcl(proveCmd), proveCmd);
-  const proveSelected = () => current && current.kind !== "assume" && !busy && run(() => backend.evalTcl(proveOne(current.name)), proveOne(current.name));
+  const idle = !busy && !running;
+  const proveAll = () => allProps.length && idle && prove(proveCmd);
+  const proveSelected = () => current && current.kind !== "assume" && idle && prove(proveOne(current.name));
   const runScript = () => {
     if (!scriptPath) {
       pathRef.current?.focus();
       return;
     }
-    if (!busy) run(() => backend.source(scriptPath), `source ${scriptPath}`);
+    if (idle) run(() => backend.source(scriptPath), `source ${scriptPath}`);
   };
   const changeFlavor = (f: Flavor) => {
     setFlavor(f);
@@ -177,7 +235,11 @@ export default function App() {
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
     else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
-    else return; // Escape: open menus close themselves; Stop is not wired yet.
+    // Esc closes an open menu first (the context menu swallows its own Esc;
+    // the menu bar's pop-up is still in the DOM here) and a field may use it
+    // (the filter clears itself); only then does it stop a running prove.
+    else if (e.key === "Escape" && running && !e.defaultPrevented && !document.querySelector(".menu-pop")) stop();
+    else return;
     e.preventDefault();
   };
   useEffect(() => {
@@ -192,9 +254,9 @@ export default function App() {
         {
           label: "Prove",
           hint: proveOne(ctxProp.name),
-          disabled: busy || ctxProp.kind === "assume",
+          disabled: !idle || ctxProp.kind === "assume",
           title: ctxProp.kind === "assume" ? "Assumptions are not proved" : undefined,
-          onClick: () => run(() => backend.evalTcl(proveOne(ctxProp.name)), proveOne(ctxProp.name)),
+          onClick: () => prove(proveOne(ctxProp.name)),
         },
         { label: "Visualize trace", disabled: true, title: "Coming soon: waveforms for CEX and cover traces" },
         { label: "Show source", disabled: !topFile, onClick: () => { setSelected(ctxProp.name); setCenter("source"); } },
@@ -207,7 +269,7 @@ export default function App() {
           return {
             label: ctxProp.enabled ? "Disable" : "Enable",
             hint: cmd ?? undefined,
-            disabled: !cmd || busy,
+            disabled: !cmd || !idle,
             title: cmd ? undefined : "The JasperGold flavor of the fdv shell has no disable command yet; switch to VC Formal (fvdisable)",
             onClick: () => cmd && run(() => backend.evalTcl(cmd), cmd),
           };
@@ -217,6 +279,7 @@ export default function App() {
 
   const summary = [
     `${allProps.length} properties`,
+    ...(counts.running ? [`${counts.running} running`] : []),
     ...SUMMARY.filter((s) => counts[s]).map((s) => `${counts[s]} ${STATUS_LABEL[s].toLowerCase()}`),
     ...(unprocessed ? [`${unprocessed} unprocessed`] : []),
     ...(assumes ? [`${assumes} assumed`] : []),
@@ -292,9 +355,9 @@ export default function App() {
     {
       label: "Prove",
       items: [
-        { label: "Prove all", hint: proveCmd, keys: "F5", onClick: proveAll, disabled: busy || !allProps.length },
-        { label: "Prove selected", keys: "F6", onClick: proveSelected, disabled: busy || !current || current.kind === "assume" },
-        { label: "Stop", keys: "Esc", disabled: true },
+        { label: "Prove all", hint: proveCmd, keys: "F5", onClick: proveAll, disabled: !idle || !allProps.length },
+        { label: "Prove selected", keys: "F6", onClick: proveSelected, disabled: !idle || !current || current.kind === "assume" },
+        { label: stopping ? "Stopping…" : "Stop", keys: "Esc", onClick: stop, disabled: !running || stopping },
       ],
     },
     {
@@ -352,21 +415,21 @@ export default function App() {
         </label>
         <label className="field">
           <span>Flavor</span>
-          <select value={flavor} disabled={busy} onChange={(e) => changeFlavor(e.target.value as Flavor)} aria-label="Flavor">
+          <select value={flavor} disabled={!idle} onChange={(e) => changeFlavor(e.target.value as Flavor)} aria-label="Flavor">
             <option value="jg">JasperGold</option>
             <option value="vcf">VC Formal</option>
           </select>
         </label>
         <span className="vsep" />
-        <ToolBtn title={scriptPath ? `source ${scriptPath}` : "Run script (set a script path first)"} onClick={runScript} disabled={busy}>
+        <ToolBtn title={scriptPath ? `source ${scriptPath}` : "Run script (set a script path first)"} onClick={runScript} disabled={!idle}>
           <ScriptIcon />
         </ToolBtn>
-        <button className="tool tool-text" onClick={proveAll} disabled={busy || !allProps.length} title={`${proveCmd} (F5)`}>
-          <PlayIcon /> {busy ? "Running…" : "Prove all"}
+        <button className="tool tool-text" onClick={proveAll} disabled={!idle || !allProps.length} title={`${proveCmd} (F5)`}>
+          <PlayIcon /> Prove all
         </button>
-        <ToolBtn title="Stop (not wired to the backend yet)" disabled>
-          <StopIcon />
-        </ToolBtn>
+        <button className="tool tool-text" onClick={stop} disabled={!running || stopping} title="Stop the running prove (Esc)">
+          <StopIcon /> {stopping ? "Stopping…" : "Stop"} {!stopping && <span className="kbd">Esc</span>}
+        </button>
         <span className="vsep" />
         <ToolBtn title={hasTrace ? "Visualize trace (coming soon)" : "Visualize trace: select a CEX or cover"} disabled>
           <WaveIcon />
@@ -375,6 +438,23 @@ export default function App() {
           <CodeIcon />
         </ToolBtn>
         <span className="spacer" />
+        {running && progress && (
+          <span className="progress">
+            <span
+              className="progress-track"
+              role="progressbar"
+              aria-label="Prove progress"
+              aria-valuemin={0}
+              aria-valuemax={progress.total}
+              aria-valuenow={progress.done}
+            >
+              <span className="progress-fill" style={{ width: `${progress.total ? (100 * progress.done) / progress.total : 0}%` }} />
+            </span>
+            <span className="progress-text mono">
+              {progress.done} of {progress.total} · {clock(progress.elapsed_ms)}
+            </span>
+          </span>
+        )}
         {!backend.inTauri && <span className="muted small">Browser preview</span>}
       </div>
 
@@ -512,7 +592,7 @@ export default function App() {
             onChange={(t) => setBottomTab(t as BottomTab)}
           />
           {/* kept mounted so history and scroll survive tab switches */}
-          <Console hidden={bottomTab !== "console"} log={log} busy={busy} flavor={flavor} onSubmit={(cmd) => run(() => backend.evalTcl(cmd), cmd)} />
+          <Console hidden={bottomTab !== "console"} log={log} busy={busy} flavor={flavor} onSubmit={(cmd) => (isProveCmd(cmd) ? prove(cmd) : run(() => backend.evalTcl(cmd), cmd))} />
           {bottomTab === "details" &&
             (current ? (
               <div className="details">
@@ -547,7 +627,7 @@ export default function App() {
                   </dl>
                   <div className="details-actions">
                     {current.kind !== "assume" && (
-                      <button className="btn" disabled={busy} onClick={proveSelected}>
+                      <button className="btn" disabled={!idle} onClick={proveSelected}>
                         Re-prove
                       </button>
                     )}
@@ -574,7 +654,14 @@ export default function App() {
         <span>reset: <span className="mono">{session?.reset ?? "—"}</span></span>
         <span>{flavor === "jg" ? "JasperGold" : "VC Formal"} flavor</span>
         <span className="spacer" />
-        <span>{busy ? "Running…" : "Idle"}</span>
+        {running ? (
+          <span className="run">
+            <Glyph k="running" />
+            {stopping ? "Stopping…" : progress ? `Proving · ${progress.done}/${progress.total}` : "Proving…"}
+          </span>
+        ) : (
+          <span>{busy ? "Working…" : "Idle"}</span>
+        )}
       </footer>
 
       {ctx && ctxProp && <ContextMenu x={ctx.x} y={ctx.y} items={ctxItems} label={`Actions for ${ctxProp.name}`} onClose={closeCtx} />}

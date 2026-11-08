@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { Property } from "../backend";
-import { bound, KIND_LETTER, sortValue, TASK, time, type SortKey } from "../model";
+import { bound, KIND_LETTER, sortValue, TASK, time, type SortKey, type ViewProp as Property } from "../model";
 import { Status } from "./Glyph";
 
 export const COLS: { key: SortKey | null; label: string; cls?: string }[] = [
