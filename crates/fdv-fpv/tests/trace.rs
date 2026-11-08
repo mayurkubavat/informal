@@ -41,7 +41,31 @@ fn prove_counter(engine: &str, tag: &str) -> Option<Shell> {
         eprintln!("skipping: fdv-bmc engines need CaDiCaL");
         return None;
     }
+    if engine == "fake-cex" {
+        // Says SAT with a one-frame witness that cannot reach the property.
+        let toml = r#"
+[[engine]]
+name = "fake-cex"
+program = "sh"
+args = ["-c", "printf 'SAT\\nsat\\nb0\\n#0\\n@0\\n.\\n'", "fake", "{model}"]
+formats = ["btor2"]
+finds_bugs = true
+cex_witness = true
+[engine.patterns]
+unsafe = '(?m)^SAT$'
+"#;
+        engines = fdv_engines_ext::parse_config(toml).unwrap();
+    }
+    if engine.starts_with("ric3") {
+        let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("ric3").is_file()));
+        if !on_path {
+            eprintln!("skipping: needs ric3 on PATH");
+            return None;
+        }
+        engines = fdv_engines_ext::load(&root().join("config/engines.toml")).unwrap();
+    }
     engines.retain(|e| e.name() == engine);
+    assert_eq!(engines.len(), 1, "no engine {engine}");
     let work = std::env::temp_dir().join(format!("fdv-trace-{tag}-{}", std::process::id()));
     // The counter script without the safe properties, which BMC alone
     // would run on until the time limit.
@@ -104,6 +128,25 @@ fn check_counter_traces(sh: &Shell, engine: &str) {
 fn counter_traces_from_bmc_witness() {
     let Some(sh) = prove_counter("fdv-bmc", "bmc") else { return };
     check_counter_traces(&sh, "fdv-bmc");
+    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
+}
+
+#[test]
+fn counter_traces_from_ric3_witness_without_a_rerun() {
+    // rIC3 IC3 prints its counterexample (--cex, Btor2 witness format);
+    // fdv converts it to a named witness, so no BMC re-run is needed.
+    let Some(sh) = prove_counter("ric3-ic3", "ric3") else { return };
+    check_counter_traces(&sh, "ric3-ic3");
+    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
+}
+
+#[test]
+fn a_witness_that_does_not_replay_falls_back_to_bmc() {
+    let Some(sh) = prove_counter("fake-cex", "fake") else { return };
+    check_counter_traces(&sh, "fake-cex");
+    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 2);
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
 }
 
@@ -113,5 +156,28 @@ fn counter_traces_when_the_winner_has_no_witness() {
     // witness, so the session re-runs BMC for the trace.
     let Some(sh) = prove_counter("fdv-kind", "kind") else { return };
     check_counter_traces(&sh, "fdv-kind");
+    // One re-run per trace (a_never9, c_done).
+    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 2);
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
+}
+
+/// A hand-written AIGER witness for the 2-bit counter, converted by
+/// fdv_engine::witness, replays on the model: q reaches 3 in cycle 3. One
+/// with the enable low never gets there and is refused.
+#[test]
+fn an_aiger_witness_replays_on_the_counter() {
+    let model = root().join("tests/models/counter2_unsafe.aag");
+    let g = fdv_aig::load(&model).unwrap();
+    let name = |l: u32| g.names.get(&fdv_aig::var(l)).cloned();
+    let inputs: Vec<_> = g.inputs.iter().map(|&i| name(i)).collect();
+    let latches: Vec<_> = g.latches.iter().map(|l| name(l.lit)).collect();
+    let named = fdv_engine::witness::from_aiger("1\nb0\n00\n1\n1\n1\n0\n.\n", &inputs, &latches).unwrap();
+    let w = fdv_fpv::trace::parse_witness(&named).expect("a named witness");
+    assert_eq!(w.depth, 3);
+    let vcd = fdv_fpv::trace::vcd_from_witness(&model, &w, "q_is_3", "clk").unwrap();
+    assert_eq!(value_at(&vcd, "q", 0).as_deref(), Some("00"));
+    assert_eq!(value_at(&vcd, "q", 30).as_deref(), Some("11"), "{vcd}");
+    let idle = fdv_engine::witness::from_aiger("1\nb0\n00\n0\n0\n0\n0\n.\n", &inputs, &latches).unwrap();
+    let w = fdv_fpv::trace::parse_witness(&idle).unwrap();
+    assert!(fdv_fpv::trace::vcd_from_witness(&model, &w, "q_is_3", "clk").is_err());
 }

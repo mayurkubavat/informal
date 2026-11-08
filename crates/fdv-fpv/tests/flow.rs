@@ -49,12 +49,16 @@ fn jaspergold_script() {
         ("c_10", "unreachable"),
     ];
     assert_eq!(got, want.map(|(n, s)| (n.to_string(), s)));
-    // rIC3 gives no witness: the traces come from the BMC re-run.
+    // rIC3 prints its counterexample (--cex); converted to a named witness
+    // it gives the traces without a BMC re-run.
+    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 0);
     for p in &sh.session.borrow().props {
         let want = matches!(p.name.as_str(), "a_never9" | "c_done");
         assert_eq!(p.trace.is_some(), want, "{}: {:?}", p.name, p.trace);
+        // The shortest trace is 10 cycles deep (ric3-bmc's); IC3's own
+        // counterexample, now kept, may hold the enable low for a while.
         if let fdv_fpv::Status::Cex { depth, .. } | fdv_fpv::Status::Covered { depth, .. } = &p.status {
-            assert_eq!(*depth, Some(10), "{}", p.name);
+            assert!(depth.is_some_and(|d| d >= 10), "{}: {depth:?}", p.name);
         }
     }
     let proven = sh

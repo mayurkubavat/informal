@@ -197,6 +197,10 @@ pub struct Session {
     /// Receives live progress while a prove runs (the desktop app).
     #[serde(skip)]
     pub sink: Option<Arc<dyn ProveSink>>,
+    /// BMC re-runs made only to get a trace (the winner gave no usable
+    /// witness). Tests and diagnostics read it.
+    #[serde(skip)]
+    pub trace_reruns: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Session {
@@ -219,6 +223,7 @@ impl Session {
             frontend: String::new(),
             stop: Arc::default(),
             sink: None,
+            trace_reruns: Arc::default(),
         }
     }
 
@@ -786,32 +791,45 @@ impl Session {
     }
 
     /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the
-    /// winner's named witness or, when the winner gave none (external
-    /// engines, IC3, k-induction), from a BMC re-run to the reported depth
-    /// that only serves to produce one. Returns the path and the trace's
-    /// depth. Failures are logged and give no trace; the verdict stands
-    /// either way.
+    /// winner's named witness (fdv's own engines, and external engines
+    /// whose counterexample fdv converts: rIC3 `--cex`, ABC `write_cex`) or,
+    /// when the winner gave none or it does not replay, from a BMC re-run to
+    /// the reported depth that only serves to produce one. Returns the path
+    /// and the trace's depth. Failures are logged and give no trace; the
+    /// verdict stands either way.
     fn write_trace(&self, i: usize, model: &Path, witness: Option<&str>, depth: Option<u32>) -> Option<(String, usize)> {
         let name = &self.props[i].name;
-        let w = match witness.and_then(trace::parse_witness) {
-            Some(w) => w,
-            None => match self.trace_bmc(model, depth) {
-                Ok(w) => w,
-                Err(e) => {
-                    self.log(&format!("{name}: no trace: {e:#}"));
-                    return None;
-                }
-            },
-        };
         let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
         // Replay on the copy with named combinational nets when there is one.
         let with_nets = trace_model(model);
         let replay = if with_nets.is_file() { with_nets.as_path() } else { model };
-        let vcd = match trace::vcd_from_witness(replay, &w, name, clock) {
-            Ok(v) => v,
-            Err(e) => {
-                self.log(&format!("{name}: no trace: {e:#}"));
-                return None;
+        let from_winner = witness.and_then(trace::parse_witness).and_then(|w| {
+            match trace::vcd_from_witness(replay, &w, name, clock) {
+                Ok(v) => Some((v, w.depth)),
+                Err(e) => {
+                    self.log(&format!("{name}: the engine's witness does not replay ({e:#}); re-running BMC for the trace"));
+                    None
+                }
+            }
+        });
+        let (vcd, trace_depth) = match from_winner {
+            Some(t) => t,
+            None => {
+                self.trace_reruns.fetch_add(1, Ordering::SeqCst);
+                let w = match self.trace_bmc(model, depth) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        self.log(&format!("{name}: no trace: {e:#}"));
+                        return None;
+                    }
+                };
+                match trace::vcd_from_witness(replay, &w, name, clock) {
+                    Ok(v) => (v, w.depth),
+                    Err(e) => {
+                        self.log(&format!("{name}: no trace: {e:#}"));
+                        return None;
+                    }
+                }
             }
         };
         let path = self.workdir.join(trace::file_name(name));
@@ -823,7 +841,7 @@ impl Session {
             .ok()
             .and_then(|d| path.strip_prefix(d).ok().map(Path::to_path_buf))
             .unwrap_or(path);
-        Some((shown.display().to_string(), w.depth))
+        Some((shown.display().to_string(), trace_depth))
     }
 
     /// A witness from fdv-bmc on `model`, searching up to `depth` (64
