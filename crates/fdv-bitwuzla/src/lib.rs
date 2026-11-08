@@ -398,6 +398,7 @@ fn unroll(
             engine: name.into(),
             bound: Some(k as u32),
             note: String::new(),
+            output: None,
         });
         prev = f;
         k += 1;

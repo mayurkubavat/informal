@@ -43,7 +43,7 @@ export function parseLayout(raw: string | null, viewH: number): Layout {
     leftOpen: typeof o.leftOpen === "boolean" ? o.leftOpen : d.leftOpen,
     left: pick(o.left, ["tasks", "design"] as const, d.left),
     center: pick(o.center, ["table", "source"] as const, d.center),
-    bottom: pick(o.bottom, ["console", "details", "messages"] as const, d.bottom),
+    bottom: pick(o.bottom, ["console", "details", "messages", "log"] as const, d.bottom),
   };
 }
 

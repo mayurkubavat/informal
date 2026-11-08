@@ -7,11 +7,14 @@
 
 use anyhow::{bail, Context};
 use fdv_engine::{
-    Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, RunContext, Verdict,
+    Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
 };
+
+/// Output lines per stream forwarded live to a progress listener per run.
+const LOG_LINES: usize = 2000;
 use regex::Regex;
 use serde::Deserialize;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -302,16 +305,40 @@ impl Engine for ExternalEngine {
             )
         })?;
 
-        // Drain both pipes on threads so a chatty engine cannot block on a full pipe.
-        let drain = |mut r: Box<dyn Read + Send>| {
+        // Drain both pipes on threads so a chatty engine cannot block on a
+        // full pipe. With a progress channel (the desktop app), each line is
+        // also forwarded as it arrives, up to LOG_LINES per stream.
+        let drain = |r: Box<dyn Read + Send>, stderr: bool| {
+            let tx = ctx.progress.clone();
+            let name = self.spec.name.clone();
             std::thread::spawn(move || {
-                let mut s = String::new();
-                let _ = r.read_to_string(&mut s);
-                s
+                let mut r = std::io::BufReader::new(r);
+                let mut all = Vec::new();
+                let mut line = Vec::new();
+                let mut sent = 0usize;
+                loop {
+                    line.clear();
+                    match r.read_until(b'\n', &mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    all.extend_from_slice(&line);
+                    if let Some(tx) = &tx {
+                        if sent < LOG_LINES {
+                            let text = String::from_utf8_lossy(&line).trim_end_matches(['\n', '\r']).to_string();
+                            let _ = tx.send(Progress::line(&name, text, stderr));
+                        } else if sent == LOG_LINES {
+                            let note = format!("[{name}: further {} output not shown]", if stderr { "stderr" } else { "stdout" });
+                            let _ = tx.send(Progress::line(&name, note, stderr));
+                        }
+                        sent += 1;
+                    }
+                }
+                String::from_utf8_lossy(&all).into_owned()
             })
         };
-        let out_t = drain(Box::new(child.stdout.take().expect("piped")));
-        let err_t = drain(Box::new(child.stderr.take().expect("piped")));
+        let out_t = drain(Box::new(child.stdout.take().expect("piped")), false);
+        let err_t = drain(Box::new(child.stderr.take().expect("piped")), true);
 
         let status = loop {
             if let Some(st) = child.try_wait()? {
@@ -387,6 +414,33 @@ mod tests {
                 .unwrap()
                 .verdict,
             Verdict::Safe
+        );
+    }
+
+    #[test]
+    fn streams_output_lines_while_running() {
+        let pats = "[engine.patterns]\nsafe = '(?m)^unsat$'\n";
+        // The second line only comes after the first was forwarded.
+        let e = sh_engine("s", "echo one; echo warn >&2; sleep 0.3; echo unsat", pats);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut ctx = RunContext::new(Duration::from_secs(5));
+        ctx.progress = Some(tx);
+        let t = std::thread::spawn(move || {
+            let first = rx.recv_timeout(Duration::from_millis(250)).ok();
+            let rest: Vec<_> = rx.iter().collect();
+            (first, rest)
+        });
+        let r = e.check(&req(5_000), &ctx).unwrap();
+        drop(ctx);
+        assert_eq!(r.verdict, Verdict::Safe);
+        let (first, rest) = t.join().unwrap();
+        let first = first.expect("a line before the engine exits");
+        assert_eq!(first.engine, "s");
+        let mut lines: Vec<_> = std::iter::once(first).chain(rest).filter_map(|p| p.output).collect();
+        lines.sort();
+        assert_eq!(
+            lines,
+            [("one".to_string(), false), ("unsat".to_string(), false), ("warn".to_string(), true)]
         );
     }
 

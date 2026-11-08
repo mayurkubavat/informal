@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Console } from "./Console";
 
@@ -52,5 +52,70 @@ describe("Console", () => {
     const { container } = render(<Console hidden={true} log={[]} busy={true} flavor="jg" onSubmit={() => {}} />);
     expect(container.querySelector(".console")).not.toBeVisible();
     expect(container.querySelector("input")).toBeDisabled();
+  });
+
+  describe("Tab completion", () => {
+    const names = ["prove", "a_max", "a_never9", "a_step"];
+    const complete = vi.fn(async (p: string) => names.filter((n) => n.startsWith(p)));
+    const setup = () => {
+      complete.mockClear();
+      render(<Console hidden={false} log={[]} busy={false} flavor="jg" onSubmit={() => {}} complete={complete} />);
+      return screen.getByLabelText("Tcl command");
+    };
+
+    it("completes a single match with a trailing space", async () => {
+      const input = setup();
+      await userEvent.type(input, "pro");
+      await userEvent.keyboard("{Tab}");
+      await waitFor(() => expect(input).toHaveValue("prove "));
+      expect(complete).toHaveBeenCalledWith("pro");
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(input).toHaveFocus();
+    });
+
+    it("lists several matches and cycles with Tab / Shift+Tab", async () => {
+      const input = setup();
+      await userEvent.type(input, "prove -property a_");
+      await userEvent.keyboard("{Tab}");
+      await waitFor(() => expect(input).toHaveValue("prove -property a_max"));
+      const list = screen.getByRole("listbox", { name: "Completions" });
+      expect(list).toHaveTextContent("a_maxa_never9a_step");
+      expect(screen.getByRole("option", { selected: true })).toHaveTextContent("a_max");
+      await userEvent.keyboard("{Tab}");
+      expect(input).toHaveValue("prove -property a_never9");
+      expect(screen.getByRole("option", { selected: true })).toHaveTextContent("a_never9");
+      await userEvent.keyboard("{Tab}{Tab}");
+      expect(input).toHaveValue("prove -property a_max");
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(input).toHaveValue("prove -property a_step");
+      // The backend is asked once; cycling is local.
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(input).toHaveFocus();
+    });
+
+    it("typing or Esc closes the list", async () => {
+      const input = setup();
+      await userEvent.type(input, "a_");
+      await userEvent.keyboard("{Tab}");
+      await screen.findByRole("listbox");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(input).toHaveValue("a_max");
+      await userEvent.clear(input);
+      await userEvent.type(input, "a_");
+      await userEvent.keyboard("{Tab}");
+      await screen.findByRole("listbox");
+      await userEvent.type(input, "x");
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(input).toHaveValue("a_maxx");
+    });
+
+    it("leaves Tab alone when there is no word to complete", async () => {
+      const input = setup();
+      await userEvent.click(input);
+      await userEvent.keyboard("{Tab}");
+      expect(complete).not.toHaveBeenCalled();
+      expect(input).not.toHaveFocus();
+    });
   });
 });

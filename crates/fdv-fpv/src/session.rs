@@ -706,7 +706,10 @@ impl Session {
                 // Ends when the portfolio returns and drops the last sender.
                 sc.spawn(move || {
                     for p in rx {
-                        t.bound(slot, &p.engine, p.bound);
+                        match p.output {
+                            Some((text, err)) => t.engine_line(slot, &p.engine, text, err),
+                            None => t.bound(slot, &p.engine, p.bound),
+                        }
                     }
                 });
                 portfolio::run_until(engines, &req, Some(tx), stop)

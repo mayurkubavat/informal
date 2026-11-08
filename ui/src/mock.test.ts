@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mock, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
-import type { ConsoleLine, ProveProgress } from "./backend";
+import { mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
+import type { ConsoleLine, EngineLine, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
 // it found it where that matters.
@@ -17,6 +17,24 @@ describe("browser mock", () => {
     expect(r.ok).toBe(true);
     expect(r.session?.design.top).toBe("counter");
     expect(r.session?.props.map((p) => p.name)).toEqual(["a_max", "a_step", "a_never9", "c_done", "c_10", "m_en"]);
+  });
+
+  it("completes the flavor's commands, then property names", async () => {
+    expect(mockComplete("pro")).toEqual(["prove"]);
+    expect(mockComplete("a_")).toEqual(["a_max", "a_never9", "a_step"]);
+    expect(mockComplete("")).toEqual([]);
+    await mock("shell_flavor", { flavor: "vcf" });
+    expect(mockComplete("fv")).toEqual(["fvassert", "fvassume", "fvcover", "fvdisable", "fvenable"]);
+    expect(mockComplete("pro")).toEqual([]);
+  });
+
+  it("emits engine-log lines while proving", async () => {
+    const got: EngineLine[] = [];
+    const off = mockEvents.on("engine-log", (l) => got.push(l as EngineLine));
+    await mock("shell_eval", { script: "prove -property a_never9" });
+    off();
+    expect(got.map((l) => l.text)).toEqual(["reading fdv_work/a_never9.btor2", "frame 6", "sat"]);
+    expect(got.every((l) => l.prop === "a_never9" && l.engine === "ric3-bmc" && !l.err)).toBe(true);
   });
 
   it("refuses fvdisable under the JasperGold flavor", async () => {

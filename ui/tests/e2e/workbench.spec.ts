@@ -294,8 +294,10 @@ test.describe("keyboard model", () => {
     await expect(page.getByRole("tab", { name: "Console" })).toHaveAttribute("aria-selected", "true");
   });
 
-  test("Ctrl+1..3 switch the bottom dock tabs", async ({ page }) => {
+  test("Ctrl+1..4 switch the bottom dock tabs", async ({ page }) => {
     const tab = (n: RegExp) => page.getByRole("tab", { name: n });
+    await page.keyboard.press("Control+4");
+    await expect(tab(/^Log$/)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Control+3");
     await expect(tab(/^Messages/)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Control+2");
@@ -317,8 +319,75 @@ test.describe("keyboard model", () => {
   test("Help > Keyboard shortcuts prints the list in the console", async ({ page }) => {
     await page.getByRole("menuitem", { name: "Help", exact: true }).click();
     await page.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
-    await expect(page.locator(".console-log")).toContainText("Ctrl+1..3");
+    await expect(page.locator(".console-log")).toContainText("Ctrl+1..4");
     await expect(page.locator(".console-log")).toContainText("Prove selected");
+  });
+});
+
+test.describe("console completion", () => {
+  const input = (page: Page) => page.getByLabel("Tcl command");
+
+  test("Tab completes a command; the completed line runs", async ({ page }) => {
+    await input(page).fill("pro");
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("prove ");
+    await expect(input(page)).toBeFocused();
+    await input(page).pressSequentially("-all");
+    await input(page).press("Enter");
+    await expect(statusbar(page)).toContainText("Idle");
+    await expect(summary(page)).toContainText("2 proven");
+  });
+
+  test("several matches are listed; Tab cycles through them", async ({ page }) => {
+    await input(page).fill("prove -property a_");
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("prove -property a_max");
+    const list = page.getByRole("listbox", { name: "Completions" });
+    await expect(list.getByRole("option")).toHaveText(["a_max", "a_never9", "a_step"]);
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("prove -property a_never9");
+    await expect(list.getByRole("option", { selected: true })).toHaveText("a_never9");
+    await input(page).press("Shift+Tab");
+    await expect(input(page)).toHaveValue("prove -property a_max");
+    await input(page).press("Escape");
+    await expect(list).toHaveCount(0);
+  });
+
+  test("completion follows the flavor", async ({ page }) => {
+    await page.getByLabel("Flavor").selectOption("vcf");
+    await expect(statusbar(page)).toContainText("Idle");
+    await input(page).fill("check");
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("check_fv ");
+  });
+});
+
+test.describe("engine log", () => {
+  const logTab = (page: Page) => page.getByRole("tab", { name: "Log", exact: true });
+  const log = (page: Page) => page.getByRole("log", { name: "Engine output" });
+
+  test("the Log tab shows engine output from a prove; Clear empties it", async ({ page }) => {
+    await logTab(page).click();
+    await expect(page.getByText(/No engine output yet/)).toBeVisible();
+    await proveAll(page);
+    await expect(log(page)).toContainText("a_never9 ric3-bmcreading fdv_work/a_never9.btor2");
+    await expect(log(page)).toContainText("a_max ric3-ic3unsat");
+    await expect(page.locator(".log-bar")).toContainText(/\d+ lines/);
+    await page.getByRole("button", { name: "Clear" }).click();
+    await expect(page.getByText(/No engine output yet/)).toBeVisible();
+  });
+
+  test("lines arriving while another tab is open are kept; autoscroll can be turned off", async ({ page }) => {
+    await page.goto("/?tick=20");
+    await page.keyboard.press("Control+4");
+    await page.getByRole("checkbox", { name: "Autoscroll" }).uncheck();
+    await page.keyboard.press("Control+1");
+    await page.getByRole("button", { name: "Prove all" }).click();
+    await expect(statusbar(page)).toContainText("Idle");
+    await page.keyboard.press("Control+4");
+    await expect(log(page).locator(".line")).not.toHaveCount(0);
+    await expect(page.getByRole("checkbox", { name: "Autoscroll" })).not.toBeChecked();
+    await expect.poll(() => log(page).evaluate((el) => el.scrollTop)).toBe(0);
   });
 });
 

@@ -17,7 +17,7 @@ export type LogLine = { kind: "in" | "out" | "err"; text: string };
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
 export type Theme = "system" | "light" | "dark";
 export type Center = "table" | "source" | "trace";
-export type BottomTab = "console" | "details" | "messages";
+export type BottomTab = "console" | "details" | "messages" | "log";
 export type LeftTab = "tasks" | "design";
 export type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time";
 export type StatusFilter = ViewStatus | "assume" | null;
@@ -124,6 +124,32 @@ export function withProgress(props: Property[], prog: ProveProgress | null): Vie
 export function traceOf(p: ViewProp | null): string | null {
   if (!p || (p.status.status !== "cex" && p.status.status !== "covered")) return null;
   return p.trace ?? null;
+}
+
+// ---- console Tab completion ----
+// The word Tab completes: the text after the last space, `[`, `{` or `;`.
+export function completionWord(cmd: string): { base: string; word: string } {
+  const m = cmd.match(/^(.*[\s[{;])?([^\s[{;]*)$/s);
+  const base = m?.[1] ?? "";
+  return { base, word: cmd.slice(base.length) };
+}
+// A completion in progress: the input before the word, the candidates, and
+// which one is in the input now (-1: none inserted yet).
+export type Completion = { base: string; matches: string[]; index: number };
+// Start completing `cmd` with `matches` from the backend: one match is
+// inserted with a trailing space and ends completion (null state); several
+// insert the first and keep the list for cycling; none leaves it unchanged.
+export function startCompletion(cmd: string, matches: string[]): { cmd: string; state: Completion | null } {
+  const { base } = completionWord(cmd);
+  if (!matches.length) return { cmd, state: null };
+  if (matches.length === 1) return { cmd: `${base}${matches[0]} `, state: null };
+  return { cmd: base + matches[0], state: { base, matches, index: 0 } };
+}
+// Repeated Tab (dir 1) or Shift+Tab (dir -1): the next candidate, wrapping.
+export function cycleCompletion(c: Completion, dir: 1 | -1): { cmd: string; state: Completion } {
+  const n = c.matches.length;
+  const index = (((c.index + dir) % n) + n) % n;
+  return { cmd: c.base + c.matches[index], state: { ...c, index } };
 }
 
 // Commands that start a prove (one at a time; the UI refuses a second).

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bound, groupOf, identifiers, matches, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
-  statusKey, statusText, clock, isProveCmd, withProgress, guessKind, sourceFile, sourceLine,
+  statusKey, statusText, clock, isProveCmd, withProgress, guessKind, sourceFile, sourceLine, completionWord, startCompletion, cycleCompletion,
 } from "./model";
 import type { ProveProgress } from "./backend";
 import { MOCK_RTL, MOCK_SCRIPT, mockScript, mockSource, mockText } from "./mock";
@@ -123,6 +123,35 @@ describe("locate", () => {
     expect(locate(src, prop("x", { expr: "1" }))).toBe(0);
     expect(locate("", prop("a_named"))).toBe(0);
     expect(locate(src, null)).toBe(0);
+  });
+});
+
+describe("console completion", () => {
+  it("completes the last word after a space, bracket, brace or semicolon", () => {
+    expect(completionWord("pro")).toEqual({ base: "", word: "pro" });
+    expect(completionWord("prove -property a_n")).toEqual({ base: "prove -property ", word: "a_n" });
+    expect(completionWord("puts [get_st")).toEqual({ base: "puts [", word: "get_st" });
+    expect(completionWord("check_fv -property {a_")).toEqual({ base: "check_fv -property {", word: "a_" });
+    expect(completionWord("clear -all; pro")).toEqual({ base: "clear -all; ", word: "pro" });
+    expect(completionWord("prove ")).toEqual({ base: "prove ", word: "" });
+  });
+  it("inserts a single match with a space and ends", () => {
+    expect(startCompletion("pro", ["prove"])).toEqual({ cmd: "prove ", state: null });
+    expect(startCompletion("zz", [])).toEqual({ cmd: "zz", state: null });
+  });
+  it("inserts the first of several and cycles both ways, wrapping", () => {
+    const first = startCompletion("prove -property a_", ["a_max", "a_never9", "a_step"]);
+    expect(first.cmd).toBe("prove -property a_max");
+    let st = first.state!;
+    expect(st).toEqual({ base: "prove -property ", matches: ["a_max", "a_never9", "a_step"], index: 0 });
+    const seen: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = cycleCompletion(st, 1);
+      seen.push(r.cmd);
+      st = r.state;
+    }
+    expect(seen).toEqual(["prove -property a_never9", "prove -property a_step", "prove -property a_max"]);
+    expect(cycleCompletion(st, -1).cmd).toBe("prove -property a_step");
   });
 });
 
