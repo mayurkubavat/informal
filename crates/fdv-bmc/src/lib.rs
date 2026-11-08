@@ -156,6 +156,12 @@ impl Engine for Bmc {
                         .zip(&bads)
                         .find(|(_, &b)| u.sat.value(b))
                         .map_or(last, |(f, _)| f);
+                    // Never report a trace we cannot replay.
+                    if let Err(e) = replay(&g, &u, d) {
+                        break unknown(format!(
+                            "internal error: counterexample does not replay: {e}"
+                        ));
+                    }
                     break Verdict::Unsafe {
                         depth: Some(d as u32),
                     };
@@ -179,6 +185,57 @@ impl Engine for Bmc {
         };
         Ok(result(self.name(), v, t0))
     }
+}
+
+/// Simulate `g` with the inputs (and free initial latch values) of the
+/// solver's model, frames 0..=d: the constraints must hold in every frame
+/// and some bad output in frame d. Checks the SAT encoding end to end.
+fn replay(g: &Aig, u: &Unroll, d: usize) -> Result<(), String> {
+    let n = g.nodes.len();
+    let lv = |val: &[bool], l: fdv_aig::Lit| val[fdv_aig::var(l) as usize] ^ fdv_aig::is_neg(l);
+    let mut state: Vec<bool> = g
+        .latches
+        .iter()
+        .map(|l| match l.init {
+            fdv_aig::Init::Zero => false,
+            fdv_aig::Init::One => true,
+            _ => u.sat.value(u.lit(0, l.lit)),
+        })
+        .collect();
+    let mut val = vec![false; n];
+    for f in 0..=d {
+        let mut li = 0;
+        for v in 0..n {
+            val[v] = match g.nodes[v] {
+                fdv_aig::Node::Const => false,
+                fdv_aig::Node::Input => u.sat.value(u.lit(f, 2 * v as u32)),
+                fdv_aig::Node::Latch => {
+                    li += 1;
+                    state[li - 1]
+                }
+                fdv_aig::Node::And(a, b) => lv(&val, a) && lv(&val, b),
+            };
+        }
+        if f == 0 {
+            for l in &g.latches {
+                if let fdv_aig::Init::Expr(e) = l.init {
+                    if lv(&val, l.lit) != lv(&val, e) {
+                        return Err("initial value expression".into());
+                    }
+                }
+            }
+        }
+        if let Some(c) = g.constraints.iter().position(|&c| !lv(&val, c)) {
+            return Err(format!("constraint {c} fails at frame {f}"));
+        }
+        if f == d && !g.bads.iter().any(|&b| lv(&val, b)) {
+            return Err(format!("no bad output at frame {d}"));
+        }
+        for (i, l) in g.latches.iter().enumerate() {
+            state[i] = lv(&val, l.next);
+        }
+    }
+    Ok(())
 }
 
 /// k-induction with lazy simple-path constraints: alongside BMC, checks
