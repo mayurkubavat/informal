@@ -295,3 +295,36 @@ test.describe("keyboard model", () => {
     await expect(page.locator(".console-log")).toContainText("Prove selected");
   });
 });
+
+test.describe("filter", () => {
+  const box = (page: Page) => page.getByLabel("Filter properties");
+  const count = (page: Page) => page.locator(".filter-count");
+
+  test("is case-insensitive across name, expression and engine, with a match count", async ({ page }) => {
+    await expect(count(page)).toHaveCount(0);
+    await box(page).fill("A_MAX");
+    await expect(rows(page)).toHaveCount(1);
+    await expect(count(page)).toHaveText("1 of 6");
+    await box(page).fill("Q != 4'D9");
+    await expect(rows(page)).toHaveCount(1);
+    await expect(row(page, "a_never9")).toHaveCount(1);
+    await proveAll(page);
+    await box(page).fill("BMC");
+    await expect(rows(page)).toHaveCount(2);
+    await expect(count(page)).toHaveText("2 of 6");
+    await box(page).fill("zzz");
+    await expect(page.getByText("No properties match the current filter.")).toBeVisible();
+    await expect(count(page)).toHaveText("0 of 6");
+  });
+
+  test("combines with the status filter and Esc clears the text", async ({ page }) => {
+    await proveAll(page);
+    await treeGroup(page, "Proven").click();
+    await expect(count(page)).toHaveText("2 of 6");
+    await box(page).fill("step");
+    await expect(count(page)).toHaveText("1 of 6");
+    await box(page).press("Escape");
+    await expect(box(page)).toHaveValue("");
+    await expect(count(page)).toHaveText("2 of 6");
+  });
+});

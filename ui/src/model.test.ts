@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  bound, groupOf, identifiers, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
+  bound, groupOf, identifiers, matches, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
   statusKey, statusText,
 } from "./model";
 import { mockSource } from "./mock";
@@ -155,5 +155,21 @@ describe("groupOf", () => {
     expect(groupOf(prop("m", { kind: "assume" }, { status: "proven" }))).toBe("assume");
     expect(groupOf(prop("p", { enabled: false }, { status: "cex" }))).toBe("cex");
     expect(groupOf(prop("p"))).toBe("unprocessed");
+  });
+});
+
+describe("matches", () => {
+  const p = prop("a_Never9", { expr: "q != 4'd9" }, { status: "cex", engine: "ric3-BMC" });
+  it("matches name, expression and engine, ignoring case and surrounding space", () => {
+    expect(matches(p, "never")).toBe(true);
+    expect(matches(p, "Q != 4")).toBe(true);
+    expect(matches(p, "bmc")).toBe(true);
+    expect(matches(p, "  A_NEVER9 ")).toBe(true);
+  });
+  it("matches everything for an empty query and nothing for a miss", () => {
+    expect(matches(p, "")).toBe(true);
+    expect(matches(p, "   ")).toBe(true);
+    expect(matches(p, "kind")).toBe(false);
+    expect(matches(prop("x"), "bmc")).toBe(false);
   });
 });

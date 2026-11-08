@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, Flavor, Reply, SessionView, StatusWord } from "./backend";
 import {
-  bound, locate, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time,
+  bound, locate, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter,
 } from "./model";
 import { useTheme } from "./useTheme";
@@ -104,7 +104,7 @@ export default function App() {
   const allProps = session?.props ?? [];
   const props = allProps.filter(
     (p) =>
-      (p.name.includes(filter) || p.expr.includes(filter)) &&
+      matches(p, filter) &&
       (!statusFilter || statusKey(p) === statusFilter || (statusFilter !== "assume" && p.kind !== "assume" && p.status.status === statusFilter)),
   );
   const counts: Partial<Record<StatusWord, number>> = {};
@@ -401,7 +401,26 @@ export default function App() {
                     clear status filter
                   </button>
                 )}
-                <input id="prop-filter" className="filter" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter properties" />
+                {(filter.trim() || statusFilter) && (
+                  <span className="filter-count" role="status" aria-live="polite">
+                    {props.length} of {allProps.length}
+                  </span>
+                )}
+                <input
+                  id="prop-filter"
+                  className="filter"
+                  placeholder="Filter"
+                  title="Case-insensitive; matches name, expression or engine (Esc clears)"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && filter) {
+                      e.preventDefault();
+                      setFilter("");
+                    }
+                  }}
+                  aria-label="Filter properties"
+                />
               </>
             ) : (
               <span className="strip-summary mono">{topFile}</span>

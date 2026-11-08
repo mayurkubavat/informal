@@ -50,6 +50,13 @@ export function statusKey(p: Property): string {
   if (p.kind === "assume") return "assume";
   return p.enabled ? p.status.status : "unprocessed";
 }
+// Text filter: case-insensitive substring of name, expression or engine.
+export function matches(p: Property, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [p.name, p.expr, p.status.engine ?? ""].some((s) => s.toLowerCase().includes(q));
+}
+
 // Task-tree group: assumes together, everything else by raw status.
 export function groupOf(p: Property): StatusWord | "assume" {
   return p.kind === "assume" ? "assume" : p.status.status;

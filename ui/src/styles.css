@@ -261,6 +261,7 @@ select {
   outline: none;
   flex: none;
 }
+.filter-count { color: var(--muted); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; flex: none; }
 .filter:focus { border-color: var(--accent); }
 .filter::placeholder { color: var(--muted); }
 

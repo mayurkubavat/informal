@@ -65,6 +65,15 @@ for (const s of sizes)
         await shot(page, n("context-menu"));
       });
 
+      test("filtered with match count", async ({ page }) => {
+        await ready(page);
+        await proveAll(page);
+        await page.getByLabel("Filter properties").fill("bmc");
+        await expect(page.locator(".filter-count")).toHaveText("2 of 6");
+        await page.getByLabel("Filter properties").blur();
+        await shot(page, n("filtered"));
+      });
+
       test("file menu open", async ({ page }) => {
         await ready(page);
         await page.getByRole("menuitem", { name: "File", exact: true }).click();
