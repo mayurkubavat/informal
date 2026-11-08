@@ -86,6 +86,10 @@ prove. It sets the session's stop flag. The UI shows "Stopping…" until the
   italics, kind from the event) after the session's own, and keeps them
   until the script's reply brings the session, which replaces them. The
   mock reproduces this with `source mock/prove-on-source.tcl`.
+  `stop-progress-live.png` is the desktop app mid-run in that case (a
+  start-up script that adds seven properties and runs `prove -all`, with a
+  fake engine that sleeps 4 s per property), in a window under 1000 CSS px,
+  so the progress bar shows without its readout.
 - Esc stops the prove, unless a menu is open or the filter uses the key
   first. Prove > Stop does the same.
 - Only Prove actions (and Flavor, Run script, Disable/Enable) are blocked
