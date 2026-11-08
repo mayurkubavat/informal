@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import {
-  bound, clock, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
+  bound, clock, designScopes, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
@@ -26,6 +26,7 @@ import { Messages } from "./components/Messages";
 import { EngineLog } from "./components/EngineLog";
 import { SourceView } from "./components/SourceView";
 import { TraceView } from "./components/TraceView";
+import { Profiler } from "./components/Profiler";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
 // Lines the Log tab keeps; older ones are dropped (and counted).
@@ -42,7 +43,7 @@ const SHORTCUTS: [string, string][] = [
   ["Esc", "Close menu; otherwise stop the running prove"],
   ["Ctrl+F", "Filter properties"],
   ["Ctrl+L", "Console prompt"],
-  ["Ctrl+1..4", "Console / Details / Messages / Log"],
+  ["Ctrl+1..5", "Console / Details / Messages / Log / Profiler"],
   ["Tab", "Complete a command or property name (console; again to cycle)"],
 ];
 
@@ -72,11 +73,21 @@ export default function App() {
   const [traceName, setTraceName] = useState<string | null>(null);
   const [trace, setTrace] = useState<{ path: string; text: string | null; error: string | null } | null>(null);
   const { layout, set } = useLayout();
-  const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW } = layout;
-  const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW] = useMemo(
-    () => [set("center"), set("left"), set("leftOpen"), set("bottom"), set("bottomH"), set("leftW")],
+  const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW, profiler } = layout;
+  const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW, setProfiler] = useMemo(
+    () => [set("center"), set("left"), set("leftOpen"), set("bottom"), set("bottomH"), set("leftW"), set("profiler")],
     [set],
   );
+  // Tools > Proof profiler (or Ctrl+5) adds the Profiler dock tab and shows
+  // it; its × removes it again.
+  const openProfiler = useCallback(() => {
+    setProfiler(true);
+    setBottomTab("profiler");
+  }, [setProfiler, setBottomTab]);
+  const closeProfiler = useCallback(() => {
+    setProfiler(false);
+    setBottomTab((t) => (t === "profiler" ? "console" : t));
+  }, [setProfiler, setBottomTab]);
   const [theme, setTheme] = useTheme();
   const [focusReq, setFocusReq] = useState<{ id: string; n: number } | null>(null);
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -177,6 +188,11 @@ export default function App() {
   useEffect(() => {
     run(() => backend.snapshot());
   }, [run]);
+  // Surfer on PATH enables the external-viewer hand-off.
+  const [surfer, setSurfer] = useState(false);
+  useEffect(() => {
+    backend.toolAvailable("surfer").then(setSurfer, () => setSurfer(false));
+  }, []);
 
   const topFile = session?.design.files[0];
   const loadText = useCallback((path: string | undefined) => {
@@ -219,6 +235,9 @@ export default function App() {
   const fileName = srcPath?.split("/").pop();
   const topText = (topFile && texts[topFile]) || "";
   const ports = useMemo(() => parsePorts(topText), [topText]);
+  // slang's scope tree; without it (Yosys front end) the top file's ports.
+  const hierarchy = session?.design.hierarchy;
+  const scopes = useMemo(() => designScopes(hierarchy, session?.design.top ?? null, ports), [hierarchy, session?.design.top, ports]);
   const currentTrace = traceOf(current);
   const hasTrace = !!currentTrace;
   const traceProp = traceName ? allProps.find((p) => p.name === traceName) ?? null : null;
@@ -253,6 +272,33 @@ export default function App() {
     };
   }, [tracePath]);
   const showTrace = center === "trace" && !!traceProp;
+  // The Design tab's double-click: add that signal to the open trace.
+  const [addReq, setAddReq] = useState<{ path: string; n: number } | null>(null);
+  const note = useCallback((ok: boolean, summary: string) => setEvents((e) => [...e, { at: new Date(), cmd: "add signal", ok, ms: 0, summary }]), []);
+  const addSignal = (path: string) => {
+    if (!traceName) {
+      note(false, `${path}: open a trace first (Visualize trace on a CEX or cover)`);
+      setBottomTab("messages");
+      return;
+    }
+    setCenter("trace");
+    setAddReq((r) => ({ path, n: (r?.n ?? 0) + 1 }));
+  };
+  const openInSurfer = (path: string) =>
+    backend.openInSurfer(path).then(
+      () => note(true, `Opened ${path} in Surfer`),
+      (e) => {
+        note(false, `Surfer: ${e}`);
+        setBottomTab("messages");
+      },
+    );
+  const surferTip = (path: string | null) =>
+    !surfer ? SURFER_MISSING : path ? `surfer ${path}` : "Only a CEX or cover result has a trace";
+  const onAddResult = useCallback(
+    (path: string, r: "added" | "shown" | "missing") =>
+      note(r !== "missing", r === "added" ? `Added ${path} to the trace` : r === "shown" ? `${path} is already in the trace` : `${path} is not in this trace`),
+    [note],
+  );
 
   const idle = !busy && !running;
   const proveAll = () => allProps.length && idle && prove(proveCmd);
@@ -297,7 +343,7 @@ export default function App() {
     setFocusReq((r) => ({ id: "console-input", n: (r?.n ?? 0) + 1 }));
   };
   const toggleSource = () => topFile && setCenter((c) => (c === "source" ? "table" : "source"));
-  const DOCK: BottomTab[] = ["console", "details", "messages", "log"];
+  const DOCK: BottomTab[] = ["console", "details", "messages", "log", "profiler"];
 
   // Workbench shortcuts (Help > Keyboard shortcuts lists them). Read through a
   // ref so the listener is installed once but always sees current state.
@@ -309,6 +355,7 @@ export default function App() {
     else if (e.key === "F3" && !mod) toggleSource();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
+    else if (mod && !e.shiftKey && !e.altKey && e.key === "5") openProfiler();
     else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3", "4"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
     // Esc closes an open menu first (the context menu stops its Esc, the
     // menu bar marks it handled) and a field may use it (the filter clears
@@ -339,6 +386,15 @@ export default function App() {
           disabled: !traceOf(ctxProp),
           title: traceOf(ctxProp) ? undefined : "Only a CEX or cover result has a trace",
           onClick: () => openTrace(ctxProp.name),
+        },
+        {
+          label: "Open trace in Surfer",
+          disabled: !surfer || !traceOf(ctxProp),
+          title: surferTip(traceOf(ctxProp)),
+          onClick: () => {
+            const t = traceOf(ctxProp);
+            if (t) openInSurfer(t);
+          },
         },
         { label: "Show source", disabled: !topFile, onClick: () => { setSelected(ctxProp.name); setCenter("source"); } },
         { sep: true },
@@ -424,6 +480,7 @@ export default function App() {
         { label: "Details", keys: "Ctrl+2", checked: bottomTab === "details", onClick: () => setBottomTab("details") },
         { label: "Messages", keys: "Ctrl+3", checked: bottomTab === "messages", onClick: () => setBottomTab("messages") },
         { label: "Log", keys: "Ctrl+4", checked: bottomTab === "log", onClick: () => setBottomTab("log") },
+        { label: "Profiler", keys: "Ctrl+5", checked: profiler && bottomTab === "profiler", onClick: openProfiler },
         { sep: true },
         { label: "Input mode: Tcl", checked: true },
         { label: "Input mode: Ask (coming soon)", disabled: true },
@@ -449,7 +506,10 @@ export default function App() {
         { label: "Show source of selected", keys: "F3", onClick: () => current && setCenter("source"), disabled: !current || !topFile },
       ],
     },
-    { label: "Tools", items: [{ label: "Proof profiler (coming soon)", disabled: true }] },
+    {
+      label: "Tools",
+      items: [{ label: "Proof profiler", keys: "Ctrl+5", checked: profiler, onClick: () => (profiler ? closeProfiler() : openProfiler()) }],
+    },
     {
       label: "Help",
       items: [
@@ -597,7 +657,7 @@ export default function App() {
                   onOpen={(n) => (traceOf(allProps.find((p) => p.name === n) ?? null) ? openTrace(n) : select(n))}
                 />
               ) : (
-                <DesignTree top={session?.design.top ?? null} files={session?.design.files ?? []} ports={ports} />
+                <DesignTree scopes={scopes} files={session?.design.files ?? []} fallback={!hierarchy?.length} onAddSignal={addSignal} />
               )}
             </div>
           </aside>
@@ -612,6 +672,16 @@ export default function App() {
               path={trace?.path ?? tracePath ?? ""}
               text={trace?.text ?? null}
               error={trace?.error}
+              addRequest={addReq}
+              onAddResult={onAddResult}
+              actions={
+                // The title sits on a wrapper too: a disabled button shows none.
+                <span className="surfer-wrap" title={surferTip(tracePath)}>
+                  <button className="btn" disabled={!surfer || !tracePath} onClick={() => tracePath && openInSurfer(tracePath)} title={surferTip(tracePath)}>
+                    Open in Surfer
+                  </button>
+                </span>
+              }
             />
           ) : (
           <>
@@ -690,6 +760,7 @@ export default function App() {
               ["details", current ? `Details: ${current.name}` : "Details"],
               ["messages", `Messages${events.some((e) => !e.ok) ? ` (${events.filter((e) => !e.ok).length})` : ""}`],
               ["log", "Log"],
+              ...(profiler ? ([["profiler", "Profiler", closeProfiler]] as [string, string, () => void][]) : []),
             ]}
             value={bottomTab}
             onChange={(t) => setBottomTab(t as BottomTab)}
@@ -778,6 +849,7 @@ export default function App() {
               <p className="empty">Select a property to see its expression, result and source.</p>
             ))}
           {bottomTab === "messages" && <Messages events={events} />}
+          {bottomTab === "profiler" && profiler && <Profiler prop={current} props={allProps} />}
         </section>
       </div>
 

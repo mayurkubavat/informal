@@ -86,4 +86,18 @@ describe("TraceView", () => {
     expect(screen.getByText("Could not read fdv_work/a_never9.vcd: no such trace")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export VCD" })).toBeDisabled();
   });
+
+  it("adds a signal requested from the Design tab once, and reports shown or missing ones", () => {
+    const results: [string, string][] = [];
+    const onAddResult = (p: string, r: string) => results.push([p, r]);
+    const names = () => [...document.querySelectorAll(".trace-names .trace-name .ellipsis")].map((e) => e.textContent);
+    const { rerender } = view({ addRequest: { path: "fdv.fdv_cyc", n: 1 }, onAddResult });
+    expect(names()).toContain("fdv.fdv_cyc");
+    // The same request again (a re-render) does nothing.
+    rerender(<TraceView tabs={<div />} prop={cex} path="fdv_work/a_never9.vcd" text={vcdText} addRequest={{ path: "fdv.fdv_cyc", n: 1 }} onAddResult={onAddResult} />);
+    rerender(<TraceView tabs={<div />} prop={cex} path="fdv_work/a_never9.vcd" text={vcdText} addRequest={{ path: "counter.q", n: 2 }} onAddResult={onAddResult} />);
+    rerender(<TraceView tabs={<div />} prop={cex} path="fdv_work/a_never9.vcd" text={vcdText} addRequest={{ path: "counter.nosuch", n: 3 }} onAddResult={onAddResult} />);
+    expect(results).toEqual([["fdv.fdv_cyc", "added"], ["counter.q", "shown"], ["counter.nosuch", "missing"]]);
+    expect(names().filter((n) => n === "fdv.fdv_cyc")).toHaveLength(1);
+  });
 });

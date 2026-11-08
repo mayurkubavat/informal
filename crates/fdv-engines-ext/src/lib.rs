@@ -43,6 +43,14 @@ pub struct EngineSpec {
     /// Keep stdout as the witness when the verdict is unsafe.
     #[serde(default)]
     pub witness_on_stdout: bool,
+    /// The engine prints its counterexample (rIC3 `--cex`, ABC `write_cex
+    /// -a -t /dev/stdout`) in the witness format of the model it read:
+    /// Btor2 witness for `.btor2`, AIGER witness for AIGER. On an unsafe
+    /// verdict it is converted to fdv's named witness (fdv_engine::witness)
+    /// using the model's names, so the trace needs no BMC re-run. Ignored
+    /// for preprocessed models (their positions are not the model's).
+    #[serde(default)]
+    pub cex_witness: bool,
     /// Give the engine fdv's preprocessed model (binary AIGER, passed in
     /// memory through memfd on Linux) instead of the original file.
     #[serde(default)]
@@ -370,8 +378,22 @@ impl Engine for ExternalEngine {
             },
             Some(st) => self.classify(st.code(), &format!("{stdout}\n{stderr}")),
         };
-        let witness = (self.spec.witness_on_stdout && matches!(verdict, Verdict::Unsafe { .. }))
-            .then_some(stdout);
+        let witness = if !matches!(verdict, Verdict::Unsafe { .. }) {
+            None
+        } else if self.spec.cex_witness && staged.is_none() {
+            // The depth is left as the engine reported it: the witness is
+            // not checked here (fdv-fpv replays it and takes the depth from
+            // the trace when it does).
+            match named_witness(&stdout, &req.model, req.format) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    ctx.report(Progress::line(&self.spec.name, format!("[fdv: witness not used: {e}]"), true));
+                    None
+                }
+            }
+        } else {
+            self.spec.witness_on_stdout.then_some(stdout)
+        };
         Ok(EngineResult {
             engine: self.spec.name.clone(),
             verdict,
@@ -379,6 +401,24 @@ impl Engine for ExternalEngine {
             witness,
         })
     }
+}
+
+/// The counterexample in an engine's stdout as a named witness: Btor2
+/// witness for a Btor2 model, AIGER witness for AIGER.
+fn named_witness(stdout: &str, model: &Path, format: ModelFormat) -> Result<String, String> {
+    let btor2 = format == ModelFormat::Btor2;
+    let raw = fdv_engine::witness::extract(stdout, btor2).ok_or("no counterexample in the output")?;
+    let named = if btor2 {
+        let text = std::fs::read_to_string(model).map_err(|e| format!("{}: {e}", model.display()))?;
+        fdv_engine::witness::from_btor2(&raw, &text)?
+    } else {
+        let g = fdv_aig::load(model).map_err(|e| format!("{}: {e:#}", model.display()))?;
+        let name = |l: u32| g.names.get(&fdv_aig::var(l)).cloned();
+        let inputs: Vec<_> = g.inputs.iter().map(|&i| name(i)).collect();
+        let latches: Vec<_> = g.latches.iter().map(|l| name(l.lit)).collect();
+        fdv_engine::witness::from_aiger(&raw, &inputs, &latches)?
+    };
+    Ok(named)
 }
 
 #[cfg(test)]
@@ -528,5 +568,77 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/engines.toml");
         let engines = load(&path).unwrap();
         assert!(engines.len() >= 4);
+    }
+
+    fn models() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/models")
+    }
+
+    /// A fake engine that prints a hand-written AIGER witness for the 2-bit
+    /// counter (en high for three cycles, q reaches 3): the result carries
+    /// it as a named witness, by the model's symbol table.
+    #[test]
+    fn converts_an_aiger_counterexample_to_a_named_witness() {
+        let toml = r#"
+[[engine]]
+name = "fake-aig"
+program = "sh"
+args = ["-c", "echo 'Output 0 was asserted in frame 3.'; printf '1\\nb0\\n00\\n1\\n1\\n1\\n0\\n.\\n'", "sh", "{model}"]
+formats = ["aiger"]
+finds_bugs = true
+cex_witness = true
+[engine.patterns]
+unsafe = 'was asserted in frame \d+'
+depth = 'was asserted in frame (\d+)'
+"#;
+        let e = parse_config(toml).unwrap().remove(0);
+        let req = CheckRequest {
+            model: models().join("counter2_unsafe.aag"),
+            format: ModelFormat::Aiger,
+            timeout: Duration::from_secs(5),
+        };
+        let r = e.check(&req, &RunContext::new(Duration::from_secs(5))).unwrap();
+        assert_eq!(r.verdict, Verdict::Unsafe { depth: Some(3) });
+        assert_eq!(
+            r.witness.as_deref(),
+            Some(
+                "fdvw 1\ndepth 3\ninit counter.q[0]=0 counter.q[1]=0\n\
+                 @0 counter.en=1\n@1 counter.en=1\n@2 counter.en=1\n@3 counter.en=0\n"
+            )
+        );
+    }
+
+    /// The same for a Btor2 witness (rIC3 `--cex` on a .btor2 model).
+    #[test]
+    fn converts_a_btor2_counterexample_to_a_named_witness() {
+        let frames: String = (1..=7).map(|k| format!("#{k}\\n@{k}\\n")).collect();
+        let toml = format!(
+            r#"
+[[engine]]
+name = "fake-btor"
+program = "sh"
+args = ["-c", "printf 'SAT\\nsat\\nb0\\n#0\\n0 000 cnt\\n@0\\n{frames}.\\n'", "sh", "{{model}}"]
+formats = ["btor2"]
+finds_bugs = true
+cex_witness = true
+[engine.patterns]
+unsafe = '(?m)^SAT$'
+"#
+        );
+        let e = parse_config(&toml).unwrap().remove(0);
+        let req = CheckRequest {
+            model: models().join("counter.btor2"),
+            format: ModelFormat::Btor2,
+            timeout: Duration::from_secs(5),
+        };
+        let r = e.check(&req, &RunContext::new(Duration::from_secs(5))).unwrap();
+        let w = r.witness.unwrap();
+        assert!(w.starts_with("fdvw 1\ndepth 7\ninit cnt[0]=0 cnt[1]=0 cnt[2]=0\n@0\n@1\n"), "{w}");
+        // A witness that does not fit the model is dropped (a note goes to
+        // the engine log) rather than passed on.
+        let bad = toml.replace("0 000 cnt", "0 00 cnt");
+        let e = parse_config(&bad).unwrap().remove(0);
+        let r = e.check(&req, &RunContext::new(Duration::from_secs(5))).unwrap();
+        assert!(matches!(r.verdict, Verdict::Unsafe { .. }) && r.witness.is_none());
     }
 }

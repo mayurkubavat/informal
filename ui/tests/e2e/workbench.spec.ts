@@ -158,7 +158,7 @@ test.describe("row context menu", () => {
     await row(page, "a_never9").click({ button: "right" });
     await expect(menu(page)).toHaveAccessibleName("Actions for a_never9");
     await expect(menu(page).getByRole("menuitem")).toHaveText([
-      /Prove\s*prove -property a_never9/, "Visualize trace", "Show source", "Copy name", "Copy expression", /Disable/,
+      /Prove\s*prove -property a_never9/, "Visualize trace", "Open trace in Surfer", "Show source", "Copy name", "Copy expression", /Disable/,
     ]);
     await expect(row(page, "a_never9")).toHaveAttribute("aria-selected", "true");
     await expect(item(page, "Visualize trace")).toHaveAttribute("aria-disabled", "true");
@@ -319,7 +319,7 @@ test.describe("keyboard model", () => {
   test("Help > Keyboard shortcuts prints the list in the console", async ({ page }) => {
     await page.getByRole("menuitem", { name: "Help", exact: true }).click();
     await page.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
-    await expect(page.locator(".console-log")).toContainText("Ctrl+1..4");
+    await expect(page.locator(".console-log")).toContainText("Ctrl+1..5");
     await expect(page.locator(".console-log")).toContainText("Prove selected");
   });
 });
@@ -388,6 +388,51 @@ test.describe("engine log", () => {
     await expect(log(page).locator(".line")).not.toHaveCount(0);
     await expect(page.getByRole("checkbox", { name: "Autoscroll" })).not.toBeChecked();
     await expect.poll(() => log(page).evaluate((el) => el.scrollTop)).toBe(0);
+  });
+});
+
+test.describe("proof profiler", () => {
+  const profTab = (page: Page) => page.getByRole("tab", { name: "Profiler", exact: true });
+  const selPane = (page: Page) => page.getByRole("region", { name: "Engines on the selected property" });
+  const runPane = (page: Page) => page.getByRole("region", { name: "Engines over the run" });
+
+  test("Tools > Proof profiler adds the tab; × removes it", async ({ page }) => {
+    await expect(profTab(page)).toHaveCount(0);
+    await page.getByRole("menuitem", { name: "Tools", exact: true }).click();
+    await page.getByRole("menuitem", { name: /Proof profiler/ }).click();
+    await expect(profTab(page)).toHaveAttribute("aria-selected", "true");
+    await expect(runPane(page)).toContainText("No profile yet");
+    await page.getByRole("button", { name: "Close Profiler" }).click();
+    await expect(profTab(page)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Console" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("Ctrl+5 shows each engine on the selected property and the run summary", async ({ page }) => {
+    await proveAll(page);
+    await page.keyboard.press("Control+5");
+    await expect(profTab(page)).toHaveAttribute("aria-selected", "true");
+    await expect(runPane(page)).toContainText("5 properties profiled");
+    const summaryRows = runPane(page).locator("tbody tr");
+    await expect(summaryRows).toHaveCount(4);
+    await expect(summaryRows.first()).toContainText("ric3-bmc");
+    await row(page, "a_never9").click();
+    // Selecting a row opens Details; come back to the profiler.
+    await page.keyboard.press("Control+5");
+    await expect(selPane(page)).toContainText("Engines on a_never9");
+    const runs = selPane(page).locator("tbody tr");
+    await expect(runs).toHaveCount(3);
+    await expect(runs.nth(1)).toHaveText(/ric3-bmc\s*Won\s*30 ms\s*11/);
+    await expect(runs.nth(0)).toContainText("Killed");
+    await expect(selPane(page).locator(".prof-bar.win")).toHaveCount(1);
+  });
+
+  test("the tab persists across reloads and has no axe violations", async ({ page }) => {
+    await page.keyboard.press("Control+5");
+    await page.reload();
+    await expect(profTab(page)).toHaveAttribute("aria-selected", "true");
+    await proveAll(page);
+    const r = await new AxeBuilder({ page }).include(".profiler").analyze();
+    expect(r.violations.filter((v) => v.impact === "serious" || v.impact === "critical")).toEqual([]);
   });
 });
 
@@ -886,5 +931,99 @@ test.describe("trace tab", () => {
     await expect(cursor(page)).toBeVisible();
     const r = await new AxeBuilder({ page }).include(".center").analyze();
     expect(r.violations.map((v) => v.id)).toEqual([]);
+  });
+});
+
+test.describe("design browser", () => {
+  const designTab = (page: Page) => page.getByRole("tab", { name: "Design" });
+  const scopes = (page: Page) => page.getByRole("tree", { name: "Design hierarchy" }).getByRole("treeitem");
+  const sigList = (page: Page, path: string) => page.getByRole("listbox", { name: `Signals in ${path}` });
+  const sig = (page: Page, path: string, name: string) => sigList(page, path).getByRole("option").filter({ has: page.locator(".sig-name", { hasText: new RegExp(`^${name}$`) }) });
+  const messages = (page: Page) => page.locator(".messages");
+
+  test("shows slang's scope tree with the top's signals, widths and kinds", async ({ page }) => {
+    await designTab(page).click();
+    await expect(scopes(page)).toHaveCount(1);
+    await expect(scopes(page).first()).toHaveText("countercounter");
+    await expect(sigList(page, "counter").getByRole("option")).toHaveCount(5);
+    await expect(sig(page, "counter", "q")).toHaveText("q4out");
+    await page.getByLabel("Filter design signals").fill("RST");
+    await expect(sigList(page, "counter").getByRole("option")).toHaveText(["rst_n1in"]);
+  });
+
+  test("expands instances and lists the selected scope's signals", async ({ page }) => {
+    await page.goto("/?fast=1&design=fifo");
+    await designTab(page).click();
+    await expect(scopes(page)).toHaveText(["fifofifo", "u_wpptr", "u_rpptr"]);
+    await scopes(page).nth(1).click();
+    await expect(page.locator(".design-head")).toContainText("fifo.u_wp");
+    await expect(sig(page, "fifo.u_wp", "p")).toHaveText("p2out");
+    const r = await new AxeBuilder({ page }).include(".design-browser").analyze();
+    expect(r.violations.filter((v) => v.impact === "serious" || v.impact === "critical")).toEqual([]);
+    await scopes(page).first().dblclick();
+    await expect(scopes(page)).toHaveCount(1);
+  });
+
+  test("double-click without an open trace says to open one", async ({ page }) => {
+    await designTab(page).click();
+    await sig(page, "counter", "q").dblclick();
+    await expect(page.getByRole("tab", { name: /^Messages/ })).toHaveAttribute("aria-selected", "true");
+    await expect(messages(page)).toContainText("counter.q: open a trace first");
+  });
+
+  test("double-click adds to the open trace, or says it is already shown", async ({ page }) => {
+    await proveAll(page);
+    await row(page, "a_never9").dblclick();
+    await expect(page.getByRole("tab", { name: "Trace: a_never9" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: "Property Table" }).click();
+    await designTab(page).click();
+    await sig(page, "counter", "done").dblclick();
+    // Back on the trace tab, with a note in Messages.
+    await expect(page.getByRole("tab", { name: "Trace: a_never9" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: /^Messages/ }).click();
+    await expect(messages(page)).toContainText("counter.done is already in the trace");
+  });
+
+  test("without a hierarchy (Yosys) it scans the top file's ports", async ({ page }) => {
+    await page.goto("/?fast=1&design=scan");
+    await designTab(page).click();
+    await expect(page.getByText("ports (scan)")).toBeVisible();
+    await expect(sig(page, "counter", "q")).toHaveText("q4out");
+  });
+});
+
+test.describe("Surfer hand-off", () => {
+  const button = (page: Page) => page.getByRole("button", { name: "Open in Surfer" });
+  const MISSING = "Install Surfer (surfer-project.org) to open traces externally";
+
+  test("without Surfer the button and menu item are disabled and say how to get it", async ({ page }) => {
+    await proveAll(page);
+    await row(page, "a_never9").dblclick();
+    await expect(button(page)).toBeDisabled();
+    await expect(button(page)).toHaveAttribute("title", MISSING);
+    await expect(page.locator(".surfer-wrap")).toHaveAttribute("title", MISSING);
+    await page.getByRole("tab", { name: "Property Table" }).click();
+    await row(page, "a_never9").click({ button: "right" });
+    const item = page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" });
+    await expect(item).toHaveAttribute("aria-disabled", "true");
+    await expect(item).toHaveAttribute("title", MISSING);
+  });
+
+  test("with Surfer on PATH they open the trace", async ({ page }) => {
+    await page.goto("/?fast=1&surfer=1");
+    await proveAll(page);
+    await row(page, "a_never9").dblclick();
+    await expect(button(page)).toBeEnabled();
+    await expect(button(page)).toHaveAttribute("title", "surfer fdv_work/a_never9.vcd");
+    await button(page).click();
+    await page.getByRole("tab", { name: /^Messages/ }).click();
+    await expect(page.locator(".messages")).toContainText("Opened fdv_work/a_never9.vcd in Surfer");
+    await page.getByRole("tab", { name: "Property Table" }).click();
+    await row(page, "c_done").click({ button: "right" });
+    await page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" }).click();
+    await expect(page.locator(".messages")).toContainText("Opened fdv_work/c_done.vcd in Surfer");
+    // A result without a trace has nothing to open.
+    await row(page, "a_max").click({ button: "right" });
+    await expect(page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" })).toHaveAttribute("aria-disabled", "true");
   });
 });

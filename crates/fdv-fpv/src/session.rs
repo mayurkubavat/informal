@@ -15,6 +15,7 @@
 use crate::progress::{ProveSink, Tracker};
 use crate::sva;
 use anyhow::{anyhow, bail, Context};
+use fdv_engine::portfolio::EngineRun;
 use fdv_engine::{portfolio, CheckRequest, Engine, ModelFormat, Progress, Verdict};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -104,6 +105,10 @@ pub struct Property {
     /// that created it, when that ran from a sourced file. `None` for
     /// properties typed at the console.
     pub source: Option<SourceLoc>,
+    /// The last prove's per-engine record: each portfolio engine's outcome
+    /// (won/lost/timeout/killed/error), time and depth reached. Empty
+    /// before a prove, or when no engine ran (elaboration, errors).
+    pub engines: Vec<EngineRun>,
 }
 
 /// A file and 1-based line (absolute path).
@@ -154,6 +159,11 @@ pub struct Design {
     pub params: Vec<(String, String)>,
     /// Modules to black-box (accepted for compatibility; not applied yet).
     pub bbox: Vec<String>,
+    /// slang's scope tree after elaboration: instances with their ports and
+    /// named signals (the app's Design browser). Also written to
+    /// `<workdir>/design.hierarchy.json`. Empty without slang (the app then
+    /// scans the top file's port list).
+    pub hierarchy: Vec<fdv_slang::Scope>,
 }
 
 #[derive(Serialize)]
@@ -187,6 +197,10 @@ pub struct Session {
     /// Receives live progress while a prove runs (the desktop app).
     #[serde(skip)]
     pub sink: Option<Arc<dyn ProveSink>>,
+    /// BMC re-runs made only to get a trace (the winner gave no usable
+    /// witness). Tests and diagnostics read it.
+    #[serde(skip)]
+    pub trace_reruns: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Session {
@@ -209,6 +223,7 @@ impl Session {
             frontend: String::new(),
             stop: Arc::default(),
             sink: None,
+            trace_reruns: Arc::default(),
         }
     }
 
@@ -246,6 +261,7 @@ impl Session {
             status: Status::Unprocessed,
             trace: None,
             source: None,
+            engines: Vec::new(),
         });
         Ok(name)
     }
@@ -291,6 +307,7 @@ impl Session {
             params: self.design.params.clone(),
             trace_outputs: false,
         };
+        self.design.hierarchy.clear();
         if let Some(d) = fdv_slang::compile(&req) {
             let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
             if !errors.is_empty() {
@@ -303,12 +320,19 @@ impl Session {
                 }
             }
             self.hierarchy = d.instances.clone();
+            self.design.hierarchy = d.hierarchy.clone();
             self.slang = Some(d);
         } else if self.design.top.is_none() {
             self.design.top = Some(guess_top(&self.design.files)?);
         }
         // A plain elaboration, to report syntax errors now rather than at prove.
         std::fs::create_dir_all(&self.workdir)?;
+        let tree = self.workdir.join("design.hierarchy.json");
+        if self.design.hierarchy.is_empty() {
+            let _ = std::fs::remove_file(&tree);
+        } else {
+            std::fs::write(&tree, serde_json::to_string_pretty(&self.design.hierarchy)?)?;
+        }
         self.run_yosys(
             &self.design.files.clone(),
             &[],
@@ -568,6 +592,7 @@ impl Session {
         for &i in &targets[reached..] {
             self.props[i].status = Status::Undetermined { reason: "stopped".into() };
             self.props[i].trace = None;
+            self.props[i].engines.clear();
         }
         if let Some(t) = &tracker {
             t.end(stopped);
@@ -596,9 +621,10 @@ impl Session {
             if let Err(e) = self.check_names(&self.props[i].expr) {
                 let status = Status::Error { message: e };
                 if let Some(t) = tracker {
-                    t.finished(slot, &status);
+                    t.finished(slot, &status, &[]);
                 }
                 self.props[i].status = status;
+                self.props[i].engines.clear();
                 continue;
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
@@ -620,12 +646,13 @@ impl Session {
                 }
             };
             self.props[i].trace = None;
-            let (mut status, trace) = match built {
+            let (mut status, trace, runs) = match built {
                 Err(e) => (
                     Status::Error {
                         message: format!("{e:#}"),
                     },
                     None,
+                    Vec::new(),
                 ),
                 Ok(()) => self.check_one(engines, i, &out, tracker.map(|t| (t, slot))),
             };
@@ -636,10 +663,11 @@ impl Session {
                 status = Status::Undetermined { reason: "stopped".into() };
             }
             if let Some(t) = tracker {
-                t.finished(slot, &status);
+                t.finished(slot, &status, &runs);
             }
             self.props[i].status = status;
             self.props[i].trace = trace;
+            self.props[i].engines = runs;
             if halt {
                 return slot + 1;
             }
@@ -680,14 +708,15 @@ impl Session {
 
     /// Run the portfolio on one property's model. With a tracker, engine
     /// progress (k-bound) is forwarded to it for `slot`. A CEX or cover
-    /// also gets its trace written (the path is returned with the status).
+    /// also gets its trace written (the path is returned with the status),
+    /// and every engine's run is returned for the proof profiler.
     fn check_one(
         &self,
         engines: &[Arc<dyn Engine>],
         i: usize,
         model: &Path,
         tracker: Option<(&Tracker, usize)>,
-    ) -> (Status, Option<String>) {
+    ) -> (Status, Option<String>, Vec<EngineRun>) {
         let kind = self.props[i].kind;
         let bads = std::fs::read_to_string(model)
             .map(|t| {
@@ -708,7 +737,7 @@ impl Session {
                     ms: 0,
                 },
             };
-            return (status, None);
+            return (status, None, Vec::new());
         }
         let req = CheckRequest {
             model: model.to_path_buf(),
@@ -758,36 +787,59 @@ impl Session {
                 }
             }
         }
-        (status, trace)
+        // The profiler's winner row gets the same depth when it had none.
+        let mut runs = o.profile;
+        if let Status::Cex { depth: Some(d), engine, .. } | Status::Covered { depth: Some(d), engine, .. } = &status {
+            for r in runs.iter_mut().filter(|r| &r.engine == engine && r.depth.is_none()) {
+                r.depth = Some(*d);
+            }
+        }
+        (status, trace, runs)
     }
 
     /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the
-    /// winner's named witness or, when the winner gave none (external
-    /// engines, IC3, k-induction), from a BMC re-run to the reported depth
-    /// that only serves to produce one. Returns the path and the trace's
-    /// depth. Failures are logged and give no trace; the verdict stands
-    /// either way.
+    /// winner's named witness (fdv's own engines, and external engines
+    /// whose counterexample fdv converts: rIC3 `--cex`, ABC `write_cex`) or,
+    /// when the winner gave none or it does not replay, from a BMC re-run to
+    /// the reported depth that only serves to produce one. Returns the path
+    /// and the trace's depth. Failures are logged and give no trace; the
+    /// verdict stands either way.
     fn write_trace(&self, i: usize, model: &Path, witness: Option<&str>, depth: Option<u32>) -> Option<(String, usize)> {
         let name = &self.props[i].name;
-        let w = match witness.and_then(trace::parse_witness) {
-            Some(w) => w,
-            None => match self.trace_bmc(model, depth) {
-                Ok(w) => w,
-                Err(e) => {
-                    self.log(&format!("{name}: no trace: {e:#}"));
-                    return None;
-                }
-            },
-        };
         let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
         // Replay on the copy with named combinational nets when there is one.
         let with_nets = trace_model(model);
         let replay = if with_nets.is_file() { with_nets.as_path() } else { model };
-        let vcd = match trace::vcd_from_witness(replay, &w, name, clock) {
-            Ok(v) => v,
-            Err(e) => {
-                self.log(&format!("{name}: no trace: {e:#}"));
-                return None;
+        let from_winner = witness.and_then(trace::parse_witness).and_then(|w| {
+            match trace::vcd_from_witness(replay, &w, name, clock) {
+                Ok(v) => Some((v, w.depth)),
+                Err(e) => {
+                    self.log(&format!("{name}: the engine's witness does not replay ({e:#}); re-running BMC for the trace"));
+                    None
+                }
+            }
+        });
+        let (vcd, trace_depth) = match from_winner {
+            Some(t) => t,
+            None => {
+                self.trace_reruns.fetch_add(1, Ordering::SeqCst);
+                if witness.is_none() {
+                    self.note(&format!("{name}: the winning engine gave no witness; tracing with a BMC re-run"));
+                }
+                let w = match self.trace_bmc(model, depth) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        self.log(&format!("{name}: no trace: {e:#}"));
+                        return None;
+                    }
+                };
+                match trace::vcd_from_witness(replay, &w, name, clock) {
+                    Ok(v) => (v, w.depth),
+                    Err(e) => {
+                        self.log(&format!("{name}: no trace: {e:#}"));
+                        return None;
+                    }
+                }
             }
         };
         let path = self.workdir.join(trace::file_name(name));
@@ -799,7 +851,7 @@ impl Session {
             .ok()
             .and_then(|d| path.strip_prefix(d).ok().map(Path::to_path_buf))
             .unwrap_or(path);
-        Some((shown.display().to_string(), w.depth))
+        Some((shown.display().to_string(), trace_depth))
     }
 
     /// A witness from fdv-bmc on `model`, searching up to `depth` (64
@@ -820,6 +872,13 @@ impl Session {
             (Verdict::Unsafe { .. }, Some(w)) => Ok(w),
             (Verdict::Unsafe { .. }, None) => anyhow::bail!("fdv-bmc gave no named witness"),
             (v, _) => anyhow::bail!("fdv-bmc could not reproduce it ({})", v.label()),
+        }
+    }
+
+    /// An informational console line (the app's sink only).
+    fn note(&self, line: &str) {
+        if let Some(s) = &self.sink {
+            s.line(line, false);
         }
     }
 

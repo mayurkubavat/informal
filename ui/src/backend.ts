@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockComplete, mockEvents, mockText, mockTrace } from "./mock";
+import { mock, mockComplete, mockEvents, mockOpenInSurfer, mockOptions, mockText, mockTrace } from "./mock";
 
 export type StatusWord =
   | "unprocessed" | "proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
@@ -31,6 +31,22 @@ export interface Property {
   // in the design. Absent or null for properties typed at the console; the
   // UI then falls back to searching the top file (model.ts locate).
   source?: SourceLoc | null;
+  // The last prove's portfolio record, one entry per engine that ran (the
+  // proof profiler). Absent or empty before a prove.
+  engines?: EngineRun[];
+}
+
+// How one portfolio engine's run on a property ended (fdv-engine
+// portfolio::EngineRun): the winner, a loser that finished, one out of
+// time, one cancelled by the winner or a Stop, or one that failed to run.
+export type RunOutcome = "won" | "lost" | "timeout" | "killed" | "error";
+export interface EngineRun {
+  engine: string;
+  outcome: RunOutcome;
+  // Wall time from the start of the portfolio until the engine returned.
+  ms: number;
+  // CEX depth for an unsafe verdict, else the deepest bound it reported.
+  depth?: number | null;
 }
 
 export interface SourceLoc {
@@ -38,8 +54,28 @@ export interface SourceLoc {
   line: number;
 }
 
+// One instance in slang's scope tree (fdv_slang::Scope): its ports and
+// named signals, and its child instances. Signal names are relative to the
+// scope; `path + "." + name` is the hierarchical name (and the VCD path).
+export interface ScopeSignal {
+  name: string;
+  width: number;
+  kind: "port" | "variable" | "net" | "parameter";
+  // Ports only.
+  dir?: "input" | "output" | "inout" | "ref";
+}
+export interface DesignScope {
+  path: string;
+  name: string;
+  module: string;
+  signals: ScopeSignal[];
+  children: DesignScope[];
+}
+
 export interface SessionView {
-  design: { files: string[]; top: string | null; defines: [string, string | null][] };
+  // `hierarchy`: slang's scope tree after elaboration; empty or absent with
+  // the Yosys front end (the Design tab then scans the top file's ports).
+  design: { files: string[]; top: string | null; defines: [string, string | null][]; hierarchy?: DesignScope[] };
   elaborated: boolean;
   clocks: { signal: string; edge: string }[];
   reset: string | null;
@@ -75,6 +111,8 @@ export interface PropProgress {
   ms?: number;
   reason?: string;
   message?: string;
+  // Present once the property finished (the portfolio's per-engine record).
+  engines?: EngineRun[];
 }
 export interface ProveProgress {
   kind: ProgressKind;
@@ -157,6 +195,24 @@ export const backend = {
     const t = mockText(path);
     if (t === null) throw new Error(`${path}: no such file`);
     return t;
+  },
+  // Whether an external tool (e.g. "surfer") is on PATH. Asked once at
+  // start-up; the browser mock says no (yes with ?surfer=1).
+  toolAvailable: async (name: string): Promise<boolean> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<boolean>("tool_available", { name });
+    }
+    return name === "surfer" && mockOptions.surfer;
+  },
+  // Open a trace in Surfer, detached. The app only opens .vcd files inside
+  // the session's workdir; it rejects with the reason otherwise.
+  openInSurfer: async (path: string): Promise<void> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<void>("open_in_surfer", { path });
+    }
+    return mockOpenInSurfer(path);
   },
   // The VCD text of a property's trace. The app only reads files inside the
   // session's workdir; the mock serves tests/fixtures/a_never9.vcd.

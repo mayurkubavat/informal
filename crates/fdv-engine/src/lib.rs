@@ -10,6 +10,7 @@
 
 pub mod memory;
 pub mod portfolio;
+pub mod witness;
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};

@@ -153,13 +153,67 @@ fn read_trace(path: String) -> Result<String, String> {
 }
 
 fn trace_in(workdir: &Path, path: &Path) -> Result<String, String> {
+    let p = vcd_in(workdir, path)?;
+    std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The canonical path of `path` when it is an existing `.vcd` file inside
+/// `workdir` (symlinks and `..` resolved first), else an error.
+fn vcd_in(workdir: &Path, path: &Path) -> Result<PathBuf, String> {
     let shown = path.display();
     let root = std::fs::canonicalize(workdir).map_err(|e| format!("{}: {e}", workdir.display()))?;
     let p = std::fs::canonicalize(path).map_err(|e| format!("{shown}: {e}"))?;
-    if !p.starts_with(&root) || p.extension().is_none_or(|e| e != "vcd") {
+    if !p.starts_with(&root) || p.extension().is_none_or(|e| e != "vcd") || !p.is_file() {
         return Err(format!("{shown}: not a trace in {}", root.display()));
     }
-    std::fs::read_to_string(&p).map_err(|e| format!("{shown}: {e}"))
+    Ok(p)
+}
+
+/// An executable called `name` in one of the `path` directories (a PATH
+/// value). Plain names only: anything with a path separator is refused.
+fn find_on_path(name: &str, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return None;
+    }
+    std::env::split_paths(path?).map(|d| d.join(name)).find(|f| {
+        use std::os::unix::fs::PermissionsExt;
+        f.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    })
+}
+
+/// Whether an external tool (e.g. `surfer`) is on PATH; the UI enables its
+/// hand-off buttons from this at start-up.
+#[tauri::command]
+fn tool_available(name: String) -> bool {
+    find_on_path(&name, std::env::var_os("PATH").as_deref()).is_some()
+}
+
+/// Open a trace in the Surfer waveform viewer (surfer-project.org):
+/// spawns `surfer <vcd>` detached (its own process group, so it is not tied
+/// to the app's) and returns at once.
+/// Only `.vcd` files inside the work directory are opened.
+#[tauri::command]
+fn open_in_surfer(path: String) -> Result<(), String> {
+    let vcd = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let surfer = find_on_path("surfer", std::env::var_os("PATH").as_deref())
+        .ok_or("surfer is not on PATH (install it from surfer-project.org)")?;
+    spawn_detached(&surfer, &vcd)
+}
+
+fn spawn_detached(program: &Path, arg: &Path) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program)
+        .arg(arg)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("{}: {e}", program.display()))?;
+    // Reap it when it exits, so no zombie is left behind.
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 /// Design source or script text for the source view (a property's
@@ -239,7 +293,9 @@ fn main() {
             shell_stop,
             shell_complete,
             read_text,
-            read_trace
+            read_trace,
+            tool_available,
+            open_in_surfer
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Formal DV app");
@@ -247,7 +303,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{text_in, trace_in};
+    use super::{find_on_path, spawn_detached, text_in, trace_in, vcd_in};
 
     #[test]
     fn text_reads_only_the_repo_and_design_files() {
@@ -279,6 +335,53 @@ mod tests {
         assert!(trace_in(&work, &work.join("../outside.vcd")).is_err());
         assert!(trace_in(&work, &base.join("outside.vcd")).is_err());
         assert!(trace_in(&work, &work.join("missing.vcd")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn surfer_opens_only_vcd_inside_the_workdir() {
+        let base = std::env::temp_dir().join(format!("fdv-app-surfer-{}", std::process::id()));
+        let work = base.join("fdv_work");
+        std::fs::create_dir_all(work.join("sub")).unwrap();
+        std::fs::write(work.join("a.vcd"), "$enddefinitions $end\n").unwrap();
+        std::fs::write(work.join("prop_0.btor2"), "1 sort bitvec 1\n").unwrap();
+        std::fs::write(base.join("outside.vcd"), "x").unwrap();
+        std::os::unix::fs::symlink(base.join("outside.vcd"), work.join("link.vcd")).unwrap();
+        let ok = vcd_in(&work, &work.join("a.vcd")).unwrap();
+        assert!(ok.is_absolute() && ok.ends_with("fdv_work/a.vcd"));
+        assert!(vcd_in(&work, &work.join("sub/../a.vcd")).is_ok());
+        for bad in ["prop_0.btor2", "../outside.vcd", "link.vcd", "missing.vcd", "sub"] {
+            assert!(vcd_in(&work, &work.join(bad)).is_err(), "{bad} must be refused");
+        }
+        assert!(vcd_in(&work, &base.join("outside.vcd")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn tools_are_found_on_path_by_plain_name_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("fdv-app-path-{}", std::process::id()));
+        let (bin, other) = (base.join("bin"), base.join("other"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let exe = bin.join("surfer");
+        std::fs::write(&exe, "#!/bin/sh\necho \"$1\" > \"$(dirname \"$0\")/opened\"\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(other.join("surfer"), "not executable").unwrap();
+        let path = std::env::join_paths([&other, &bin]).unwrap();
+        assert_eq!(find_on_path("surfer", Some(&path)), Some(exe.clone()));
+        assert_eq!(find_on_path("surfer", Some(&std::env::join_paths([&other]).unwrap())), None);
+        assert_eq!(find_on_path("../bin/surfer", Some(&path)), None);
+        assert_eq!(find_on_path("", Some(&path)), None);
+        assert_eq!(find_on_path("surfer", None), None);
+        // The detached spawn runs the tool with the trace path and returns.
+        spawn_detached(&exe, &base.join("t.vcd")).unwrap();
+        let opened = bin.join("opened");
+        let t = std::time::Instant::now();
+        while !opened.exists() && t.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(std::fs::read_to_string(&opened).unwrap().trim(), base.join("t.vcd").display().to_string());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

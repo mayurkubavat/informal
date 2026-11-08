@@ -312,7 +312,7 @@ describe("withProgress", () => {
     expect(v.map((p) => p.name)).toEqual(["a", "b", "c", "x_live", "y_q"]);
     expect(v[1].provisional).toBeUndefined();
     expect(v[3]).toEqual({
-      name: "x_live", kind: "cover", expr: "", enabled: true, provisional: true,
+      name: "x_live", kind: "cover", expr: "", enabled: true, provisional: true, engines: [],
       status: { status: "running", engine: "bmc", depth: 4, ms: 50 },
     });
     expect(v[4].kind).toBe("assert");

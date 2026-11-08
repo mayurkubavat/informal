@@ -52,6 +52,45 @@ pub struct Signal {
     pub constant: bool,
 }
 
+/// One instance in the design browser's tree: where it is, what it
+/// instantiates, its ports and named signals, and its child instances.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Scope {
+    /// Hierarchical path, e.g. `fifo.u_wp`.
+    pub path: String,
+    /// Instance name (the last part of the path; the module name for a top).
+    pub name: String,
+    pub module: String,
+    /// Ports first (declaration order), then variables, nets and
+    /// parameters as slang visits them.
+    pub signals: Vec<ScopeSignal>,
+    pub children: Vec<Scope>,
+}
+
+/// A port or named signal of a [`Scope`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScopeSignal {
+    /// Name relative to the scope (`g[0].x` inside a generate block).
+    pub name: String,
+    pub width: u64,
+    /// `port`, `variable`, `net` or `parameter`.
+    pub kind: String,
+    /// Ports only: `input`, `output`, `inout` or `ref`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+impl Scope {
+    /// This scope and every scope below it, depth first.
+    pub fn walk(&self) -> Vec<&Scope> {
+        let mut out = vec![self];
+        for c in &self.children {
+            out.extend(c.walk());
+        }
+        out
+    }
+}
+
 /// What slang found in a design.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Design {
@@ -63,6 +102,10 @@ pub struct Design {
     pub instances: Vec<Instance>,
     #[serde(default)]
     pub signals: Vec<Signal>,
+    /// The instance tree with each scope's ports and signals (the app's
+    /// Design browser). One root per top instance.
+    #[serde(default)]
+    pub hierarchy: Vec<Scope>,
 }
 
 impl Design {
@@ -337,6 +380,79 @@ mod tests {
         let e = d.errors().next().unwrap();
         assert_eq!(e.line, Some(2));
         assert!(e.message.contains("nosuch"), "{e}");
+    }
+
+    fn root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn sig<'a>(s: &'a Scope, name: &str) -> &'a ScopeSignal {
+        s.signals
+            .iter()
+            .find(|x| x.name == name)
+            .unwrap_or_else(|| panic!("{} has no {name}: {:?}", s.path, s.signals))
+    }
+
+    #[test]
+    fn hierarchy_of_the_counter() {
+        if !available() {
+            eprintln!("skipping: built without slang");
+            return;
+        }
+        let d = compile(&Request {
+            files: vec![root().join("tests/fpv/counter/counter.sv")],
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(d.ok, "{:?}", d.diagnostics);
+        let [top] = d.hierarchy.as_slice() else { panic!("{:?}", d.hierarchy) };
+        assert_eq!((top.path.as_str(), top.name.as_str(), top.module.as_str()), ("counter", "counter", "counter"));
+        assert!(top.children.is_empty());
+        let ports: Vec<_> = top
+            .signals
+            .iter()
+            .filter(|s| s.kind == "port")
+            .map(|s| (s.name.as_str(), s.dir.as_deref().unwrap(), s.width))
+            .collect();
+        assert_eq!(
+            ports,
+            [("clk", "input", 1), ("rst_n", "input", 1), ("en", "input", 1), ("q", "output", 4), ("done", "output", 1)]
+        );
+        // Internal signals follow the ports, each listed once.
+        assert_eq!(sig(top, "nxt").width, 4);
+        assert_eq!(sig(top, "nxt").dir, None);
+        assert_eq!(top.signals.iter().filter(|s| s.name == "q").count(), 1);
+        let json = serde_json::to_value(top).unwrap();
+        assert_eq!(json["signals"][0], serde_json::json!({"name": "clk", "width": 1, "kind": "port", "dir": "input"}));
+    }
+
+    #[test]
+    fn hierarchy_of_the_fifo() {
+        if !available() {
+            eprintln!("skipping: built without slang");
+            return;
+        }
+        let d = compile(&Request {
+            files: vec![root().join("tests/fpv/fifo/fifo.sv")],
+            top: Some("fifo".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(d.ok, "{:?}", d.diagnostics);
+        let [top] = d.hierarchy.as_slice() else { panic!("{:?}", d.hierarchy) };
+        assert_eq!(top.module, "fifo");
+        let kids: Vec<_> = top.children.iter().map(|c| (c.path.as_str(), c.name.as_str(), c.module.as_str())).collect();
+        assert_eq!(kids, [("fifo.u_wp", "u_wp", "ptr"), ("fifo.u_rp", "u_rp", "ptr")]);
+        assert_eq!(top.walk().len(), 3);
+        // Parameterised widths are elaborated: DEPTH_LOG2 = 2, DW = 8.
+        assert_eq!((sig(top, "din").width, sig(top, "din").dir.as_deref()), (8, Some("input")));
+        assert_eq!((sig(top, "status").width, sig(top, "status").dir.as_deref()), (2, Some("output")));
+        assert_eq!((sig(top, "count").width, sig(top, "count").kind.as_str()), (3, "variable"));
+        assert_eq!(sig(top, "mem").width, 32);
+        assert_eq!(sig(top, "DEPTH").kind, "parameter");
+        let wp = &top.children[0];
+        assert_eq!((sig(wp, "p").width, sig(wp, "p").dir.as_deref()), (2, Some("output")));
+        assert_eq!(sig(wp, "W").kind, "parameter");
     }
 
     #[test]

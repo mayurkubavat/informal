@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
+import { MOCK_ENGINES, mockOpenInSurfer, mockSurferOpened, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
 import type { ConsoleLine, EngineLine, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
@@ -115,7 +115,9 @@ describe("browser mock: live progress and stop", () => {
     mockOptions.tick = 0;
     await mock("shell_eval", { script: "prove -property c_10" });
     expect(events.map((e) => e.kind)).toEqual(["start", "done"]);
-    expect(events[1].props).toEqual([{ name: "c_10", kind: "cover", status: "unreachable", engine: "ric3-ic3", ms: 29 }]);
+    expect(events[1].props).toEqual([{ name: "c_10", kind: "cover", status: "unreachable", engine: "ric3-ic3", ms: 29, engines: MOCK_ENGINES.c_10 }]);
+    // The session's property carries the same portfolio record.
+    expect((await mock("snapshot", {})).session!.props.find((p) => p.name === "c_10")!.engines).toEqual(MOCK_ENGINES.c_10);
   });
 
   it("stops mid-run: unfinished properties become undetermined (stopped)", async () => {
@@ -179,5 +181,23 @@ describe("browser mock: live progress and stop", () => {
     await new Promise((r) => setTimeout(r, 250));
     expect(answered).toBe(false);
     expect(mockRunning()).toBe(true);
+  });
+});
+
+describe("browser mock: Surfer hand-off", () => {
+  afterEach(() => resetMock());
+  it("is unavailable by default and refuses to open", async () => {
+    const { backend } = await import("./backend");
+    expect(await backend.toolAvailable("surfer")).toBe(false);
+    await expect(mockOpenInSurfer("fdv_work/a_never9.vcd")).rejects.toThrow(/surfer is not on PATH/);
+  });
+  it("with ?surfer=1 opens known traces only", async () => {
+    mockOptions.surfer = true;
+    const { backend } = await import("./backend");
+    expect(await backend.toolAvailable("surfer")).toBe(true);
+    expect(await backend.toolAvailable("gtkwave")).toBe(false);
+    await mockOpenInSurfer("fdv_work/a_never9.vcd");
+    await expect(mockOpenInSurfer("fdv_work/prop_0.btor2")).rejects.toThrow(/not a trace/);
+    expect(mockSurferOpened).toEqual(["fdv_work/a_never9.vcd"]);
   });
 });

@@ -14,13 +14,19 @@
 //   ?holdStop=1  shell_stop never completes, so "Stopping…" stays up
 //   ?props=<n>   add n generated properties (p_00000 ...) after the six,
 //                for the virtualized table tests
+//   ?design=fifo show tests/fpv/fifo's scope tree (two ptr instances) in
+//                the Design tab instead of the counter's
+//   ?surfer=1    report the Surfer viewer as installed (tool_available);
+//                "Open in Surfer" then succeeds without opening anything
+//   ?design=scan no hierarchy, as with the Yosys front end: the Design tab
+//                falls back to scanning the top file's ports
 //
 // `source mock/prove-on-source.tcl` stands for a script that adds two
 // properties and proves them in the same call: progress events name them
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { ConsoleLine, EngineLine, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { ConsoleLine, DesignScope, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
                 output logic [3:0] q, output logic done);
@@ -58,8 +64,35 @@ export function mockText(path: string): string | null {
 }
 const at = (file: string, line: number) => ({ file, line });
 
+// slang's scope tree for the counter above (fdv_slang::Scope, as the app's
+// snapshot carries it in design.hierarchy).
+const port = (name: string, dir: "input" | "output", width = 1) => ({ name, width, kind: "port" as const, dir });
+export const MOCK_HIERARCHY: DesignScope[] = [
+  {
+    path: "counter", name: "counter", module: "counter", children: [],
+    signals: [port("clk", "input"), port("rst_n", "input"), port("en", "input"), port("q", "output", 4), port("done", "output")],
+  },
+];
+// tests/fpv/fifo/fifo.sv elaborated with its defaults (DEPTH_LOG2 = 2, DW = 8).
+const ptr = (name: string): DesignScope => ({
+  path: `fifo.${name}`, name, module: "ptr", children: [],
+  signals: [port("clk", "input"), port("rst_n", "input"), port("inc", "input"), port("p", "output", 2), { name: "W", width: 32, kind: "parameter" }],
+});
+export const MOCK_FIFO: DesignScope[] = [
+  {
+    path: "fifo", name: "fifo", module: "fifo", children: [ptr("u_wp"), ptr("u_rp")],
+    signals: [
+      port("clk", "input"), port("rst_n", "input"), port("push", "input"), port("pop", "input"), port("din", "input", 8),
+      port("dout", "output", 8), port("full", "output"), port("empty", "output"), port("status", "output", 2),
+      { name: "wp", width: 2, kind: "variable" }, { name: "rp", width: 2, kind: "variable" }, { name: "count", width: 3, kind: "variable" },
+      { name: "mem", width: 32, kind: "variable" }, { name: "do_push", width: 1, kind: "variable" }, { name: "do_pop", width: 1, kind: "variable" },
+      { name: "DEPTH_LOG2", width: 32, kind: "parameter" }, { name: "DW", width: 32, kind: "parameter" }, { name: "DEPTH", width: 32, kind: "parameter" },
+    ],
+  },
+];
+
 const mockSession: SessionView = {
-  design: { files: [MOCK_RTL], top: "counter", defines: [] },
+  design: { files: [MOCK_RTL], top: "counter", defines: [], hierarchy: MOCK_HIERARCHY },
   elaborated: true,
   clocks: [{ signal: "clk", edge: "posedge" }],
   reset: "!rst_n",
@@ -85,9 +118,31 @@ const mockResults: Record<string, PropStatus> = {
   c_src_hit: { status: "covered", engine: "ric3-bmc", depth: 4, ms: 22 },
 };
 
+// The portfolio's per-engine record for each result (the proof profiler):
+// the winner first as in mockResults, the rest cancelled when it won.
+const run = (engine: string, outcome: EngineRun["outcome"], ms: number, depth?: number): EngineRun =>
+  depth === undefined ? { engine, outcome, ms } : { engine, outcome, ms, depth };
+export const MOCK_ENGINES: Record<string, EngineRun[]> = {
+  a_max: [run("ric3-ic3", "won", 41, 3), run("ric3-bmc", "killed", 42, 24), run("fdv-kind", "killed", 43, 6)],
+  a_step: [run("ric3-ic3", "killed", 56, 4), run("ric3-bmc", "killed", 56, 31), run("ric3", "won", 55, 2)],
+  a_never9: [run("ric3-ic3", "killed", 31, 2), run("ric3-bmc", "won", 30, 11), run("fdv-kind", "killed", 31, 9)],
+  c_done: [run("ric3-ic3", "killed", 32, 2), run("ric3-bmc", "won", 31, 11), run("fdv-kind", "error", 2)],
+  c_10: [run("ric3-ic3", "won", 29, 5), run("ric3-bmc", "timeout", 29, 20), run("fdv-kind", "lost", 12, 4)],
+  a_src_ok: [run("ric3-ic3", "won", 44, 3), run("ric3-bmc", "killed", 45, 26)],
+  c_src_hit: [run("ric3-ic3", "killed", 23, 1), run("ric3-bmc", "won", 22, 4)],
+};
+
 // Properties whose result comes with a trace: both get the counter's 12
 // cycle fixture (q reaches 9, so done rises, in cycle 11).
 export const MOCK_TRACES: Record<string, string> = { a_never9: "fdv_work/a_never9.vcd", c_done: "fdv_work/c_done.vcd" };
+// The app's open_in_surfer: refuses when Surfer is missing or the path is
+// not one of the traces; otherwise records the path (for the tests).
+export const mockSurferOpened: string[] = [];
+export async function mockOpenInSurfer(path: string): Promise<void> {
+  if (!mockOptions.surfer) throw new Error("surfer is not on PATH (install it from surfer-project.org)");
+  if (mockTrace(path) === null) throw new Error(`${path}: not a trace in fdv_work`);
+  mockSurferOpened.push(path);
+}
 export function mockTrace(path: string): string | null {
   return Object.values(MOCK_TRACES).includes(path) ? counterTrace : null;
 }
@@ -119,13 +174,16 @@ export const MOCK_TICKS: Record<string, number> = { a_max: 2, a_step: 3, a_never
 export const TICK_MS = 300;
 const PARALLEL = 2;
 
-export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false };
+export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false, surfer: false };
 if (typeof location !== "undefined") {
   const q = new URLSearchParams(location.search);
   if (q.get("fast") === "1") mockOptions.tick = 0;
   if (q.has("tick")) mockOptions.tick = Math.max(0, Number(q.get("tick")) || 0);
   if (q.has("freeze")) mockOptions.freeze = Number(q.get("freeze"));
   if (q.get("holdStop") === "1") mockOptions.holdStop = true;
+  if (q.get("surfer") === "1") mockOptions.surfer = true;
+  if (q.get("design") === "fifo") mockSession.design.hierarchy = MOCK_FIFO;
+  if (q.get("design") === "scan") mockSession.design.hierarchy = [];
   const extra = Math.min(100_000, Math.max(0, Number(q.get("props")) || 0));
   if (extra) mockSession.props.push(...generatedProps(extra));
 }
@@ -232,7 +290,8 @@ function step(run: Run) {
       const prop = run.props.find((q) => q.name === p.name)!;
       prop.status = { ...final };
       prop.trace = MOCK_TRACES[p.name] ?? null;
-      reset(p, final);
+      prop.engines = (MOCK_ENGINES[p.name] ?? []).map((e) => ({ ...e }));
+      reset(p, { ...final, engines: prop.engines.map((e) => ({ ...e })) });
       engineLine(p.name, final.engine ?? "ric3", final.status === "proven" || final.status === "unreachable" ? "unsat" : "sat", false);
       mockEvents.emit("console-line", { kind: "out", text: lineFor(p.name, final) });
     } else {
@@ -267,7 +326,7 @@ function startProve(props: Property[], onEnd?: () => void): Promise<Reply> {
       timer: null,
       resolve,
     };
-    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null });
+    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null, engines: [] });
     active = run;
     if (!props.length) return finish(run, "done");
     fill(run);
@@ -297,8 +356,9 @@ export function resetMock() {
   active = null;
   mockFlavor = "jg";
   mockSession.props.length = BASE_PROPS;
-  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null });
-  Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false });
+  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null, engines: [] });
+  Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false, surfer: false });
+  mockSurferOpened.length = 0;
 }
 
 let mockFlavor = "jg";

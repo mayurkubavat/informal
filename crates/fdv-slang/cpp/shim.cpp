@@ -9,6 +9,7 @@
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/PortSymbols.h"
 #include "slang/ast/types/AllTypes.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/driver/Driver.h"
@@ -16,6 +17,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -51,6 +53,61 @@ char* dup(const std::string& s) {
     char* p = (char*)std::malloc(s.size() + 1);
     std::memcpy(p, s.c_str(), s.size() + 1);
     return p;
+}
+
+// The design browser's view of one instance: its ports and named signals
+// (by name relative to the instance, so a generate block's signal reads
+// `g[0].x`) and its child instances.
+struct Sig {
+    std::string name;
+    uint64_t width;
+    std::string kind; // "port", "variable", "net", "parameter"
+    std::string dir;  // ports only: "input", "output", "inout", "ref"
+};
+struct ScopeNode {
+    std::string path, name, module;
+    std::vector<Sig> sigs;
+    std::vector<std::unique_ptr<ScopeNode>> children;
+};
+
+const char* dirName(ArgumentDirection d) {
+    switch (d) {
+        case ArgumentDirection::In: return "input";
+        case ArgumentDirection::Out: return "output";
+        case ArgumentDirection::InOut: return "inout";
+        default: return "ref";
+    }
+}
+
+void emitScope(std::string& out, const ScopeNode& n) {
+    out += "{\"path\":";
+    esc(out, n.path);
+    out += ",\"name\":";
+    esc(out, n.name);
+    out += ",\"module\":";
+    esc(out, n.module);
+    out += ",\"signals\":[";
+    for (size_t i = 0; i < n.sigs.size(); i++) {
+        auto& s = n.sigs[i];
+        if (i)
+            out += ',';
+        out += "{\"name\":";
+        esc(out, s.name);
+        out += ",\"width\":" + std::to_string(s.width) + ",\"kind\":";
+        esc(out, s.kind);
+        if (!s.dir.empty()) {
+            out += ",\"dir\":";
+            esc(out, s.dir);
+        }
+        out += '}';
+    }
+    out += "],\"children\":[";
+    for (size_t i = 0; i < n.children.size(); i++) {
+        if (i)
+            out += ',';
+        emitScope(out, *n.children[i]);
+    }
+    out += "]}";
 }
 
 } // namespace
@@ -121,6 +178,27 @@ char* fdv_slang_compile(const char* args) {
         out += "],\"instances\":[";
         std::string signals = "\"signals\":[";
         bool firstInst = true, firstSig = true;
+        // The scope tree for the design browser, built alongside.
+        std::vector<std::unique_ptr<ScopeNode>> tops;
+        std::vector<ScopeNode*> stack;
+        auto local = [&](const Symbol& s) {
+            std::string p = s.getHierarchicalPath();
+            const std::string& base = stack.back()->path;
+            return p.size() > base.size() + 1 && p.compare(0, base.size(), base) == 0 && p[base.size()] == '.'
+                       ? p.substr(base.size() + 1)
+                       : std::string(s.name);
+        };
+        // A signal for the current scope; a port's internal variable or net
+        // only fills in its kind.
+        auto addSig = [&](const Symbol& s, uint64_t width, const char* kind) {
+            if (stack.empty() || s.name.empty())
+                return;
+            auto name = local(s);
+            for (auto& q : stack.back()->sigs)
+                if (q.name == name)
+                    return;
+            stack.back()->sigs.push_back({name, width, kind, ""});
+        };
         root.visit(makeVisitor(
             [&](auto& v, const InstanceSymbol& inst) {
                 if (!firstInst)
@@ -131,9 +209,29 @@ char* fdv_slang_compile(const char* args) {
                 out += ",\"module\":";
                 esc(out, inst.getDefinition().name);
                 out += '}';
+                auto node = std::make_unique<ScopeNode>();
+                node->path = inst.getHierarchicalPath();
+                node->name = std::string(inst.name);
+                node->module = std::string(inst.getDefinition().name);
+                for (auto ps : inst.body.getPortList()) {
+                    if (ps->kind != SymbolKind::Port || ps->name.empty())
+                        continue;
+                    auto& port = ps->as<PortSymbol>();
+                    node->sigs.push_back(
+                        {std::string(port.name), port.getType().getBitWidth(), "port", dirName(port.direction)});
+                }
+                ScopeNode* raw = node.get();
+                if (stack.empty())
+                    tops.push_back(std::move(node));
+                else
+                    stack.back()->children.push_back(std::move(node));
+                stack.push_back(raw);
                 v.visitDefault(inst);
+                stack.pop_back();
             },
             [&](auto&, const VariableSymbol& s) {
+                if (s.lifetime != VariableLifetime::Automatic)
+                    addSig(s, s.getType().getBitWidth(), "variable");
                 if (!firstSig)
                     signals += ',';
                 firstSig = false;
@@ -142,6 +240,7 @@ char* fdv_slang_compile(const char* args) {
                 signals += ",\"width\":" + std::to_string(s.getType().getBitWidth()) + "}";
             },
             [&](auto&, const ParameterSymbol& s) {
+                addSig(s, s.getType().getBitWidth(), "parameter");
                 if (!firstSig)
                     signals += ',';
                 firstSig = false;
@@ -158,6 +257,7 @@ char* fdv_slang_compile(const char* args) {
                 signals += ",\"width\":" + std::to_string(s.getType().getBitWidth()) + ",\"constant\":true}";
             },
             [&](auto&, const NetSymbol& s) {
+                addSig(s, s.getType().getBitWidth(), "net");
                 if (!firstSig)
                     signals += ',';
                 firstSig = false;
@@ -165,7 +265,13 @@ char* fdv_slang_compile(const char* args) {
                 esc(signals, s.getHierarchicalPath());
                 signals += ",\"width\":" + std::to_string(s.getType().getBitWidth()) + "}";
             }));
-        out += "]," + signals + "],\"ok\":" + (ok ? "true" : "false") + "}";
+        out += "]," + signals + "],\"hierarchy\":[";
+        for (size_t i = 0; i < tops.size(); i++) {
+            if (i)
+                out += ',';
+            emitScope(out, *tops[i]);
+        }
+        out += std::string("],\"ok\":") + (ok ? "true" : "false") + "}";
     }
     catch (const std::exception& e) {
         out = "{\"ok\":false,\"diagnostics\":[{\"severity\":\"error\",\"message\":";

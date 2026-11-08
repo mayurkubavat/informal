@@ -24,6 +24,9 @@ export function TraceView({
   path,
   text,
   error,
+  addRequest,
+  onAddResult,
+  actions,
 }: {
   /** The centre tab strip; the trace's own controls follow it. */
   tabs: React.ReactNode;
@@ -31,6 +34,12 @@ export function TraceView({
   path: string;
   text: string | null;
   error?: string | null;
+  /** A signal to add by hierarchical path (the Design tab's double-click); `n` makes each request new. */
+  addRequest?: { path: string; n: number } | null;
+  /** How a request ended: added, already shown, or not in this trace. */
+  onAddResult?: (path: string, result: "added" | "shown" | "missing") => void;
+  /** Extra buttons at the end of the trace bar. */
+  actions?: React.ReactNode;
 }) {
   const vcd = useMemo(() => (text ? parseVcd(text) : null), [text]);
   const cycles = useMemo(() => (vcd ? cycleTimes(vcd) : []), [vcd]);
@@ -48,15 +57,33 @@ export function TraceView({
 
   // A new trace (another property, or a re-prove): default signals, cursor
   // on the failing / covering cycle.
+  const shownRef = useRef<string[]>([]);
+  shownRef.current = shown;
+  const shownFor = useRef<Vcd | null>(null);
   useEffect(() => {
     if (!vcd) return;
-    setShown(vcd.signals.filter((s) => !helper(s)).map((s) => s.path));
+    shownFor.current = vcd;
+    shownRef.current = vcd.signals.filter((s) => !helper(s)).map((s) => s.path);
+    setShown(shownRef.current);
     setCursor(Math.max(0, Math.min(n - 1, depth)));
     setAdding(false);
     reveal.current = true;
   }, [vcd, n, depth]);
 
   const byPath = useMemo(() => new Map(vcd?.signals.map((s) => [s.path, s]) ?? []), [vcd]);
+  // Add a signal asked for from outside (once per request, once the VCD is in).
+  const handled = useRef(0);
+  useEffect(() => {
+    if (!addRequest || !vcd || shownFor.current !== vcd || handled.current === addRequest.n) return;
+    handled.current = addRequest.n;
+    const { path: p } = addRequest;
+    const result = !byPath.has(p) ? "missing" : shownRef.current.includes(p) ? "shown" : "added";
+    if (result === "added") {
+      shownRef.current = [...shownRef.current, p];
+      setShown(shownRef.current);
+    }
+    onAddResult?.(p, result);
+  }, [addRequest, vcd, byPath, onAddResult]);
   const lanes = shown.map((p) => byPath.get(p)).filter((s): s is Signal => !!s);
   const hidden = vcd ? vcd.signals.filter((s) => !shown.includes(s.path)) : [];
 
@@ -145,6 +172,7 @@ export function TraceView({
         <button className="btn" onClick={exportVcd} disabled={!text} title={`Save ${path}`}>
           Export VCD
         </button>
+        {actions}
       </div>
 
       {!vcd ? (
