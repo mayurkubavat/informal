@@ -1,0 +1,79 @@
+# LLM providers for the console's Ask mode (crate fdv-llm, docs/ui/ask-mode.md).
+#
+# Every provider here speaks the OpenAI chat-completions API with streaming
+# (kind = "openai-compat"), so swapping the model server is an edit to this
+# file, the FDV_LLM_PROVIDER environment variable, or the status-bar menu in
+# the app (that one lasts until the app closes; this file is not rewritten).
+#
+# Keys are never written here: api_key_env names the environment variable
+# that holds one. Ask mode never runs anything by itself; a suggested Tcl
+# command waits on the prompt until you press Enter.
+
+[default]
+provider = "ollama-gemma"
+
+# Local Gemma 3 12B served by Ollama (`ollama serve`, `ollama pull gemma3:12b`).
+[providers.ollama-gemma]
+kind = "openai-compat"
+base_url = "http://localhost:11434/v1"
+model = "gemma3:12b"
+timeout_s = 180
+max_tokens = 512
+temperature = 0.2
+
+# Smaller and faster Gemma on the same Ollama.
+[providers.ollama-gemma-4b]
+kind = "openai-compat"
+base_url = "http://localhost:11434/v1"
+model = "gemma3:4b"
+timeout_s = 120
+max_tokens = 512
+temperature = 0.2
+
+# llama.cpp's llama-server (`llama-server -m gemma-3-12b-it-Q4_K_M.gguf --port 8080`).
+# It serves whatever model it loaded; the name only has to match /v1/models.
+# [providers.llama-server]
+# kind = "openai-compat"
+# base_url = "http://localhost:8080/v1"
+# model = "gemma-3-12b-it"
+# timeout_s = 180
+# max_tokens = 512
+# temperature = 0.2
+
+# vLLM (`vllm serve google/gemma-3-12b-it --port 8000`).
+# [providers.vllm]
+# kind = "openai-compat"
+# base_url = "http://localhost:8000/v1"
+# model = "google/gemma-3-12b-it"
+# api_key_env = "VLLM_API_KEY"      # only if vLLM was started with --api-key
+# timeout_s = 120
+# max_tokens = 512
+# temperature = 0.2
+
+# OpenAI.
+# [providers.openai]
+# kind = "openai-compat"
+# base_url = "https://api.openai.com/v1"
+# model = "gpt-4.1-mini"
+# api_key_env = "OPENAI_API_KEY"
+# timeout_s = 60
+# max_tokens = 512
+# temperature = 0.2
+
+# Anthropic, through its OpenAI SDK compatibility endpoint.
+# TODO: a native Messages API adapter (kind = "anthropic") for features the
+# compatibility layer leaves out.
+# [providers.anthropic]
+# kind = "openai-compat"
+# base_url = "https://api.anthropic.com/v1"
+# model = "claude-sonnet-5-5"
+# api_key_env = "ANTHROPIC_API_KEY"
+# timeout_s = 60
+# max_tokens = 512
+# temperature = 0.2
+
+# Scripted replies, no server (tests and demos).
+[providers.fake]
+kind = "fake"
+model = "scripted"
+replies = ["Proving only that property:\n```tcl\nprove -property a_never9\n```"]

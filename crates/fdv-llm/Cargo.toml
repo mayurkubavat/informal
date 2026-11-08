@@ -1,0 +1,22 @@
+[package]
+name = "fdv-llm"
+description = "Swappable LLM providers for the Ask console: an OpenAI-compatible streaming client (Ollama, llama-server, vLLM, OpenAI) and a scripted fake for tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+async-trait = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["time", "sync"] }
+# rustls with ring (no aws-lc C build); the provider is installed in `http_client`.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "json", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }

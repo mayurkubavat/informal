@@ -541,3 +541,15 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .sig-width { width: 4ch; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; flex: none; }
 .sig-kind { width: 5ch; color: var(--muted); font-size: 11px; flex: none; }
 .surfer-wrap { display: inline-flex; flex: none; }
+
+/* ---- Ask mode: input switch, answer lines, suggested command ---- */
+.tabs-extra { margin-left: auto; display: flex; align-items: center; padding: 0 6px; }
+.mode-switch { display: inline-flex; height: 18px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.mode-switch button { padding: 0 7px; font-size: 11px; color: var(--muted); }
+.mode-switch button + button { border-left: 1px solid var(--border); }
+.mode-switch button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.mode-switch button[aria-pressed="true"] { color: var(--text); background: var(--surface); font-weight: 500; }
+.line.ask { color: var(--text-2); }
+.prompt-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.statusbar-btn { padding: 0 4px; margin: 0 -4px; border-radius: 3px; color: var(--text-2); }
+.statusbar-btn:hover { color: var(--text); background: var(--hover); }

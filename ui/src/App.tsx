@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
+import { llmLabel, llmTip, prefill, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   bound, clock, designScopes, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
@@ -45,6 +46,8 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl+L", "Console prompt"],
   ["Ctrl+1..5", "Console / Details / Messages / Log / Profiler"],
   ["Tab", "Complete a command or property name (console; again to cycle)"],
+  ["Ctrl+Shift+A", "Console input mode: Tcl / Ask"],
+  ["Enter / Esc", "Run / discard a command Ask suggested (console)"],
 ];
 
 export default function App() {
@@ -93,6 +96,18 @@ export default function App() {
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
   const closeCtx = useCallback(() => setCtx(null), []);
   const pathRef = useRef<HTMLInputElement>(null);
+
+  // ---- Ask mode ----
+  const [inputMode, setInputMode] = useState<InputMode>("tcl");
+  const [llm, setLlm] = useState<LlmStatus | null>(null);
+  const [llmMenu, setLlmMenu] = useState<{ x: number; y: number; providers: LlmProviderEntry[] } | null>(null);
+  const closeLlmMenu = useCallback(() => setLlmMenu(null), []);
+  // The answer streaming now (its id and question), and a suggested command
+  // waiting on the prompt for Enter / Esc.
+  const askRef = useRef<{ id: number; prompt: string; t0: number } | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const askOk = !!llm?.ok;
 
   const apply = useCallback((r: Reply) => {
     if (r.session) setSession(r.session);
@@ -148,6 +163,91 @@ export default function App() {
       offEngine();
     };
   }, []);
+  // Ask mode: provider status at start, and the streamed answer.
+  const checkLlm = useCallback(() => {
+    backend.llmStatus().then(setLlm, (e) => setLlm({ provider: "", model: "", ok: false, error: String(e) }));
+  }, []);
+  useEffect(checkLlm, [checkLlm]);
+  // Offline: Ask is disabled, so leave it.
+  useEffect(() => {
+    if (llm && !llm.ok) setInputMode("tcl");
+  }, [llm]);
+  useEffect(() => {
+    const offDelta = backend.onAskDelta((d) => {
+      if (askRef.current?.id !== d.id) return;
+      setLog((log) => {
+        const i = log.map((l) => l.kind).lastIndexOf("ask");
+        if (i < 0) return log;
+        const next = log.slice();
+        next[i] = { kind: "ask", text: next[i].text + d.text };
+        return next;
+      });
+    });
+    const offDone = backend.onAskDone((d) => {
+      const a = askRef.current;
+      if (a?.id !== d.id) return;
+      askRef.current = null;
+      setAsking(false);
+      const ms = performance.now() - a.t0;
+      const ok = !d.error;
+      setLog((log) => {
+        // An answer that never streamed (error or empty): say so.
+        const i = log.map((l) => l.kind).lastIndexOf("ask");
+        const next = i >= 0 && !log[i].text ? [...log.slice(0, i), ...log.slice(i + 1)] : log.slice();
+        if (d.error) next.push({ kind: "err", text: `ask: ${d.error}` });
+        else if (i >= 0 && !log[i].text) next.push({ kind: "ask", text: d.explanation || "(no answer)" });
+        return next;
+      });
+      setEvents((e) => [...e, { at: new Date(), cmd: `ask ${a.prompt}`, ok, ms, summary: d.error ?? (d.command ? `suggested: ${prefill(d.command)}` : d.explanation.split("\n")[0]) }]);
+      if (d.command) setSuggestion(prefill(d.command));
+    });
+    return () => {
+      offDelta();
+      offDone();
+    };
+  }, []);
+  const askNow = (prompt: string) => {
+    if (askRef.current) return;
+    const id = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+    askRef.current = { id, prompt, t0: performance.now() };
+    setAsking(true);
+    setSuggestion(null);
+    setLog((l) => [...l, { kind: "ask-in", text: prompt }, { kind: "ask", text: "" }]);
+    const context = selected ? `selected property: ${selected}` : undefined;
+    backend.ask(id, prompt, context).catch((e) => {
+      if (askRef.current?.id !== id) return;
+      askRef.current = null;
+      setAsking(false);
+      setLog((l) => {
+        const i = l.map((x) => x.kind).lastIndexOf("ask");
+        const next = i >= 0 && !l[i].text ? [...l.slice(0, i), ...l.slice(i + 1)] : l.slice();
+        return [...next, { kind: "err", text: `ask: ${e instanceof Error ? e.message : String(e)}` }];
+      });
+      checkLlm();
+    });
+  };
+  const cancelAsk = () => {
+    const a = askRef.current;
+    if (a) backend.askCancel(a.id).catch(() => {});
+  };
+  const setMode = (m: InputMode) => {
+    if (m === "ask" && !askOk) return;
+    setInputMode(m);
+    setSuggestion(null);
+  };
+  const toggleMode = () => setMode(inputMode === "ask" ? "tcl" : "ask");
+  const openLlmMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    backend.llmProviders().then(
+      (providers) => setLlmMenu({ x: r.left, y: r.top - 2, providers }),
+      (err) => setLog((l) => [...l, { kind: "err", text: `LLM providers: ${err}` }]),
+    );
+  };
+  const selectLlm = (name: string) => {
+    setLlm(null);
+    backend.llmSelect(name).then(setLlm, (e) => setLlm({ provider: name, model: "", ok: false, error: String(e) }));
+  };
+
   const live = progress?.kind === "start" || progress?.kind === "update";
   const running = proving || live;
   // The Running group disappears with the run; do not leave its filter behind.
@@ -355,6 +455,10 @@ export default function App() {
     else if (e.key === "F3" && !mod) toggleSource();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
+    else if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "a") {
+      toggleMode();
+      focusConsole();
+    }
     else if (mod && !e.shiftKey && !e.altKey && e.key === "5") openProfiler();
     else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3", "4"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
     // Esc closes an open menu first (the context menu stops its Esc, the
@@ -482,8 +586,18 @@ export default function App() {
         { label: "Log", keys: "Ctrl+4", checked: bottomTab === "log", onClick: () => setBottomTab("log") },
         { label: "Profiler", keys: "Ctrl+5", checked: profiler && bottomTab === "profiler", onClick: openProfiler },
         { sep: true },
-        { label: "Input mode: Tcl", checked: true },
-        { label: "Input mode: Ask (coming soon)", disabled: true },
+        { label: "Input mode: Tcl", checked: inputMode === "tcl", onClick: () => setMode("tcl") },
+        {
+          label: "Input mode: Ask",
+          keys: "Ctrl+Shift+A",
+          checked: inputMode === "ask",
+          disabled: !askOk,
+          title: askOk ? undefined : llmTip(llm),
+          onClick: () => {
+            setMode("ask");
+            focusConsole();
+          },
+        },
         { sep: true },
         { label: "Theme: System", checked: theme === "system", onClick: () => setTheme("system") },
         { label: "Theme: Light", checked: theme === "light", onClick: () => setTheme("light") },
@@ -764,6 +878,21 @@ export default function App() {
             ]}
             value={bottomTab}
             onChange={(t) => setBottomTab(t as BottomTab)}
+            extra={
+              <div className="mode-switch" role="group" aria-label="Console input mode">
+                <button aria-pressed={inputMode === "tcl"} title="Tcl commands (Ctrl+Shift+A toggles)" onClick={() => { setMode("tcl"); focusConsole(); }}>
+                  Tcl
+                </button>
+                <button
+                  aria-pressed={inputMode === "ask"}
+                  disabled={!askOk}
+                  title={askOk ? `Ask ${llm?.provider}/${llm?.model} in plain words (Ctrl+Shift+A toggles)` : llmTip(llm)}
+                  onClick={() => { setMode("ask"); focusConsole(); }}
+                >
+                  Ask
+                </button>
+              </div>
+            }
           />
           {/* kept mounted so history and scroll survive tab switches */}
           <Console
@@ -773,6 +902,12 @@ export default function App() {
             flavor={flavor}
             complete={backend.complete}
             onSubmit={(cmd) => (isProveCmd(cmd) ? prove(cmd) : run(() => backend.evalTcl(cmd), cmd))}
+            mode={inputMode}
+            asking={asking}
+            suggestion={suggestion}
+            onAsk={askNow}
+            onCancelAsk={cancelAsk}
+            onSuggestion={() => setSuggestion(null)}
           />
           <EngineLog
             hidden={bottomTab !== "log"}
@@ -860,6 +995,9 @@ export default function App() {
         <span>reset: <span className="mono">{session?.reset ?? "—"}</span></span>
         <span>{flavor === "jg" ? "JasperGold" : "VC Formal"} flavor</span>
         <span className="spacer" />
+        <button className="statusbar-btn" title={llmTip(llm)} aria-haspopup="menu" onClick={openLlmMenu}>
+          {llmLabel(llm)}
+        </button>
         {running ? (
           <span className="run">
             <Glyph k="running" />
@@ -870,6 +1008,26 @@ export default function App() {
         )}
       </footer>
 
+      {llmMenu && (
+        <ContextMenu
+          x={llmMenu.x}
+          y={llmMenu.y}
+          above
+          label="LLM provider"
+          onClose={closeLlmMenu}
+          items={[
+            ...llmMenu.providers.map((p) => ({
+              label: p.name,
+              hint: p.model,
+              checked: p.selected,
+              title: p.base_url || p.kind,
+              onClick: () => selectLlm(p.name),
+            })),
+            { sep: true as const },
+            { label: "Check connection", onClick: checkLlm },
+          ]}
+        />
+      )}
       {ctx && ctxProp && <ContextMenu x={ctx.x} y={ctx.y} items={ctxItems} label={`Actions for ${ctxProp.name}`} onClose={closeCtx} />}
     </div>
   );

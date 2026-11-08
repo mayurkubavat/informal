@@ -51,6 +51,7 @@ export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: Reac
                     role="menuitem"
                     className="menu-item"
                     disabled={it.disabled}
+                    title={it.title}
                     onClick={() => {
                       setOpen(null);
                       it.onClick?.();
