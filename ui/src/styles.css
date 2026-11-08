@@ -510,6 +510,7 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .engine-log { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .log-bar { display: flex; align-items: center; gap: 10px; padding: 3px 8px; border-bottom: 1px solid var(--border); flex: none; }
 .log-bar .check { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
+.log-bar .check input { accent-color: var(--accent); margin: 0; }
 .log-lines { flex: 1; overflow: auto; padding: 4px 8px; min-height: 0; line-height: 1.5; }
 .log-lines .line { white-space: pre-wrap; word-break: break-word; }
 .log-lines .stdout { color: var(--text); }
