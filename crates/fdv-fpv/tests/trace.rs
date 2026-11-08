@@ -122,6 +122,8 @@ fn check_counter_traces(sh: &Shell, engine: &str) {
     assert_eq!(runs[0]["engine"], *engine);
     assert_eq!(runs[0]["outcome"], "won");
     assert!(runs[0]["ms"].as_u64().is_some());
+    // The winner's depth: its own, or the replayed trace's.
+    assert!(runs[0]["depth"].as_u64().is_some(), "{runs:?}");
 }
 
 #[test]

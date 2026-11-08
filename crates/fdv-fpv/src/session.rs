@@ -787,7 +787,14 @@ impl Session {
                 }
             }
         }
-        (status, trace, o.profile)
+        // The profiler's winner row gets the same depth when it had none.
+        let mut runs = o.profile;
+        if let Status::Cex { depth: Some(d), engine, .. } | Status::Covered { depth: Some(d), engine, .. } = &status {
+            for r in runs.iter_mut().filter(|r| &r.engine == engine && r.depth.is_none()) {
+                r.depth = Some(*d);
+            }
+        }
+        (status, trace, runs)
     }
 
     /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the
