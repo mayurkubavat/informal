@@ -12,7 +12,7 @@
 //! and are not implemented are errors, so a migrated script never passes
 //! silently on a different setup.
 
-use crate::session::{glob, parse_duration, Clock, Kind, Session, Status};
+use crate::session::{glob, parse_duration, Clock, Kind, Session, SourceLoc, Status};
 use fdv_tcl::{Interp, TclError, Value};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -332,7 +332,15 @@ fn add_props(
     name: Option<String>,
     expr: &str,
 ) -> Result<Value, String> {
-    s.add_property(kind, name, expr).map(Value::from)
+    let name = s.add_property(kind, name, expr)?;
+    let loc = match fdv_tcl::caller_location() {
+        Some((file, line)) => Some(SourceLoc::new(&file, line)),
+        None => fdv_tcl::current_script().and_then(|f| SourceLoc::search(&f, &name)),
+    };
+    if let Some(p) = s.props.iter_mut().find(|p| p.name == name) {
+        p.source = loc;
+    }
+    Ok(name.into())
 }
 
 fn select(s: &Session, patterns: &[String]) -> Result<Vec<usize>, String> {
@@ -871,6 +879,46 @@ fn vcf_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> 
     add_props(s, kind, name, &expr)
 }
 
+/// Command names a flavor defines (its map plus the commands shared by
+/// both), sorted: what the console completes a first word against.
+pub fn command_names(flavor: Flavor) -> Vec<&'static str> {
+    let own: &[(&str, Body)] = match flavor {
+        Flavor::Jg => JG,
+        Flavor::Vcf => VCF,
+    };
+    let mut names: Vec<&str> = COMMON.iter().chain(own).map(|c| c.0).collect();
+    if flavor == Flavor::Jg {
+        names.extend(["include", "clock"]);
+    }
+    names.retain(|n| !n.ends_with("_cmd"));
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// Console Tab completion: command names of `flavor`, then property names,
+/// that start with `prefix` (each list sorted, no duplicates). An empty
+/// prefix matches nothing, so Tab on an empty prompt does not dump the map.
+pub fn complete(flavor: Flavor, props: &[String], prefix: &str) -> Vec<String> {
+    if prefix.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = command_names(flavor)
+        .into_iter()
+        .filter(|n| n.starts_with(prefix))
+        .map(String::from)
+        .collect();
+    let mut ps: Vec<&String> = props.iter().filter(|p| p.starts_with(prefix)).collect();
+    ps.sort();
+    ps.dedup();
+    for p in ps {
+        if !out.contains(p) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
 /// Status words for use by callers that want the result of a whole script.
 pub fn summary(s: &Session) -> Vec<(String, &'static str)> {
     s.props
@@ -898,6 +946,19 @@ mod tests {
             Session::new(Vec::new(), std::env::temp_dir().join("fdv-compat-unit")),
             flavor,
         )
+    }
+
+    #[test]
+    fn completes_commands_then_properties() {
+        let props = vec!["a_max".to_string(), "prove_me".to_string(), "a_hold".to_string()];
+        assert_eq!(complete(Flavor::Jg, &props, "prov"), ["prove", "prove_me"]);
+        assert_eq!(complete(Flavor::Jg, &props, "a_"), ["a_hold", "a_max"]);
+        assert!(complete(Flavor::Jg, &props, "").is_empty());
+        // Each flavor completes its own map only.
+        assert!(complete(Flavor::Vcf, &[], "check").contains(&"check_fv".to_string()));
+        assert!(!complete(Flavor::Jg, &[], "check").contains(&"check_fv".to_string()));
+        assert!(command_names(Flavor::Jg).contains(&"clock"));
+        assert!(!command_names(Flavor::Jg).contains(&"clock_cmd"));
     }
 
     #[test]

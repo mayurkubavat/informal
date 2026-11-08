@@ -58,6 +58,19 @@ for (const s of sizes)
         await shot(page, n("details"));
       });
 
+      test("log tab and completion list", async ({ page }) => {
+        await ready(page);
+        await proveAll(page);
+        await page.keyboard.press("Control+4");
+        await expect(page.getByRole("log", { name: "Engine output" })).toContainText("unsat");
+        await shot(page, n("log"));
+        await page.keyboard.press("Control+1");
+        await page.getByLabel("Tcl command").fill("prove -property a_");
+        await page.getByLabel("Tcl command").press("Tab");
+        await expect(page.getByRole("listbox", { name: "Completions" })).toBeVisible();
+        await shot(page, n("completion"));
+      });
+
       test("source tab", async ({ page }) => {
         await ready(page);
         await page.getByRole("tab", { name: "counter.sv" }).click();

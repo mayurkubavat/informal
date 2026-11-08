@@ -84,7 +84,14 @@ pub fn from_btor2(m: &Model) -> Result<Aig> {
                 g.constraints.push(c);
                 continue;
             }
-            Op::Output | Op::Fair | Op::Justice => continue,
+            Op::Output => {
+                if let Some(name) = &l.symbol {
+                    let bits = bb.get(&f, &g, l.args[0])?;
+                    g.outputs.push((name.clone(), bits));
+                }
+                continue;
+            }
+            Op::Fair | Op::Justice => continue,
             _ => bb.encode(&mut g, &f, l)?,
         };
         f.insert(l.id, w);

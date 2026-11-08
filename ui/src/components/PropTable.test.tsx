@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { PropTable } from "./PropTable";
+import { OVERSCAN, PropTable, ROW_H, scrollFor, visibleRange } from "./PropTable";
 import { prop } from "../test/fixtures";
 
 const props = [
@@ -117,5 +117,51 @@ describe("PropTable", () => {
     rerender(<PropTable props={props} total={3} selected="a_max" onSelect={() => {}} onOpen={onOpen} />);
     fireEvent.keyDown(wrap, { key: "Enter" });
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ name: "a_max" }));
+  });
+
+  describe("virtual rows", () => {
+    const many = Array.from({ length: 1000 }, (_, i) => prop(`p_${String(i).padStart(4, "0")}`));
+
+    it("computes the visible slice with overscan, clamped to the rows", () => {
+      expect(visibleRange(1000, 0, 220)).toEqual({ start: 0, end: 11 + OVERSCAN });
+      const mid = visibleRange(1000, 500 * ROW_H, 220);
+      expect(mid).toEqual({ start: 500 - OVERSCAN, end: 500 + 11 + OVERSCAN });
+      expect(visibleRange(1000, 999 * ROW_H, 220).end).toBe(1000);
+      expect(visibleRange(5, 0, 220)).toEqual({ start: 0, end: 5 });
+    });
+
+    it("scrolls just enough to show a row", () => {
+      expect(scrollFor(9, 0, 220)).toBe(0); // already in view (rows 0..9)
+      expect(scrollFor(20, 0, 220)).toBe(21 * ROW_H - 220); // below: bottom-aligned
+      expect(scrollFor(3, 100 * ROW_H, 220)).toBe(3 * ROW_H); // above: top-aligned
+    });
+
+    it("renders a slice with spacer rows that keep the full height", () => {
+      const { container } = table({ props: many, total: 1000 });
+      const real = container.querySelectorAll("tbody tr:not(.spacer)");
+      expect(real.length).toBeLessThan(100);
+      const spacer = container.querySelector<HTMLElement>("tbody tr.spacer:last-child")!;
+      expect(parseInt(spacer.style.height)).toBe((1000 - real.length) * ROW_H);
+      expect(container.querySelector("table")).toHaveAttribute("aria-rowcount", "1001");
+      expect(real[0]).toHaveAttribute("aria-rowindex", "2");
+    });
+
+    it("Home, End, PageDown and PageUp select by position", () => {
+      const onSelect = vi.fn();
+      const { rerender } = render(<PropTable props={many} total={1000} selected="p_0500" onSelect={onSelect} onOpen={() => {}} />);
+      const wrap = screen.getByLabelText(/Property table/);
+      fireEvent.keyDown(wrap, { key: "End" });
+      expect(onSelect).toHaveBeenLastCalledWith("p_0999");
+      fireEvent.keyDown(wrap, { key: "Home" });
+      expect(onSelect).toHaveBeenLastCalledWith("p_0000");
+      // jsdom has no layout: a page is the fallback 40 rows less one.
+      fireEvent.keyDown(wrap, { key: "PageDown" });
+      expect(onSelect).toHaveBeenLastCalledWith("p_0539");
+      fireEvent.keyDown(wrap, { key: "PageUp" });
+      expect(onSelect).toHaveBeenLastCalledWith("p_0461");
+      rerender(<PropTable props={many} total={1000} selected="p_0999" onSelect={onSelect} onOpen={() => {}} />);
+      fireEvent.keyDown(wrap, { key: "PageDown" });
+      expect(onSelect).toHaveBeenLastCalledWith("p_0999");
+    });
   });
 });

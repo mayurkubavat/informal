@@ -7,7 +7,9 @@
 //! true at the reported depth, or no trace is written: a trace we cannot
 //! replay is never shown. Bits group back into words by their `name[i]`
 //! suffix and dotted names into scopes; FPV helpers (`fdv_*`) go under an
-//! `fdv` scope with the property's own lane.
+//! `fdv` scope with the property's own lane. Named `output` lines (the
+//! slang lowering's combinational nets, in `prop_N.trace.btor2`) are
+//! replayed and written too.
 
 use anyhow::{bail, Context, Result};
 use fdv_aig::{is_neg, var, Aig, Init, Lit, Node};
@@ -114,6 +116,26 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
                 }
                 b
             })
+            .collect();
+        vars.push(Var { scope: parts, name: leaf, bits });
+    }
+    // Combinational nets the model names with `output` lines (the slang
+    // lowering's trace section), unless an input or register already has
+    // the name. Their values come from the replay like everything else.
+    for (n, bits_of) in &g.outputs {
+        if words.contains_key(n.as_str()) || bits_of.is_empty() {
+            continue;
+        }
+        let mut parts: Vec<String> = n.split('.').map(str::to_string).collect();
+        let leaf = parts.pop().unwrap_or_default();
+        if leaf.starts_with("fdv_") {
+            continue;
+        }
+        if parts.is_empty() {
+            parts.push(top.clone());
+        }
+        let bits = (0..frames.len())
+            .map(|f| bits_of.iter().map(|&b| Some(lit(&frames[f], b))).collect())
             .collect();
         vars.push(Var { scope: parts, name: leaf, bits });
     }

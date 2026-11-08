@@ -81,6 +81,10 @@ pub struct Aig {
     pub constraints: Vec<Lit>,
     /// Names for inputs and latches, by variable (when known).
     pub names: HashMap<u32, String, Fixed>,
+    /// Named Btor2 `output` lines (bits LSB first), kept only so a trace
+    /// replay can show combinational nets; engines and preprocessing
+    /// ignore them.
+    pub outputs: Vec<(String, Vec<Lit>)>,
     strash: HashMap<(Lit, Lit), Lit, Fixed>,
 }
 

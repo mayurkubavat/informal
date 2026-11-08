@@ -12,13 +12,15 @@
 //   ?tick=<ms>   tick period, default 300
 //   ?freeze=<n>  stop ticking after n ticks, leaving the run mid-way
 //   ?holdStop=1  shell_stop never completes, so "Stopping…" stays up
+//   ?props=<n>   add n generated properties (p_00000 ...) after the six,
+//                for the virtualized table tests
 //
 // `source mock/prove-on-source.tcl` stands for a script that adds two
 // properties and proves them in the same call: progress events name them
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { ConsoleLine, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { ConsoleLine, EngineLine, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
                 output logic [3:0] q, output logic done);
@@ -26,21 +28,48 @@ export const mockSource = `module counter (input logic clk, input logic rst_n, i
     always_ff @(posedge clk or negedge rst_n)
         if (!rst_n) q <= 4'd0;
         else if (en && !done) q <= q + 4'd1;
+    m_en: assume property (@(posedge clk) en |=> en);
 endmodule
 `;
 
+// The script the mock's properties came from (Property.source points here,
+// except m_en, which is SVA in the RTL above).
+export const MOCK_SCRIPT = "tests/fpv/counter/counter.jg.tcl";
+export const MOCK_RTL = "tests/fpv/counter/counter.sv";
+export const mockScript = `# JasperGold-style FPV setup for the counter.
+clear -all
+analyze -sv12 counter.sv
+elaborate -top counter
+clock clk
+reset -expression {!rst_n}
+
+assert -name a_max    {q <= 4'd9}
+assert -name a_step   {en && !done |=> q == $past(q) + 4'd1}
+assert -name a_never9 {q != 4'd9}
+cover  -name c_done   {$rose(done)}
+cover  -name c_10     {q == 4'd10}
+
+prove -all
+`;
+export function mockText(path: string): string | null {
+  if (path === MOCK_RTL) return mockSource;
+  if (path === MOCK_SCRIPT) return mockScript;
+  return null;
+}
+const at = (file: string, line: number) => ({ file, line });
+
 const mockSession: SessionView = {
-  design: { files: ["tests/fpv/counter/counter.sv"], top: "counter", defines: [] },
+  design: { files: [MOCK_RTL], top: "counter", defines: [] },
   elaborated: true,
   clocks: [{ signal: "clk", edge: "posedge" }],
   reset: "!rst_n",
   props: [
-    { name: "a_max", kind: "assert", expr: "q <= 4'd9", enabled: true, status: { status: "unprocessed" } },
-    { name: "a_step", kind: "assert", expr: "en && !done |=> q == $past(q) + 4'd1", enabled: true, status: { status: "unprocessed" } },
-    { name: "a_never9", kind: "assert", expr: "q != 4'd9", enabled: true, status: { status: "unprocessed" } },
-    { name: "c_done", kind: "cover", expr: "$rose(done)", enabled: true, status: { status: "unprocessed" } },
-    { name: "c_10", kind: "cover", expr: "q == 4'd10", enabled: true, status: { status: "unprocessed" } },
-    { name: "m_en", kind: "assume", expr: "en |=> en", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_max", source: at(MOCK_SCRIPT, 8), kind: "assert", expr: "q <= 4'd9", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_step", source: at(MOCK_SCRIPT, 9), kind: "assert", expr: "en && !done |=> q == $past(q) + 4'd1", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_never9", source: at(MOCK_SCRIPT, 10), kind: "assert", expr: "q != 4'd9", enabled: true, status: { status: "unprocessed" } },
+    { name: "c_done", source: at(MOCK_SCRIPT, 11), kind: "cover", expr: "$rose(done)", enabled: true, status: { status: "unprocessed" } },
+    { name: "c_10", source: at(MOCK_SCRIPT, 12), kind: "cover", expr: "q == 4'd10", enabled: true, status: { status: "unprocessed" } },
+    { name: "m_en", source: at(MOCK_RTL, 7), kind: "assume", expr: "en |=> en", enabled: true, status: { status: "unprocessed" } },
   ],
   time_limit: { secs: 60, nanos: 0 },
   workdir: "fdv_work",
@@ -71,6 +100,19 @@ const sourcedProps = (): Property[] => [
 ];
 const BASE_PROPS = mockSession.props.length;
 
+// `?props=n`: n extra properties, mostly asserts with a cover every 7th, all
+// unprocessed (a prove resolves them to undetermined).
+export function generatedProps(n: number): Property[] {
+  const w = String(Math.max(0, n - 1)).length;
+  return Array.from({ length: n }, (_, i) => ({
+    name: `p_${String(i).padStart(Math.max(5, w), "0")}`,
+    kind: i % 7 === 6 ? ("cover" as const) : ("assert" as const),
+    expr: `q != 4'd${i % 16}`,
+    enabled: true,
+    status: { status: "unprocessed" as const },
+  }));
+}
+
 // Ticks each property runs for before it resolves (default 2).
 export const MOCK_TICKS: Record<string, number> = { a_max: 2, a_step: 3, a_never9: 2, c_done: 2, c_10: 1 };
 // Reported times use a nominal tick, so frames are identical at any speed.
@@ -84,16 +126,18 @@ if (typeof location !== "undefined") {
   if (q.has("tick")) mockOptions.tick = Math.max(0, Number(q.get("tick")) || 0);
   if (q.has("freeze")) mockOptions.freeze = Number(q.get("freeze"));
   if (q.get("holdStop") === "1") mockOptions.holdStop = true;
+  const extra = Math.min(100_000, Math.max(0, Number(q.get("props")) || 0));
+  if (extra) mockSession.props.push(...generatedProps(extra));
 }
 
-type Ev = "prove-progress" | "console-line";
-const listeners: Record<Ev, Set<(p: unknown) => void>> = { "prove-progress": new Set(), "console-line": new Set() };
+type Ev = "prove-progress" | "console-line" | "engine-log";
+const listeners: Record<Ev, Set<(p: unknown) => void>> = { "prove-progress": new Set(), "console-line": new Set(), "engine-log": new Set() };
 export const mockEvents = {
   on(ev: Ev, cb: (p: unknown) => void) {
     listeners[ev].add(cb);
     return () => void listeners[ev].delete(cb);
   },
-  emit(ev: Ev, payload: ProveProgress | ConsoleLine) {
+  emit(ev: Ev, payload: ProveProgress | ConsoleLine | EngineLine) {
     for (const cb of [...listeners[ev]]) cb(payload);
   },
 };
@@ -119,6 +163,25 @@ const reset = (p: PropProgress, to: Omit<PropProgress, "name" | "kind">) => {
   Object.assign(p, to);
 };
 
+// Raw engine output for the Log tab: one line when a property starts, one
+// per tick, and the verdict line.
+function engineLine(prop: string, engine: string, text: string, err = false) {
+  mockEvents.emit("engine-log", { prop, engine, text, err });
+}
+
+// Tab completion: a static list of each flavor's commands, then the
+// session's property names (crates/fdv-fpv compat::complete in the app).
+export const MOCK_COMMANDS: Record<string, string[]> = {
+  jg: ["analyze", "assert", "assume", "clear", "clock", "cover", "elaborate", "get_property_list", "get_status", "include", "prove", "report", "reset", "set_prove_time_limit"],
+  vcf: ["check_fv", "create_clock", "create_reset", "fvassert", "fvassume", "fvcover", "fvdisable", "fvenable", "get_props", "read_file", "report_fv", "set_fml_appmode", "set_fml_var"],
+};
+export function mockComplete(prefix: string): string[] {
+  if (!prefix) return [];
+  const cmds = (MOCK_COMMANDS[mockFlavor] ?? []).filter((c) => c.startsWith(prefix));
+  const props = mockSession.props.map((p) => p.name).filter((n) => n.startsWith(prefix) && !cmds.includes(n)).sort();
+  return [...cmds, ...props];
+}
+
 export function lineFor(name: string, s: PropStatus): string {
   const at = s.depth != null ? ` at depth ${s.depth}` : "";
   const why = s.reason ? ` (${s.reason})` : "";
@@ -141,8 +204,10 @@ function fill(run: Run) {
   for (const p of run.prog) {
     if (run.prog.filter((q) => q.status === "running").length >= PARALLEL) break;
     if (p.status !== "unprocessed") continue;
-    reset(p, { status: "running", engine: mockResults[p.name]?.engine ?? "ric3", depth: 1, ms: 0 });
+    const engine = mockResults[p.name]?.engine ?? "ric3";
+    reset(p, { status: "running", engine, depth: 1, ms: 0 });
     run.ran.set(p.name, 0);
+    engineLine(p.name, engine, `reading fdv_work/${p.name}.btor2`);
   }
 }
 
@@ -168,8 +233,12 @@ function step(run: Run) {
       prop.status = { ...final };
       prop.trace = MOCK_TRACES[p.name] ?? null;
       reset(p, final);
+      engineLine(p.name, final.engine ?? "ric3", final.status === "proven" || final.status === "unreachable" ? "unsat" : "sat", false);
       mockEvents.emit("console-line", { kind: "out", text: lineFor(p.name, final) });
-    } else Object.assign(p, { depth: 1 + n * 5, ms: n * TICK_MS });
+    } else {
+      Object.assign(p, { depth: 1 + n * 5, ms: n * TICK_MS });
+      engineLine(p.name, p.engine ?? "ric3", `frame ${1 + n * 5}`);
+    }
   }
   fill(run);
   if (run.prog.every(isFinal)) finish(run, "done");

@@ -144,6 +144,112 @@ unsafe fn new_obj(s: &str) -> *mut ffi::Tcl_Obj {
     ffi::Tcl_NewStringObj(s.as_ptr() as *const c_char, s.len() as c_int)
 }
 
+thread_local! {
+    /// The interpreter running the innermost Rust command, for
+    /// [`caller_location`]. Commands can nest (a command that evaluates
+    /// Tcl which calls another), so the previous value is restored after.
+    static CURRENT: std::cell::Cell<*mut ffi::Tcl_Interp> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// Where the Rust command now running was called from: the script file and
+/// line, from Tcl's `info frame` (Tcl 8.6 tracks lines for code read by
+/// `source`, including loop and proc bodies defined in that file). `None`
+/// outside a command callback, or when the call did not come from a file
+/// (a console line, `eval` of a built string).
+pub fn caller_location() -> Option<(String, u32)> {
+    let raw = CURRENT.with(|c| c.get());
+    if raw.is_null() {
+        return None;
+    }
+    // The evaluated `info frame` runs one level below the command, so -1
+    // is the command's own frame. The interp result is reset by the
+    // command's return value afterwards, so clobbering it here is fine.
+    let script = "info frame -1";
+    let code = unsafe {
+        ffi::Tcl_EvalEx(raw, script.as_ptr() as *const c_char, script.len() as c_int, 0)
+    };
+    let text = unsafe { CStr::from_ptr(ffi::Tcl_GetStringResult(raw)) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { ffi::Tcl_ResetResult(raw) };
+    if code != ffi::TCL_OK {
+        return None;
+    }
+    let dict = list_words(&text);
+    let get = |k: &str| {
+        dict.chunks(2)
+            .find(|kv| kv.len() == 2 && kv[0] == k)
+            .map(|kv| kv[1].clone())
+    };
+    let file = get("file")?;
+    let line = get("line")?.parse().ok()?;
+    Some((file, line))
+}
+
+/// The script being sourced (`info script`) while a Rust command runs;
+/// `None` outside a command or when no `source` is in progress.
+pub fn current_script() -> Option<String> {
+    let raw = CURRENT.with(|c| c.get());
+    if raw.is_null() {
+        return None;
+    }
+    let script = "info script";
+    let code = unsafe {
+        ffi::Tcl_EvalEx(raw, script.as_ptr() as *const c_char, script.len() as c_int, 0)
+    };
+    let text = unsafe { CStr::from_ptr(ffi::Tcl_GetStringResult(raw)) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { ffi::Tcl_ResetResult(raw) };
+    (code == ffi::TCL_OK && !text.is_empty()).then_some(text)
+}
+
+/// Split a Tcl list the simple way `info frame` needs: words separated by
+/// spaces, `{...}` groups (nested) kept whole without the outer braces.
+fn list_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let mut w = String::new();
+        if c == '{' {
+            chars.next();
+            let mut depth = 1;
+            for c in chars.by_ref() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                w.push(c);
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() {
+                    break;
+                }
+                if c == '\\' {
+                    chars.next();
+                }
+                if let Some(c) = chars.next() {
+                    w.push(c);
+                }
+            }
+        }
+        out.push(w);
+    }
+    out
+}
+
 unsafe extern "C" fn trampoline(
     data: *mut c_void,
     interp: *mut ffi::Tcl_Interp,
@@ -151,12 +257,14 @@ unsafe extern "C" fn trampoline(
     objv: *const *mut ffi::Tcl_Obj,
 ) -> c_int {
     let cmd = &mut *(data as *mut Command);
+    let prev = CURRENT.with(|c| c.replace(interp));
     let args: Vec<String> = (0..objc as usize)
         .map(|i| obj_string(*objv.add(i)))
         .collect();
     // A panic must not unwind into C.
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd(&args)))
         .unwrap_or_else(|_| Err(format!("internal error in command {}", args[0])));
+    CURRENT.with(|c| c.set(prev));
     match out {
         Ok(Value::Str(s)) => {
             ffi::Tcl_SetObjResult(interp, new_obj(&s));
@@ -337,6 +445,44 @@ mod tests {
         assert!(e.info.contains("\"f\""), "{}", e.info);
         // The interpreter is still usable after an error.
         assert_eq!(i.eval("set x 1").unwrap(), "1");
+    }
+
+    #[test]
+    fn caller_location_from_sourced_files() {
+        let dir = std::env::temp_dir().join(format!("fdv-tcl-loc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("s.tcl");
+        std::fs::write(
+            &f,
+            "# header\nhere a\n\nforeach x {1 2} {\n    here b$x\n}\nproc p {} {\n  here c\n}\np\n",
+        )
+        .unwrap();
+        let i = Interp::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = seen.clone();
+        i.register(
+            "here",
+            Box::new(move |a| {
+                s.borrow_mut().push((a[1].clone(), caller_location()));
+                Ok(().into())
+            }),
+        );
+        i.eval_file(&f).unwrap();
+        i.eval("here d").unwrap();
+        let file = f.to_string_lossy().into_owned();
+        let at = |n| Some((file.clone(), n));
+        assert_eq!(
+            *seen.borrow(),
+            [
+                ("a".to_string(), at(2)),
+                ("b1".to_string(), at(5)),
+                ("b2".to_string(), at(5)),
+                ("c".to_string(), at(8)),
+                ("d".to_string(), None),
+            ]
+        );
+        assert_eq!(caller_location(), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

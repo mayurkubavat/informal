@@ -60,6 +60,19 @@ pub trait ProveSink: Send + Sync {
     fn progress(&self, p: &ProveProgress);
     /// One console line (a finished property, or the stop notice).
     fn line(&self, _text: &str, _err: bool) {}
+    /// One line of an engine's own output while it works on `prop` (the
+    /// app's "engine-log" event). External engines stream stdout/stderr
+    /// lines as they print them; `err` marks stderr.
+    fn engine_log(&self, _line: &EngineLine) {}
+}
+
+/// Payload of the "engine-log" event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EngineLine {
+    pub prop: String,
+    pub engine: String,
+    pub text: String,
+    pub err: bool,
 }
 
 struct Slot {
@@ -182,6 +195,20 @@ impl Tracker {
             s.since = Some(Instant::now());
         }
         self.emit(ProgressKind::Update);
+    }
+
+    /// A line of engine output for the property in `slot`.
+    pub fn engine_line(&self, slot: usize, engine: &str, text: String, err: bool) {
+        let prop = match self.slots.lock().unwrap().get(slot) {
+            Some(s) => s.p.name.clone(),
+            None => return,
+        };
+        self.sink.engine_log(&EngineLine {
+            prop,
+            engine: engine.to_string(),
+            text,
+            err,
+        });
     }
 
     /// An engine reported progress on the running property in `slot`. Only

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   bound, groupOf, identifiers, matches, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
-  statusKey, statusText, clock, isProveCmd, withProgress, guessKind,
+  statusKey, statusText, clock, isProveCmd, withProgress, guessKind, sourceFile, sourceLine, completionWord, startCompletion, cycleCompletion,
 } from "./model";
 import type { ProveProgress } from "./backend";
-import { mockSource } from "./mock";
+import { MOCK_RTL, MOCK_SCRIPT, mockScript, mockSource, mockText } from "./mock";
 import { prop } from "./test/fixtures";
 
 describe("constants", () => {
@@ -123,6 +123,60 @@ describe("locate", () => {
     expect(locate(src, prop("x", { expr: "1" }))).toBe(0);
     expect(locate("", prop("a_named"))).toBe(0);
     expect(locate(src, null)).toBe(0);
+  });
+});
+
+describe("console completion", () => {
+  it("completes the last word after a space, bracket, brace or semicolon", () => {
+    expect(completionWord("pro")).toEqual({ base: "", word: "pro" });
+    expect(completionWord("prove -property a_n")).toEqual({ base: "prove -property ", word: "a_n" });
+    expect(completionWord("puts [get_st")).toEqual({ base: "puts [", word: "get_st" });
+    expect(completionWord("check_fv -property {a_")).toEqual({ base: "check_fv -property {", word: "a_" });
+    expect(completionWord("clear -all; pro")).toEqual({ base: "clear -all; ", word: "pro" });
+    expect(completionWord("prove ")).toEqual({ base: "prove ", word: "" });
+  });
+  it("inserts a single match with a space and ends", () => {
+    expect(startCompletion("pro", ["prove"])).toEqual({ cmd: "prove ", state: null });
+    expect(startCompletion("zz", [])).toEqual({ cmd: "zz", state: null });
+  });
+  it("inserts the first of several and cycles both ways, wrapping", () => {
+    const first = startCompletion("prove -property a_", ["a_max", "a_never9", "a_step"]);
+    expect(first.cmd).toBe("prove -property a_max");
+    let st = first.state!;
+    expect(st).toEqual({ base: "prove -property ", matches: ["a_max", "a_never9", "a_step"], index: 0 });
+    const seen: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = cycleCompletion(st, 1);
+      seen.push(r.cmd);
+      st = r.state;
+    }
+    expect(seen).toEqual(["prove -property a_never9", "prove -property a_step", "prove -property a_max"]);
+    expect(cycleCompletion(st, -1).cmd).toBe("prove -property a_step");
+  });
+});
+
+describe("sourceFile / sourceLine", () => {
+  const top = "rtl/top.sv";
+  const fromScript = prop("a1", { source: { file: "/w/run.tcl", line: 12 } });
+  it("follows a recorded source to its own file and line", () => {
+    expect(sourceFile(fromScript, top)).toBe("/w/run.tcl");
+    expect(sourceLine(fromScript, "/w/run.tcl", "")).toBe(12);
+  });
+  it("falls back to the top file and the name search without one", () => {
+    const typed = prop("a_named", { source: null });
+    expect(sourceFile(typed, top)).toBe(top);
+    expect(sourceFile(null, top)).toBe(top);
+    expect(sourceLine(typed, top, "x\na_named: assert property (q);")).toBe(2);
+  });
+  it("searches when shown a file other than the recorded one", () => {
+    expect(sourceLine(fromScript, top, "a1 here")).toBe(1);
+  });
+  it("matches the mock's script and RTL entries", () => {
+    expect(mockText(MOCK_SCRIPT)).toBe(mockScript);
+    expect(mockText(MOCK_RTL)).toBe(mockSource);
+    expect(mockText("elsewhere.sv")).toBeNull();
+    expect(mockScript.split("\n")[10 - 1]).toContain("assert -name a_never9");
+    expect(mockSource.split("\n")[7 - 1]).toContain("m_en: assume property");
   });
 });
 

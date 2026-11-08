@@ -140,11 +140,30 @@ pub struct Request {
     pub incdirs: Vec<PathBuf>,
     pub top: Option<String>,
     pub params: Vec<(String, String)>,
+    /// [`lower`] only: append the named-output section for traces (see
+    /// [`TRACE_MARKER`]). Not a slang option; the shim strips it.
+    pub trace_outputs: bool,
+}
+
+/// The comment line that starts [`lower`]'s trace section: `output` lines
+/// naming the combinational nets. Text before it is exactly the model
+/// without [`Request::trace_outputs`], which is what engines get.
+pub const TRACE_MARKER: &str = "; fdv-trace-outputs";
+
+/// Split a lowered model at [`TRACE_MARKER`]: (engine model, trace section).
+pub fn split_trace(btor2: &str) -> (&str, &str) {
+    match btor2.find(TRACE_MARKER) {
+        Some(i) => btor2.split_at(i),
+        None => (btor2, ""),
+    }
 }
 
 impl Request {
     fn words(&self) -> Vec<String> {
         let mut w = Vec::new();
+        if self.trace_outputs {
+            w.push("--fdv-trace-outputs".into());
+        }
         for (k, v) in &self.defines {
             w.push(match v {
                 Some(v) => format!("-D{k}={v}"),
@@ -318,5 +337,38 @@ mod tests {
         let e = d.errors().next().unwrap();
         assert_eq!(e.line, Some(2));
         assert!(e.message.contains("nosuch"), "{e}");
+    }
+
+    #[test]
+    fn trace_outputs_only_append_named_nets() {
+        if !available() {
+            eprintln!("skipping: built without slang");
+            return;
+        }
+        let f = write(
+            "t.sv",
+            "module t(input logic clk, input logic en, output logic done);\n\
+             logic [1:0] q; logic [1:0] nxt; logic unused;\n\
+             assign nxt = q + 2'd1;\n  assign done = q == 2'd3;\n  assign unused = en ^ q[0];\n\
+             always_ff @(posedge clk) if (en && !done) q <= nxt;\n\
+             always_comb begin a_ok: assert (q <= 2'd3); end\nendmodule\n",
+        );
+        let mut req = Request { files: vec![f], ..Default::default() };
+        let plain = lower(&req).unwrap();
+        assert!(plain.ok, "{:?}", plain.errors);
+        assert!(!plain.btor2.contains(TRACE_MARKER) && !plain.btor2.contains(" output "));
+        req.trace_outputs = true;
+        let traced = lower(&req).unwrap();
+        assert!(traced.ok, "{:?}", traced.errors);
+        let (model, section) = split_trace(&traced.btor2);
+        assert_eq!(model, plain.btor2, "the engine part must not change");
+        let outs: Vec<&str> = section
+            .lines()
+            .filter(|l| l.split_whitespace().nth(1) == Some("output"))
+            .filter_map(|l| l.split_whitespace().nth(3))
+            .collect();
+        // Sorted; `unused` is read by nothing and lowered for the trace.
+        assert_eq!(outs, ["t.done", "t.nxt", "t.unused"]);
+        assert!(section.starts_with(TRACE_MARKER));
     }
 }

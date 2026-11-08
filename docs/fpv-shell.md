@@ -47,6 +47,21 @@ directory (`fdv_work/` by default).
    the session time limit. A cover is checked as "never matches": a
    counterexample means covered, a proof means unreachable.
 
+## Property source locations
+
+Each property in the session JSON carries `source: {file, line}` (or
+`null`): the absolute script path and 1-based line of the Tcl command that
+created it, from Tcl's `info frame` (`fdv_tcl::caller_location`). Tcl 8.6
+tracks lines for code read by `source`, including `foreach` and proc bodies
+written in that file. A property made by `eval` of a built string has no
+line info; then the first line of the sourced script (`info script`) naming
+the property as a whole word is used. Properties typed at the console get
+`null`. SVA written in the RTL is not read by the shell yet, so no RTL
+locations are produced today; the field is ready for them. The app's source
+view opens `source.file` at `source.line` (F3, Show source, the Details
+Source row) and only falls back to searching the top design file when it is
+absent.
+
 ## SVA subset
 
 Supported: `@(posedge clk)` / `@(negedge clk)`, `disable iff (expr)`,

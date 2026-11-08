@@ -6,9 +6,9 @@
 // as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, Flavor, ProveProgress, Reply, SessionView } from "./backend";
+import { backend, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import {
-  bound, clock, isProveCmd, locate, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time, traceOf, withProgress,
+  bound, clock, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
@@ -23,9 +23,13 @@ import { Glyph, Status } from "./components/Glyph";
 import { PropTable } from "./components/PropTable";
 import { Console } from "./components/Console";
 import { Messages } from "./components/Messages";
+import { EngineLog } from "./components/EngineLog";
 import { SourceView } from "./components/SourceView";
 import { TraceView } from "./components/TraceView";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
+
+// Lines the Log tab keeps; older ones are dropped (and counted).
+const LOG_CAP = 5000;
 
 const SHORTCUTS: [string, string][] = [
   ["F5", "Prove all"],
@@ -38,7 +42,8 @@ const SHORTCUTS: [string, string][] = [
   ["Esc", "Close menu; otherwise stop the running prove"],
   ["Ctrl+F", "Filter properties"],
   ["Ctrl+L", "Console prompt"],
-  ["Ctrl+1..3", "Console / Details / Messages"],
+  ["Ctrl+1..4", "Console / Details / Messages / Log"],
+  ["Tab", "Complete a command or property name (console; again to cycle)"],
 ];
 
 export default function App() {
@@ -55,10 +60,14 @@ export default function App() {
   const [stopping, setStopping] = useState(false);
   const [log, setLog] = useState<LogLine[]>([]);
   const [events, setEvents] = useState<LogEvent[]>([]);
+  // Raw engine output for the Log tab, newest last, capped at LOG_CAP lines.
+  const [engineLog, setEngineLog] = useState<{ lines: EngineLine[]; dropped: number }>({ lines: [], dropped: 0 });
+  const [autoscroll, setAutoscroll] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
-  const [source, setSource] = useState("");
+  // Text of files read for the source view and the design tree, by path.
+  const [texts, setTexts] = useState<Record<string, string>>({});
   // The property shown in the trace tab (null: no trace tab), and its VCD.
   const [traceName, setTraceName] = useState<string | null>(null);
   const [trace, setTrace] = useState<{ path: string; text: string | null; error: string | null } | null>(null);
@@ -115,9 +124,17 @@ export default function App() {
       if (p.kind === "done" || p.kind === "stopped") setStopping(false);
     });
     const offConsole = backend.onConsole((l) => setLog((log) => [...log, { kind: l.kind, text: l.text }]));
+    const offEngine = backend.onEngineLog((l) =>
+      setEngineLog(({ lines, dropped }) => {
+        const all = [...lines, l];
+        const cut = Math.max(0, all.length - LOG_CAP);
+        return { lines: cut ? all.slice(cut) : all, dropped: dropped + cut };
+      }),
+    );
     return () => {
       offProgress();
       offConsole();
+      offEngine();
     };
   }, []);
   const live = progress?.kind === "start" || progress?.kind === "update";
@@ -162,9 +179,14 @@ export default function App() {
   }, [run]);
 
   const topFile = session?.design.files[0];
-  useEffect(() => {
-    if (topFile) backend.readText(topFile).then(setSource, () => setSource(""));
-  }, [topFile]);
+  const loadText = useCallback((path: string | undefined) => {
+    if (!path) return;
+    backend.readText(path).then(
+      (t) => setTexts((m) => (m[path] === t ? m : { ...m, [path]: t })),
+      () => setTexts((m) => (path in m ? m : { ...m, [path]: "" })),
+    );
+  }, []);
+  useEffect(() => loadText(topFile), [topFile, loadText]);
 
   // Recomputed every render (cheap): the browser mock mutates the session in
   // place, so memoising on the session reference would go stale.
@@ -186,9 +208,17 @@ export default function App() {
   const current = allProps.find((p) => p.name === selected) ?? null;
   const proveCmd = flavor === "jg" ? "prove -all" : "check_fv";
   const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${n}` : `check_fv -property {${n}}`);
-  const focusLine = locate(source, current);
-  const fileName = topFile?.split("/").pop();
-  const ports = useMemo(() => parsePorts(source), [source]);
+  // The source view follows the selected property's own file (its script
+  // line, or RTL for SVA in the design); the top file otherwise.
+  const srcPath = sourceFile(current, topFile);
+  useEffect(() => {
+    if (srcPath !== topFile) loadText(srcPath);
+  }, [srcPath, topFile, loadText]);
+  const source = (srcPath && texts[srcPath]) || "";
+  const focusLine = sourceLine(current, srcPath, source);
+  const fileName = srcPath?.split("/").pop();
+  const topText = (topFile && texts[topFile]) || "";
+  const ports = useMemo(() => parsePorts(topText), [topText]);
   const currentTrace = traceOf(current);
   const hasTrace = !!currentTrace;
   const traceProp = traceName ? allProps.find((p) => p.name === traceName) ?? null : null;
@@ -267,7 +297,7 @@ export default function App() {
     setFocusReq((r) => ({ id: "console-input", n: (r?.n ?? 0) + 1 }));
   };
   const toggleSource = () => topFile && setCenter((c) => (c === "source" ? "table" : "source"));
-  const DOCK: BottomTab[] = ["console", "details", "messages"];
+  const DOCK: BottomTab[] = ["console", "details", "messages", "log"];
 
   // Workbench shortcuts (Help > Keyboard shortcuts lists them). Read through a
   // ref so the listener is installed once but always sees current state.
@@ -279,7 +309,7 @@ export default function App() {
     else if (e.key === "F3" && !mod) toggleSource();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
-    else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
+    else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3", "4"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
     // Esc closes an open menu first (the context menu stops its Esc, the
     // menu bar marks it handled) and a field may use it (the filter clears
     // itself); only then does it stop a running prove.
@@ -393,6 +423,7 @@ export default function App() {
         { label: "Console", keys: "Ctrl+1", checked: bottomTab === "console", onClick: () => setBottomTab("console") },
         { label: "Details", keys: "Ctrl+2", checked: bottomTab === "details", onClick: () => setBottomTab("details") },
         { label: "Messages", keys: "Ctrl+3", checked: bottomTab === "messages", onClick: () => setBottomTab("messages") },
+        { label: "Log", keys: "Ctrl+4", checked: bottomTab === "log", onClick: () => setBottomTab("log") },
         { sep: true },
         { label: "Input mode: Tcl", checked: true },
         { label: "Input mode: Ask (coming soon)", disabled: true },
@@ -617,7 +648,7 @@ export default function App() {
                 />
               </>
             ) : (
-              <span className="strip-summary mono">{topFile}</span>
+              <span className="strip-summary mono">{srcPath}{focusLine ? `:${focusLine}` : ""}</span>
             )}
           </div>
           {center !== "source" ? (
@@ -658,12 +689,28 @@ export default function App() {
               ["console", "Console"],
               ["details", current ? `Details: ${current.name}` : "Details"],
               ["messages", `Messages${events.some((e) => !e.ok) ? ` (${events.filter((e) => !e.ok).length})` : ""}`],
+              ["log", "Log"],
             ]}
             value={bottomTab}
             onChange={(t) => setBottomTab(t as BottomTab)}
           />
           {/* kept mounted so history and scroll survive tab switches */}
-          <Console hidden={bottomTab !== "console"} log={log} busy={busy} flavor={flavor} onSubmit={(cmd) => (isProveCmd(cmd) ? prove(cmd) : run(() => backend.evalTcl(cmd), cmd))} />
+          <Console
+            hidden={bottomTab !== "console"}
+            log={log}
+            busy={busy}
+            flavor={flavor}
+            complete={backend.complete}
+            onSubmit={(cmd) => (isProveCmd(cmd) ? prove(cmd) : run(() => backend.evalTcl(cmd), cmd))}
+          />
+          <EngineLog
+            hidden={bottomTab !== "log"}
+            lines={engineLog.lines}
+            dropped={engineLog.dropped}
+            autoscroll={autoscroll}
+            onAutoscroll={setAutoscroll}
+            onClear={() => setEngineLog({ lines: [], dropped: 0 })}
+          />
           {bottomTab === "details" &&
             (current ? (
               <div className="details">
@@ -698,7 +745,7 @@ export default function App() {
                     <dt>Source</dt>
                     <dd>
                       {fileName ? (
-                        <button className="link mono" onClick={() => setCenter("source")}>
+                        <button className="link mono" onClick={() => setCenter("source")} title={current.source ? `${srcPath}:${focusLine}` : "Not recorded; best guess in the top file"}>
                           {fileName}
                           {focusLine ? `:${focusLine}` : ""}
                         </button>

@@ -176,11 +176,20 @@ test.describe("row context menu", () => {
     await expect(page.locator(".console-log")).toContainText("fdv[jg]> prove -property c_done");
   });
 
-  test("Show source opens the source tab at the property's line", async ({ page }) => {
+  test("Show source opens the script at the line that made the property", async ({ page }) => {
     await row(page, "a_never9").click({ button: "right" });
     await item(page, "Show source").click();
+    await expect(page.getByRole("tab", { name: "counter.jg.tcl" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("main pre.source .focus")).toHaveText("10assert -name a_never9 {q != 4'd9}");
+    await expect(page.locator(".strip-summary")).toHaveText("tests/fpv/counter/counter.jg.tcl:10");
+  });
+
+  test("Show source of SVA in the RTL opens the design file at its line", async ({ page }) => {
+    await row(page, "m_en").click({ button: "right" });
+    await item(page, "Show source").click();
     await expect(page.getByRole("tab", { name: "counter.sv" })).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator("main pre.source .focus")).toContainText("output logic [3:0] q");
+    await expect(page.locator("main pre.source .focus")).toContainText("m_en: assume property");
+    await expect(page.locator("main pre.source")).toHaveAttribute("data-focus-line", "7");
   });
 
   test("Copy name and Copy expression use the clipboard", async ({ page }) => {
@@ -248,6 +257,21 @@ test.describe("keyboard model", () => {
     await expect(page.getByRole("tab", { name: "Details: a_step" })).toHaveAttribute("aria-selected", "true");
   });
 
+  test("F3 on a selected property opens its source line; Details links it", async ({ page }) => {
+    await row(page, "c_done").click();
+    await expect(page.getByRole("button", { name: "counter.jg.tcl:11" })).toBeVisible();
+    await page.keyboard.press("F3");
+    await expect(page.getByRole("tab", { name: "counter.jg.tcl" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("main pre.source .focus")).toContainText("cover  -name c_done");
+    // The highlighted line is scrolled into the pane.
+    const inView = await page.locator("main pre.source .focus").evaluate((el) => {
+      const pre = el.closest("pre")!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return r.top >= pre.top && r.bottom <= pre.bottom;
+    });
+    expect(inView).toBe(true);
+  });
+
   test("F3 toggles the source view", async ({ page }) => {
     await page.keyboard.press("F3");
     await expect(page.getByRole("tab", { name: "counter.sv" })).toHaveAttribute("aria-selected", "true");
@@ -270,8 +294,10 @@ test.describe("keyboard model", () => {
     await expect(page.getByRole("tab", { name: "Console" })).toHaveAttribute("aria-selected", "true");
   });
 
-  test("Ctrl+1..3 switch the bottom dock tabs", async ({ page }) => {
+  test("Ctrl+1..4 switch the bottom dock tabs", async ({ page }) => {
     const tab = (n: RegExp) => page.getByRole("tab", { name: n });
+    await page.keyboard.press("Control+4");
+    await expect(tab(/^Log$/)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Control+3");
     await expect(tab(/^Messages/)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Control+2");
@@ -293,8 +319,173 @@ test.describe("keyboard model", () => {
   test("Help > Keyboard shortcuts prints the list in the console", async ({ page }) => {
     await page.getByRole("menuitem", { name: "Help", exact: true }).click();
     await page.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
-    await expect(page.locator(".console-log")).toContainText("Ctrl+1..3");
+    await expect(page.locator(".console-log")).toContainText("Ctrl+1..4");
     await expect(page.locator(".console-log")).toContainText("Prove selected");
+  });
+});
+
+test.describe("console completion", () => {
+  const input = (page: Page) => page.getByLabel("Tcl command");
+
+  test("Tab completes a command; the completed line runs", async ({ page }) => {
+    await input(page).fill("pro");
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("prove ");
+    await expect(input(page)).toBeFocused();
+    await input(page).pressSequentially("-all");
+    await input(page).press("Enter");
+    await expect(statusbar(page)).toContainText("Idle");
+    await expect(summary(page)).toContainText("2 proven");
+  });
+
+  test("several matches are listed; Tab cycles through them", async ({ page }) => {
+    await input(page).fill("prove -property a_");
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("prove -property a_max");
+    const list = page.getByRole("listbox", { name: "Completions" });
+    await expect(list.getByRole("option")).toHaveText(["a_max", "a_never9", "a_step"]);
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("prove -property a_never9");
+    await expect(list.getByRole("option", { selected: true })).toHaveText("a_never9");
+    await input(page).press("Shift+Tab");
+    await expect(input(page)).toHaveValue("prove -property a_max");
+    await input(page).press("Escape");
+    await expect(list).toHaveCount(0);
+  });
+
+  test("completion follows the flavor", async ({ page }) => {
+    await page.getByLabel("Flavor").selectOption("vcf");
+    await expect(statusbar(page)).toContainText("Idle");
+    await input(page).fill("check");
+    await input(page).press("Tab");
+    await expect(input(page)).toHaveValue("check_fv ");
+  });
+});
+
+test.describe("engine log", () => {
+  const logTab = (page: Page) => page.getByRole("tab", { name: "Log", exact: true });
+  const log = (page: Page) => page.getByRole("log", { name: "Engine output" });
+
+  test("the Log tab shows engine output from a prove; Clear empties it", async ({ page }) => {
+    await logTab(page).click();
+    await expect(page.getByText(/No engine output yet/)).toBeVisible();
+    await proveAll(page);
+    await expect(log(page)).toContainText("a_never9 ric3-bmcreading fdv_work/a_never9.btor2");
+    await expect(log(page)).toContainText("a_max ric3-ic3unsat");
+    await expect(page.locator(".log-bar")).toContainText(/\d+ lines/);
+    await page.getByRole("button", { name: "Clear" }).click();
+    await expect(page.getByText(/No engine output yet/)).toBeVisible();
+  });
+
+  test("lines arriving while another tab is open are kept; autoscroll can be turned off", async ({ page }) => {
+    await page.goto("/?tick=20");
+    await page.keyboard.press("Control+4");
+    await page.getByRole("checkbox", { name: "Autoscroll" }).uncheck();
+    await page.keyboard.press("Control+1");
+    await page.getByRole("button", { name: "Prove all" }).click();
+    await expect(statusbar(page)).toContainText("Idle");
+    await page.keyboard.press("Control+4");
+    await expect(log(page).locator(".line")).not.toHaveCount(0);
+    await expect(page.getByRole("checkbox", { name: "Autoscroll" })).not.toBeChecked();
+    await expect.poll(() => log(page).evaluate((el) => el.scrollTop)).toBe(0);
+  });
+});
+
+test.describe("virtualized table (5,000 properties)", () => {
+  const N = 5006;
+  const wrap = (page: Page) => page.locator(".table-wrap");
+  const domRows = (page: Page) => page.locator("table.grid tbody tr:not(.spacer):not(.empty-row)");
+  const selectedName = (page: Page) => page.locator("table.grid tbody tr.sel td:nth-child(2)");
+  // The selected row lies fully inside the scrolled pane, below the header.
+  const selInView = (page: Page) =>
+    page.evaluate(() => {
+      const w = document.querySelector(".table-wrap")!.getBoundingClientRect();
+      const r = document.querySelector("table.grid tbody tr.sel")?.getBoundingClientRect();
+      return !!r && r.top >= w.top + 22 && r.bottom <= w.bottom + 0.5;
+    });
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/?fast=1&props=5000");
+    await expect(summary(page)).toContainText(`${N} properties`);
+  });
+
+  test("only the visible rows are in the DOM; the scrollbar spans all of them", async ({ page }) => {
+    expect(await domRows(page).count()).toBeLessThan(100);
+    const sizes = await wrap(page).evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }));
+    expect(sizes.scroll).toBeGreaterThanOrEqual(N * 22);
+    expect(sizes.scroll).toBeLessThan(N * 22 + 200);
+    const h = await domRows(page).first().evaluate((el) => el.getBoundingClientRect().height);
+    expect(h).toBe(22);
+    // Scrolling to the middle renders the rows there, still fewer than 100.
+    await wrap(page).evaluate((el) => (el.scrollTop = 2500 * 22));
+    await expect(page.getByRole("cell", { name: "p_02494", exact: true })).toBeVisible();
+    expect(await domRows(page).count()).toBeLessThan(100);
+  });
+
+  test("End, Home and PageDown move the selection and keep it in view", async ({ page }) => {
+    await row(page, "a_max").click();
+    await page.keyboard.press("End");
+    await expect(selectedName(page)).toHaveText("p_04999");
+    expect(await selInView(page)).toBe(true);
+    expect(await domRows(page).count()).toBeLessThan(100);
+    await page.keyboard.press("Home");
+    await expect(selectedName(page)).toHaveText("a_max");
+    expect(await wrap(page).evaluate((el) => el.scrollTop)).toBe(0);
+    await page.keyboard.press("PageDown");
+    const afterPage = await selectedName(page).textContent();
+    expect(afterPage).toMatch(/^p_000\d\d$/);
+    expect(await selInView(page)).toBe(true);
+    await page.keyboard.press("PageDown");
+    await page.keyboard.press("ArrowDown");
+    expect(await selInView(page)).toBe(true);
+    await expect(page.getByRole("tab", { name: /^Details: p_0/ })).toBeVisible();
+  });
+
+  test("sort, filter, context menu and double-click work on the virtual rows", async ({ page }) => {
+    await page.getByRole("columnheader", { name: "Name" }).click();
+    await page.getByRole("columnheader", { name: "Name" }).click();
+    await expect(domRows(page).first().locator("td").nth(1)).toHaveText("p_04999");
+    await page.getByLabel("Filter properties").fill("p_0412");
+    await expect(page.locator(".filter-count")).toHaveText(`10 of ${N}`);
+    await expect(domRows(page)).toHaveCount(10);
+    await row(page, "p_04123").click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await row(page, "p_04123").dblclick();
+    await expect(page.getByRole("tab", { name: "Details: p_04123" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("a task-tree group lists 200 leaves and a 'more' row that filters the table", async ({ page }) => {
+    const group = page.locator(".tree").getByRole("group").filter({ hasText: "Unprocessed" });
+    await expect(group.locator(".tree-row.leaf:not(.more)")).toHaveCount(200);
+    await group.locator(".tree-row.more").click();
+    await expect(page.locator(".filter-count")).toHaveText(`5005 of ${N}`);
+  });
+
+  test("a selection change renders in under 16 ms", async ({ page }) => {
+    await row(page, "a_max").click();
+    const times = await page.evaluate(async () => {
+      const wrap = document.querySelector<HTMLElement>(".table-wrap")!;
+      const body = wrap.querySelector("tbody")!;
+      const out: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        const done = new Promise<number>((resolve) => {
+          const mo = new MutationObserver(() => {
+            mo.disconnect();
+            resolve(performance.now());
+          });
+          mo.observe(body, { attributes: true, subtree: true, attributeFilter: ["aria-selected"] });
+        });
+        const t0 = performance.now();
+        wrap.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        out.push((await done) - t0);
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+      }
+      return out.sort((a, b) => a - b);
+    });
+    const median = times[Math.floor(times.length / 2)];
+    console.log(`selection change: median ${median.toFixed(2)} ms, max ${times[times.length - 1].toFixed(2)} ms`);
+    expect(median).toBeLessThan(16);
   });
 });
 

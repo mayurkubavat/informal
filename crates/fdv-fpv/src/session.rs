@@ -100,6 +100,43 @@ pub struct Property {
     /// to the working directory when inside it); `None` otherwise or when
     /// no witness could be replayed. See docs/ui/trace-format.md.
     pub trace: Option<String>,
+    /// Where the property was written: the script line of the Tcl command
+    /// that created it, when that ran from a sourced file. `None` for
+    /// properties typed at the console.
+    pub source: Option<SourceLoc>,
+}
+
+/// A file and 1-based line (absolute path).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceLoc {
+    pub file: String,
+    pub line: u32,
+}
+
+impl SourceLoc {
+    /// Absolute form of a path as Tcl saw it (relative to the process's
+    /// working directory).
+    pub fn new(file: &str, line: u32) -> Self {
+        let file = std::path::absolute(file)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| file.to_string());
+        SourceLoc { file, line }
+    }
+
+    /// Fallback when Tcl has no line for the command (it was built with
+    /// `eval` or `uplevel` from a string): the first line of `file` that
+    /// mentions the property name as a whole word.
+    pub fn search(file: &str, name: &str) -> Option<Self> {
+        let text = std::fs::read_to_string(file).ok()?;
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let line = text.lines().position(|l| {
+            l.match_indices(name).any(|(i, _)| {
+                !l[..i].chars().next_back().is_some_and(is_word)
+                    && !l[i + name.len()..].chars().next().is_some_and(is_word)
+            })
+        })?;
+        Some(SourceLoc::new(file, line as u32 + 1))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,6 +245,7 @@ impl Session {
             enabled: true,
             status: Status::Unprocessed,
             trace: None,
+            source: None,
         });
         Ok(name)
     }
@@ -251,6 +289,7 @@ impl Session {
             incdirs: self.design.incdirs.clone(),
             top: self.design.top.clone(),
             params: self.design.params.clone(),
+            trace_outputs: false,
         };
         if let Some(d) = fdv_slang::compile(&req) {
             let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
@@ -564,9 +603,21 @@ impl Session {
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
             let built = match lowered {
-                Some(btor) => std::fs::write(&out, only_bad(btor, &format!("fdv_p{i}")))
-                    .map_err(anyhow::Error::from),
-                None => self.run_yosys(files, &[format!("FDV_P{i}")], &out),
+                Some(btor) => {
+                    let keep = format!("fdv_p{i}");
+                    let (model, section) = fdv_slang::split_trace(btor);
+                    let mut r = std::fs::write(&out, only_bad(model, &keep));
+                    // The same model plus `output` lines naming the
+                    // combinational nets, for the VCD (trace_model).
+                    if r.is_ok() && !section.is_empty() {
+                        r = std::fs::write(trace_model(&out), only_bad(btor, &keep));
+                    }
+                    r.map_err(anyhow::Error::from)
+                }
+                None => {
+                    let _ = std::fs::remove_file(trace_model(&out));
+                    self.run_yosys(files, &[format!("FDV_P{i}")], &out)
+                }
             };
             self.props[i].trace = None;
             let (mut status, trace) = match built {
@@ -611,6 +662,10 @@ impl Session {
             incdirs: self.design.incdirs.clone(),
             top: self.design.top.clone(),
             params: self.design.params.clone(),
+            // Appends named outputs for combinational nets after
+            // fdv_slang::TRACE_MARKER: engines get the text before it
+            // (unchanged), the trace replay all of it.
+            trace_outputs: true,
         };
         let l = fdv_slang::lower(&req)?;
         if l.ok {
@@ -668,7 +723,10 @@ impl Session {
                 // Ends when the portfolio returns and drops the last sender.
                 sc.spawn(move || {
                     for p in rx {
-                        t.bound(slot, &p.engine, p.bound);
+                        match p.output {
+                            Some((text, err)) => t.engine_line(slot, &p.engine, text, err),
+                            None => t.bound(slot, &p.engine, p.bound),
+                        }
                     }
                 });
                 portfolio::run_until(engines, &req, Some(tx), stop)
@@ -722,7 +780,10 @@ impl Session {
             },
         };
         let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
-        let vcd = match trace::vcd_from_witness(model, &w, name, clock) {
+        // Replay on the copy with named combinational nets when there is one.
+        let with_nets = trace_model(model);
+        let replay = if with_nets.is_file() { with_nets.as_path() } else { model };
+        let vcd = match trace::vcd_from_witness(replay, &w, name, clock) {
             Ok(v) => v,
             Err(e) => {
                 self.log(&format!("{name}: no trace: {e:#}"));
@@ -814,6 +875,12 @@ impl Session {
 }
 
 /// The Btor2 text with every `bad` line dropped except the one named `keep`.
+/// `prop_N.trace.btor2` next to `prop_N.btor2`: the property's model with
+/// the slang lowering's named-output section, used only to replay traces.
+fn trace_model(model: &Path) -> PathBuf {
+    model.with_extension("trace.btor2")
+}
+
 fn only_bad(btor: &str, keep: &str) -> String {
     btor.lines()
         .filter(|l| {

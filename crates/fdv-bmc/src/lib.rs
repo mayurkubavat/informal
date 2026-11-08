@@ -196,6 +196,7 @@ impl Engine for Bmc {
                 engine: self.name().into(),
                 bound: Some(last as u32),
                 note: String::new(),
+                output: None,
             });
             k = last + 1;
         };
@@ -369,6 +370,7 @@ fn kind(
             engine: name.into(),
             bound: Some(k as u32),
             note: String::new(),
+            output: None,
         });
         k += 1;
     };

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TaskTree } from "./TaskTree";
+import { LEAF_CAP, TaskTree } from "./TaskTree";
 import { prop } from "../test/fixtures";
 
 const items = () => screen.getAllByRole("treeitem").map((r) => r.textContent);
@@ -16,6 +16,17 @@ describe("TaskTree", () => {
     const props = [prop("a", {}, { status: "running" } as never), prop("b", {}, { status: "proven" })];
     render(<TaskTree total={2} counts={{ running: 1, proven: 1 }} assumes={0} filter={null} onFilter={() => {}} props={props} />);
     expect(items()).toEqual(["<embedded>2", "Running1", "Aa", "Proven1", "Ab"]);
+  });
+
+  it("caps leaves per group, keeps the selected one, and 'more' filters", async () => {
+    const props = Array.from({ length: LEAF_CAP + 50 }, (_, i) => prop(`p${i}`));
+    const onFilter = vi.fn();
+    render(<TaskTree total={props.length} counts={{ unprocessed: props.length }} assumes={0} filter={null} onFilter={onFilter} props={props} selected="p240" />);
+    const leaves = screen.getAllByRole("treeitem").filter((r) => r.classList.contains("leaf") && !r.classList.contains("more"));
+    expect(leaves).toHaveLength(LEAF_CAP + 1);
+    expect(leaves[leaves.length - 1]).toHaveTextContent("p240");
+    await userEvent.click(screen.getByText("49 more…"));
+    expect(onFilter).toHaveBeenCalledWith("unprocessed");
   });
 
   it("lists unprocessed properties before assumes", () => {

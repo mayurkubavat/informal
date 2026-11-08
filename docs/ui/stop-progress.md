@@ -58,6 +58,29 @@ There is one line per finished property, for example
 `prove stopped: N properties left undetermined` (kind `err`). The UI adds
 each line to the console under the echoed command.
 
+### `engine-log`
+
+`{ prop, engine, text, err }`: one line of an external engine's own output
+while it works on `prop` (`err` = stderr). fdv-engines-ext reads the
+engine's pipes line by line and forwards each line through the run's
+progress channel (`fdv_engine::Progress::output`), up to 2,000 lines per
+stream per engine run, then one "further output not shown" line. Lines
+arrive as the engine flushes them: Rust engines (rIC3) flush per line; C
+programs that block-buffer a pipe (ABC) deliver theirs when they exit. Only
+sessions with a progress sink (the app) pay for this; `fdv bench` and the
+CLI pass no channel. In-process engines (fdv-bmc, fdv-ic3, ...) print
+nothing. The UI shows these in the bottom dock's Log tab (Ctrl+4), capped
+at 5,000 lines.
+
+### `shell_complete`
+
+`shell_complete(prefix) -> string[]`: the active flavor's command names
+(fdv_fpv::compat::command_names), then property names, starting with
+`prefix`. Answered from the app's cache of the last reply, so it works
+while a prove runs. The console's Tab inserts a single match with a space;
+several insert the first and list them under the prompt, and Tab /
+Shift+Tab cycle through them.
+
 ### `shell_stop`
 
 The command returns `{ ok: true, result: "", session: null }` at once. It

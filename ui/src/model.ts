@@ -17,7 +17,7 @@ export type LogLine = { kind: "in" | "out" | "err"; text: string };
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
 export type Theme = "system" | "light" | "dark";
 export type Center = "table" | "source" | "trace";
-export type BottomTab = "console" | "details" | "messages";
+export type BottomTab = "console" | "details" | "messages" | "log";
 export type LeftTab = "tasks" | "design";
 export type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time";
 export type StatusFilter = ViewStatus | "assume" | null;
@@ -126,6 +126,32 @@ export function traceOf(p: ViewProp | null): string | null {
   return p.trace ?? null;
 }
 
+// ---- console Tab completion ----
+// The word Tab completes: the text after the last space, `[`, `{` or `;`.
+export function completionWord(cmd: string): { base: string; word: string } {
+  const m = cmd.match(/^(.*[\s[{;])?([^\s[{;]*)$/s);
+  const base = m?.[1] ?? "";
+  return { base, word: cmd.slice(base.length) };
+}
+// A completion in progress: the input before the word, the candidates, and
+// which one is in the input now (-1: none inserted yet).
+export type Completion = { base: string; matches: string[]; index: number };
+// Start completing `cmd` with `matches` from the backend: one match is
+// inserted with a trailing space and ends completion (null state); several
+// insert the first and keep the list for cycling; none leaves it unchanged.
+export function startCompletion(cmd: string, matches: string[]): { cmd: string; state: Completion | null } {
+  const { base } = completionWord(cmd);
+  if (!matches.length) return { cmd, state: null };
+  if (matches.length === 1) return { cmd: `${base}${matches[0]} `, state: null };
+  return { cmd: base + matches[0], state: { base, matches, index: 0 } };
+}
+// Repeated Tab (dir 1) or Shift+Tab (dir -1): the next candidate, wrapping.
+export function cycleCompletion(c: Completion, dir: 1 | -1): { cmd: string; state: Completion } {
+  const n = c.matches.length;
+  const index = (((c.index + dir) % n) + n) % n;
+  return { cmd: c.base + c.matches[index], state: { ...c, index } };
+}
+
 // Commands that start a prove (one at a time; the UI refuses a second).
 export const isProveCmd = (script: string) => /^\s*(prove|check_fv)\b/.test(script);
 
@@ -134,7 +160,7 @@ export function identifiers(expr: string): string[] {
   return [...new Set(expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [])].filter((w) => !skip.has(w) && !/^\d/.test(w));
 }
 
-// Best-effort source line for a property: where its name appears, else the
+// Fallback for properties without a recorded source: best-effort line: where its name appears, else the
 // first line that mentions one of its signals. 1-based; 0 when unknown.
 export function locate(text: string, p: ViewProp | null): number {
   if (!p || !text) return 0;
@@ -145,6 +171,19 @@ export function locate(text: string, p: ViewProp | null): number {
   if (!ids.length) return 0;
   const re = new RegExp(`\\b(${ids.join("|")})\\b`);
   return lines.findIndex((l) => re.test(l)) + 1;
+}
+
+// The file the source view shows for a property: where it was written
+// (Property.source: its script line, or RTL for SVA in the design), else
+// the top design file.
+export function sourceFile(p: ViewProp | null, topFile: string | undefined): string | undefined {
+  return p?.source?.file ?? topFile;
+}
+// The line to highlight in `file`: the recorded one when the property came
+// from that file, else the old best-effort search (locate) in its text.
+export function sourceLine(p: ViewProp | null, file: string | undefined, text: string): number {
+  if (p?.source && p.source.file === file) return p.source.line;
+  return locate(text, p);
 }
 
 // The snapshot carries no netlist, so ports come from a light scan of the

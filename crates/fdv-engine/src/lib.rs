@@ -99,6 +99,23 @@ pub struct Progress {
     /// BMC depth or IC3 frame reached, when known.
     pub bound: Option<u32>,
     pub note: String,
+    /// One line of the engine's own output (external engines stream their
+    /// stdout and stderr here while they run, for the app's Log tab); the
+    /// flag is true for stderr. `None` for ordinary progress reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<(String, bool)>,
+}
+
+impl Progress {
+    /// A line of engine output (see [`Progress::output`]).
+    pub fn line(engine: &str, text: String, stderr: bool) -> Self {
+        Progress {
+            engine: engine.to_string(),
+            bound: None,
+            note: String::new(),
+            output: Some((text, stderr)),
+        }
+    }
 }
 
 /// Cooperative cancellation shared between the scheduler and engines.
