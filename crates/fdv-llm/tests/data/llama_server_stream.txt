@@ -1,0 +1,10 @@
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1794164700,"id":"chatcmpl-x","model":"gemma-3-12b-it","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"Run:\n```tcl\n"}}],"created":1794164700,"id":"chatcmpl-x","model":"gemma-3-12b-it","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"prove -property a_never9\n```"}}],"created":1794164700,"id":"chatcmpl-x","model":"gemma-3-12b-it","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],"created":1794164700,"id":"chatcmpl-x","model":"gemma-3-12b-it","object":"chat.completion.chunk","timings":{"prompt_n":40,"predicted_n":12}}
+
+data: [DONE]
+
