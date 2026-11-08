@@ -599,7 +599,7 @@ test.describe("trace tab", () => {
     await row(page, "a_never9").dblclick();
     await expect(traceTab(page)).toHaveText("Trace: a_never9");
     await expect(traceTab(page)).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator(".strip-summary")).toHaveText("CEX · depth 11 · ric3-bmc · 12 cycles");
+    await expect(page.locator(".trace-bar .strip-summary")).toHaveText("CEX · depth 11 · ric3-bmc · 12 cycles");
     await expect(cursor(page)).toHaveText("cycle 11");
     await page.getByRole("button", { name: "Close Trace: a_never9" }).click();
     await expect(traceTab(page)).toHaveCount(0);
@@ -608,7 +608,7 @@ test.describe("trace tab", () => {
     await row(page, "c_done").click();
     await page.locator(".table-wrap").press("Enter");
     await expect(traceTab(page)).toHaveText("Trace: c_done");
-    await expect(page.locator(".strip-summary")).toHaveText("Covered · depth 11 · ric3-bmc · 12 cycles");
+    await expect(page.locator(".trace-bar .strip-summary")).toHaveText("Covered · depth 11 · ric3-bmc · 12 cycles");
   });
 
   test("Enter on a proven row still opens details, not a trace", async ({ page }) => {
@@ -636,6 +636,14 @@ test.describe("trace tab", () => {
     await row(page, "a_never9").click();
     await page.getByRole("button", { name: "Trace: fdv_work/a_never9.vcd · 12 cycles" }).click();
     await expect(traceTab(page)).toHaveText("Trace: a_never9");
+  });
+
+  test("double-click on a task-tree leaf with a trace opens it", async ({ page }) => {
+    await page.locator(".tree-row.leaf").filter({ hasText: "c_done" }).dblclick();
+    await expect(traceTab(page)).toHaveText("Trace: c_done");
+    await page.locator(".tree-row.leaf").filter({ hasText: "a_max" }).dblclick();
+    await expect(traceTab(page)).toHaveText("Trace: c_done");
+    await expect(page.getByRole("tab", { name: "Details: a_max" })).toHaveAttribute("aria-selected", "true");
   });
 
   test("selecting another property with a trace switches the tab", async ({ page }) => {

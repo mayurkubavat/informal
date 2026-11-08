@@ -687,22 +687,29 @@ impl Session {
             (Verdict::Unsafe { depth }, _) => Status::Cex { engine, depth, ms },
             (Verdict::Unknown { reason }, _) => Status::Undetermined { reason },
         };
-        let trace = match &status {
-            Status::Cex { depth, .. } | Status::Covered { depth, .. } if !self.stop.load(Ordering::SeqCst) => {
+        let mut status = status;
+        let mut trace = None;
+        if let Status::Cex { depth, .. } | Status::Covered { depth, .. } = &mut status {
+            if !self.stop.load(Ordering::SeqCst) {
                 let witness = o.winner.as_ref().and_then(|w| w.witness.as_deref());
-                self.write_trace(i, model, witness, *depth)
+                if let Some((path, d)) = self.write_trace(i, model, witness, *depth) {
+                    // IC3 and external engines often report no depth; the
+                    // replayed trace has one.
+                    depth.get_or_insert(d as u32);
+                    trace = Some(path);
+                }
             }
-            _ => None,
-        };
+        }
         (status, trace)
     }
 
     /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the
     /// winner's named witness or, when the winner gave none (external
     /// engines, IC3, k-induction), from a BMC re-run to the reported depth
-    /// that only serves to produce one. Failures are logged and give no
-    /// trace; the verdict stands either way.
-    fn write_trace(&self, i: usize, model: &Path, witness: Option<&str>, depth: Option<u32>) -> Option<String> {
+    /// that only serves to produce one. Returns the path and the trace's
+    /// depth. Failures are logged and give no trace; the verdict stands
+    /// either way.
+    fn write_trace(&self, i: usize, model: &Path, witness: Option<&str>, depth: Option<u32>) -> Option<(String, usize)> {
         let name = &self.props[i].name;
         let w = match witness.and_then(trace::parse_witness) {
             Some(w) => w,
@@ -731,7 +738,7 @@ impl Session {
             .ok()
             .and_then(|d| path.strip_prefix(d).ok().map(Path::to_path_buf))
             .unwrap_or(path);
-        Some(shown.display().to_string())
+        Some((shown.display().to_string(), w.depth))
     }
 
     /// A witness from fdv-bmc on `model`, searching up to `depth` (64

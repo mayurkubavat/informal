@@ -450,7 +450,9 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
    the cursor and the depth cycle number ---- */
 .st-cex { --st: var(--st-cex); }
 .st-covered { --st: var(--st-covered); }
-.trace-cursor { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; margin-left: 12px; }
+.trace-bar { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 8px; flex: none; min-width: 0; background: var(--surface); border-bottom: 1px solid var(--border); }
+.trace-bar .btn { flex: none; white-space: nowrap; }
+.trace-cursor { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; flex: none; }
 .zoom { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .zoom .tool { font-size: 14px; }
 .zoom-text { color: var(--muted); min-width: 5ch; text-align: center; font-size: 11.5px; }
@@ -496,3 +498,4 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .trace-cursorline { stroke: var(--st); stroke-width: 1; pointer-events: none; }
 .trace-cursorcol { fill: var(--hover); pointer-events: none; }
 .strip .btn { flex: none; white-space: nowrap; }
+.tree-row, .grid tbody tr { user-select: none; }

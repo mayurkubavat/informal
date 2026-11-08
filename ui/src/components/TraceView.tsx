@@ -105,8 +105,9 @@ export function TraceView({
 
   return (
     <>
-      <div className="strip">
-        {tabs}
+      <div className="strip">{tabs}</div>
+      {/* The trace's own bar: on the strip it would not fit narrow windows. */}
+      <div className="trace-bar">
         <span className="strip-summary">
           {STATUS_LABEL[prop.status.status]} · depth {prop.status.depth ?? "?"} · {prop.status.engine ?? "—"}
           {vcd ? ` · ${n} cycles` : ""}

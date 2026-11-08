@@ -53,6 +53,9 @@ fn jaspergold_script() {
     for p in &sh.session.borrow().props {
         let want = matches!(p.name.as_str(), "a_never9" | "c_done");
         assert_eq!(p.trace.is_some(), want, "{}: {:?}", p.name, p.trace);
+        if let fdv_fpv::Status::Cex { depth, .. } | fdv_fpv::Status::Covered { depth, .. } = &p.status {
+            assert_eq!(*depth, Some(10), "{}", p.name);
+        }
     }
     let proven = sh
         .eval("get_property_list -include {type assert status proven}")

@@ -563,7 +563,7 @@ export default function App() {
                   props={allProps}
                   selected={selected}
                   onSelect={setSelected}
-                  onOpen={select}
+                  onOpen={(n) => (traceOf(allProps.find((p) => p.name === n) ?? null) ? openTrace(n) : select(n))}
                 />
               ) : (
                 <DesignTree top={session?.design.top ?? null} files={session?.design.files ?? []} ports={ports} />
