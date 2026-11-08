@@ -20,3 +20,5 @@ serde_json = "1"
 fdv-fpv = { path = "../../crates/fdv-fpv" }
 fdv-engines-ext = { path = "../../crates/fdv-engines-ext" }
 fdv-bmc = { path = "../../crates/fdv-bmc" }
+fdv-llm = { path = "../../crates/fdv-llm" }
+tokio = { version = "1", features = ["time"] }

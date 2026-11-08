@@ -11,14 +11,21 @@
 //! shell's stop flag directly (the shell thread is busy with the prove).
 //! The event contract is in docs/ui/stop-progress.md. External engines'
 //! stdout/stderr lines arrive as "engine-log" events (the Log tab).
+//!
+//! Ask mode (docs/ui/ask-mode.md): `ask` streams an LLM's answer as
+//! "ask-delta" events and ends with "ask-done", which may carry one
+//! suggested Tcl command. Nothing the model says is run here; the UI puts
+//! the command on the prompt and the user presses Enter (or Esc).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod ask;
 
 use fdv_fpv::{EngineLine, Flavor, ProveProgress, ProveSink, Reply, Request, Session, Worker};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Set once the window exists; events before that (a start-up script's
 /// prove can begin first) are dropped.
@@ -77,8 +84,10 @@ fn engines_config() -> Option<PathBuf> {
 static DESIGN_FILES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 static PROP_NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static FLAVOR: Mutex<Flavor> = Mutex::new(Flavor::Jg);
+/// The session JSON of the last reply, for Ask mode's prompt.
+static LAST_SESSION: Mutex<serde_json::Value> = Mutex::new(serde_json::Value::Null);
 
-async fn ask(w: &Worker, req: Request) -> Reply {
+async fn call(w: &Worker, req: Request) -> Reply {
     let w = w.clone();
     let r = tauri::async_runtime::spawn_blocking(move || w.call(req))
         .await
@@ -87,6 +96,11 @@ async fn ask(w: &Worker, req: Request) -> Reply {
         let files = a.iter().filter_map(|f| f.as_str().map(PathBuf::from)).collect();
         if let Ok(mut g) = DESIGN_FILES.lock() {
             *g = files;
+        }
+    }
+    if !r.session.is_null() {
+        if let Ok(mut g) = LAST_SESSION.lock() {
+            *g = r.session.clone();
         }
     }
     if let Some(a) = r.session["props"].as_array() {
@@ -100,17 +114,17 @@ async fn ask(w: &Worker, req: Request) -> Reply {
 
 #[tauri::command]
 async fn snapshot(w: State<'_, Worker>) -> Result<Reply, String> {
-    Ok(ask(&w, Request::Snapshot).await)
+    Ok(call(&w, Request::Snapshot).await)
 }
 
 #[tauri::command]
 async fn shell_eval(w: State<'_, Worker>, script: String) -> Result<Reply, String> {
-    Ok(ask(&w, Request::Eval(script)).await)
+    Ok(call(&w, Request::Eval(script)).await)
 }
 
 #[tauri::command]
 async fn shell_source(w: State<'_, Worker>, path: String) -> Result<Reply, String> {
-    Ok(ask(&w, Request::Source(path.into())).await)
+    Ok(call(&w, Request::Source(path.into())).await)
 }
 
 #[tauri::command]
@@ -119,7 +133,7 @@ async fn shell_flavor(w: State<'_, Worker>, flavor: String) -> Result<Reply, Str
     if let Ok(mut g) = FLAVOR.lock() {
         *g = f;
     }
-    Ok(ask(&w, Request::Flavor(f)).await)
+    Ok(call(&w, Request::Flavor(f)).await)
 }
 
 /// Console Tab completion: the active flavor's command names, then
@@ -240,6 +254,212 @@ fn text_in(root: &Path, files: &[PathBuf], path: &Path) -> Result<String, String
     std::fs::read_to_string(&p).map_err(|e| format!("{shown}: {e}"))
 }
 
+/// Ask mode's providers (config/llm.toml) and the one in use. Switching
+/// with `llm_select` lasts until the app closes; the file is not written.
+struct Llm {
+    config: Result<fdv_llm::LlmConfig, String>,
+    current: Mutex<Option<(String, Arc<dyn fdv_llm::LlmProvider>)>>,
+    /// Why the current provider could not be built, if it could not.
+    build_error: Mutex<Option<String>>,
+    /// Running asks by id, so `ask_cancel` can abort one.
+    running: Mutex<std::collections::HashMap<u64, tauri::async_runtime::JoinHandle<()>>>,
+}
+
+impl Llm {
+    fn load(root: &Path) -> Llm {
+        let config = match fdv_llm::find_config(root) {
+            Some(p) => fdv_llm::LlmConfig::load(&p).map_err(|e| format!("{e:#}")),
+            None => Err("no config/llm.toml".into()),
+        };
+        let llm = Llm {
+            config,
+            current: Mutex::new(None),
+            build_error: Mutex::new(None),
+            running: Mutex::new(Default::default()),
+        };
+        let env = std::env::var(fdv_llm::DEFAULT_PROVIDER_ENV).ok();
+        match llm.config.as_ref().map_err(String::clone).and_then(|c| c.selected(env.as_deref()).map_err(|e| e.to_string())) {
+            Ok(name) => {
+                let _ = llm.select(&name);
+            }
+            Err(e) => *llm.build_error.lock().unwrap() = Some(e),
+        }
+        llm
+    }
+
+    fn select(&self, name: &str) -> Result<(), String> {
+        let c = self.config.as_ref().map_err(String::clone)?;
+        let p = c.providers.get(name).ok_or_else(|| format!("no LLM provider {name}"))?;
+        match fdv_llm::build(name, p) {
+            Ok(b) => {
+                *self.current.lock().unwrap() = Some((name.to_string(), Arc::from(b)));
+                *self.build_error.lock().unwrap() = None;
+                Ok(())
+            }
+            Err(e) => {
+                let e = format!("{e:#}");
+                *self.build_error.lock().unwrap() = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+
+    fn provider(&self) -> Result<Arc<dyn fdv_llm::LlmProvider>, String> {
+        if let Some((_, p)) = self.current.lock().unwrap().as_ref() {
+            return Ok(p.clone());
+        }
+        Err(self.build_error.lock().unwrap().clone().unwrap_or_else(|| "no LLM provider".into()))
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct LlmStatus {
+    provider: String,
+    model: String,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// The provider in use and whether it answers (its health check).
+#[tauri::command]
+async fn llm_status(llm: State<'_, Llm>) -> Result<LlmStatus, String> {
+    let p = match llm.provider() {
+        Ok(p) => p,
+        Err(e) => return Ok(LlmStatus { provider: String::new(), model: String::new(), ok: false, error: Some(e) }),
+    };
+    let (provider, model) = (p.name().to_string(), p.model().to_string());
+    let h = tokio::time::timeout(std::time::Duration::from_secs(8), p.health()).await;
+    let error = match h {
+        Ok(Ok(_)) => None,
+        Ok(Err(e)) => Some(format!("{e:#}")),
+        Err(_) => Some("health check timed out".into()),
+    };
+    Ok(LlmStatus { provider, model, ok: error.is_none(), error })
+}
+
+#[derive(Clone, Serialize)]
+struct ProviderEntry {
+    name: String,
+    kind: String,
+    model: String,
+    base_url: String,
+    selected: bool,
+}
+
+/// Configured providers, for the status-bar menu.
+#[tauri::command]
+fn llm_providers(llm: State<'_, Llm>) -> Result<Vec<ProviderEntry>, String> {
+    let c = llm.config.as_ref().map_err(String::clone)?;
+    let cur = llm.current.lock().unwrap().as_ref().map(|(n, _)| n.clone());
+    Ok(c.providers
+        .iter()
+        .map(|(n, p)| ProviderEntry {
+            name: n.clone(),
+            kind: p.kind.clone(),
+            model: p.model.clone(),
+            base_url: p.base_url.clone(),
+            selected: cur.as_deref() == Some(n),
+        })
+        .collect())
+}
+
+/// Switch provider for the rest of this run, then report its status.
+#[tauri::command]
+async fn llm_select(llm: State<'_, Llm>, name: String) -> Result<LlmStatus, String> {
+    llm.select(&name)?;
+    llm_status(llm).await
+}
+
+#[derive(Clone, Serialize)]
+struct AskDelta<'a> {
+    id: u64,
+    text: &'a str,
+}
+
+#[derive(Clone, Serialize)]
+struct AskDone {
+    id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    explanation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    model: String,
+    first_token_ms: Option<u64>,
+    total_ms: u64,
+}
+
+/// Ask the model. Returns at once; the answer streams as "ask-delta"
+/// {id, text} events and ends with one "ask-done" {id, command?,
+/// explanation, error?}. `id` is chosen by the UI so it can match events
+/// that arrive before this call returns. `context` is extra text from the
+/// UI (e.g. the selected property). The command is only ever shown.
+#[tauri::command]
+fn ask(llm: State<'_, Llm>, id: u64, prompt: String, context: Option<String>) -> Result<u64, String> {
+    let p = llm.provider()?;
+    let flavor = FLAVOR.lock().map(|g| *g).unwrap_or(Flavor::Jg);
+    let session = LAST_SESSION.lock().map(|g| g.clone()).unwrap_or_default();
+    let flavor_word = if flavor == Flavor::Vcf { "vcf" } else { "jg" };
+    let system = ask::system_prompt(flavor_word, &fdv_fpv::compat::command_names(flavor), &session);
+    let user = match context.filter(|c| !c.trim().is_empty()) {
+        Some(c) => format!("{prompt}\n\n(Context from the UI: {c})"),
+        None => prompt,
+    };
+    let req = fdv_llm::ChatRequest::new(vec![fdv_llm::Message::system(system), fdv_llm::Message::user(user)]);
+    // Held across the spawn, so a very quick answer cannot remove its
+    // entry before it is inserted.
+    let mut running = llm.running.lock().unwrap();
+    let task = tauri::async_runtime::spawn(async move {
+        let emit_delta = |text: &str| {
+            if let Some(app) = APP.get() {
+                let _ = app.emit("ask-delta", AskDelta { id, text });
+            }
+        };
+        let mut on_delta = emit_delta;
+        let done = match p.chat(req, &mut on_delta).await {
+            Ok(r) => {
+                let (explanation, command) = ask::split_answer(&r.text);
+                AskDone { id, command, explanation, error: None, model: r.model, first_token_ms: r.first_token_ms, total_ms: r.total_ms }
+            }
+            Err(e) => AskDone {
+                id,
+                command: None,
+                explanation: String::new(),
+                error: Some(format!("{e:#}")),
+                model: p.model().to_string(),
+                first_token_ms: None,
+                total_ms: 0,
+            },
+        };
+        if let Some(app) = APP.get() {
+            let _ = app.emit("ask-done", done);
+            if let Some(llm) = app.try_state::<Llm>() {
+                llm.running.lock().unwrap().remove(&id);
+            }
+        }
+    });
+    running.insert(id, task);
+    Ok(id)
+}
+
+/// Abort a running ask. Its stream stops; "ask-done" is sent with error
+/// "cancelled" so the UI has one ending either way.
+#[tauri::command]
+fn ask_cancel(llm: State<'_, Llm>, id: u64) -> bool {
+    let Some(t) = llm.running.lock().unwrap().remove(&id) else {
+        return false;
+    };
+    t.abort();
+    if let Some(app) = APP.get() {
+        let _ = app.emit(
+            "ask-done",
+            AskDone { id, command: None, explanation: String::new(), error: Some("cancelled".into()), model: String::new(), first_token_ms: None, total_ms: 0 },
+        );
+    }
+    true
+}
+
 fn main() {
     // Run from the repo root (the directory holding config/engines.toml), so
     // script paths read as they do for `fdv shell` and generated models land
@@ -279,12 +499,14 @@ fn main() {
             }
         });
     }
+    let llm = Llm::load(&std::env::current_dir().unwrap_or_default());
     tauri::Builder::default()
         .setup(|app| {
             let _ = APP.set(app.handle().clone());
             Ok(())
         })
         .manage(worker)
+        .manage(llm)
         .invoke_handler(tauri::generate_handler![
             snapshot,
             shell_eval,
@@ -295,7 +517,12 @@ fn main() {
             read_text,
             read_trace,
             tool_available,
-            open_in_surfer
+            open_in_surfer,
+            llm_status,
+            llm_providers,
+            llm_select,
+            ask,
+            ask_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Formal DV app");
