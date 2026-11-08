@@ -80,6 +80,14 @@ for (const s of sizes)
         await shot(page, n("profiler"));
       });
 
+      test("design browser", async ({ page }) => {
+        await ready(page, "fast=1&design=fifo");
+        await page.getByRole("tab", { name: "Design" }).click();
+        await page.getByRole("treeitem").filter({ hasText: "u_wp" }).click();
+        await expect(page.locator(".design-head")).toContainText("fifo.u_wp");
+        await shot(page, n("design"));
+      });
+
       test("source tab", async ({ page }) => {
         await ready(page);
         await page.getByRole("tab", { name: "counter.sv" }).click();

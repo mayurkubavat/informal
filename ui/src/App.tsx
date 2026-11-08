@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import {
-  bound, clock, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
+  bound, clock, designScopes, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
@@ -230,6 +230,9 @@ export default function App() {
   const fileName = srcPath?.split("/").pop();
   const topText = (topFile && texts[topFile]) || "";
   const ports = useMemo(() => parsePorts(topText), [topText]);
+  // slang's scope tree; without it (Yosys front end) the top file's ports.
+  const hierarchy = session?.design.hierarchy;
+  const scopes = useMemo(() => designScopes(hierarchy, session?.design.top ?? null, ports), [hierarchy, session?.design.top, ports]);
   const currentTrace = traceOf(current);
   const hasTrace = !!currentTrace;
   const traceProp = traceName ? allProps.find((p) => p.name === traceName) ?? null : null;
@@ -264,6 +267,23 @@ export default function App() {
     };
   }, [tracePath]);
   const showTrace = center === "trace" && !!traceProp;
+  // The Design tab's double-click: add that signal to the open trace.
+  const [addReq, setAddReq] = useState<{ path: string; n: number } | null>(null);
+  const note = useCallback((ok: boolean, summary: string) => setEvents((e) => [...e, { at: new Date(), cmd: "add signal", ok, ms: 0, summary }]), []);
+  const addSignal = (path: string) => {
+    if (!traceName) {
+      note(false, `${path}: open a trace first (Visualize trace on a CEX or cover)`);
+      setBottomTab("messages");
+      return;
+    }
+    setCenter("trace");
+    setAddReq((r) => ({ path, n: (r?.n ?? 0) + 1 }));
+  };
+  const onAddResult = useCallback(
+    (path: string, r: "added" | "shown" | "missing") =>
+      note(r !== "missing", r === "added" ? `Added ${path} to the trace` : r === "shown" ? `${path} is already in the trace` : `${path} is not in this trace`),
+    [note],
+  );
 
   const idle = !busy && !running;
   const proveAll = () => allProps.length && idle && prove(proveCmd);
@@ -613,7 +633,7 @@ export default function App() {
                   onOpen={(n) => (traceOf(allProps.find((p) => p.name === n) ?? null) ? openTrace(n) : select(n))}
                 />
               ) : (
-                <DesignTree top={session?.design.top ?? null} files={session?.design.files ?? []} ports={ports} />
+                <DesignTree scopes={scopes} files={session?.design.files ?? []} fallback={!hierarchy?.length} onAddSignal={addSignal} />
               )}
             </div>
           </aside>
@@ -628,6 +648,8 @@ export default function App() {
               path={trace?.path ?? tracePath ?? ""}
               text={trace?.text ?? null}
               error={trace?.error}
+              addRequest={addReq}
+              onAddResult={onAddResult}
             />
           ) : (
           <>

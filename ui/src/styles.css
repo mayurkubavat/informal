@@ -527,3 +527,16 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .prof-bar { display: block; height: 100%; min-width: 1px; background: var(--border-strong); border-radius: 1px; }
 .prof-bar.win { background: var(--text); }
 .prof-won td:first-child { font-weight: 600; }
+
+/* ---- design browser (left dock, Design tab): scope tree over the signal list ---- */
+.design-browser { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.design-scopes { flex: 0 1 auto; max-height: 45%; overflow: auto; border-bottom: 1px solid var(--border); }
+.design-signals { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.design-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px 2px; color: var(--text-2); min-width: 0; }
+.design-filter { margin: 2px 8px 4px; width: auto; flex: none; }
+.design-siglist { flex: none; }
+.twisty.none { visibility: hidden; }
+.sig-row { padding-left: 10px; }
+.sig-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sig-width { width: 4ch; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; flex: none; }
+.sig-kind { width: 5ch; color: var(--muted); font-size: 11px; flex: none; }

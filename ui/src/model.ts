@@ -1,7 +1,7 @@
 // Pure view-model helpers shared by the workbench components: status words,
 // table cell text, sort keys, and light source scanning. No React here.
 
-import type { EngineRun, PropStatus, Property, ProveProgress, StatusWord } from "./backend";
+import type { DesignScope, EngineRun, PropStatus, Property, ProveProgress, StatusWord } from "./backend";
 
 // What a row shows: the backend's status words plus "running", which only
 // exists in the view while a prove's progress events say so.
@@ -233,3 +233,29 @@ export function profileSummary(props: { engines?: EngineRun[] }[]): EngineSummar
 export const barShare = (ms: number, maxMs: number) => (maxMs > 0 ? Math.max(0, Math.min(1, ms / maxMs)) : 0);
 // Milliseconds as the profiler shows them: "41 ms" under a second, else seconds.
 export const msText = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`);
+
+// ---- design browser ----
+// The scope tree the Design tab shows: slang's hierarchy when the snapshot
+// has one, else the top module alone with the ports a regex scan of its
+// file finds (the Yosys front end). Widths the scan cannot evaluate are 0.
+export function designScopes(hierarchy: DesignScope[] | undefined, top: string | null, ports: Port[]): DesignScope[] {
+  if (hierarchy?.length) return hierarchy;
+  if (!top) return [];
+  const width = (w: string) => {
+    const m = w.match(/^\[\s*(\d+)\s*:\s*(\d+)\s*\]$/);
+    return !w ? 1 : m ? Math.abs(Number(m[1]) - Number(m[2])) + 1 : 0;
+  };
+  const dir = (d: string) => (d === "input" || d === "output" || d === "inout" ? d : undefined);
+  return [{ path: top, name: top, module: top, children: [], signals: ports.map((p) => ({ name: p.name, width: width(p.width), kind: "port" as const, dir: dir(p.dir) })) }];
+}
+export function findScope(scopes: DesignScope[], path: string | null): DesignScope | null {
+  for (const s of scopes) {
+    if (s.path === path) return s;
+    const hit = findScope(s.children, path);
+    if (hit) return hit;
+  }
+  return null;
+}
+// The short kind column: port direction, else the declaration kind.
+export const KIND_SHORT: Record<string, string> = { input: "in", output: "out", inout: "inout", ref: "ref", variable: "var", net: "net", parameter: "param" };
+export const signalKind = (s: { kind: string; dir?: string }) => KIND_SHORT[s.kind === "port" ? s.dir ?? "inout" : s.kind] ?? s.kind;

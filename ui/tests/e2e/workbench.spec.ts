@@ -933,3 +933,61 @@ test.describe("trace tab", () => {
     expect(r.violations.map((v) => v.id)).toEqual([]);
   });
 });
+
+test.describe("design browser", () => {
+  const designTab = (page: Page) => page.getByRole("tab", { name: "Design" });
+  const scopes = (page: Page) => page.getByRole("tree", { name: "Design hierarchy" }).getByRole("treeitem");
+  const sigList = (page: Page, path: string) => page.getByRole("listbox", { name: `Signals in ${path}` });
+  const sig = (page: Page, path: string, name: string) => sigList(page, path).getByRole("option").filter({ has: page.locator(".sig-name", { hasText: new RegExp(`^${name}$`) }) });
+  const messages = (page: Page) => page.locator(".messages");
+
+  test("shows slang's scope tree with the top's signals, widths and kinds", async ({ page }) => {
+    await designTab(page).click();
+    await expect(scopes(page)).toHaveCount(1);
+    await expect(scopes(page).first()).toHaveText("countercounter");
+    await expect(sigList(page, "counter").getByRole("option")).toHaveCount(5);
+    await expect(sig(page, "counter", "q")).toHaveText("q4out");
+    await page.getByLabel("Filter design signals").fill("RST");
+    await expect(sigList(page, "counter").getByRole("option")).toHaveText(["rst_n1in"]);
+  });
+
+  test("expands instances and lists the selected scope's signals", async ({ page }) => {
+    await page.goto("/?fast=1&design=fifo");
+    await designTab(page).click();
+    await expect(scopes(page)).toHaveText(["fifofifo", "u_wpptr", "u_rpptr"]);
+    await scopes(page).nth(1).click();
+    await expect(page.locator(".design-head")).toContainText("fifo.u_wp");
+    await expect(sig(page, "fifo.u_wp", "p")).toHaveText("p2out");
+    const r = await new AxeBuilder({ page }).include(".design-browser").analyze();
+    expect(r.violations.filter((v) => v.impact === "serious" || v.impact === "critical")).toEqual([]);
+    await scopes(page).first().dblclick();
+    await expect(scopes(page)).toHaveCount(1);
+  });
+
+  test("double-click without an open trace says to open one", async ({ page }) => {
+    await designTab(page).click();
+    await sig(page, "counter", "q").dblclick();
+    await expect(page.getByRole("tab", { name: /^Messages/ })).toHaveAttribute("aria-selected", "true");
+    await expect(messages(page)).toContainText("counter.q: open a trace first");
+  });
+
+  test("double-click adds to the open trace, or says it is already shown", async ({ page }) => {
+    await proveAll(page);
+    await row(page, "a_never9").dblclick();
+    await expect(page.getByRole("tab", { name: "Trace: a_never9" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: "Property Table" }).click();
+    await designTab(page).click();
+    await sig(page, "counter", "done").dblclick();
+    // Back on the trace tab, with a note in Messages.
+    await expect(page.getByRole("tab", { name: "Trace: a_never9" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: /^Messages/ }).click();
+    await expect(messages(page)).toContainText("counter.done is already in the trace");
+  });
+
+  test("without a hierarchy (Yosys) it scans the top file's ports", async ({ page }) => {
+    await page.goto("/?fast=1&design=scan");
+    await designTab(page).click();
+    await expect(page.getByText("ports (scan)")).toBeVisible();
+    await expect(sig(page, "counter", "q")).toHaveText("q4out");
+  });
+});

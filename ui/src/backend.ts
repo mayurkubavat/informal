@@ -54,8 +54,28 @@ export interface SourceLoc {
   line: number;
 }
 
+// One instance in slang's scope tree (fdv_slang::Scope): its ports and
+// named signals, and its child instances. Signal names are relative to the
+// scope; `path + "." + name` is the hierarchical name (and the VCD path).
+export interface ScopeSignal {
+  name: string;
+  width: number;
+  kind: "port" | "variable" | "net" | "parameter";
+  // Ports only.
+  dir?: "input" | "output" | "inout" | "ref";
+}
+export interface DesignScope {
+  path: string;
+  name: string;
+  module: string;
+  signals: ScopeSignal[];
+  children: DesignScope[];
+}
+
 export interface SessionView {
-  design: { files: string[]; top: string | null; defines: [string, string | null][] };
+  // `hierarchy`: slang's scope tree after elaboration; empty or absent with
+  // the Yosys front end (the Design tab then scans the top file's ports).
+  design: { files: string[]; top: string | null; defines: [string, string | null][]; hierarchy?: DesignScope[] };
   elaborated: boolean;
   clocks: { signal: string; edge: string }[];
   reset: string | null;

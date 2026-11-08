@@ -14,13 +14,17 @@
 //   ?holdStop=1  shell_stop never completes, so "Stopping…" stays up
 //   ?props=<n>   add n generated properties (p_00000 ...) after the six,
 //                for the virtualized table tests
+//   ?design=fifo show tests/fpv/fifo's scope tree (two ptr instances) in
+//                the Design tab instead of the counter's
+//   ?design=scan no hierarchy, as with the Yosys front end: the Design tab
+//                falls back to scanning the top file's ports
 //
 // `source mock/prove-on-source.tcl` stands for a script that adds two
 // properties and proves them in the same call: progress events name them
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { ConsoleLine, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { ConsoleLine, DesignScope, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
                 output logic [3:0] q, output logic done);
@@ -58,8 +62,35 @@ export function mockText(path: string): string | null {
 }
 const at = (file: string, line: number) => ({ file, line });
 
+// slang's scope tree for the counter above (fdv_slang::Scope, as the app's
+// snapshot carries it in design.hierarchy).
+const port = (name: string, dir: "input" | "output", width = 1) => ({ name, width, kind: "port" as const, dir });
+export const MOCK_HIERARCHY: DesignScope[] = [
+  {
+    path: "counter", name: "counter", module: "counter", children: [],
+    signals: [port("clk", "input"), port("rst_n", "input"), port("en", "input"), port("q", "output", 4), port("done", "output")],
+  },
+];
+// tests/fpv/fifo/fifo.sv elaborated with its defaults (DEPTH_LOG2 = 2, DW = 8).
+const ptr = (name: string): DesignScope => ({
+  path: `fifo.${name}`, name, module: "ptr", children: [],
+  signals: [port("clk", "input"), port("rst_n", "input"), port("inc", "input"), port("p", "output", 2), { name: "W", width: 32, kind: "parameter" }],
+});
+export const MOCK_FIFO: DesignScope[] = [
+  {
+    path: "fifo", name: "fifo", module: "fifo", children: [ptr("u_wp"), ptr("u_rp")],
+    signals: [
+      port("clk", "input"), port("rst_n", "input"), port("push", "input"), port("pop", "input"), port("din", "input", 8),
+      port("dout", "output", 8), port("full", "output"), port("empty", "output"), port("status", "output", 2),
+      { name: "wp", width: 2, kind: "variable" }, { name: "rp", width: 2, kind: "variable" }, { name: "count", width: 3, kind: "variable" },
+      { name: "mem", width: 32, kind: "variable" }, { name: "do_push", width: 1, kind: "variable" }, { name: "do_pop", width: 1, kind: "variable" },
+      { name: "DEPTH_LOG2", width: 32, kind: "parameter" }, { name: "DW", width: 32, kind: "parameter" }, { name: "DEPTH", width: 32, kind: "parameter" },
+    ],
+  },
+];
+
 const mockSession: SessionView = {
-  design: { files: [MOCK_RTL], top: "counter", defines: [] },
+  design: { files: [MOCK_RTL], top: "counter", defines: [], hierarchy: MOCK_HIERARCHY },
   elaborated: true,
   clocks: [{ signal: "clk", edge: "posedge" }],
   reset: "!rst_n",
@@ -140,6 +171,8 @@ if (typeof location !== "undefined") {
   if (q.has("tick")) mockOptions.tick = Math.max(0, Number(q.get("tick")) || 0);
   if (q.has("freeze")) mockOptions.freeze = Number(q.get("freeze"));
   if (q.get("holdStop") === "1") mockOptions.holdStop = true;
+  if (q.get("design") === "fifo") mockSession.design.hierarchy = MOCK_FIFO;
+  if (q.get("design") === "scan") mockSession.design.hierarchy = [];
   const extra = Math.min(100_000, Math.max(0, Number(q.get("props")) || 0));
   if (extra) mockSession.props.push(...generatedProps(extra));
 }

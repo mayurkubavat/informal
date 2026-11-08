@@ -159,6 +159,11 @@ pub struct Design {
     pub params: Vec<(String, String)>,
     /// Modules to black-box (accepted for compatibility; not applied yet).
     pub bbox: Vec<String>,
+    /// slang's scope tree after elaboration: instances with their ports and
+    /// named signals (the app's Design browser). Also written to
+    /// `<workdir>/design.hierarchy.json`. Empty without slang (the app then
+    /// scans the top file's port list).
+    pub hierarchy: Vec<fdv_slang::Scope>,
 }
 
 #[derive(Serialize)]
@@ -297,6 +302,7 @@ impl Session {
             params: self.design.params.clone(),
             trace_outputs: false,
         };
+        self.design.hierarchy.clear();
         if let Some(d) = fdv_slang::compile(&req) {
             let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
             if !errors.is_empty() {
@@ -309,12 +315,19 @@ impl Session {
                 }
             }
             self.hierarchy = d.instances.clone();
+            self.design.hierarchy = d.hierarchy.clone();
             self.slang = Some(d);
         } else if self.design.top.is_none() {
             self.design.top = Some(guess_top(&self.design.files)?);
         }
         // A plain elaboration, to report syntax errors now rather than at prove.
         std::fs::create_dir_all(&self.workdir)?;
+        let tree = self.workdir.join("design.hierarchy.json");
+        if self.design.hierarchy.is_empty() {
+            let _ = std::fs::remove_file(&tree);
+        } else {
+            std::fs::write(&tree, serde_json::to_string_pretty(&self.design.hierarchy)?)?;
+        }
         self.run_yosys(
             &self.design.files.clone(),
             &[],

@@ -63,6 +63,34 @@ fn jaspergold_script() {
     assert_eq!(proven, "a_max a_step a_hold a_no_wrap");
 }
 
+/// slang's scope tree reaches the snapshot as `design.hierarchy` and is
+/// written next to design.btor2. Needs slang (and Yosys for elaborate).
+#[test]
+fn design_hierarchy_in_the_snapshot() {
+    let yosys = on_path("yosys") || Path::new("/tools/yosys/current/bin/yosys").is_file();
+    if !fdv_slang::available() || !yosys {
+        eprintln!("skipping: needs slang and yosys");
+        return;
+    }
+    let work = std::env::temp_dir().join(format!("fdv-fpv-test-hier-{}", std::process::id()));
+    let sh = Shell::new(Session::new(Vec::new(), work.clone()), Flavor::Jg);
+    let rtl = root().join("tests/fpv/fifo/fifo.sv");
+    sh.eval(&format!("analyze -sv12 {}; elaborate -top fifo", rtl.display())).unwrap();
+    let json = serde_json::to_value(&*sh.session.borrow()).unwrap();
+    let h = &json["design"]["hierarchy"];
+    assert_eq!(h[0]["module"], "fifo");
+    assert_eq!(h[0]["children"][1]["path"], "fifo.u_rp");
+    assert_eq!(h[0]["children"][1]["module"], "ptr");
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(work.join("design.hierarchy.json")).unwrap()).unwrap();
+    assert_eq!(&file, h);
+    // `clear -all` forgets it with the rest of the design.
+    sh.eval("clear -all").unwrap();
+    let json = serde_json::to_value(&*sh.session.borrow()).unwrap();
+    assert_eq!(json["design"]["hierarchy"], serde_json::json!([]));
+    let _ = std::fs::remove_dir_all(&work);
+}
+
 #[test]
 fn vc_formal_script() {
     let Some(sh) = shell(Flavor::Vcf, "vcf") else {
