@@ -260,6 +260,8 @@ name = "fdv-fpv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fdv-aig",
+ "fdv-bmc",
  "fdv-engine",
  "fdv-engines-ext",
  "fdv-slang",

@@ -102,6 +102,27 @@ async fn shell_stop(w: State<'_, Worker>) -> Result<Reply, String> {
     Ok(Reply { ok: true, result: String::new(), session: serde_json::Value::Null })
 }
 
+/// The session's work directory, relative to the repo root the app runs
+/// from: generated models and trace VCDs land here.
+const WORKDIR: &str = "fdv_work";
+
+/// A trace VCD for the trace tab (`Property.trace`). Only `.vcd` files
+/// inside the work directory are served, whatever the path says.
+#[tauri::command]
+fn read_trace(path: String) -> Result<String, String> {
+    trace_in(Path::new(WORKDIR), Path::new(&path))
+}
+
+fn trace_in(workdir: &Path, path: &Path) -> Result<String, String> {
+    let shown = path.display();
+    let root = std::fs::canonicalize(workdir).map_err(|e| format!("{}: {e}", workdir.display()))?;
+    let p = std::fs::canonicalize(path).map_err(|e| format!("{shown}: {e}"))?;
+    if !p.starts_with(&root) || p.extension().is_none_or(|e| e != "vcd") {
+        return Err(format!("{shown}: not a trace in {}", root.display()));
+    }
+    std::fs::read_to_string(&p).map_err(|e| format!("{shown}: {e}"))
+}
+
 /// Design source text for the source view.
 #[tauri::command]
 fn read_text(path: String) -> Result<String, String> {
@@ -131,7 +152,7 @@ fn main() {
             .into_iter()
             .chain(fdv_bmc::engines())
             .collect();
-        let mut session = Session::new(engines, PathBuf::from("fdv_work"));
+        let mut session = Session::new(engines, PathBuf::from(WORKDIR));
         session.sink = Some(Arc::new(EventSink));
         session
     });
@@ -156,8 +177,30 @@ fn main() {
             shell_source,
             shell_flavor,
             shell_stop,
-            read_text
+            read_text,
+            read_trace
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Formal DV app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trace_in;
+
+    #[test]
+    fn trace_reads_only_vcd_inside_the_workdir() {
+        let base = std::env::temp_dir().join(format!("fdv-app-trace-{}", std::process::id()));
+        let work = base.join("fdv_work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("a.vcd"), "$enddefinitions $end\n").unwrap();
+        std::fs::write(work.join("prop_0.btor2"), "1 sort bitvec 1\n").unwrap();
+        std::fs::write(base.join("outside.vcd"), "x").unwrap();
+        assert!(trace_in(&work, &work.join("a.vcd")).unwrap().contains("$enddefinitions"));
+        assert!(trace_in(&work, &work.join("prop_0.btor2")).is_err());
+        assert!(trace_in(&work, &work.join("../outside.vcd")).is_err());
+        assert!(trace_in(&work, &base.join("outside.vcd")).is_err());
+        assert!(trace_in(&work, &work.join("missing.vcd")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

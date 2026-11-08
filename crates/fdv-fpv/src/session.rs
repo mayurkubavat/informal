@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
+use crate::trace;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
@@ -94,6 +96,10 @@ pub struct Property {
     pub expr: String,
     pub enabled: bool,
     pub status: Status,
+    /// The VCD written for a CEX or cover (`<workdir>/<name>.vcd`, relative
+    /// to the working directory when inside it); `None` otherwise or when
+    /// no witness could be replayed. See docs/ui/trace-format.md.
+    pub trace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -201,6 +207,7 @@ impl Session {
             expr: expr.to_string(),
             enabled: true,
             status: Status::Unprocessed,
+            trace: None,
         });
         Ok(name)
     }
@@ -521,6 +528,7 @@ impl Session {
         let stopped = reached < targets.len() || self.stop.load(Ordering::SeqCst);
         for &i in &targets[reached..] {
             self.props[i].status = Status::Undetermined { reason: "stopped".into() };
+            self.props[i].trace = None;
         }
         if let Some(t) = &tracker {
             t.end(stopped);
@@ -560,10 +568,14 @@ impl Session {
                     .map_err(anyhow::Error::from),
                 None => self.run_yosys(files, &[format!("FDV_P{i}")], &out),
             };
-            let mut status = match built {
-                Err(e) => Status::Error {
-                    message: format!("{e:#}"),
-                },
+            self.props[i].trace = None;
+            let (mut status, trace) = match built {
+                Err(e) => (
+                    Status::Error {
+                        message: format!("{e:#}"),
+                    },
+                    None,
+                ),
                 Ok(()) => self.check_one(engines, i, &out, tracker.map(|t| (t, slot))),
             };
             // Stopped mid-run: the portfolio came back without a verdict.
@@ -576,6 +588,7 @@ impl Session {
                 t.finished(slot, &status);
             }
             self.props[i].status = status;
+            self.props[i].trace = trace;
             if halt {
                 return slot + 1;
             }
@@ -611,14 +624,15 @@ impl Session {
     }
 
     /// Run the portfolio on one property's model. With a tracker, engine
-    /// progress (k-bound) is forwarded to it for `slot`.
+    /// progress (k-bound) is forwarded to it for `slot`. A CEX or cover
+    /// also gets its trace written (the path is returned with the status).
     fn check_one(
         &self,
         engines: &[Arc<dyn Engine>],
         i: usize,
         model: &Path,
         tracker: Option<(&Tracker, usize)>,
-    ) -> Status {
+    ) -> (Status, Option<String>) {
         let kind = self.props[i].kind;
         let bads = std::fs::read_to_string(model)
             .map(|t| {
@@ -629,7 +643,7 @@ impl Session {
             .unwrap_or(0);
         if bads == 0 {
             // Yosys folded the check to a constant true.
-            return match kind {
+            let status = match kind {
                 Kind::Cover => Status::Unreachable {
                     engine: "elaboration".into(),
                     ms: 0,
@@ -639,6 +653,7 @@ impl Session {
                     ms: 0,
                 },
             };
+            return (status, None);
         }
         let req = CheckRequest {
             model: model.to_path_buf(),
@@ -665,12 +680,86 @@ impl Session {
             .map(|w| w.engine.clone())
             .unwrap_or_default();
         let ms = o.wall_ms;
-        match (portfolio::verdict(&o), kind) {
+        let status = match (portfolio::verdict(&o), kind) {
             (Verdict::Safe, Kind::Cover) => Status::Unreachable { engine, ms },
             (Verdict::Safe, _) => Status::Proven { engine, ms },
             (Verdict::Unsafe { depth }, Kind::Cover) => Status::Covered { engine, depth, ms },
             (Verdict::Unsafe { depth }, _) => Status::Cex { engine, depth, ms },
             (Verdict::Unknown { reason }, _) => Status::Undetermined { reason },
+        };
+        let trace = match &status {
+            Status::Cex { depth, .. } | Status::Covered { depth, .. } if !self.stop.load(Ordering::SeqCst) => {
+                let witness = o.winner.as_ref().and_then(|w| w.witness.as_deref());
+                self.write_trace(i, model, witness, *depth)
+            }
+            _ => None,
+        };
+        (status, trace)
+    }
+
+    /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the
+    /// winner's named witness or, when the winner gave none (external
+    /// engines, IC3, k-induction), from a BMC re-run to the reported depth
+    /// that only serves to produce one. Failures are logged and give no
+    /// trace; the verdict stands either way.
+    fn write_trace(&self, i: usize, model: &Path, witness: Option<&str>, depth: Option<u32>) -> Option<String> {
+        let name = &self.props[i].name;
+        let w = match witness.and_then(trace::parse_witness) {
+            Some(w) => w,
+            None => match self.trace_bmc(model, depth) {
+                Ok(w) => w,
+                Err(e) => {
+                    self.log(&format!("{name}: no trace: {e:#}"));
+                    return None;
+                }
+            },
+        };
+        let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
+        let vcd = match trace::vcd_from_witness(model, &w, name, clock) {
+            Ok(v) => v,
+            Err(e) => {
+                self.log(&format!("{name}: no trace: {e:#}"));
+                return None;
+            }
+        };
+        let path = self.workdir.join(trace::file_name(name));
+        if let Err(e) = std::fs::write(&path, vcd) {
+            self.log(&format!("{name}: writing {}: {e}", path.display()));
+            return None;
+        }
+        let shown = std::env::current_dir()
+            .ok()
+            .and_then(|d| path.strip_prefix(d).ok().map(Path::to_path_buf))
+            .unwrap_or(path);
+        Some(shown.display().to_string())
+    }
+
+    /// A witness from fdv-bmc on `model`, searching up to `depth` (64
+    /// frames when the winner did not say), within 30 s or the prove time
+    /// limit if shorter.
+    fn trace_bmc(&self, model: &Path, depth: Option<u32>) -> anyhow::Result<trace::Witness> {
+        let bmc = fdv_bmc::Bmc {
+            max_depth: Some(depth.unwrap_or(64) as usize),
+            step: 1,
+        };
+        let req = CheckRequest {
+            model: model.to_path_buf(),
+            format: ModelFormat::Btor2,
+            timeout: self.time_limit.min(Duration::from_secs(30)),
+        };
+        let r = bmc.check(&req, &fdv_engine::RunContext::new(req.timeout))?;
+        match (&r.verdict, r.witness.as_deref().and_then(trace::parse_witness)) {
+            (Verdict::Unsafe { .. }, Some(w)) => Ok(w),
+            (Verdict::Unsafe { .. }, None) => anyhow::bail!("fdv-bmc gave no named witness"),
+            (v, _) => anyhow::bail!("fdv-bmc could not reproduce it ({})", v.label()),
+        }
+    }
+
+    /// A line for the console: the app's sink when there is one, else stderr.
+    fn log(&self, line: &str) {
+        match &self.sink {
+            Some(s) => s.line(line, true),
+            None => eprintln!("fdv: {line}"),
         }
     }
 

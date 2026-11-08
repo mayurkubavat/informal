@@ -1,6 +1,10 @@
 # Counterexample and cover traces: witness to VCD
 
-Status: survey (T0) and plan for the Visualize trace tab. 2026-11-08.
+Status: implemented 2026-11-08: the survey (T0) and plan below, now built
+(T2). Code: `named_witness` in `crates/fdv-bmc/src/lib.rs`,
+`crates/fdv-fpv/src/trace.rs`, `Session::write_trace`, and the app's
+`read_trace` command. Tests: `crates/fdv-fpv/tests/trace.rs`, `flow.rs`, and
+`trace.rs` unit tests.
 
 ## What exists today
 
@@ -46,6 +50,13 @@ Depth convention: `Unsafe { depth: d }` means the bad output is true in frame `d
 3. **The winner has no witness.** An external engine, IC3 or k-ind can win. fdv-fpv then runs `fdv_bmc::Bmc { max_depth: Some(d), step: 1 }` on the same model just to get the trace. It takes milliseconds at the shallow depths FPV sees, and JasperGold also builds traces in a separate step. It's limited to the remaining time budget. If the depth is unknown, it searches up to 64 frames, then gives up.
 4. **The session exposes the path.** `Property` gains `trace: Option<String>`, the VCD path. It goes into the snapshot JSON (`props[i].trace`) and is cleared when the property is re-proven. Status words don't change.
 5. **The app reads the file.** A Tauri command `read_trace(path)` returns the text only if the path canonicalises inside the session workdir. `backend.ts readTrace(prop)` calls it. The browser mock serves `ui/tests/fixtures/a_never9.vcd`.
+
+## As built
+
+- **Names.** Witness bits carry RTL names (`counter.q[2]`). The VCD has `counter.clk` (synthetic), `counter.rst_n`, `counter.en` and `counter.q[3:0]`, plus `fdv.fdv_cyc`, `fdv.fdv_past_N` and the property lane `fdv.<prop>`. AIG-style names (`i3`/`s7`) appear only for Btor2 lines without a symbol. FPV models don't have any, so nothing falls back today.
+- **Before reset.** Registers show their free value in cycle 0, the reset cycle. On the real counter, `q` is `1111` in cycle 0, then 0 from cycle 1. That is the model's semantics: reset is asserted in cycle 0 only.
+- **Which engine.** On the counter, `fdv-bmc`, `fdv-bmc-10` and `fdv-bmc-65` give the witness directly. With rIC3, IC3 or k-induction winning, the BMC re-run produces the trace. `flow.rs` covers that case with rIC3 only.
+- **Failures.** If the trace can't be built (BMC can't reproduce the result in time, or the replay misses the bad state), the console gets `<prop>: no trace: <why>`. The property keeps its verdict and has no `trace`.
 
 ## Later
 
