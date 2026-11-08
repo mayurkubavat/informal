@@ -176,11 +176,20 @@ test.describe("row context menu", () => {
     await expect(page.locator(".console-log")).toContainText("fdv[jg]> prove -property c_done");
   });
 
-  test("Show source opens the source tab at the property's line", async ({ page }) => {
+  test("Show source opens the script at the line that made the property", async ({ page }) => {
     await row(page, "a_never9").click({ button: "right" });
     await item(page, "Show source").click();
+    await expect(page.getByRole("tab", { name: "counter.jg.tcl" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("main pre.source .focus")).toHaveText("10assert -name a_never9 {q != 4'd9}");
+    await expect(page.locator(".strip-summary")).toHaveText("tests/fpv/counter/counter.jg.tcl:10");
+  });
+
+  test("Show source of SVA in the RTL opens the design file at its line", async ({ page }) => {
+    await row(page, "m_en").click({ button: "right" });
+    await item(page, "Show source").click();
     await expect(page.getByRole("tab", { name: "counter.sv" })).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator("main pre.source .focus")).toContainText("output logic [3:0] q");
+    await expect(page.locator("main pre.source .focus")).toContainText("m_en: assume property");
+    await expect(page.locator("main pre.source")).toHaveAttribute("data-focus-line", "7");
   });
 
   test("Copy name and Copy expression use the clipboard", async ({ page }) => {
@@ -246,6 +255,21 @@ test.describe("keyboard model", () => {
     await wrap.press("ArrowDown");
     await wrap.press("Enter");
     await expect(page.getByRole("tab", { name: "Details: a_step" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("F3 on a selected property opens its source line; Details links it", async ({ page }) => {
+    await row(page, "c_done").click();
+    await expect(page.getByRole("button", { name: "counter.jg.tcl:11" })).toBeVisible();
+    await page.keyboard.press("F3");
+    await expect(page.getByRole("tab", { name: "counter.jg.tcl" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("main pre.source .focus")).toContainText("cover  -name c_done");
+    // The highlighted line is scrolled into the pane.
+    const inView = await page.locator("main pre.source .focus").evaluate((el) => {
+      const pre = el.closest("pre")!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return r.top >= pre.top && r.bottom <= pre.bottom;
+    });
+    expect(inView).toBe(true);
   });
 
   test("F3 toggles the source view", async ({ page }) => {

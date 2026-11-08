@@ -134,7 +134,7 @@ export function identifiers(expr: string): string[] {
   return [...new Set(expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [])].filter((w) => !skip.has(w) && !/^\d/.test(w));
 }
 
-// Best-effort source line for a property: where its name appears, else the
+// Fallback for properties without a recorded source: best-effort line: where its name appears, else the
 // first line that mentions one of its signals. 1-based; 0 when unknown.
 export function locate(text: string, p: ViewProp | null): number {
   if (!p || !text) return 0;
@@ -145,6 +145,19 @@ export function locate(text: string, p: ViewProp | null): number {
   if (!ids.length) return 0;
   const re = new RegExp(`\\b(${ids.join("|")})\\b`);
   return lines.findIndex((l) => re.test(l)) + 1;
+}
+
+// The file the source view shows for a property: where it was written
+// (Property.source: its script line, or RTL for SVA in the design), else
+// the top design file.
+export function sourceFile(p: ViewProp | null, topFile: string | undefined): string | undefined {
+  return p?.source?.file ?? topFile;
+}
+// The line to highlight in `file`: the recorded one when the property came
+// from that file, else the old best-effort search (locate) in its text.
+export function sourceLine(p: ViewProp | null, file: string | undefined, text: string): number {
+  if (p?.source && p.source.file === file) return p.source.line;
+  return locate(text, p);
 }
 
 // The snapshot carries no netlist, so ports come from a light scan of the

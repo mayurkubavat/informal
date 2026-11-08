@@ -26,21 +26,48 @@ export const mockSource = `module counter (input logic clk, input logic rst_n, i
     always_ff @(posedge clk or negedge rst_n)
         if (!rst_n) q <= 4'd0;
         else if (en && !done) q <= q + 4'd1;
+    m_en: assume property (@(posedge clk) en |=> en);
 endmodule
 `;
 
+// The script the mock's properties came from (Property.source points here,
+// except m_en, which is SVA in the RTL above).
+export const MOCK_SCRIPT = "tests/fpv/counter/counter.jg.tcl";
+export const MOCK_RTL = "tests/fpv/counter/counter.sv";
+export const mockScript = `# JasperGold-style FPV setup for the counter.
+clear -all
+analyze -sv12 counter.sv
+elaborate -top counter
+clock clk
+reset -expression {!rst_n}
+
+assert -name a_max    {q <= 4'd9}
+assert -name a_step   {en && !done |=> q == $past(q) + 4'd1}
+assert -name a_never9 {q != 4'd9}
+cover  -name c_done   {$rose(done)}
+cover  -name c_10     {q == 4'd10}
+
+prove -all
+`;
+export function mockText(path: string): string | null {
+  if (path === MOCK_RTL) return mockSource;
+  if (path === MOCK_SCRIPT) return mockScript;
+  return null;
+}
+const at = (file: string, line: number) => ({ file, line });
+
 const mockSession: SessionView = {
-  design: { files: ["tests/fpv/counter/counter.sv"], top: "counter", defines: [] },
+  design: { files: [MOCK_RTL], top: "counter", defines: [] },
   elaborated: true,
   clocks: [{ signal: "clk", edge: "posedge" }],
   reset: "!rst_n",
   props: [
-    { name: "a_max", kind: "assert", expr: "q <= 4'd9", enabled: true, status: { status: "unprocessed" } },
-    { name: "a_step", kind: "assert", expr: "en && !done |=> q == $past(q) + 4'd1", enabled: true, status: { status: "unprocessed" } },
-    { name: "a_never9", kind: "assert", expr: "q != 4'd9", enabled: true, status: { status: "unprocessed" } },
-    { name: "c_done", kind: "cover", expr: "$rose(done)", enabled: true, status: { status: "unprocessed" } },
-    { name: "c_10", kind: "cover", expr: "q == 4'd10", enabled: true, status: { status: "unprocessed" } },
-    { name: "m_en", kind: "assume", expr: "en |=> en", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_max", source: at(MOCK_SCRIPT, 8), kind: "assert", expr: "q <= 4'd9", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_step", source: at(MOCK_SCRIPT, 9), kind: "assert", expr: "en && !done |=> q == $past(q) + 4'd1", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_never9", source: at(MOCK_SCRIPT, 10), kind: "assert", expr: "q != 4'd9", enabled: true, status: { status: "unprocessed" } },
+    { name: "c_done", source: at(MOCK_SCRIPT, 11), kind: "cover", expr: "$rose(done)", enabled: true, status: { status: "unprocessed" } },
+    { name: "c_10", source: at(MOCK_SCRIPT, 12), kind: "cover", expr: "q == 4'd10", enabled: true, status: { status: "unprocessed" } },
+    { name: "m_en", source: at(MOCK_RTL, 7), kind: "assume", expr: "en |=> en", enabled: true, status: { status: "unprocessed" } },
   ],
   time_limit: { secs: 60, nanos: 0 },
   workdir: "fdv_work",

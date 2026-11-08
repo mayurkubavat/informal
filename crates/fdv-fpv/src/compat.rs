@@ -12,7 +12,7 @@
 //! and are not implemented are errors, so a migrated script never passes
 //! silently on a different setup.
 
-use crate::session::{glob, parse_duration, Clock, Kind, Session, Status};
+use crate::session::{glob, parse_duration, Clock, Kind, Session, SourceLoc, Status};
 use fdv_tcl::{Interp, TclError, Value};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -332,7 +332,15 @@ fn add_props(
     name: Option<String>,
     expr: &str,
 ) -> Result<Value, String> {
-    s.add_property(kind, name, expr).map(Value::from)
+    let name = s.add_property(kind, name, expr)?;
+    let loc = match fdv_tcl::caller_location() {
+        Some((file, line)) => Some(SourceLoc::new(&file, line)),
+        None => fdv_tcl::current_script().and_then(|f| SourceLoc::search(&f, &name)),
+    };
+    if let Some(p) = s.props.iter_mut().find(|p| p.name == name) {
+        p.source = loc;
+    }
+    Ok(name.into())
 }
 
 fn select(s: &Session, patterns: &[String]) -> Result<Vec<usize>, String> {

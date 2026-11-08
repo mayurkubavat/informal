@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import {
-  bound, clock, isProveCmd, locate, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, statusKey, time, traceOf, withProgress,
+  bound, clock, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
@@ -58,7 +58,8 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
-  const [source, setSource] = useState("");
+  // Text of files read for the source view and the design tree, by path.
+  const [texts, setTexts] = useState<Record<string, string>>({});
   // The property shown in the trace tab (null: no trace tab), and its VCD.
   const [traceName, setTraceName] = useState<string | null>(null);
   const [trace, setTrace] = useState<{ path: string; text: string | null; error: string | null } | null>(null);
@@ -162,9 +163,14 @@ export default function App() {
   }, [run]);
 
   const topFile = session?.design.files[0];
-  useEffect(() => {
-    if (topFile) backend.readText(topFile).then(setSource, () => setSource(""));
-  }, [topFile]);
+  const loadText = useCallback((path: string | undefined) => {
+    if (!path) return;
+    backend.readText(path).then(
+      (t) => setTexts((m) => (m[path] === t ? m : { ...m, [path]: t })),
+      () => setTexts((m) => (path in m ? m : { ...m, [path]: "" })),
+    );
+  }, []);
+  useEffect(() => loadText(topFile), [topFile, loadText]);
 
   // Recomputed every render (cheap): the browser mock mutates the session in
   // place, so memoising on the session reference would go stale.
@@ -186,9 +192,17 @@ export default function App() {
   const current = allProps.find((p) => p.name === selected) ?? null;
   const proveCmd = flavor === "jg" ? "prove -all" : "check_fv";
   const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${n}` : `check_fv -property {${n}}`);
-  const focusLine = locate(source, current);
-  const fileName = topFile?.split("/").pop();
-  const ports = useMemo(() => parsePorts(source), [source]);
+  // The source view follows the selected property's own file (its script
+  // line, or RTL for SVA in the design); the top file otherwise.
+  const srcPath = sourceFile(current, topFile);
+  useEffect(() => {
+    if (srcPath !== topFile) loadText(srcPath);
+  }, [srcPath, topFile, loadText]);
+  const source = (srcPath && texts[srcPath]) || "";
+  const focusLine = sourceLine(current, srcPath, source);
+  const fileName = srcPath?.split("/").pop();
+  const topText = (topFile && texts[topFile]) || "";
+  const ports = useMemo(() => parsePorts(topText), [topText]);
   const currentTrace = traceOf(current);
   const hasTrace = !!currentTrace;
   const traceProp = traceName ? allProps.find((p) => p.name === traceName) ?? null : null;
@@ -617,7 +631,7 @@ export default function App() {
                 />
               </>
             ) : (
-              <span className="strip-summary mono">{topFile}</span>
+              <span className="strip-summary mono">{srcPath}{focusLine ? `:${focusLine}` : ""}</span>
             )}
           </div>
           {center !== "source" ? (
@@ -698,7 +712,7 @@ export default function App() {
                     <dt>Source</dt>
                     <dd>
                       {fileName ? (
-                        <button className="link mono" onClick={() => setCenter("source")}>
+                        <button className="link mono" onClick={() => setCenter("source")} title={current.source ? `${srcPath}:${focusLine}` : "Not recorded; best guess in the top file"}>
                           {fileName}
                           {focusLine ? `:${focusLine}` : ""}
                         </button>

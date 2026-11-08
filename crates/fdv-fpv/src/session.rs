@@ -100,6 +100,43 @@ pub struct Property {
     /// to the working directory when inside it); `None` otherwise or when
     /// no witness could be replayed. See docs/ui/trace-format.md.
     pub trace: Option<String>,
+    /// Where the property was written: the script line of the Tcl command
+    /// that created it, when that ran from a sourced file. `None` for
+    /// properties typed at the console.
+    pub source: Option<SourceLoc>,
+}
+
+/// A file and 1-based line (absolute path).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceLoc {
+    pub file: String,
+    pub line: u32,
+}
+
+impl SourceLoc {
+    /// Absolute form of a path as Tcl saw it (relative to the process's
+    /// working directory).
+    pub fn new(file: &str, line: u32) -> Self {
+        let file = std::path::absolute(file)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| file.to_string());
+        SourceLoc { file, line }
+    }
+
+    /// Fallback when Tcl has no line for the command (it was built with
+    /// `eval` or `uplevel` from a string): the first line of `file` that
+    /// mentions the property name as a whole word.
+    pub fn search(file: &str, name: &str) -> Option<Self> {
+        let text = std::fs::read_to_string(file).ok()?;
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let line = text.lines().position(|l| {
+            l.match_indices(name).any(|(i, _)| {
+                !l[..i].chars().next_back().is_some_and(is_word)
+                    && !l[i + name.len()..].chars().next().is_some_and(is_word)
+            })
+        })?;
+        Some(SourceLoc::new(file, line as u32 + 1))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,6 +245,7 @@ impl Session {
             enabled: true,
             status: Status::Unprocessed,
             trace: None,
+            source: None,
         });
         Ok(name)
     }

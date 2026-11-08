@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   bound, groupOf, identifiers, matches, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
-  statusKey, statusText, clock, isProveCmd, withProgress, guessKind,
+  statusKey, statusText, clock, isProveCmd, withProgress, guessKind, sourceFile, sourceLine,
 } from "./model";
 import type { ProveProgress } from "./backend";
-import { mockSource } from "./mock";
+import { MOCK_RTL, MOCK_SCRIPT, mockScript, mockSource, mockText } from "./mock";
 import { prop } from "./test/fixtures";
 
 describe("constants", () => {
@@ -123,6 +123,31 @@ describe("locate", () => {
     expect(locate(src, prop("x", { expr: "1" }))).toBe(0);
     expect(locate("", prop("a_named"))).toBe(0);
     expect(locate(src, null)).toBe(0);
+  });
+});
+
+describe("sourceFile / sourceLine", () => {
+  const top = "rtl/top.sv";
+  const fromScript = prop("a1", { source: { file: "/w/run.tcl", line: 12 } });
+  it("follows a recorded source to its own file and line", () => {
+    expect(sourceFile(fromScript, top)).toBe("/w/run.tcl");
+    expect(sourceLine(fromScript, "/w/run.tcl", "")).toBe(12);
+  });
+  it("falls back to the top file and the name search without one", () => {
+    const typed = prop("a_named", { source: null });
+    expect(sourceFile(typed, top)).toBe(top);
+    expect(sourceFile(null, top)).toBe(top);
+    expect(sourceLine(typed, top, "x\na_named: assert property (q);")).toBe(2);
+  });
+  it("searches when shown a file other than the recorded one", () => {
+    expect(sourceLine(fromScript, top, "a1 here")).toBe(1);
+  });
+  it("matches the mock's script and RTL entries", () => {
+    expect(mockText(MOCK_SCRIPT)).toBe(mockScript);
+    expect(mockText(MOCK_RTL)).toBe(mockSource);
+    expect(mockText("elsewhere.sv")).toBeNull();
+    expect(mockScript.split("\n")[10 - 1]).toContain("assert -name a_never9");
+    expect(mockSource.split("\n")[7 - 1]).toContain("m_en: assume property");
   });
 });
 

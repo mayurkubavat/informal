@@ -16,7 +16,7 @@
 use fdv_fpv::{Flavor, ProveProgress, ProveSink, Reply, Request, Session, Worker};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
 
 /// Set once the window exists; events before that (a start-up script's
@@ -65,11 +65,22 @@ fn engines_config() -> Option<PathBuf> {
     }
 }
 
+/// The design file list from the last reply, for `read_text` (which must
+/// not queue behind a running prove on the shell thread).
+static DESIGN_FILES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
 async fn ask(w: &Worker, req: Request) -> Reply {
     let w = w.clone();
-    tauri::async_runtime::spawn_blocking(move || w.call(req))
+    let r = tauri::async_runtime::spawn_blocking(move || w.call(req))
         .await
-        .unwrap_or_else(|e| Reply { ok: false, result: e.to_string(), session: serde_json::Value::Null })
+        .unwrap_or_else(|e| Reply { ok: false, result: e.to_string(), session: serde_json::Value::Null });
+    if let Some(a) = r.session["design"]["files"].as_array() {
+        let files = a.iter().filter_map(|f| f.as_str().map(PathBuf::from)).collect();
+        if let Ok(mut g) = DESIGN_FILES.lock() {
+            *g = files;
+        }
+    }
+    r
 }
 
 #[tauri::command]
@@ -123,10 +134,28 @@ fn trace_in(workdir: &Path, path: &Path) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| format!("{shown}: {e}"))
 }
 
-/// Design source text for the source view.
+/// Design source or script text for the source view (a property's
+/// `source` file, the top design file). Only files under the app's working
+/// directory (the repo root, which holds the work directory) or in the
+/// session's design file list are served.
 #[tauri::command]
 fn read_text(path: String) -> Result<String, String> {
-    std::fs::read_to_string(Path::new(&path)).map_err(|e| format!("{path}: {e}"))
+    let files = DESIGN_FILES.lock().map(|g| g.clone()).unwrap_or_default();
+    let root = std::env::current_dir().map_err(|e| e.to_string())?;
+    text_in(&root, &files, Path::new(&path))
+}
+
+fn text_in(root: &Path, files: &[PathBuf], path: &Path) -> Result<String, String> {
+    let shown = path.display();
+    let p = std::fs::canonicalize(path).map_err(|e| format!("{shown}: {e}"))?;
+    let root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let listed = files
+        .iter()
+        .any(|f| std::fs::canonicalize(f).is_ok_and(|f| f == p));
+    if !p.starts_with(&root) && !listed {
+        return Err(format!("{shown}: not under {} or in the design files", root.display()));
+    }
+    std::fs::read_to_string(&p).map_err(|e| format!("{shown}: {e}"))
 }
 
 fn main() {
@@ -186,7 +215,24 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::trace_in;
+    use super::{text_in, trace_in};
+
+    #[test]
+    fn text_reads_only_the_repo_and_design_files() {
+        let base = std::env::temp_dir().join(format!("fdv-app-text-{}", std::process::id()));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(repo.join("tests")).unwrap();
+        std::fs::write(repo.join("tests/run.tcl"), "assert -name a {x}\n").unwrap();
+        std::fs::write(base.join("ip.sv"), "module ip; endmodule\n").unwrap();
+        std::fs::write(base.join("secret.txt"), "no").unwrap();
+        let files = vec![base.join("ip.sv")];
+        assert!(text_in(&repo, &files, &repo.join("tests/run.tcl")).unwrap().contains("assert"));
+        assert!(text_in(&repo, &files, &base.join("ip.sv")).unwrap().contains("module ip"));
+        assert!(text_in(&repo, &files, &base.join("secret.txt")).is_err());
+        assert!(text_in(&repo, &files, &repo.join("../secret.txt")).is_err());
+        assert!(text_in(&repo, &[], &base.join("ip.sv")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn trace_reads_only_vcd_inside_the_workdir() {

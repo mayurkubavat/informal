@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockEvents, mockSource, mockTrace } from "./mock";
+import { mock, mockEvents, mockText, mockTrace } from "./mock";
 
 export type StatusWord =
   | "unprocessed" | "proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
@@ -26,6 +26,16 @@ export interface Property {
   // workdir, e.g. "fdv_work/a_never9.vcd"); absent or null when there is
   // none. See docs/ui/trace-format.md.
   trace?: string | null;
+  // Where the property was written: the script line of the Tcl command that
+  // created it (absolute path, 1-based line), or an RTL file:line for SVA
+  // in the design. Absent or null for properties typed at the console; the
+  // UI then falls back to searching the top file (model.ts locate).
+  source?: SourceLoc | null;
+}
+
+export interface SourceLoc {
+  file: string;
+  line: number;
 }
 
 export interface SessionView {
@@ -115,12 +125,16 @@ export const backend = {
   stop: () => call("shell_stop"),
   onProgress: (cb: (p: ProveProgress) => void) => subscribe("prove-progress", cb),
   onConsole: (cb: (l: ConsoleLine) => void) => subscribe("console-line", cb),
+  // A design file or script for the source view. The app only reads files
+  // under its working directory (the repo) or in the design's file list.
   readText: async (path: string): Promise<string> => {
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<string>("read_text", { path });
     }
-    return mockSource;
+    const t = mockText(path);
+    if (t === null) throw new Error(`${path}: no such file`);
+    return t;
   },
   // The VCD text of a property's trace. The app only reads files inside the
   // session's workdir; the mock serves tests/fixtures/a_never9.vcd.

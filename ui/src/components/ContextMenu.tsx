@@ -3,7 +3,8 @@ import type { MenuItem } from "./MenuBar";
 
 // A right-click menu in the same style as the menu bar pop-ups. Opens at
 // (x, y), clamped to the window; Escape, an outside click, scrolling or a
-// resize close it. Disabled items stay focusable (aria-disabled) so their
+// resize close it. Scrolls of panes marked `data-scroll-quiet` (the source
+// view following the selection) leave it open: they do not move its row. Disabled items stay focusable (aria-disabled) so their
 // tooltip explains why.
 export function ContextMenu({ x, y, items, label, onClose }: { x: number; y: number; items: MenuItem[]; label: string; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -42,13 +43,14 @@ export function ContextMenu({ x, y, items, label, onClose }: { x: number; y: num
     document.addEventListener("keydown", key, true);
     window.addEventListener("resize", onClose);
     window.addEventListener("blur", onClose);
-    document.addEventListener("scroll", onClose, true);
+    const scroll = (e: Event) => !(e.target as HTMLElement | null)?.closest?.("[data-scroll-quiet]") && onClose();
+    document.addEventListener("scroll", scroll, true);
     return () => {
       document.removeEventListener("mousedown", away);
       document.removeEventListener("keydown", key, true);
       window.removeEventListener("resize", onClose);
       window.removeEventListener("blur", onClose);
-      document.removeEventListener("scroll", onClose, true);
+      document.removeEventListener("scroll", scroll, true);
     };
   }, [onClose]);
 
