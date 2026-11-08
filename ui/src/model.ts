@@ -50,6 +50,10 @@ export function statusKey(p: Property): string {
   if (p.kind === "assume") return "assume";
   return p.enabled ? p.status.status : "unprocessed";
 }
+// Task-tree group: assumes together, everything else by raw status.
+export function groupOf(p: Property): StatusWord | "assume" {
+  return p.kind === "assume" ? "assume" : p.status.status;
+}
 export function statusText(p: Property): string {
   if (p.kind === "assume") return "Assumed";
   return p.enabled ? STATUS_LABEL[p.status.status] : "Disabled";

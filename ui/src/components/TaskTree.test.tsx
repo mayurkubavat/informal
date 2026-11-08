@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskTree } from "./TaskTree";
+import { prop } from "../test/fixtures";
 
 const items = () => screen.getAllByRole("treeitem").map((r) => r.textContent);
 
@@ -36,5 +37,50 @@ describe("TaskTree", () => {
     expect(items()).toEqual(["<embedded>3"]);
     expect(screen.getAllByRole("treeitem")[0]).toHaveAttribute("aria-expanded", "false");
     expect(onFilter).not.toHaveBeenCalled();
+  });
+
+  describe("property leaves", () => {
+    const props = [
+      prop("a_max", {}, { status: "proven" }),
+      prop("a_never9", {}, { status: "cex" }),
+      prop("a_step", {}, { status: "proven" }),
+      prop("m_en", { kind: "assume" }),
+    ];
+    const tree = (over = {}) => {
+      const onSelect = vi.fn();
+      const onOpen = vi.fn();
+      const onFilter = vi.fn();
+      render(<TaskTree total={4} counts={{ proven: 2, cex: 1 }} assumes={1} filter={null} onFilter={onFilter} props={props} selected={null} onSelect={onSelect} onOpen={onOpen} {...over} />);
+      return { onSelect, onOpen, onFilter };
+    };
+
+    it("lists each property under its status group", () => {
+      tree();
+      expect(items()).toEqual(["<embedded>4", "Proven2", "Aa_max", "Aa_step", "CEX1", "Aa_never9", "Assumed1", "Mm_en"]);
+    });
+
+    it("selects on click and opens on double-click without filtering", async () => {
+      const { onSelect, onOpen, onFilter } = tree();
+      await userEvent.click(screen.getByText("a_never9"));
+      expect(onSelect).toHaveBeenLastCalledWith("a_never9");
+      await userEvent.dblClick(screen.getByText("a_step"));
+      expect(onOpen).toHaveBeenCalledWith("a_step");
+      expect(onFilter).not.toHaveBeenCalled();
+    });
+
+    it("marks the selected property", () => {
+      tree({ selected: "a_step" });
+      const leaf = screen.getByText("a_step").closest(".tree-row")!;
+      expect(leaf).toHaveClass("sel");
+      expect(leaf).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("collapses one group with its own twisty", async () => {
+      tree();
+      await userEvent.click(screen.getByRole("button", { name: "Collapse Proven" }));
+      expect(items()).toEqual(["<embedded>4", "Proven2", "CEX1", "Aa_never9", "Assumed1", "Mm_en"]);
+      await userEvent.click(screen.getByRole("button", { name: "Expand Proven" }));
+      expect(screen.getByText("a_max")).toBeInTheDocument();
+    });
   });
 });

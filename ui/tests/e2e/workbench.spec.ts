@@ -122,3 +122,27 @@ test("no serious or critical axe violations", async ({ page }) => {
   const bad = r.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(bad.map((v) => `${v.id} (${v.impact}): ${v.help} @ ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
 });
+
+test.describe("task tree properties", () => {
+  const leaf = (page: Page, name: string) => page.locator(".tree-row.leaf").filter({ hasText: new RegExp(`${name}$`) });
+
+  test("lists properties under their status groups", async ({ page }) => {
+    await expect(page.locator(".tree-row.leaf")).toHaveCount(6);
+    await proveAll(page);
+    const tree = page.getByRole("tree", { name: "Tasks" });
+    await expect(tree.getByRole("treeitem")).toHaveText([
+      /<embedded>6/, /Proven2/, /a_max/, /a_step/, /CEX1/, /a_never9/, /Covered1/, /c_done/, /Unreachable1/, /c_10/, /Assumed1/, /m_en/,
+    ]);
+  });
+
+  test("click selects the table row; double-click opens Details", async ({ page }) => {
+    await page.getByRole("tab", { name: "Console" }).click();
+    await leaf(page, "a_never9").click();
+    await expect(row(page, "a_never9")).toHaveAttribute("aria-selected", "true");
+    await expect(leaf(page, "a_never9")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Console" })).toHaveAttribute("aria-selected", "true");
+    await leaf(page, "c_done").dblclick();
+    await expect(page.getByRole("tab", { name: "Details: c_done" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".details pre.expr")).toHaveText("$rose(done)");
+  });
+});

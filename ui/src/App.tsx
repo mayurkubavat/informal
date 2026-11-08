@@ -257,7 +257,17 @@ export default function App() {
             />
             <div className="pane-body">
               {left === "tasks" ? (
-                <TaskTree total={allProps.length} counts={counts} assumes={assumes} filter={statusFilter} onFilter={setStatusFilter} />
+                <TaskTree
+                  total={allProps.length}
+                  counts={counts}
+                  assumes={assumes}
+                  filter={statusFilter}
+                  onFilter={setStatusFilter}
+                  props={allProps}
+                  selected={selected}
+                  onSelect={setSelected}
+                  onOpen={select}
+                />
               ) : (
                 <DesignTree top={session?.design.top ?? null} files={session?.design.files ?? []} ports={ports} />
               )}

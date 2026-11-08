@@ -277,6 +277,10 @@ select {
 .tree-row:hover { background: var(--hover); }
 .tree-row.sel { background: var(--accent-soft); }
 .tree-row.child { padding-left: 26px; }
+.tree-row.leaf { padding-left: 46px; }
+.tree-row.off { opacity: 0.5; }
+.group-twisty { margin-left: -20px; }
+.leaf-kind { width: 10px; flex: none; color: var(--muted); font-size: 11px; }
 .tree-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px; }
 .twisty { display: inline-grid; place-items: center; width: 14px; height: 14px; color: var(--muted); transform: rotate(-90deg); transition: transform 0.1s; }
 .twisty.open { transform: none; }

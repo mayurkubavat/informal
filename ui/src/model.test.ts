@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  bound, identifiers, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
+  bound, groupOf, identifiers, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
   statusKey, statusText,
 } from "./model";
 import { mockSource } from "./mock";
@@ -147,5 +147,13 @@ describe("parsePorts", () => {
   it("returns nothing without a module header or for non-ANSI ports", () => {
     expect(parsePorts("")).toEqual([]);
     expect(parsePorts("module m (a, b);")).toEqual([]);
+  });
+});
+
+describe("groupOf", () => {
+  it("groups assumes together and others by raw status, even when disabled", () => {
+    expect(groupOf(prop("m", { kind: "assume" }, { status: "proven" }))).toBe("assume");
+    expect(groupOf(prop("p", { enabled: false }, { status: "cex" }))).toBe("cex");
+    expect(groupOf(prop("p"))).toBe("unprocessed");
   });
 });
