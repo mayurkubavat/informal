@@ -16,6 +16,8 @@
 //                for the virtualized table tests
 //   ?design=fifo show tests/fpv/fifo's scope tree (two ptr instances) in
 //                the Design tab instead of the counter's
+//   ?surfer=1    report the Surfer viewer as installed (tool_available);
+//                "Open in Surfer" then succeeds without opening anything
 //   ?design=scan no hierarchy, as with the Yosys front end: the Design tab
 //                falls back to scanning the top file's ports
 //
@@ -133,6 +135,14 @@ export const MOCK_ENGINES: Record<string, EngineRun[]> = {
 // Properties whose result comes with a trace: both get the counter's 12
 // cycle fixture (q reaches 9, so done rises, in cycle 11).
 export const MOCK_TRACES: Record<string, string> = { a_never9: "fdv_work/a_never9.vcd", c_done: "fdv_work/c_done.vcd" };
+// The app's open_in_surfer: refuses when Surfer is missing or the path is
+// not one of the traces; otherwise records the path (for the tests).
+export const mockSurferOpened: string[] = [];
+export async function mockOpenInSurfer(path: string): Promise<void> {
+  if (!mockOptions.surfer) throw new Error("surfer is not on PATH (install it from surfer-project.org)");
+  if (mockTrace(path) === null) throw new Error(`${path}: not a trace in fdv_work`);
+  mockSurferOpened.push(path);
+}
 export function mockTrace(path: string): string | null {
   return Object.values(MOCK_TRACES).includes(path) ? counterTrace : null;
 }
@@ -164,13 +174,14 @@ export const MOCK_TICKS: Record<string, number> = { a_max: 2, a_step: 3, a_never
 export const TICK_MS = 300;
 const PARALLEL = 2;
 
-export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false };
+export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false, surfer: false };
 if (typeof location !== "undefined") {
   const q = new URLSearchParams(location.search);
   if (q.get("fast") === "1") mockOptions.tick = 0;
   if (q.has("tick")) mockOptions.tick = Math.max(0, Number(q.get("tick")) || 0);
   if (q.has("freeze")) mockOptions.freeze = Number(q.get("freeze"));
   if (q.get("holdStop") === "1") mockOptions.holdStop = true;
+  if (q.get("surfer") === "1") mockOptions.surfer = true;
   if (q.get("design") === "fifo") mockSession.design.hierarchy = MOCK_FIFO;
   if (q.get("design") === "scan") mockSession.design.hierarchy = [];
   const extra = Math.min(100_000, Math.max(0, Number(q.get("props")) || 0));
@@ -346,7 +357,8 @@ export function resetMock() {
   mockFlavor = "jg";
   mockSession.props.length = BASE_PROPS;
   for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null, engines: [] });
-  Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false });
+  Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false, surfer: false });
+  mockSurferOpened.length = 0;
 }
 
 let mockFlavor = "jg";

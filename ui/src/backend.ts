@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockComplete, mockEvents, mockText, mockTrace } from "./mock";
+import { mock, mockComplete, mockEvents, mockOpenInSurfer, mockOptions, mockText, mockTrace } from "./mock";
 
 export type StatusWord =
   | "unprocessed" | "proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
@@ -195,6 +195,24 @@ export const backend = {
     const t = mockText(path);
     if (t === null) throw new Error(`${path}: no such file`);
     return t;
+  },
+  // Whether an external tool (e.g. "surfer") is on PATH. Asked once at
+  // start-up; the browser mock says no (yes with ?surfer=1).
+  toolAvailable: async (name: string): Promise<boolean> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<boolean>("tool_available", { name });
+    }
+    return name === "surfer" && mockOptions.surfer;
+  },
+  // Open a trace in Surfer, detached. The app only opens .vcd files inside
+  // the session's workdir; it rejects with the reason otherwise.
+  openInSurfer: async (path: string): Promise<void> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<void>("open_in_surfer", { path });
+    }
+    return mockOpenInSurfer(path);
   },
   // The VCD text of a property's trace. The app only reads files inside the
   // session's workdir; the mock serves tests/fixtures/a_never9.vcd.

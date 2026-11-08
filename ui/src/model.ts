@@ -259,3 +259,6 @@ export function findScope(scopes: DesignScope[], path: string | null): DesignSco
 // The short kind column: port direction, else the declaration kind.
 export const KIND_SHORT: Record<string, string> = { input: "in", output: "out", inout: "inout", ref: "ref", variable: "var", net: "net", parameter: "param" };
 export const signalKind = (s: { kind: string; dir?: string }) => KIND_SHORT[s.kind === "port" ? s.dir ?? "inout" : s.kind] ?? s.kind;
+
+// Tooltip of the Surfer hand-off when the viewer is not on PATH.
+export const SURFER_MISSING = "Install Surfer (surfer-project.org) to open traces externally";

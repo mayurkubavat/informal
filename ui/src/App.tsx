@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import {
-  bound, clock, designScopes, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
+  bound, clock, designScopes, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
@@ -188,6 +188,11 @@ export default function App() {
   useEffect(() => {
     run(() => backend.snapshot());
   }, [run]);
+  // Surfer on PATH enables the external-viewer hand-off.
+  const [surfer, setSurfer] = useState(false);
+  useEffect(() => {
+    backend.toolAvailable("surfer").then(setSurfer, () => setSurfer(false));
+  }, []);
 
   const topFile = session?.design.files[0];
   const loadText = useCallback((path: string | undefined) => {
@@ -279,6 +284,16 @@ export default function App() {
     setCenter("trace");
     setAddReq((r) => ({ path, n: (r?.n ?? 0) + 1 }));
   };
+  const openInSurfer = (path: string) =>
+    backend.openInSurfer(path).then(
+      () => note(true, `Opened ${path} in Surfer`),
+      (e) => {
+        note(false, `Surfer: ${e}`);
+        setBottomTab("messages");
+      },
+    );
+  const surferTip = (path: string | null) =>
+    !surfer ? SURFER_MISSING : path ? `surfer ${path}` : "Only a CEX or cover result has a trace";
   const onAddResult = useCallback(
     (path: string, r: "added" | "shown" | "missing") =>
       note(r !== "missing", r === "added" ? `Added ${path} to the trace` : r === "shown" ? `${path} is already in the trace` : `${path} is not in this trace`),
@@ -371,6 +386,15 @@ export default function App() {
           disabled: !traceOf(ctxProp),
           title: traceOf(ctxProp) ? undefined : "Only a CEX or cover result has a trace",
           onClick: () => openTrace(ctxProp.name),
+        },
+        {
+          label: "Open trace in Surfer",
+          disabled: !surfer || !traceOf(ctxProp),
+          title: surferTip(traceOf(ctxProp)),
+          onClick: () => {
+            const t = traceOf(ctxProp);
+            if (t) openInSurfer(t);
+          },
         },
         { label: "Show source", disabled: !topFile, onClick: () => { setSelected(ctxProp.name); setCenter("source"); } },
         { sep: true },
@@ -650,6 +674,14 @@ export default function App() {
               error={trace?.error}
               addRequest={addReq}
               onAddResult={onAddResult}
+              actions={
+                // The title sits on a wrapper too: a disabled button shows none.
+                <span className="surfer-wrap" title={surferTip(tracePath)}>
+                  <button className="btn" disabled={!surfer || !tracePath} onClick={() => tracePath && openInSurfer(tracePath)} title={surferTip(tracePath)}>
+                    Open in Surfer
+                  </button>
+                </span>
+              }
             />
           ) : (
           <>

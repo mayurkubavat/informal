@@ -540,3 +540,4 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .sig-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sig-width { width: 4ch; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; flex: none; }
 .sig-kind { width: 5ch; color: var(--muted); font-size: 11px; flex: none; }
+.surfer-wrap { display: inline-flex; flex: none; }

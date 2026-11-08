@@ -158,7 +158,7 @@ test.describe("row context menu", () => {
     await row(page, "a_never9").click({ button: "right" });
     await expect(menu(page)).toHaveAccessibleName("Actions for a_never9");
     await expect(menu(page).getByRole("menuitem")).toHaveText([
-      /Prove\s*prove -property a_never9/, "Visualize trace", "Show source", "Copy name", "Copy expression", /Disable/,
+      /Prove\s*prove -property a_never9/, "Visualize trace", "Open trace in Surfer", "Show source", "Copy name", "Copy expression", /Disable/,
     ]);
     await expect(row(page, "a_never9")).toHaveAttribute("aria-selected", "true");
     await expect(item(page, "Visualize trace")).toHaveAttribute("aria-disabled", "true");
@@ -989,5 +989,41 @@ test.describe("design browser", () => {
     await designTab(page).click();
     await expect(page.getByText("ports (scan)")).toBeVisible();
     await expect(sig(page, "counter", "q")).toHaveText("q4out");
+  });
+});
+
+test.describe("Surfer hand-off", () => {
+  const button = (page: Page) => page.getByRole("button", { name: "Open in Surfer" });
+  const MISSING = "Install Surfer (surfer-project.org) to open traces externally";
+
+  test("without Surfer the button and menu item are disabled and say how to get it", async ({ page }) => {
+    await proveAll(page);
+    await row(page, "a_never9").dblclick();
+    await expect(button(page)).toBeDisabled();
+    await expect(button(page)).toHaveAttribute("title", MISSING);
+    await expect(page.locator(".surfer-wrap")).toHaveAttribute("title", MISSING);
+    await page.getByRole("tab", { name: "Property Table" }).click();
+    await row(page, "a_never9").click({ button: "right" });
+    const item = page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" });
+    await expect(item).toHaveAttribute("aria-disabled", "true");
+    await expect(item).toHaveAttribute("title", MISSING);
+  });
+
+  test("with Surfer on PATH they open the trace", async ({ page }) => {
+    await page.goto("/?fast=1&surfer=1");
+    await proveAll(page);
+    await row(page, "a_never9").dblclick();
+    await expect(button(page)).toBeEnabled();
+    await expect(button(page)).toHaveAttribute("title", "surfer fdv_work/a_never9.vcd");
+    await button(page).click();
+    await page.getByRole("tab", { name: /^Messages/ }).click();
+    await expect(page.locator(".messages")).toContainText("Opened fdv_work/a_never9.vcd in Surfer");
+    await page.getByRole("tab", { name: "Property Table" }).click();
+    await row(page, "c_done").click({ button: "right" });
+    await page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" }).click();
+    await expect(page.locator(".messages")).toContainText("Opened fdv_work/c_done.vcd in Surfer");
+    // A result without a trace has nothing to open.
+    await row(page, "a_max").click({ button: "right" });
+    await expect(page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" })).toHaveAttribute("aria-disabled", "true");
   });
 });
