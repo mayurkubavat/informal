@@ -73,6 +73,18 @@ pub fn session_summary(s: &Value) -> String {
         out += "properties: none\n";
         return out;
     }
+    // Spelled out, so a small model does not count an unreachable cover
+    // as a failure.
+    let with = |st: &str, kind: &str| -> Vec<&str> {
+        props
+            .iter()
+            .filter(|p| p["status"]["status"].as_str() == Some(st) && p["kind"].as_str() == Some(kind))
+            .filter_map(|p| p["name"].as_str())
+            .collect()
+    };
+    let list = |v: Vec<&str>| if v.is_empty() { "none".to_string() } else { v.join(", ") };
+    out += &format!("failed (assertions with a CEX): {}\n", list(with("cex", "assert")));
+    out += &format!("unreachable covers (not failures): {}\n", list(with("unreachable", "cover")));
     let shown = props.len().min(MAX_PROPS);
     out += &format!("properties ({}{}): name kind status\n", props.len(), if shown < props.len() { format!(", first {shown}") } else { String::new() });
     for p in &props[..shown] {
@@ -164,6 +176,7 @@ mod tests {
         let t = session_summary(&s);
         assert!(t.contains("top: counter") && t.contains("clk (posedge)") && t.contains("reset: !rst_n"), "{t}");
         assert!(t.contains("a_never9 assert cex depth 9") && t.contains("c_wrap cover unprocessed (disabled)"), "{t}");
+        assert!(t.contains("failed (assertions with a CEX): a_never9\n") && t.contains("unreachable covers (not failures): none"), "{t}");
         let many: Vec<Value> = (0..250).map(|i| json!({"name": format!("p{i}"), "kind": "assert", "status": {"status": "proven"}})).collect();
         let t = session_summary(&json!({"props": many}));
         assert!(t.contains("properties (250, first 200)") && t.contains("p199 ") && !t.contains("p200 "), "{t}");
