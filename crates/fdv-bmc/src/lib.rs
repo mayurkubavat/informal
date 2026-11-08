@@ -36,8 +36,21 @@ fn prepare(req: &CheckRequest) -> Result<Aig, String> {
 /// time left (at most 10 s): on the big CPU models of HWMCC'24 1-induction
 /// peels off about one candidate per SAT call and never finishes, so the
 /// budget only bounds the waste. `FDV_NO_SCORR` turns it off.
+///
+/// Every engine prepares its own copy, so with a portfolio over budget
+/// this checks between phases: stopping only in the SAT loop lets the
+/// load, scorr and CNF build of each engine run on past the budget.
 fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Aig, String> {
+    let stop = || {
+        if ctx.should_stop() {
+            Err(ctx.stop_reason().to_string())
+        } else {
+            Ok(())
+        }
+    };
+    stop()?;
     let g = prepare(req)?;
+    stop()?;
     if std::env::var_os("FDV_NO_SCORR").is_some() {
         return Ok(g);
     }
@@ -61,6 +74,7 @@ fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Aig, String> {
         }
         None => Ok(g),
     }
+    .and_then(|g| stop().map(|()| g))
 }
 
 fn solver(ctx: &RunContext) -> Box<dyn Sat> {

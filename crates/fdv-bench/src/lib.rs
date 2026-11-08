@@ -16,7 +16,65 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// Runs in progress, so a memout exit can still record them.
+static IN_FLIGHT: Mutex<Vec<(u64, Instant, RunRecord)>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Marks `rec` in flight until dropped.
+struct InFlight(u64);
+
+impl InFlight {
+    fn new(rec: &RunRecord) -> Self {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed) as u64;
+        let mut v = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+        v.push((id, Instant::now(), rec.clone()));
+        InFlight(id)
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let mut v = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+        v.retain(|(id, ..)| *id != self.0);
+    }
+}
+
+/// The runs in flight, as unknown "memout" records.
+pub fn memout_records() -> Vec<RunRecord> {
+    let Ok(v) = IN_FLIGHT.try_lock() else {
+        return Vec::new();
+    };
+    v.iter()
+        .map(|(_, t0, rec)| RunRecord {
+            verdict: "unknown".into(),
+            detail: Some("memout".into()),
+            wall_ms: t0.elapsed().as_millis(),
+            ..rec.clone()
+        })
+        .collect()
+}
+
+/// Append [`memout_records`] to the run database at `db` and echo them
+/// to stderr (the memory sampler calls this just before a memout exit).
+pub fn write_memouts(db: &Path) -> anyhow::Result<()> {
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(db)?;
+    for rec in memout_records() {
+        let mut line = serde_json::to_vec(&rec)?;
+        line.push(b'\n');
+        f.write_all(&line)?;
+        eprintln!(
+            "  {:<14} {:<8} {:>8} ms  {}",
+            rec.engine, "memout", rec.wall_ms, rec.model
+        );
+    }
+    f.flush()?;
+    Ok(())
+}
 
 /// One engine run, as stored in the run database.
 #[derive(Debug, Clone, Serialize)]
@@ -180,6 +238,7 @@ fn run_model(
             {
                 let ctx = fdv_engine::RunContext::new(timeout);
                 let mut rec = base("single", e.name().to_string());
+                let _in_flight = InFlight::new(&rec);
                 fill(
                     &mut rec,
                     e.check(&req, &ctx).map_err(|err| format!("{err:#}")),
@@ -188,8 +247,10 @@ fn run_model(
             }
         }
         Mode::Portfolio => {
-            let o = portfolio::run(engines, &req, None);
             let mut rec = base("portfolio", "portfolio".into());
+            let in_flight = InFlight::new(&rec);
+            let o = portfolio::run(engines, &req, None);
+            drop(in_flight);
             let v = portfolio::verdict(&o);
             rec.wall_ms = o.wall_ms;
             fill_verdict(&mut rec, &v);

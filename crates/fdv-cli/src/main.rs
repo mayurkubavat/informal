@@ -24,7 +24,10 @@ struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
     /// Memory budget for in-process engines, in GB (0 = none). Default:
-    /// 75% of physical memory. Over it, they stop with unknown "memory".
+    /// 90% of the cgroup's memory.max (or memory.high) when it has one,
+    /// else 75% of physical memory. Over it, they stop with unknown
+    /// "memory"; 10% over it (or near the cgroup limit), fdv exits with
+    /// a memout (status 3).
     #[arg(long, global = true)]
     mem_gb: Option<f64>,
 }
@@ -127,7 +130,10 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let budget = match cli.mem_gb {
         Some(gb) => (gb * 1e9) as u64,
-        None => fdv_engine::memory::total_bytes().map_or(0, |t| t / 4 * 3),
+        None => fdv_engine::memory::default_budget(
+            fdv_engine::memory::cgroup().map(|c| c.max),
+            fdv_engine::memory::total_bytes(),
+        ),
     };
     fdv_engine::memory::set_budget(budget);
     match cli.cmd {
@@ -156,6 +162,7 @@ fn main() -> anyhow::Result<()> {
                 format,
                 timeout: Duration::from_secs(timeout),
             };
+            fdv_engine::memory::on_memout(|| println!("UNKNOWN (memout)"));
             let o = portfolio::run(&engines, &req, None);
             for r in &o.runs {
                 match r {
@@ -292,6 +299,11 @@ fn main() -> anyhow::Result<()> {
                 .create(true)
                 .append(true)
                 .open(&db)?;
+            // On a memout, record the runs in flight before exiting.
+            let memout_db = db.clone();
+            fdv_engine::memory::on_memout(move || {
+                let _ = fdv_bench::write_memouts(&memout_db);
+            });
             let mode = if each {
                 fdv_bench::Mode::EachEngine
             } else {
