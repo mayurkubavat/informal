@@ -71,4 +71,11 @@ for (const s of sizes)
         await expect(page.locator(".menu-pop")).toBeVisible();
         await shot(page, n("file-menu"));
       });
+
+      test("prove menu with shortcuts", async ({ page }) => {
+        await ready(page);
+        await page.getByRole("menuitem", { name: "Prove", exact: true }).click();
+        await expect(page.locator(".menu-pop")).toBeVisible();
+        await shot(page, n("prove-menu"));
+      });
     });

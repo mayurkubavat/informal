@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 export type MenuItem =
-  | { label: string; hint?: string; title?: string; onClick?: () => void; disabled?: boolean; checked?: boolean }
+  | { label: string; hint?: string; keys?: string; title?: string; onClick?: () => void; disabled?: boolean; checked?: boolean }
   | { sep: true };
 export type MenuDef = { label: string; items: MenuItem[] };
 
@@ -54,6 +54,7 @@ export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: Reac
                     <span className="menu-check">{it.checked ? "✓" : ""}</span>
                     <span>{it.label}</span>
                     {it.hint && <span className="menu-hint mono">{it.hint}</span>}
+                    {it.keys && <span className="menu-keys">{it.keys}</span>}
                   </button>
                 ),
               )}

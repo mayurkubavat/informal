@@ -225,3 +225,73 @@ test.describe("row context menu", () => {
     await expect(menu(page)).toHaveCount(0);
   });
 });
+
+test.describe("keyboard model", () => {
+  test("F5 proves all, F6 proves the selected property", async ({ page }) => {
+    await row(page, "c_10").click();
+    await page.keyboard.press("F6");
+    await expect(row(page, "c_10")).toContainText("Unreachable");
+    await expect(row(page, "a_max")).toContainText("Unprocessed");
+    await page.keyboard.press("F5");
+    await expect(summary(page)).toHaveText("6 properties · 2 proven · 1 cex · 1 covered · 1 unreachable · 1 assumed");
+  });
+
+  test("Enter opens Details for the selected row", async ({ page }) => {
+    await row(page, "a_max").click();
+    await page.getByRole("tab", { name: "Console" }).click();
+    const wrap = page.locator(".table-wrap");
+    await wrap.focus();
+    await wrap.press("ArrowDown");
+    await wrap.press("Enter");
+    await expect(page.getByRole("tab", { name: "Details: a_step" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("F3 toggles the source view", async ({ page }) => {
+    await page.keyboard.press("F3");
+    await expect(page.getByRole("tab", { name: "counter.sv" })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("F3");
+    await expect(page.getByRole("tab", { name: "Property Table" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("Ctrl+F focuses the filter, even from the source view", async ({ page }) => {
+    await page.keyboard.press("F3");
+    await page.keyboard.press("Control+f");
+    await expect(page.getByLabel("Filter properties")).toBeFocused();
+    await page.keyboard.type("never");
+    await expect(rows(page)).toHaveCount(1);
+  });
+
+  test("Ctrl+L jumps to the console prompt from another dock tab", async ({ page }) => {
+    await page.getByRole("tab", { name: "Messages" }).click();
+    await page.keyboard.press("Control+l");
+    await expect(page.getByLabel("Tcl command")).toBeFocused();
+    await expect(page.getByRole("tab", { name: "Console" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("Ctrl+1..3 switch the bottom dock tabs", async ({ page }) => {
+    const tab = (n: RegExp) => page.getByRole("tab", { name: n });
+    await page.keyboard.press("Control+3");
+    await expect(tab(/^Messages/)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Control+2");
+    await expect(tab(/^Details/)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Control+1");
+    await expect(tab(/^Console/)).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("Esc closes an open menu; Stop is listed but disabled", async ({ page }) => {
+    await page.getByRole("menuitem", { name: "Prove", exact: true }).click();
+    const stop = page.locator(".menu-pop").getByRole("menuitem", { name: /Stop/ });
+    await expect(stop).toBeDisabled();
+    await expect(stop).toContainText("Esc");
+    await expect(page.locator(".menu-pop").getByRole("menuitem", { name: /Prove all/ })).toContainText("F5");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".menu-pop")).toHaveCount(0);
+  });
+
+  test("Help > Keyboard shortcuts prints the list in the console", async ({ page }) => {
+    await page.getByRole("menuitem", { name: "Help", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Keyboard shortcuts" }).click();
+    await expect(page.locator(".console-log")).toContainText("Ctrl+1..3");
+    await expect(page.locator(".console-log")).toContainText("Prove selected");
+  });
+});

@@ -158,6 +158,8 @@ select {
 .menu-item:hover:not(:disabled) { background: var(--accent-soft); }
 .menu-check { width: 14px; text-align: center; color: var(--text-2); }
 .menu-hint { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: 11px; }
+.menu-keys { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: 11px; }
+.menu-hint + .menu-keys { margin-left: 0; }
 .menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
 .menu-path {
   width: 340px;

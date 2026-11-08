@@ -48,6 +48,14 @@ export function PropTable({
       onContext(rows[i], (r?.left ?? 0) + 40, r?.bottom ?? 0);
       return;
     }
+    if (e.key === "Enter") {
+      const p = rows.find((r) => r.name === selected);
+      if (p) {
+        e.preventDefault();
+        onOpen(p);
+      }
+      return;
+    }
     if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || !rows.length) return;
     e.preventDefault();
     const i = rows.findIndex((p) => p.name === selected);
@@ -56,7 +64,7 @@ export function PropTable({
     body.current?.children[n]?.scrollIntoView({ block: "nearest" });
   };
   return (
-    <div className="table-wrap" tabIndex={0} onKeyDown={onKey} aria-label="Property table (arrow keys move the selection)">
+    <div className="table-wrap" tabIndex={0} onKeyDown={onKey} aria-label="Property table (arrow keys move the selection, Enter opens details)">
       <table className="grid">
         <thead>
           <tr>

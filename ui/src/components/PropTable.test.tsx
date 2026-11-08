@@ -108,4 +108,14 @@ describe("PropTable", () => {
     fireEvent.keyDown(wrap, { key: "ContextMenu" });
     expect(onContext).toHaveBeenLastCalledWith(expect.objectContaining({ name: "c_cov" }), expect.any(Number), expect.any(Number));
   });
+
+  it("opens the selected row on Enter and ignores Enter without a selection", () => {
+    const { onOpen, rerender } = table({ selected: null });
+    const wrap = screen.getByLabelText(/Property table/);
+    fireEvent.keyDown(wrap, { key: "Enter" });
+    expect(onOpen).not.toHaveBeenCalled();
+    rerender(<PropTable props={props} total={3} selected="a_max" onSelect={() => {}} onOpen={onOpen} />);
+    fireEvent.keyDown(wrap, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ name: "a_max" }));
+  });
 });

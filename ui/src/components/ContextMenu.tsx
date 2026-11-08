@@ -83,6 +83,7 @@ export function ContextMenu({ x, y, items, label, onClose }: { x: number; y: num
             <span className="menu-check">{it.checked ? "✓" : ""}</span>
             <span>{it.label}</span>
             {it.hint && <span className="menu-hint mono">{it.hint}</span>}
+            {it.keys && <span className="menu-keys">{it.keys}</span>}
           </button>
         ),
       )}

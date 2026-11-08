@@ -7,7 +7,7 @@ function setup() {
   const open = vi.fn();
   const close = vi.fn();
   const menus: MenuDef[] = [
-    { label: "File", items: [{ label: "Open", onClick: open, hint: "o" }, { sep: true }, { label: "Close design", onClick: close, disabled: true }] },
+    { label: "File", items: [{ label: "Open", onClick: open, hint: "o", keys: "Ctrl+O" }, { sep: true }, { label: "Close design", onClick: close, disabled: true }] },
     { label: "View", items: [{ label: "Dark", checked: true }] },
   ];
   render(
@@ -30,6 +30,7 @@ describe("MenuBar", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     expect(title("File")).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("o")).toHaveClass("menu-hint");
+    expect(screen.getByText("Ctrl+O")).toHaveClass("menu-keys");
     await userEvent.click(title("File"));
     expect(screen.queryByRole("menu")).toBeNull();
   });

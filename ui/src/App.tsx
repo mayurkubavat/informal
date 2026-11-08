@@ -25,6 +25,19 @@ import { Messages } from "./components/Messages";
 import { SourceView } from "./components/SourceView";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
+const SHORTCUTS: [string, string][] = [
+  ["F5", "Prove all"],
+  ["F6", "Prove selected"],
+  ["F3", "Toggle source view"],
+  ["Enter", "Open details of the selected property (table)"],
+  ["Up / Down", "Move the selection (table)"],
+  ["Shift+F10", "Row actions menu (table)"],
+  ["Esc", "Close menu (Stop once the backend supports it)"],
+  ["Ctrl+F", "Filter properties"],
+  ["Ctrl+L", "Console prompt"],
+  ["Ctrl+1..3", "Console / Details / Messages"],
+];
+
 export default function App() {
   const [session, setSession] = useState<SessionView | null>(null);
   const [flavor, setFlavor] = useState<Flavor>("jg");
@@ -42,6 +55,7 @@ export default function App() {
   const [bottomTab, setBottomTab] = useState<BottomTab>("console");
   const [bottomH, setBottomH] = useState(250);
   const [theme, setTheme] = useTheme();
+  const [focusReq, setFocusReq] = useState<{ id: string; n: number } | null>(null);
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
   const closeCtx = useCallback(() => setCtx(null), []);
   const pathRef = useRef<HTMLInputElement>(null);
@@ -131,6 +145,45 @@ export default function App() {
   // Only the VC Formal command map has fvdisable/fvenable today.
   const toggleCmd = (p: { name: string; enabled: boolean }) => (flavor === "vcf" ? `${p.enabled ? "fvdisable" : "fvenable"} {${p.name}}` : null);
 
+  // Focus after the render that shows the target (the filter only exists in
+  // table view; the console is hidden on other tabs).
+  useEffect(() => {
+    if (!focusReq) return;
+    const el = document.getElementById(focusReq.id) as HTMLInputElement | null;
+    el?.focus();
+    el?.select?.();
+  }, [focusReq]);
+  const focusFilter = () => {
+    setCenter("table");
+    setFocusReq((r) => ({ id: "prop-filter", n: (r?.n ?? 0) + 1 }));
+  };
+  const focusConsole = () => {
+    setBottomTab("console");
+    setFocusReq((r) => ({ id: "console-input", n: (r?.n ?? 0) + 1 }));
+  };
+  const toggleSource = () => topFile && setCenter((c) => (c === "source" ? "table" : "source"));
+  const DOCK: BottomTab[] = ["console", "details", "messages"];
+
+  // Workbench shortcuts (Help > Keyboard shortcuts lists them). Read through a
+  // ref so the listener is installed once but always sees current state.
+  const onShortcut = useRef<(e: KeyboardEvent) => void>(() => {});
+  onShortcut.current = (e: KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (e.key === "F5" && !mod) proveAll();
+    else if (e.key === "F6" && !mod) proveSelected();
+    else if (e.key === "F3" && !mod) toggleSource();
+    else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
+    else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
+    else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
+    else return; // Escape: open menus close themselves; Stop is not wired yet.
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => onShortcut.current(e);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
   const ctxProp = ctx ? allProps.find((p) => p.name === ctx.name) ?? null : null;
   const ctxItems: MenuItem[] = ctxProp
     ? [
@@ -189,16 +242,17 @@ export default function App() {
         { label: "Close design", disabled: true },
       ],
     },
-    { label: "Edit", items: [{ label: "Find property", onClick: () => document.getElementById("prop-filter")?.focus() }, { label: "Clear filters", onClick: () => { setFilter(""); setStatusFilter(null); } }] },
+    { label: "Edit", items: [{ label: "Find property", keys: "Ctrl+F", onClick: focusFilter }, { label: "Clear filters", onClick: () => { setFilter(""); setStatusFilter(null); } }, { sep: true }, { label: "Console prompt", keys: "Ctrl+L", onClick: focusConsole }] },
     {
       label: "View",
       items: [
         { label: "Task / Design dock", checked: leftOpen, onClick: () => setLeftOpen((o) => !o) },
         { label: "Property table", checked: center === "table", onClick: () => setCenter("table") },
-        { label: `Source (${fileName ?? "none"})`, checked: center === "source", onClick: () => setCenter("source"), disabled: !topFile },
+        { label: `Source (${fileName ?? "none"})`, checked: center === "source", keys: "F3", onClick: () => setCenter("source"), disabled: !topFile },
         { sep: true },
-        { label: "Console", onClick: () => setBottomTab("console") },
-        { label: "Messages", onClick: () => setBottomTab("messages") },
+        { label: "Console", keys: "Ctrl+1", checked: bottomTab === "console", onClick: () => setBottomTab("console") },
+        { label: "Details", keys: "Ctrl+2", checked: bottomTab === "details", onClick: () => setBottomTab("details") },
+        { label: "Messages", keys: "Ctrl+3", checked: bottomTab === "messages", onClick: () => setBottomTab("messages") },
         { sep: true },
         { label: "Input mode: Tcl", checked: true },
         { label: "Input mode: Ask (coming soon)", disabled: true },
@@ -212,20 +266,33 @@ export default function App() {
     {
       label: "Prove",
       items: [
-        { label: "Prove all", hint: proveCmd, onClick: proveAll, disabled: busy || !allProps.length },
-        { label: "Prove selected", onClick: proveSelected, disabled: busy || !current || current.kind === "assume" },
-        { label: "Stop", disabled: true },
+        { label: "Prove all", hint: proveCmd, keys: "F5", onClick: proveAll, disabled: busy || !allProps.length },
+        { label: "Prove selected", keys: "F6", onClick: proveSelected, disabled: busy || !current || current.kind === "assume" },
+        { label: "Stop", keys: "Esc", disabled: true },
       ],
     },
     {
       label: "Debug",
       items: [
         { label: "Visualize trace", disabled: true },
-        { label: "Show source of selected", onClick: () => current && setBottomTab("details"), disabled: !current },
+        { label: "Show source of selected", keys: "F3", onClick: () => current && setCenter("source"), disabled: !current || !topFile },
       ],
     },
     { label: "Tools", items: [{ label: "Proof profiler (coming soon)", disabled: true }] },
-    { label: "Help", items: [{ label: "Formal DV v0.1", disabled: true }] },
+    {
+      label: "Help",
+      items: [
+        {
+          label: "Keyboard shortcuts",
+          onClick: () => {
+            setLog((l) => [...l, ...SHORTCUTS.map(([k, what]) => ({ kind: "out" as const, text: `${k.padEnd(14)}${what}` }))]);
+            setBottomTab("console");
+          },
+        },
+        { sep: true },
+        { label: "Formal DV v0.1", disabled: true },
+      ],
+    },
   ];
 
   return (
@@ -265,7 +332,7 @@ export default function App() {
         <ToolBtn title={scriptPath ? `source ${scriptPath}` : "Run script (set a script path first)"} onClick={runScript} disabled={busy}>
           <ScriptIcon />
         </ToolBtn>
-        <button className="tool tool-text" onClick={proveAll} disabled={busy || !allProps.length} title={proveCmd}>
+        <button className="tool tool-text" onClick={proveAll} disabled={busy || !allProps.length} title={`${proveCmd} (F5)`}>
           <PlayIcon /> {busy ? "Running…" : "Prove all"}
         </button>
         <ToolBtn title="Stop (not wired to the backend yet)" disabled>
@@ -275,7 +342,7 @@ export default function App() {
         <ToolBtn title={hasTrace ? "Visualize trace (coming soon)" : "Visualize trace: select a CEX or cover"} disabled>
           <WaveIcon />
         </ToolBtn>
-        <ToolBtn title="Source view" onClick={() => setCenter((c) => (c === "source" ? "table" : "source"))} disabled={!topFile} on={center === "source"}>
+        <ToolBtn title="Source view (F3)" onClick={toggleSource} disabled={!topFile} on={center === "source"}>
           <CodeIcon />
         </ToolBtn>
         <span className="spacer" />

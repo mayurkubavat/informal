@@ -24,6 +24,7 @@ export function Console({ hidden, log, busy, flavor, onSubmit }: { hidden: boole
       <label className="prompt-line mono">
         <span className="prompt">{prompt}</span>
         <input
+          id="console-input"
           className="mono"
           value={cmd}
           disabled={busy}
