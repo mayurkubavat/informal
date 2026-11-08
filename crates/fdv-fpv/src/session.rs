@@ -816,6 +816,9 @@ impl Session {
             Some(t) => t,
             None => {
                 self.trace_reruns.fetch_add(1, Ordering::SeqCst);
+                if witness.is_none() {
+                    self.note(&format!("{name}: the winning engine gave no witness; tracing with a BMC re-run"));
+                }
                 let w = match self.trace_bmc(model, depth) {
                     Ok(w) => w,
                     Err(e) => {
@@ -862,6 +865,13 @@ impl Session {
             (Verdict::Unsafe { .. }, Some(w)) => Ok(w),
             (Verdict::Unsafe { .. }, None) => anyhow::bail!("fdv-bmc gave no named witness"),
             (v, _) => anyhow::bail!("fdv-bmc could not reproduce it ({})", v.label()),
+        }
+    }
+
+    /// An informational console line (the app's sink only).
+    fn note(&self, line: &str) {
+        if let Some(s) = &self.sink {
+            s.line(line, false);
         }
     }
 
