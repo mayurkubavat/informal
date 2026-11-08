@@ -9,10 +9,18 @@ const sizes = [
 ];
 const schemes = ["light", "dark"] as const;
 
-async function ready(page: Page) {
-  await page.goto("/?fast=1");
+async function ready(page: Page, query = "fast=1") {
+  await page.goto(`/?${query}`);
   await expect(page.locator("table.grid tbody tr")).toHaveCount(6);
   await expect(page.locator("footer.statusbar")).toContainText("Idle");
+}
+// A prove held mid-run by the mock (?freeze=2): a_max proven, a_step and
+// a_never9 running, c_done and c_10 queued; times are nominal, so the frame
+// is the same on every run.
+async function midRun(page: Page, query = "") {
+  await ready(page, `freeze=2${query}`);
+  await page.getByRole("button", { name: "Prove all" }).click();
+  await expect(page.locator("footer.statusbar")).toContainText("Proving · 1/5");
 }
 async function proveAll(page: Page) {
   await page.getByRole("button", { name: "Prove all" }).click();
@@ -88,6 +96,19 @@ for (const s of sizes)
         await page.getByRole("menuitem", { name: "File", exact: true }).click();
         await expect(page.locator(".menu-pop")).toBeVisible();
         await shot(page, n("file-menu"));
+      });
+
+      test("prove running", async ({ page }) => {
+        await midRun(page);
+        await expect(page.locator(".progress-text")).toHaveText("1 of 5 · 0:00");
+        await shot(page, n("running"));
+      });
+
+      test("prove stopping", async ({ page }) => {
+        await midRun(page, "&holdStop=1");
+        await page.getByRole("button", { name: /^Stop/ }).click();
+        await expect(page.getByRole("button", { name: "Stopping…" })).toBeDisabled();
+        await shot(page, n("stopping"));
       });
 
       test("prove menu with shortcuts", async ({ page }) => {

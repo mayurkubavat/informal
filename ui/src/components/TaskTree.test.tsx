@@ -12,6 +12,12 @@ describe("TaskTree", () => {
     expect(items()).toEqual(["<embedded>6", "Proven2", "CEX1", "Assumed1"]);
   });
 
+  it("puts a Running group first while a prove runs", () => {
+    const props = [prop("a", {}, { status: "running" } as never), prop("b", {}, { status: "proven" })];
+    render(<TaskTree total={2} counts={{ running: 1, proven: 1 }} assumes={0} filter={null} onFilter={() => {}} props={props} />);
+    expect(items()).toEqual(["<embedded>2", "Running1", "Aa", "Proven1", "Ab"]);
+  });
+
   it("lists unprocessed properties before assumes", () => {
     render(<TaskTree total={6} counts={{ unprocessed: 5 }} assumes={1} filter={null} onFilter={() => {}} />);
     expect(items()).toEqual(["<embedded>6", "Unprocessed5", "Assumed1"]);

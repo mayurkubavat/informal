@@ -235,10 +235,10 @@ export default function App() {
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
     else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
-    // Esc closes an open menu first (the context menu swallows its own Esc;
-    // the menu bar's pop-up is still in the DOM here) and a field may use it
-    // (the filter clears itself); only then does it stop a running prove.
-    else if (e.key === "Escape" && running && !e.defaultPrevented && !document.querySelector(".menu-pop")) stop();
+    // Esc closes an open menu first (the context menu stops its Esc, the
+    // menu bar marks it handled) and a field may use it (the filter clears
+    // itself); only then does it stop a running prove.
+    else if (e.key === "Escape" && running && !e.defaultPrevented) stop();
     else return;
     e.preventDefault();
   };

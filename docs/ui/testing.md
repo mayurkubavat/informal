@@ -17,3 +17,10 @@ generate them with `test:update` and review the PNGs before committing.
 
 Rules: wait with `await expect(...)` polling, never fixed sleeps; mask
 anything time-based (Messages time and duration columns).
+
+The mock proves asynchronously (see `docs/ui/stop-progress.md`). Query
+parameters steer it: `?fast=1` finishes a prove in one step (most tests use
+it), `?tick=<ms>` sets the tick, `?freeze=<n>` holds a run after n ticks (a
+deterministic mid-run frame for the running/stopping baselines and Stop
+tests), `?holdStop=1` keeps "Stopping…" up. Unit tests set `mockOptions`
+and call `resetMock()` instead.

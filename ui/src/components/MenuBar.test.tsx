@@ -42,6 +42,18 @@ describe("MenuBar", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("marks the Escape that closed a menu as handled, and only that one", async () => {
+    setup();
+    const seen: boolean[] = [];
+    const h = (e: KeyboardEvent) => seen.push(e.defaultPrevented);
+    window.addEventListener("keydown", h);
+    await userEvent.click(title("File"));
+    await userEvent.keyboard("{Escape}");
+    await userEvent.keyboard("{Escape}");
+    window.removeEventListener("keydown", h);
+    expect(seen).toEqual([true, false]);
+  });
+
   it("closes on an outside click but not on a click inside the bar", async () => {
     setup();
     await userEvent.click(title("File"));

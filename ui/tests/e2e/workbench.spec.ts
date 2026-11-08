@@ -396,3 +396,120 @@ test.describe("layout", () => {
     await expect(page.getByRole("tab", { name: "Tasks" })).toHaveAttribute("aria-selected", "true");
   });
 });
+
+// The ticking mock (src/mock.ts): two properties at a time, 300ms ticks
+// unless ?tick is given; ?freeze=2 holds the run with a_max proven,
+// a_step and a_never9 running and c_done, c_10 queued; ?freeze=4 holds it
+// with three done and c_done, c_10 running.
+test.describe("live progress", () => {
+  const proveBtn = (page: Page) => page.getByRole("button", { name: "Prove all" });
+  const stopBtn = (page: Page) => page.getByRole("button", { name: /^Stop/ });
+  const bar = (page: Page) => page.getByRole("progressbar", { name: "Prove progress" });
+  async function start(page: Page, query: string) {
+    await page.goto(`/?${query}`);
+    await expect(rows(page)).toHaveCount(6);
+    await expect(statusbar(page)).toContainText("Idle");
+    await expect(stopBtn(page)).toBeDisabled();
+    await proveBtn(page).click();
+  }
+
+  test("prove shows running rows, then the final counts", async ({ page }) => {
+    await start(page, "tick=150");
+    await expect(row(page, "a_max")).toContainText("Running");
+    await expect(row(page, "a_max").locator(".st-running")).toHaveCount(1);
+    await expect(row(page, "a_step")).toContainText(/k=\d+/);
+    await expect(treeGroup(page, "Running")).toContainText("2");
+    await expect(statusbar(page)).toContainText(/Proving · \d\/5/);
+    await expect(bar(page)).toHaveAttribute("aria-valuemax", "5");
+    await expect(page.locator(".progress-text")).toHaveText(/^\d of 5 · 0:0\d$/);
+    await expect(proveBtn(page)).toBeDisabled();
+    await expect(stopBtn(page)).toBeEnabled();
+    await expect(stopBtn(page)).toContainText("Esc");
+    await expect(summary(page)).toHaveText("6 properties · 2 proven · 1 cex · 1 covered · 1 unreachable · 1 assumed");
+    await expect(statusbar(page)).toContainText("Idle");
+    await expect(bar(page)).toHaveCount(0);
+    await expect(treeGroup(page, "Running")).toHaveCount(0);
+    await expect(proveBtn(page)).toBeEnabled();
+    await expect(stopBtn(page)).toBeDisabled();
+  });
+
+  test("a frozen run shows the mid-run frame", async ({ page }) => {
+    await start(page, "freeze=2");
+    await expect(statusbar(page)).toContainText("Proving · 1/5");
+    await expect(page.locator(".progress-text")).toHaveText("1 of 5 · 0:00");
+    await expect(bar(page)).toHaveAttribute("aria-valuenow", "1");
+    await expect(row(page, "a_max")).toContainText("Proven");
+    await expect(row(page, "a_step")).toContainText("k=11");
+    await expect(row(page, "a_never9")).toContainText("k=1");
+    await expect(row(page, "c_10")).toContainText("Unprocessed");
+    await expect(summary(page)).toHaveText("6 properties · 2 running · 1 proven · 2 unprocessed · 1 assumed");
+    await row(page, "a_step").click();
+    await expect(page.locator(".details .details-title")).toContainText("Running");
+    await expect(page.getByRole("button", { name: "Re-prove" })).toBeDisabled();
+  });
+
+  test("Stop mid-run leaves undetermined (stopped) rows and re-enables Prove all", async ({ page }) => {
+    await start(page, "freeze=2");
+    await expect(statusbar(page)).toContainText("Proving · 1/5");
+    await stopBtn(page).click();
+    for (const n of ["a_step", "a_never9", "c_done", "c_10"]) {
+      await expect(row(page, n)).toContainText("Undetermined");
+      await expect(row(page, n)).toContainText("stopped");
+    }
+    await expect(row(page, "a_max")).toContainText("Proven");
+    await expect(summary(page)).toHaveText("6 properties · 1 proven · 4 undetermined · 1 assumed");
+    await expect(page.locator(".console-log .line.err").last()).toHaveText("prove stopped: 4 properties left undetermined");
+    await expect(statusbar(page)).toContainText("Idle");
+    await expect(proveBtn(page)).toBeEnabled();
+    await expect(stopBtn(page)).toBeDisabled();
+    await expect(stopBtn(page)).toHaveText(/Stop/);
+  });
+
+  test("Stop reads Stopping… until the backend confirms", async ({ page }) => {
+    await start(page, "freeze=2&holdStop=1");
+    await expect(statusbar(page)).toContainText("Proving · 1/5");
+    await stopBtn(page).click();
+    await expect(stopBtn(page)).toHaveText("Stopping…");
+    await expect(stopBtn(page)).toBeDisabled();
+    await expect(statusbar(page)).toContainText("Stopping…");
+    await page.getByRole("menuitem", { name: "Prove", exact: true }).click();
+    await expect(page.locator(".menu-pop").getByRole("menuitem", { name: /Stopping/ })).toBeDisabled();
+  });
+
+  test("Esc stops a running prove, but closes an open menu first", async ({ page }) => {
+    await start(page, "freeze=2");
+    await expect(statusbar(page)).toContainText("Proving · 1/5");
+    await page.getByRole("menuitem", { name: "Prove", exact: true }).click();
+    const stopItem = page.locator(".menu-pop").getByRole("menuitem", { name: /Stop/ });
+    await expect(stopItem).toBeEnabled();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".menu-pop")).toHaveCount(0);
+    await expect(statusbar(page)).toContainText("Proving");
+    await page.keyboard.press("Escape");
+    await expect(row(page, "a_step")).toContainText("stopped");
+    await expect(statusbar(page)).toContainText("Idle");
+  });
+
+  test("the console gets engine lines live and stays usable; a second prove is refused", async ({ page }) => {
+    await start(page, "freeze=4");
+    const log = page.locator(".console-log");
+    await expect(statusbar(page)).toContainText("Proving · 3/5");
+    await expect(log.locator(".line.in").last()).toHaveText("fdv[jg]> prove -all");
+    await expect(log.locator(".line.out")).toHaveText([
+      "a_max: proven [ric3-ic3, 41 ms]",
+      "a_step: proven [ric3, 55 ms]",
+      "a_never9: cex at depth 11 [ric3-bmc, 30 ms]",
+    ]);
+    const input = page.getByLabel("Tcl command");
+    await expect(input).toBeEnabled();
+    await input.fill("prove -all");
+    await input.press("Enter");
+    await expect(log.locator(".line.err").last()).toHaveText("a prove is already running; stop it first (Esc)");
+    await input.fill("get_design_info");
+    await input.press("Enter");
+    await expect(log.locator(".line.err").last()).toHaveText("browser preview: Tcl runs only in the desktop app");
+    await page.keyboard.press("F5");
+    await expect(statusbar(page)).toContainText("Proving · 3/5");
+    await expect(log.locator(".line.in").filter({ hasText: "prove -all" })).toHaveCount(2);
+  });
+});

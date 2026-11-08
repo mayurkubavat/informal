@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   bound, groupOf, identifiers, matches, KIND_LETTER, locate, parsePorts, sortValue, STATUS_LABEL, STATUS_ORDER, SUMMARY, TASK, time,
-  statusKey, statusText,
+  statusKey, statusText, clock, isProveCmd, withProgress,
 } from "./model";
+import type { ProveProgress } from "./backend";
 import { mockSource } from "./mock";
 import { prop } from "./test/fixtures";
 
@@ -171,5 +172,69 @@ describe("matches", () => {
     expect(matches(p, "   ")).toBe(true);
     expect(matches(p, "kind")).toBe(false);
     expect(matches(prop("x"), "bmc")).toBe(false);
+  });
+});
+
+describe("running view status", () => {
+  const run = prop("p", {}, { status: "running", engine: "ric3-bmc", depth: 16, ms: 65_400 } as never);
+  it("labels, glyph key, bound and time", () => {
+    expect(STATUS_LABEL.running).toBe("Running");
+    expect(statusText(run)).toBe("Running");
+    expect(statusKey(run)).toBe("running");
+    expect(groupOf(run)).toBe("running");
+    expect(bound(run)).toBe("k=16");
+    expect(bound(prop("q", {}, { status: "running" } as never))).toBe("k=0");
+    expect(time(run)).toBe("1:05");
+  });
+  it("sorts after failures and before undetermined", () => {
+    expect(STATUS_ORDER.indexOf("running")).toBeGreaterThan(STATUS_ORDER.indexOf("cex"));
+    expect(STATUS_ORDER.indexOf("running")).toBeLessThan(STATUS_ORDER.indexOf("undetermined"));
+    expect(SUMMARY).not.toContain("running");
+  });
+});
+
+describe("clock", () => {
+  it("formats m:ss and floors partial seconds", () => {
+    expect(clock(0)).toBe("0:00");
+    expect(clock(999)).toBe("0:00");
+    expect(clock(61_000)).toBe("1:01");
+    expect(clock(600_000)).toBe("10:00");
+    expect(clock(-5)).toBe("0:00");
+  });
+});
+
+describe("isProveCmd", () => {
+  it("recognises prove and check_fv only as the command word", () => {
+    expect(isProveCmd("prove -all")).toBe(true);
+    expect(isProveCmd("  check_fv -property {a}")).toBe(true);
+    expect(isProveCmd("prove")).toBe(true);
+    expect(isProveCmd("prover")).toBe(false);
+    expect(isProveCmd("get_prove_result")).toBe(false);
+    expect(isProveCmd("puts prove")).toBe(false);
+  });
+});
+
+describe("withProgress", () => {
+  const props = [prop("a", {}, { status: "proven", engine: "old", ms: 1 }), prop("b"), prop("c", {}, { status: "cex", depth: 3 })];
+  const prog: ProveProgress = {
+    kind: "update",
+    total: 2,
+    done: 1,
+    elapsed_ms: 900,
+    props: [
+      { name: "a", status: "running", engine: "ric3", depth: 6, ms: 300 },
+      { name: "b", status: "undetermined", reason: "stopped" },
+    ],
+  };
+  it("overlays run members and leaves the rest alone", () => {
+    const v = withProgress(props, prog);
+    expect(v[0].status).toEqual({ status: "running", engine: "ric3", depth: 6, ms: 300 });
+    expect(v[1].status).toEqual({ status: "undetermined", reason: "stopped" });
+    expect(bound(v[1])).toBe("stopped");
+    expect(v[2]).toBe(props[2]);
+    expect(v[0].expr).toBe(props[0].expr);
+  });
+  it("returns the session's properties untouched without progress", () => {
+    expect(withProgress(props, null)).toBe(props);
   });
 });

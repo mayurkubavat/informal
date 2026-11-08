@@ -11,7 +11,12 @@ export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: Reac
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => !bar.current?.contains(e.target as Node) && setOpen(null);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(null);
+    // Mark the Esc as used, so the workbench does not also stop a prove.
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setOpen(null);
+    };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", esc);
     return () => {
