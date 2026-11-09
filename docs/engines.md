@@ -9,6 +9,10 @@ Phase 0 runs existing model checkers as child processes. Each one is an
 | Pono (k-induction, IC3IA, interpolation, liveness) | Btor2 | yes | yes | github.com/stanford-centaur/pono |
 | ABC `pdr`, `bmc3` | AIGER (binary) | pdr | yes | github.com/berkeley-abc/abc: `make ABC_USE_NO_READLINE=1 abc` (also ships as `yosys-abc` with Yosys) |
 | BtorMC (BMC) | Btor2 | no | yes | github.com/Boolector/boolector |
+
+Only rIC3 and ABC are built and checked (see `docs/third-party.md`); the
+Pono and BtorMC entries are unchecked guesses and those tools are not
+installed on the Linux box.
 | AVR, CAR, Avy | Btor2 / AIGER | yes | yes | to add (from the Gemini research) |
 
 ## Checked engine notes
@@ -24,8 +28,11 @@ and a sample of HWMCC'24 models with published answers.
   workers and collects results over `ipc-channel`, which uses Mach ports
   on macOS; those do not survive `fork()`, so the parent never hears back
   and every run hangs to the timeout. On macOS use the single-engine
-  entries (`ric3-ic3`, `ric3-bmc`); the `ric3` portfolio entry is kept
-  commented out in `engines.toml` for Linux.
+  entries (`ric3-ic3`, `ric3-bmc`) and comment out the `ric3` portfolio
+  entry, which is enabled in `engines.toml` for Linux.
+- **Counterexamples**: entries with `cex_witness = true` (rIC3 `--cex`,
+  ABC `write_cex`) hand their witness to fdv, which turns it into the
+  trace; other engines' bugs get a BMC re-run for the trace.
 - **rIC3 has no liveness support** for Btor2 `fair`/`justice`: it panics
   (`unsupport fair op`), which reads as unknown.
 - **ABC needs a prefix for AIGER 1.9** (HWMCC) files:
@@ -69,17 +76,26 @@ of use. `fdv simp <model>` shows a model's size before and after.
 
 | Engine | Proves | Finds bugs | Notes |
 | --- | --- | --- | --- |
-| `fdv-bmc` | no | yes | Shortest counterexample first |
+| `fdv-bmc` | no | yes | Shortest counterexample first; every counterexample is replayed before it is reported |
+| `fdv-bmc-10`, `fdv-bmc-65` | no | yes | Stepped BMC: 10 or 65 frames per SAT call (like rIC3 `bmc --step`), for deep bugs |
 | `fdv-kind` | yes | yes | k-induction with lazy simple-path constraints, BMC base case |
-| `fdv-wbmc` | no | yes | Word-level BMC on Bitwuzla: Btor2 unrolled into terms, arrays included |
-| `fdv-ic3` | yes | yes | IC3 / PDR: lifting, core + MIC generalization, propagation (first cut) |
+| `fdv-ic3` | yes | yes | IC3 / PDR on fdv's small CDCL solver (`fdv_sat::Mini`): lifting, core + MIC generalization, propagation |
+| `fdv-ic3-cadical` | yes | yes | The same IC3 on CaDiCaL |
+| `fdv-ic3-mt` | yes | yes | 4 IC3 workers with different options sharing lemmas (imports re-checked against each worker's frames) |
+| `fdv-kind-ic3` | yes | yes | IC3 for part of the budget, Houdini on its lemmas, then k-induction strengthened by the proved invariant |
+| `fdv-wbmc` | no | yes | Word-level BMC on Bitwuzla: Btor2 unrolled into terms, arrays included (skips `.aig` models) |
+
+The in-house portfolio used for HWMCC'24 runs is `fdv-kind-ic3`,
+`fdv-ic3-mt`, `fdv-kind`, `fdv-bmc`, `fdv-bmc-10` and `fdv-bmc-65`.
+The front end encodes the AIG to CNF with DAG-aware variable elimination
+and compact ITE / XOR clauses, and `scorr` merges equivalent latches
+before the engines start.
 
 Not supported yet at bit level (they report unknown): arrays and
 liveness; `fdv-wbmc` covers arrays for bug finding. Bitwuzla is built
 under `~/Silicon/DV/tools/bitwuzla` with its own patched CaDiCaL, and
-fdv links that one library for both (crate `fdv-sat` decides). Next:
-DAG-CNF variable elimination when encoding, and IC3 invariants fed into
-k-induction once our IC3 exists.
+fdv links that one library for both (crate `fdv-sat` decides).
+
 Build CaDiCaL once (`./configure -fPIC && make` in
 `~/Silicon/DV/tools/cadical`, or point `FDV_CADICAL_DIR` at a checkout)
 and rebuild fdv; without it these engines are left out of the portfolio.
