@@ -333,10 +333,15 @@ impl Engine for ExternalEngine {
                     all.extend_from_slice(&line);
                     if let Some(tx) = &tx {
                         if sent < LOG_LINES {
-                            let text = String::from_utf8_lossy(&line).trim_end_matches(['\n', '\r']).to_string();
+                            let text = String::from_utf8_lossy(&line)
+                                .trim_end_matches(['\n', '\r'])
+                                .to_string();
                             let _ = tx.send(Progress::line(&name, text, stderr));
                         } else if sent == LOG_LINES {
-                            let note = format!("[{name}: further {} output not shown]", if stderr { "stderr" } else { "stdout" });
+                            let note = format!(
+                                "[{name}: further {} output not shown]",
+                                if stderr { "stderr" } else { "stdout" }
+                            );
                             let _ = tx.send(Progress::line(&name, note, stderr));
                         }
                         sent += 1;
@@ -387,7 +392,11 @@ impl Engine for ExternalEngine {
             match named_witness(&stdout, &req.model, req.format) {
                 Ok(w) => Some(w),
                 Err(e) => {
-                    ctx.report(Progress::line(&self.spec.name, format!("[fdv: witness not used: {e}]"), true));
+                    ctx.report(Progress::line(
+                        &self.spec.name,
+                        format!("[fdv: witness not used: {e}]"),
+                        true,
+                    ));
                     None
                 }
             }
@@ -407,9 +416,11 @@ impl Engine for ExternalEngine {
 /// witness for a Btor2 model, AIGER witness for AIGER.
 fn named_witness(stdout: &str, model: &Path, format: ModelFormat) -> Result<String, String> {
     let btor2 = format == ModelFormat::Btor2;
-    let raw = fdv_engine::witness::extract(stdout, btor2).ok_or("no counterexample in the output")?;
+    let raw =
+        fdv_engine::witness::extract(stdout, btor2).ok_or("no counterexample in the output")?;
     let named = if btor2 {
-        let text = std::fs::read_to_string(model).map_err(|e| format!("{}: {e}", model.display()))?;
+        let text =
+            std::fs::read_to_string(model).map_err(|e| format!("{}: {e}", model.display()))?;
         fdv_engine::witness::from_btor2(&raw, &text)?
     } else {
         let g = fdv_aig::load(model).map_err(|e| format!("{}: {e:#}", model.display()))?;
@@ -476,11 +487,18 @@ mod tests {
         let (first, rest) = t.join().unwrap();
         let first = first.expect("a line before the engine exits");
         assert_eq!(first.engine, "s");
-        let mut lines: Vec<_> = std::iter::once(first).chain(rest).filter_map(|p| p.output).collect();
+        let mut lines: Vec<_> = std::iter::once(first)
+            .chain(rest)
+            .filter_map(|p| p.output)
+            .collect();
         lines.sort();
         assert_eq!(
             lines,
-            [("one".to_string(), false), ("unsat".to_string(), false), ("warn".to_string(), true)]
+            [
+                ("one".to_string(), false),
+                ("unsat".to_string(), false),
+                ("warn".to_string(), true)
+            ]
         );
     }
 
@@ -597,7 +615,9 @@ depth = 'was asserted in frame (\d+)'
             format: ModelFormat::Aiger,
             timeout: Duration::from_secs(5),
         };
-        let r = e.check(&req, &RunContext::new(Duration::from_secs(5))).unwrap();
+        let r = e
+            .check(&req, &RunContext::new(Duration::from_secs(5)))
+            .unwrap();
         assert_eq!(r.verdict, Verdict::Unsafe { depth: Some(3) });
         assert_eq!(
             r.witness.as_deref(),
@@ -631,14 +651,21 @@ unsafe = '(?m)^SAT$'
             format: ModelFormat::Btor2,
             timeout: Duration::from_secs(5),
         };
-        let r = e.check(&req, &RunContext::new(Duration::from_secs(5))).unwrap();
+        let r = e
+            .check(&req, &RunContext::new(Duration::from_secs(5)))
+            .unwrap();
         let w = r.witness.unwrap();
-        assert!(w.starts_with("fdvw 1\ndepth 7\ninit cnt[0]=0 cnt[1]=0 cnt[2]=0\n@0\n@1\n"), "{w}");
+        assert!(
+            w.starts_with("fdvw 1\ndepth 7\ninit cnt[0]=0 cnt[1]=0 cnt[2]=0\n@0\n@1\n"),
+            "{w}"
+        );
         // A witness that does not fit the model is dropped (a note goes to
         // the engine log) rather than passed on.
         let bad = toml.replace("0 000 cnt", "0 00 cnt");
         let e = parse_config(&bad).unwrap().remove(0);
-        let r = e.check(&req, &RunContext::new(Duration::from_secs(5))).unwrap();
+        let r = e
+            .check(&req, &RunContext::new(Duration::from_secs(5)))
+            .unwrap();
         assert!(matches!(r.verdict, Verdict::Unsafe { .. }) && r.witness.is_none());
     }
 }

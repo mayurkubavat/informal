@@ -38,7 +38,9 @@ pub fn extract(output: &str, btor2: bool) -> Option<String> {
     let lines: Vec<&str> = output.lines().map(str::trim_end).collect();
     let start = (0..lines.len()).find(|&i| {
         let next = lines.get(i + 1).map(|l| l.trim());
-        let is_b = next.is_some_and(|l| l.starts_with('b') && l[1..].chars().all(|c| c.is_ascii_digit()) && l.len() > 1);
+        let is_b = next.is_some_and(|l| {
+            l.starts_with('b') && l[1..].chars().all(|c| c.is_ascii_digit()) && l.len() > 1
+        });
         if btor2 {
             lines[i].trim() == "sat" && is_b
         } else {
@@ -58,7 +60,9 @@ pub fn extract(output: &str, btor2: bool) -> Option<String> {
 
 /// One named bit assignment list, in a stable order.
 fn pairs(m: &BTreeMap<String, bool>) -> String {
-    m.iter().map(|(k, v)| format!(" {k}={}", u8::from(*v))).collect()
+    m.iter()
+        .map(|(k, v)| format!(" {k}={}", u8::from(*v)))
+        .collect()
 }
 
 fn render(init: &BTreeMap<String, bool>, frames: &[BTreeMap<String, bool>]) -> String {
@@ -74,8 +78,15 @@ fn render(init: &BTreeMap<String, bool>, frames: &[BTreeMap<String, bool>]) -> S
 /// model's input and latch names in AIGER order (`None`: unnamed, left
 /// out). Don't-care values are left out of `init` (the latch's own reset
 /// applies) and read as 0 for inputs.
-pub fn from_aiger(witness: &str, inputs: &[Option<String>], latches: &[Option<String>]) -> Result<String, String> {
-    let mut lines = witness.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('c'));
+pub fn from_aiger(
+    witness: &str,
+    inputs: &[Option<String>],
+    latches: &[Option<String>],
+) -> Result<String, String> {
+    let mut lines = witness
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('c'));
     if lines.next() != Some("1") {
         return Err("not an AIGER witness (no `1` status line)".into());
     }
@@ -144,7 +155,9 @@ pub fn btor2_symbols(model: &str) -> (Decls, Decls) {
             [id, kind @ ("input" | "state"), sort, rest @ ..] => {
                 let width = sorts.get(sort).copied().unwrap_or(0);
                 let prefix = if *kind == "input" { "i" } else { "s" };
-                let name = rest.first().map_or_else(|| format!("{prefix}{id}"), |s| s.to_string());
+                let name = rest
+                    .first()
+                    .map_or_else(|| format!("{prefix}{id}"), |s| s.to_string());
                 if *kind == "input" {
                     inputs.push((name, width));
                 } else {
@@ -162,7 +175,10 @@ pub fn btor2_symbols(model: &str) -> (Decls, Decls) {
 /// frames, which only restate what the model computes, are ignored.
 pub fn from_btor2(witness: &str, model: &str) -> Result<String, String> {
     let (inputs, states) = btor2_symbols(model);
-    let mut lines = witness.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(';'));
+    let mut lines = witness
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with(';'));
     if lines.next() != Some("sat") {
         return Err("not a Btor2 witness (no `sat` line)".into());
     }
@@ -170,20 +186,36 @@ pub fn from_btor2(witness: &str, model: &str) -> Result<String, String> {
         Some(b) if b.starts_with('b') || b.starts_with('j') => {}
         _ => return Err("Btor2 witness without a property line".into()),
     }
-    let assign = |l: &str, decl: &[(String, u32)], what: &str, out: &mut BTreeMap<String, bool>| -> Result<(), String> {
+    let assign = |l: &str,
+                  decl: &[(String, u32)],
+                  what: &str,
+                  out: &mut BTreeMap<String, bool>|
+     -> Result<(), String> {
         let mut w = l.split_whitespace();
-        let idx: usize = w.next().and_then(|i| i.parse().ok()).ok_or_else(|| format!("bad {what} line `{l}`"))?;
+        let idx: usize = w
+            .next()
+            .and_then(|i| i.parse().ok())
+            .ok_or_else(|| format!("bad {what} line `{l}`"))?;
         let bits = w.next().ok_or_else(|| format!("bad {what} line `{l}`"))?;
         if bits.contains('[') {
             return Err("array witnesses are not supported".into());
         }
-        let (name, width) = decl.get(idx).ok_or_else(|| format!("{what} {idx} is not in the model"))?;
+        let (name, width) = decl
+            .get(idx)
+            .ok_or_else(|| format!("{what} {idx} is not in the model"))?;
         if bits.len() != *width as usize {
-            return Err(format!("{what} {name}: {} bits for width {width}", bits.len()));
+            return Err(format!(
+                "{what} {name}: {} bits for width {width}",
+                bits.len()
+            ));
         }
         for (k, c) in bits.chars().rev().enumerate() {
             let v = bit(c).ok_or_else(|| format!("bad bit `{c}` in `{l}`"))?;
-            let key = if *width == 1 { name.clone() } else { format!("{name}[{k}]") };
+            let key = if *width == 1 {
+                name.clone()
+            } else {
+                format!("{name}[{k}]")
+            };
             if let Some(v) = v {
                 out.insert(key, v);
             } else if what == "input" {
@@ -236,8 +268,14 @@ mod tests {
         let out = "some log line\n1\nb0\n0x\n10\n10\n11\n.\nmore log\n";
         let w = extract(out, false).unwrap();
         assert_eq!(w, "1\nb0\n0x\n10\n10\n11\n.\n");
-        let inputs = [Some("counter.en".to_string()), Some("counter.rst".to_string())];
-        let latches = [Some("counter.q[0]".to_string()), Some("counter.q[1]".to_string())];
+        let inputs = [
+            Some("counter.en".to_string()),
+            Some("counter.rst".to_string()),
+        ];
+        let latches = [
+            Some("counter.q[0]".to_string()),
+            Some("counter.q[1]".to_string()),
+        ];
         let named = from_aiger(&w, &inputs, &latches).unwrap();
         assert_eq!(
             named,
@@ -247,20 +285,34 @@ mod tests {
         // Unnamed inputs are left out; size mismatches are refused.
         let named = from_aiger(&w, &[Some("counter.en".into()), None], &latches).unwrap();
         assert!(named.contains("@0 counter.en=1\n"));
-        assert!(from_aiger(&w, &inputs, &latches[..1]).unwrap_err().contains("1 latches"));
-        assert!(from_aiger("1\nb0\n00\n1\n", &inputs, &latches).unwrap_err().contains("input values"));
+        assert!(from_aiger(&w, &inputs, &latches[..1])
+            .unwrap_err()
+            .contains("1 latches"));
+        assert!(from_aiger("1\nb0\n00\n1\n", &inputs, &latches)
+            .unwrap_err()
+            .contains("input values"));
         assert!(from_aiger("0\nb0\n", &inputs, &latches).is_err());
         assert!(extract("SAT\n", false).is_none());
     }
 
-    const MODEL: &str = "1 sort bitvec 1\n2 sort bitvec 4\n3 input 1 counter.en\n4 input 1 counter.rst_n\n\
+    const MODEL: &str =
+        "1 sort bitvec 1\n2 sort bitvec 4\n3 input 1 counter.en\n4 input 1 counter.rst_n\n\
         5 state 2 counter.q\n6 state 1\n7 zero 2\n8 init 2 5 7\n";
 
     #[test]
     fn btor2_symbols_and_witness_to_named() {
         let (inputs, states) = btor2_symbols(MODEL);
-        assert_eq!(inputs, [("counter.en".to_string(), 1), ("counter.rst_n".to_string(), 1)]);
-        assert_eq!(states, [("counter.q".to_string(), 4), ("s6".to_string(), 1)]);
+        assert_eq!(
+            inputs,
+            [
+                ("counter.en".to_string(), 1),
+                ("counter.rst_n".to_string(), 1)
+            ]
+        );
+        assert_eq!(
+            states,
+            [("counter.q".to_string(), 4), ("s6".to_string(), 1)]
+        );
         let out = "[INFO] x\nSAT\nsat\nb0\n#0\n0 0000 counter.q\n1 1\n@0\n0 1\n1 0\n#1\n0 0000\n1 0\n@1\n0 1\n1 1\n.\n";
         let w = extract(out, true).unwrap();
         assert!(w.starts_with("sat\nb0\n#0\n") && w.ends_with(".\n"));
@@ -273,8 +325,14 @@ mod tests {
         // MSB first: bit 0 is the last character.
         let one = from_btor2("sat\nb0\n#0\n0 0001\n@0\n0 0\n1 1\n.\n", MODEL).unwrap();
         assert!(one.contains("counter.q[0]=1 counter.q[1]=0"), "{one}");
-        assert!(from_btor2("sat\nb0\n#0\n0 01\n@0\n.\n", MODEL).unwrap_err().contains("2 bits for width 4"));
-        assert!(from_btor2("sat\nb0\n@0\n9 1\n.\n", MODEL).unwrap_err().contains("not in the model"));
-        assert!(from_btor2("sat\nb0\n#0\n.\n", MODEL).unwrap_err().contains("without input frames"));
+        assert!(from_btor2("sat\nb0\n#0\n0 01\n@0\n.\n", MODEL)
+            .unwrap_err()
+            .contains("2 bits for width 4"));
+        assert!(from_btor2("sat\nb0\n@0\n9 1\n.\n", MODEL)
+            .unwrap_err()
+            .contains("not in the model"));
+        assert!(from_btor2("sat\nb0\n#0\n.\n", MODEL)
+            .unwrap_err()
+            .contains("without input frames"));
     }
 }

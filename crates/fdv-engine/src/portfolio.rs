@@ -8,9 +8,9 @@ use crate::{CheckRequest, Engine, EngineResult, Progress, RunContext, Verdict};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize)]
@@ -130,7 +130,12 @@ pub fn run_until(
                 let r = engine
                     .check(req, &ctx)
                     .map_err(|e| format!("{}: {e:#}", engine.name()));
-                let _ = tx.send((slot, engine.name().to_string(), start.elapsed().as_millis(), r));
+                let _ = tx.send((
+                    slot,
+                    engine.name().to_string(),
+                    start.elapsed().as_millis(),
+                    r,
+                ));
             });
         }
         drop(tx);
@@ -206,7 +211,12 @@ pub fn run_until(
                 RunOutcome::Lost
             });
             let depth = depth.or_else(|| bounds.get(&engine).copied());
-            EngineRun { engine, outcome, ms, depth }
+            EngineRun {
+                engine,
+                outcome,
+                ms,
+                depth,
+            }
         })
         .collect();
     out
@@ -316,13 +326,29 @@ mod tests {
     #[test]
     fn the_profile_records_each_engines_outcome_time_and_depth() {
         let engines: Vec<Arc<dyn Engine>> = vec![
-            Arc::new(Fake { name: "slow", delay_ms: 5_000, verdict: Verdict::Safe }),
-            Arc::new(Fake { name: "fast", delay_ms: 20, verdict: Verdict::Unsafe { depth: Some(7) } }),
-            Arc::new(Fake { name: "broken", delay_ms: 0, verdict: Verdict::Safe }),
+            Arc::new(Fake {
+                name: "slow",
+                delay_ms: 5_000,
+                verdict: Verdict::Safe,
+            }),
+            Arc::new(Fake {
+                name: "fast",
+                delay_ms: 20,
+                verdict: Verdict::Unsafe { depth: Some(7) },
+            }),
+            Arc::new(Fake {
+                name: "broken",
+                delay_ms: 0,
+                verdict: Verdict::Safe,
+            }),
         ];
         let (tx, rx) = mpsc::channel();
         let o = run(&engines, &req(), Some(tx));
-        let p: Vec<_> = o.profile.iter().map(|r| (r.engine.as_str(), r.outcome, r.depth)).collect();
+        let p: Vec<_> = o
+            .profile
+            .iter()
+            .map(|r| (r.engine.as_str(), r.outcome, r.depth))
+            .collect();
         assert_eq!(
             p,
             [
@@ -335,12 +361,19 @@ mod tests {
         // Reports still reach the caller.
         assert_eq!(rx.iter().filter(|p| p.bound == Some(3)).count(), 2);
         let json = serde_json::to_value(&o.profile[2]).unwrap();
-        assert_eq!(json, serde_json::json!({"engine": "broken", "outcome": "error", "ms": o.profile[2].ms}));
+        assert_eq!(
+            json,
+            serde_json::json!({"engine": "broken", "outcome": "error", "ms": o.profile[2].ms})
+        );
     }
 
     #[test]
     fn engines_out_of_time_are_timeouts() {
-        let engines: Vec<Arc<dyn Engine>> = vec![Arc::new(Fake { name: "slow", delay_ms: 5_000, verdict: Verdict::Safe })];
+        let engines: Vec<Arc<dyn Engine>> = vec![Arc::new(Fake {
+            name: "slow",
+            delay_ms: 5_000,
+            verdict: Verdict::Safe,
+        })];
         let mut r = req();
         r.timeout = Duration::from_millis(50);
         let o = run(&engines, &r, None);

@@ -51,13 +51,21 @@ fn jaspergold_script() {
     assert_eq!(got, want.map(|(n, s)| (n.to_string(), s)));
     // rIC3 prints its counterexample (--cex); converted to a named witness
     // it gives the traces without a BMC re-run.
-    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        sh.session
+            .borrow()
+            .trace_reruns
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     for p in &sh.session.borrow().props {
         let want = matches!(p.name.as_str(), "a_never9" | "c_done");
         assert_eq!(p.trace.is_some(), want, "{}: {:?}", p.name, p.trace);
         // The shortest trace is 10 cycles deep (ric3-bmc's); IC3's own
         // counterexample, now kept, may hold the enable low for a while.
-        if let fdv_fpv::Status::Cex { depth, .. } | fdv_fpv::Status::Covered { depth, .. } = &p.status {
+        if let fdv_fpv::Status::Cex { depth, .. } | fdv_fpv::Status::Covered { depth, .. } =
+            &p.status
+        {
             assert!(depth.is_some_and(|d| d >= 10), "{}: {depth:?}", p.name);
         }
     }
@@ -79,14 +87,19 @@ fn design_hierarchy_in_the_snapshot() {
     let work = std::env::temp_dir().join(format!("fdv-fpv-test-hier-{}", std::process::id()));
     let sh = Shell::new(Session::new(Vec::new(), work.clone()), Flavor::Jg);
     let rtl = root().join("tests/fpv/fifo/fifo.sv");
-    sh.eval(&format!("analyze -sv12 {}; elaborate -top fifo", rtl.display())).unwrap();
+    sh.eval(&format!(
+        "analyze -sv12 {}; elaborate -top fifo",
+        rtl.display()
+    ))
+    .unwrap();
     let json = serde_json::to_value(&*sh.session.borrow()).unwrap();
     let h = &json["design"]["hierarchy"];
     assert_eq!(h[0]["module"], "fifo");
     assert_eq!(h[0]["children"][1]["path"], "fifo.u_rp");
     assert_eq!(h[0]["children"][1]["module"], "ptr");
     let file: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(work.join("design.hierarchy.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(work.join("design.hierarchy.json")).unwrap())
+            .unwrap();
     assert_eq!(&file, h);
     // `clear -all` forgets it with the rest of the design.
     sh.eval("clear -all").unwrap();

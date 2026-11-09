@@ -30,7 +30,11 @@ fn examples(flavor: &str) -> &'static str {
 /// The system prompt: the flavor, its command names (the list Tab
 /// completion uses), and a summary of the session.
 pub fn system_prompt(flavor: &str, commands: &[&str], session: &Value) -> String {
-    let tool = if flavor == "vcf" { "Synopsys VC Formal" } else { "Cadence JasperGold" };
+    let tool = if flavor == "vcf" {
+        "Synopsys VC Formal"
+    } else {
+        "Cadence JasperGold"
+    };
     format!(
         "You are the Ask assistant of FormalDV, a formal property verification shell. \
          The shell accepts {tool} Tcl commands.\n\
@@ -59,14 +63,30 @@ pub fn session_summary(s: &Value) -> String {
     let mut out = String::new();
     let top = s["design"]["top"].as_str().unwrap_or("(not set)");
     let files = s["design"]["files"].as_array().map_or(0, Vec::len);
-    out += &format!("top: {top}  design files: {files}  elaborated: {}\n", s["elaborated"].as_bool().unwrap_or(false));
+    out += &format!(
+        "top: {top}  design files: {files}  elaborated: {}\n",
+        s["elaborated"].as_bool().unwrap_or(false)
+    );
     let clocks: Vec<String> = s["clocks"]
         .as_array()
         .into_iter()
         .flatten()
-        .map(|c| format!("{} ({})", c["signal"].as_str().unwrap_or("?"), c["edge"].as_str().unwrap_or("?")))
+        .map(|c| {
+            format!(
+                "{} ({})",
+                c["signal"].as_str().unwrap_or("?"),
+                c["edge"].as_str().unwrap_or("?")
+            )
+        })
         .collect();
-    out += &format!("clocks: {}\n", if clocks.is_empty() { "none".into() } else { clocks.join(", ") });
+    out += &format!(
+        "clocks: {}\n",
+        if clocks.is_empty() {
+            "none".into()
+        } else {
+            clocks.join(", ")
+        }
+    );
     out += &format!("reset: {}\n", s["reset"].as_str().unwrap_or("none"));
     let props = s["props"].as_array().map(Vec::as_slice).unwrap_or_default();
     if props.is_empty() {
@@ -78,15 +98,37 @@ pub fn session_summary(s: &Value) -> String {
     let with = |st: &str, kind: &str| -> Vec<&str> {
         props
             .iter()
-            .filter(|p| p["status"]["status"].as_str() == Some(st) && p["kind"].as_str() == Some(kind))
+            .filter(|p| {
+                p["status"]["status"].as_str() == Some(st) && p["kind"].as_str() == Some(kind)
+            })
             .filter_map(|p| p["name"].as_str())
             .collect()
     };
-    let list = |v: Vec<&str>| if v.is_empty() { "none".to_string() } else { v.join(", ") };
-    out += &format!("failed (assertions with a CEX): {}\n", list(with("cex", "assert")));
-    out += &format!("unreachable covers (not failures): {}\n", list(with("unreachable", "cover")));
+    let list = |v: Vec<&str>| {
+        if v.is_empty() {
+            "none".to_string()
+        } else {
+            v.join(", ")
+        }
+    };
+    out += &format!(
+        "failed (assertions with a CEX): {}\n",
+        list(with("cex", "assert"))
+    );
+    out += &format!(
+        "unreachable covers (not failures): {}\n",
+        list(with("unreachable", "cover"))
+    );
     let shown = props.len().min(MAX_PROPS);
-    out += &format!("properties ({}{}): name kind status\n", props.len(), if shown < props.len() { format!(", first {shown}") } else { String::new() });
+    out += &format!(
+        "properties ({}{}): name kind status\n",
+        props.len(),
+        if shown < props.len() {
+            format!(", first {shown}")
+        } else {
+            String::new()
+        }
+    );
     for p in &props[..shown] {
         let st = &p["status"];
         let mut word = st["status"].as_str().unwrap_or("unprocessed").to_string();
@@ -96,7 +138,12 @@ pub fn session_summary(s: &Value) -> String {
         if p["enabled"].as_bool() == Some(false) {
             word += " (disabled)";
         }
-        out += &format!("  {} {} {}\n", p["name"].as_str().unwrap_or("?"), p["kind"].as_str().unwrap_or("?"), word);
+        out += &format!(
+            "  {} {} {}\n",
+            p["name"].as_str().unwrap_or("?"),
+            p["kind"].as_str().unwrap_or("?"),
+            word
+        );
     }
     out
 }
@@ -116,7 +163,9 @@ pub fn split_answer(text: &str) -> (String, Option<String>) {
         None => (body, ""),
     };
     let cmd = cmd.trim();
-    let explanation = format!("{} {}", before.trim(), after.trim()).trim().to_string();
+    let explanation = format!("{} {}", before.trim(), after.trim())
+        .trim()
+        .to_string();
     (explanation, (!cmd.is_empty()).then(|| cmd.to_string()))
 }
 
@@ -144,18 +193,32 @@ mod tests {
 
     #[test]
     fn splits_the_tcl_block_from_the_explanation() {
-        let (e, c) = split_answer("Proving only that one.\n```tcl\nprove -property a_never9\n```\n");
-        assert_eq!((e.as_str(), c.as_deref()), ("Proving only that one.", Some("prove -property a_never9")));
+        let (e, c) =
+            split_answer("Proving only that one.\n```tcl\nprove -property a_never9\n```\n");
+        assert_eq!(
+            (e.as_str(), c.as_deref()),
+            ("Proving only that one.", Some("prove -property a_never9"))
+        );
         let (e, c) = split_answer("Two failed: a_x and a_y.");
         assert_eq!((e.as_str(), c), ("Two failed: a_x and a_y.", None));
-        assert_eq!(split_answer("```Tcl\nprove -all\n```").1.as_deref(), Some("prove -all"));
-        assert_eq!(split_answer("```\nreport -summary\n```").1.as_deref(), Some("report -summary"));
+        assert_eq!(
+            split_answer("```Tcl\nprove -all\n```").1.as_deref(),
+            Some("prove -all")
+        );
+        assert_eq!(
+            split_answer("```\nreport -summary\n```").1.as_deref(),
+            Some("report -summary")
+        );
         // A non-Tcl block is skipped; the Tcl one after it is taken.
-        let (_, c) = split_answer("```sv\nassert property (x);\n```\nthen\n```tcl\nprove -all\n```");
+        let (_, c) =
+            split_answer("```sv\nassert property (x);\n```\nthen\n```tcl\nprove -all\n```");
         assert_eq!(c.as_deref(), Some("prove -all"));
         assert_eq!(split_answer("```python\nprint(1)\n```").1, None);
         // Unclosed fence (stream cut by max_tokens) and empty block.
-        assert_eq!(split_answer("Run\n```tcl\nprove -all").1.as_deref(), Some("prove -all"));
+        assert_eq!(
+            split_answer("Run\n```tcl\nprove -all").1.as_deref(),
+            Some("prove -all")
+        );
         assert_eq!(split_answer("```tcl\n```").1, None);
         let (e, _) = split_answer("Before\n```tcl\nprove -all\n```\nAfter.");
         assert_eq!(e, "Before After.");
@@ -174,12 +237,30 @@ mod tests {
             ],
         });
         let t = session_summary(&s);
-        assert!(t.contains("top: counter") && t.contains("clk (posedge)") && t.contains("reset: !rst_n"), "{t}");
-        assert!(t.contains("a_never9 assert cex depth 9") && t.contains("c_wrap cover unprocessed (disabled)"), "{t}");
-        assert!(t.contains("failed (assertions with a CEX): a_never9\n") && t.contains("unreachable covers (not failures): none"), "{t}");
+        assert!(
+            t.contains("top: counter")
+                && t.contains("clk (posedge)")
+                && t.contains("reset: !rst_n"),
+            "{t}"
+        );
+        assert!(
+            t.contains("a_never9 assert cex depth 9")
+                && t.contains("c_wrap cover unprocessed (disabled)"),
+            "{t}"
+        );
+        assert!(
+            t.contains("failed (assertions with a CEX): a_never9\n")
+                && t.contains("unreachable covers (not failures): none"),
+            "{t}"
+        );
         let many: Vec<Value> = (0..250).map(|i| json!({"name": format!("p{i}"), "kind": "assert", "status": {"status": "proven"}})).collect();
         let t = session_summary(&json!({"props": many}));
-        assert!(t.contains("properties (250, first 200)") && t.contains("p199 ") && !t.contains("p200 "), "{t}");
+        assert!(
+            t.contains("properties (250, first 200)")
+                && t.contains("p199 ")
+                && !t.contains("p200 "),
+            "{t}"
+        );
         assert_eq!(session_summary(&Value::Null), "(no session yet)");
     }
 

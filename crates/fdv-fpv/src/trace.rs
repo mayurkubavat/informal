@@ -74,13 +74,20 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
     let frames = simulate(&g, w)?;
     let bad = |f: usize| g.bads.iter().any(|&b| lit(&frames[f], b));
     if !bad(w.depth) {
-        bail!("the witness does not reach the property at depth {}", w.depth);
+        bail!(
+            "the witness does not reach the property at depth {}",
+            w.depth
+        );
     }
 
     // Named inputs and latches, grouped into words by `name[i]`.
     let mut words: BTreeMap<String, Vec<(usize, u32)>> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
-    let named = g.inputs.iter().map(|&i| var(i)).chain(g.latches.iter().map(|l| var(l.lit)));
+    let named = g
+        .inputs
+        .iter()
+        .map(|&i| var(i))
+        .chain(g.latches.iter().map(|l| var(l.lit)));
     for v in named {
         let Some(n) = g.names.get(&v) else { continue };
         let (base, idx) = split_index(n);
@@ -117,7 +124,11 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
                 b
             })
             .collect();
-        vars.push(Var { scope: parts, name: leaf, bits });
+        vars.push(Var {
+            scope: parts,
+            name: leaf,
+            bits,
+        });
     }
     // Combinational nets the model names with `output` lines (the slang
     // lowering's trace section), unless an input or register already has
@@ -137,7 +148,11 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         let bits = (0..frames.len())
             .map(|f| bits_of.iter().map(|&b| Some(lit(&frames[f], b))).collect())
             .collect();
-        vars.push(Var { scope: parts, name: leaf, bits });
+        vars.push(Var {
+            scope: parts,
+            name: leaf,
+            bits,
+        });
     }
     vars.push(Var {
         scope: vec!["fdv".into()],
@@ -165,7 +180,13 @@ fn lit(val: &[bool], l: Lit) -> bool {
 /// witness does not name are 0 (they are don't-cares for the property:
 /// the engine's simplified model did not need them). Constraints must hold.
 fn simulate(g: &Aig, w: &Witness) -> Result<Vec<Vec<bool>>> {
-    let named = |m: &HashMap<String, bool>, v: u32| g.names.get(&v).and_then(|n| m.get(n)).copied().unwrap_or(false);
+    let named = |m: &HashMap<String, bool>, v: u32| {
+        g.names
+            .get(&v)
+            .and_then(|n| m.get(n))
+            .copied()
+            .unwrap_or(false)
+    };
     let mut state: Vec<bool> = g
         .latches
         .iter()
@@ -267,10 +288,22 @@ fn write_vcd(vars: &[Var], frames: usize, prop: &str) -> String {
         for part in sc.iter() {
             let _ = writeln!(s, "$scope module {part} $end");
         }
-        for (i, v) in vars.iter().enumerate().filter(|(_, v)| v.scope.as_slice() == *sc) {
-            let width = if i == 0 { 1 } else { v.bits.first().map_or(1, Vec::len) };
+        for (i, v) in vars
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.scope.as_slice() == *sc)
+        {
+            let width = if i == 0 {
+                1
+            } else {
+                v.bits.first().map_or(1, Vec::len)
+            };
             let kind = if i == 0 { "wire" } else { "reg" };
-            let range = if width > 1 { format!(" [{}:0]", width - 1) } else { String::new() };
+            let range = if width > 1 {
+                format!(" [{}:0]", width - 1)
+            } else {
+                String::new()
+            };
             let _ = writeln!(s, "$var {kind} {width} {} {}{range} $end", ident(i), v.name);
         }
         for _ in sc.iter() {
@@ -312,7 +345,13 @@ fn write_vcd(vars: &[Var], frames: usize, prop: &str) -> String {
 pub fn file_name(prop: &str) -> String {
     let safe: String = prop
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || "_-.".contains(c) { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "_-.".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("{}.vcd", safe.trim_start_matches('.'))
 }
@@ -359,7 +398,10 @@ mod tests {
     fn replays_and_writes_vcd() {
         let p = model();
         // en low in frame 1: q = 0,1,1,2,3
-        let mut w = Witness { depth: 4, ..Default::default() };
+        let mut w = Witness {
+            depth: 4,
+            ..Default::default()
+        };
         for f in 0..5 {
             w.frames.push([("top.en".to_string(), f != 1)].into());
         }
@@ -367,9 +409,18 @@ mod tests {
         assert!(vcd.contains("$scope module top $end"), "{vcd}");
         assert!(vcd.contains("$var wire 1 ! clk $end"));
         assert!(vcd.contains("$var reg 2 # q [1:0] $end"), "{vcd}");
-        assert!(vcd.contains("$scope module fdv $end\n$var reg 1 $ a_never3 $end"), "{vcd}");
+        assert!(
+            vcd.contains("$scope module fdv $end\n$var reg 1 $ a_never3 $end"),
+            "{vcd}"
+        );
         // q at frame 4 (#40) is 3; the property lane rises there.
-        let at40 = vcd.split("#40\n").nth(1).unwrap().split("#45").next().unwrap();
+        let at40 = vcd
+            .split("#40\n")
+            .nth(1)
+            .unwrap()
+            .split("#45")
+            .next()
+            .unwrap();
         assert!(at40.contains("b11 #") && at40.contains("1$"), "{at40}");
         assert!(vcd.trim_end().ends_with("#50"));
 

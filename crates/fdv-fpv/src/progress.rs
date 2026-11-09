@@ -245,7 +245,8 @@ impl Tracker {
             s.since = None;
             line_for(&s.p)
         };
-        self.sink.line(&line, matches!(status, Status::Error { .. }));
+        self.sink
+            .line(&line, matches!(status, Status::Error { .. }));
         self.emit(ProgressKind::Update);
     }
 
@@ -268,7 +269,9 @@ impl Tracker {
                     s.p = from_status(
                         &s.p.name,
                         s.p.kind,
-                        &Status::Undetermined { reason: "stopped".into() },
+                        &Status::Undetermined {
+                            reason: "stopped".into(),
+                        },
                     );
                     s.p.engine = engine;
                     s.p.ms = ms;
@@ -277,9 +280,16 @@ impl Tracker {
                 left
             };
             let noun = if left == 1 { "property" } else { "properties" };
-            self.sink.line(&format!("prove stopped: {left} {noun} left undetermined"), true);
+            self.sink.line(
+                &format!("prove stopped: {left} {noun} left undetermined"),
+                true,
+            );
         }
-        self.emit(if stopped { ProgressKind::Stopped } else { ProgressKind::Done });
+        self.emit(if stopped {
+            ProgressKind::Stopped
+        } else {
+            ProgressKind::Done
+        });
     }
 }
 
@@ -304,7 +314,10 @@ mod tests {
     #[test]
     fn reports_start_running_bound_finish_and_done() {
         let rec = Arc::new(Rec::default());
-        let t = Tracker::start(rec.clone(), [("a".to_string(), "assert"), ("b".to_string(), "cover")]);
+        let t = Tracker::start(
+            rec.clone(),
+            [("a".to_string(), "assert"), ("b".to_string(), "cover")],
+        );
         t.running(0);
         t.bound(0, "bmc", Some(5));
         t.bound(0, "bmc", Some(3)); // not deeper: ignored
@@ -314,7 +327,15 @@ mod tests {
             ms: 12,
             depth: Some(7),
         }];
-        t.finished(0, &Status::Cex { engine: "bmc".into(), depth: Some(7), ms: 12 }, &runs);
+        t.finished(
+            0,
+            &Status::Cex {
+                engine: "bmc".into(),
+                depth: Some(7),
+                ms: 12,
+            },
+            &runs,
+        );
         t.end(false);
         let ev = rec.events.lock().unwrap();
         let kinds: Vec<_> = ev.iter().map(|e| e.kind).collect();
@@ -324,9 +345,15 @@ mod tests {
         assert_eq!(ev[1].props[0].status, "running");
         assert_eq!(ev[2].props[0].depth, Some(5));
         assert_eq!(ev[3].props[0].status, "cex");
-        assert_eq!((ev[0].props[1].kind, ev[3].props[0].kind), ("cover", "assert"));
+        assert_eq!(
+            (ev[0].props[1].kind, ev[3].props[0].kind),
+            ("cover", "assert")
+        );
         assert_eq!((ev[4].done, ev[4].total), (1, 2));
-        assert_eq!(*rec.lines.lock().unwrap(), ["a: cex at depth 7 [bmc, 12 ms]"]);
+        assert_eq!(
+            *rec.lines.lock().unwrap(),
+            ["a: cex at depth 7 [bmc, 12 ms]"]
+        );
         let json = serde_json::to_value(&ev[4]).unwrap();
         assert_eq!(json["kind"], "done");
         assert!(json["props"][1].get("engine").is_none());
@@ -340,10 +367,21 @@ mod tests {
         let rec = Arc::new(Rec::default());
         let t = Tracker::start(
             rec.clone(),
-            [("a".to_string(), "assert"), ("b".to_string(), "assert"), ("c".to_string(), "cover")],
+            [
+                ("a".to_string(), "assert"),
+                ("b".to_string(), "assert"),
+                ("c".to_string(), "cover"),
+            ],
         );
         t.running(0);
-        t.finished(0, &Status::Proven { engine: "ic3".into(), ms: 3 }, &[]);
+        t.finished(
+            0,
+            &Status::Proven {
+                engine: "ic3".into(),
+                ms: 3,
+            },
+            &[],
+        );
         t.running(1);
         t.end(true);
         let ev = rec.events.lock().unwrap();
@@ -352,9 +390,15 @@ mod tests {
         assert_eq!(last.done, 3);
         assert_eq!(last.props[0].status, "proven");
         for p in &last.props[1..] {
-            assert_eq!((p.status, p.reason.as_deref()), ("undetermined", Some("stopped")));
+            assert_eq!(
+                (p.status, p.reason.as_deref()),
+                ("undetermined", Some("stopped"))
+            );
         }
         assert_eq!(last.props[2].kind, "cover");
-        assert_eq!(rec.lines.lock().unwrap().last().unwrap(), "prove stopped: 2 properties left undetermined");
+        assert_eq!(
+            rec.lines.lock().unwrap().last().unwrap(),
+            "prove stopped: 2 properties left undetermined"
+        );
     }
 }

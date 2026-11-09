@@ -1,12 +1,19 @@
 //! fdv-llm: config, SSE on recorded streams, the fake, and the
 //! OpenAI-compatible client against a local stand-in server.
 
-use fdv_llm::{build, parse_chunk, ChatRequest, Fake, LlmConfig, LlmProvider, Message, OpenAiCompat, SseParser};
+use fdv_llm::{
+    build, parse_chunk, ChatRequest, Fake, LlmConfig, LlmProvider, Message, OpenAiCompat, SseParser,
+};
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn data(name: &str) -> Vec<u8> {
-    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(name)).unwrap()
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data")
+            .join(name),
+    )
+    .unwrap()
 }
 
 fn text_of(stream: &[u8], step: usize) -> (String, Option<String>, Option<String>) {
@@ -31,14 +38,22 @@ fn text_of(stream: &[u8], step: usize) -> (String, Option<String>, Option<String
 
 #[test]
 fn shipped_config_parses_and_defaults_to_local_gemma() {
-    let c = LlmConfig::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/llm.toml")).unwrap();
+    let c = LlmConfig::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/llm.toml"))
+        .unwrap();
     assert_eq!(c.selected(None).unwrap(), "ollama-gemma");
     let g = &c.providers["ollama-gemma"];
-    assert_eq!((g.kind.as_str(), g.base_url.as_str()), ("openai-compat", "http://localhost:11434/v1"));
+    assert_eq!(
+        (g.kind.as_str(), g.base_url.as_str()),
+        ("openai-compat", "http://localhost:11434/v1")
+    );
     assert!(g.model.starts_with("gemma"));
     assert_eq!(c.selected(Some("fake")).unwrap(), "fake");
     assert_eq!(c.selected(Some("")).unwrap(), "ollama-gemma");
-    assert!(c.selected(Some("nope")).unwrap_err().to_string().contains("FDV_LLM_PROVIDER=nope"));
+    assert!(c
+        .selected(Some("nope"))
+        .unwrap_err()
+        .to_string()
+        .contains("FDV_LLM_PROVIDER=nope"));
     for (name, p) in &c.providers {
         build(name, p).unwrap();
     }
@@ -47,7 +62,10 @@ fn shipped_config_parses_and_defaults_to_local_gemma() {
 #[test]
 fn config_errors_are_caught() {
     let bad_default = "[default]\nprovider = \"x\"\n[providers.y]\nkind = \"fake\"\n";
-    assert!(LlmConfig::parse(bad_default).unwrap_err().to_string().contains("\"x\""));
+    assert!(LlmConfig::parse(bad_default)
+        .unwrap_err()
+        .to_string()
+        .contains("\"x\""));
     let no_url = "[providers.y]\nkind = \"openai-compat\"\nmodel = \"m\"\n";
     assert!(LlmConfig::parse(no_url).is_err());
     let typo = "[providers.y]\nkind = \"fake\"\ntemprature = 1\n";
@@ -55,7 +73,8 @@ fn config_errors_are_caught() {
     let c = LlmConfig::parse("[providers.z]\nkind = \"carrier-pigeon\"\n").unwrap();
     assert!(build("z", &c.providers["z"]).is_err());
     // No [default]: the first provider, timeout defaulted.
-    let c = LlmConfig::parse("[providers.b]\nkind = \"fake\"\n[providers.a]\nkind = \"fake\"\n").unwrap();
+    let c = LlmConfig::parse("[providers.b]\nkind = \"fake\"\n[providers.a]\nkind = \"fake\"\n")
+        .unwrap();
     assert_eq!(c.selected(None).unwrap(), "a");
     assert_eq!(c.providers["a"].timeout_s, 120);
     assert!(LlmConfig::parse("").unwrap().selected(None).is_err());
@@ -85,10 +104,30 @@ fn recorded_llama_server_stream_parses() {
 async fn fake_streams_its_replies_in_turn() {
     let f = Fake::new(vec!["one two".into(), "three".into()]);
     let mut got = Vec::new();
-    let r = f.chat(ChatRequest::new(vec![Message::user("hi")]), &mut |d| got.push(d.to_string())).await.unwrap();
-    assert_eq!((r.text.as_str(), got), ("one two", vec!["one ".to_string(), "two".into()]));
-    assert_eq!(f.chat(ChatRequest::default(), &mut |_| {}).await.unwrap().text, "three");
-    assert_eq!(f.chat(ChatRequest::default(), &mut |_| {}).await.unwrap().text, "one two");
+    let r = f
+        .chat(ChatRequest::new(vec![Message::user("hi")]), &mut |d| {
+            got.push(d.to_string())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.text.as_str(), got),
+        ("one two", vec!["one ".to_string(), "two".into()])
+    );
+    assert_eq!(
+        f.chat(ChatRequest::default(), &mut |_| {})
+            .await
+            .unwrap()
+            .text,
+        "three"
+    );
+    assert_eq!(
+        f.chat(ChatRequest::default(), &mut |_| {})
+            .await
+            .unwrap()
+            .text,
+        "one two"
+    );
     assert_eq!(f.seen.lock().unwrap()[0].messages[0].content, "hi");
     assert!(f.health().await.is_ok());
     let off = Fake::offline("no server");
@@ -99,7 +138,12 @@ async fn fake_streams_its_replies_in_turn() {
 /// A one-shot HTTP server on a free port: answers each connection with
 /// `status`, `ctype` and `body` (written in small pieces), and passes the
 /// request it read back over the channel.
-async fn serve(status: &'static str, ctype: &'static str, body: Vec<u8>, conns: usize) -> (String, tokio::sync::mpsc::Receiver<String>) {
+async fn serve(
+    status: &'static str,
+    ctype: &'static str,
+    body: Vec<u8>,
+    conns: usize,
+) -> (String, tokio::sync::mpsc::Receiver<String>) {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1", l.local_addr().unwrap());
     let (tx, rx) = tokio::sync::mpsc::channel(4);
@@ -116,7 +160,11 @@ async fn serve(status: &'static str, ctype: &'static str, body: Vec<u8>, conns: 
                 if let Some(h) = t.find("\r\n\r\n") {
                     let len = t[..h]
                         .lines()
-                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap()))
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
                         .unwrap_or(0);
                     if req.len() >= h + 4 + len {
                         break;
@@ -127,7 +175,8 @@ async fn serve(status: &'static str, ctype: &'static str, body: Vec<u8>, conns: 
                 }
             }
             let _ = tx.send(String::from_utf8_lossy(&req).to_string()).await;
-            let head = format!("HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nConnection: close\r\n\r\n");
+            let head =
+                format!("HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nConnection: close\r\n\r\n");
             s.write_all(head.as_bytes()).await.unwrap();
             for c in body.chunks(37) {
                 s.write_all(c).await.unwrap();
@@ -141,7 +190,13 @@ async fn serve(status: &'static str, ctype: &'static str, body: Vec<u8>, conns: 
 
 #[tokio::test]
 async fn openai_compat_streams_from_a_server() {
-    let (url, mut rx) = serve("200 OK", "text/event-stream", data("llama_server_stream.txt"), 1).await;
+    let (url, mut rx) = serve(
+        "200 OK",
+        "text/event-stream",
+        data("llama_server_stream.txt"),
+        1,
+    )
+    .await;
     let mut cfg = LlmConfig::parse(&format!(
         "[providers.t]\nkind = \"openai-compat\"\nbase_url = \"{url}\"\nmodel = \"gemma-3-12b-it\"\napi_key_env = \"FDV_LLM_TEST_KEY\"\nmax_tokens = 77\n[providers.t.headers]\nX-Extra = \"yes\"\n"
     ))
@@ -149,7 +204,13 @@ async fn openai_compat_streams_from_a_server() {
     std::env::set_var("FDV_LLM_TEST_KEY", "sekrit");
     let p = build("t", cfg.providers.get_mut("t").unwrap()).unwrap();
     let mut deltas = String::new();
-    let r = p.chat(ChatRequest::new(vec![Message::user("prove a_never9")]), &mut |d| deltas.push_str(d)).await.unwrap();
+    let r = p
+        .chat(
+            ChatRequest::new(vec![Message::user("prove a_never9")]),
+            &mut |d| deltas.push_str(d),
+        )
+        .await
+        .unwrap();
     assert_eq!(r.text, "Run:\n```tcl\nprove -property a_never9\n```");
     assert_eq!(deltas, r.text);
     assert_eq!(r.finish_reason.as_deref(), Some("stop"));
@@ -157,21 +218,44 @@ async fn openai_compat_streams_from_a_server() {
     let req = rx.recv().await.unwrap().to_ascii_lowercase();
     assert!(req.starts_with("post /v1/chat/completions "), "{req}");
     assert!(req.contains("authorization: bearer sekrit") && req.contains("x-extra: yes"));
-    assert!(req.contains("\"stream\":true") && req.contains("\"max_tokens\":77") && req.contains("prove a_never9"));
+    assert!(
+        req.contains("\"stream\":true")
+            && req.contains("\"max_tokens\":77")
+            && req.contains("prove a_never9")
+    );
 }
 
 #[tokio::test]
 async fn openai_compat_reports_http_errors_and_health() {
-    let (url, _rx) = serve("404 Not Found", "application/json", br#"{"error":{"message":"model \"gemma9\" not found"}}"#.to_vec(), 1).await;
+    let (url, _rx) = serve(
+        "404 Not Found",
+        "application/json",
+        br#"{"error":{"message":"model \"gemma9\" not found"}}"#.to_vec(),
+        1,
+    )
+    .await;
     let p = OpenAiCompat::new("t", &url, "gemma9").unwrap();
-    let e = p.chat(ChatRequest::default(), &mut |_| {}).await.unwrap_err().to_string();
+    let e = p
+        .chat(ChatRequest::default(), &mut |_| {})
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("404") && e.contains("not found"), "{e}");
 
     let models = br#"{"object":"list","data":[{"id":"gemma3:12b"},{"id":"gemma3:4b"}]}"#.to_vec();
     let (url, _rx) = serve("200 OK", "application/json", models, 2).await;
-    let ok = OpenAiCompat::new("t", &url, "gemma3:4b").unwrap().health().await.unwrap();
+    let ok = OpenAiCompat::new("t", &url, "gemma3:4b")
+        .unwrap()
+        .health()
+        .await
+        .unwrap();
     assert_eq!(ok.available, ["gemma3:12b", "gemma3:4b"]);
-    let e = OpenAiCompat::new("t", &url, "llama9").unwrap().health().await.unwrap_err().to_string();
+    let e = OpenAiCompat::new("t", &url, "llama9")
+        .unwrap()
+        .health()
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("llama9 is not served"), "{e}");
 
     // Nothing listening.
@@ -179,7 +263,11 @@ async fn openai_compat_reports_http_errors_and_health() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         format!("http://{}/v1", l.local_addr().unwrap())
     };
-    assert!(OpenAiCompat::new("t", &dead, "m").unwrap().health().await.is_err());
+    assert!(OpenAiCompat::new("t", &dead, "m")
+        .unwrap()
+        .health()
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -187,7 +275,11 @@ async fn openai_compat_accepts_a_non_streamed_answer() {
     let body = br#"{"model":"m","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}"#.to_vec();
     let (url, _rx) = serve("200 OK", "application/json", body, 1).await;
     let mut got = String::new();
-    let r = OpenAiCompat::new("t", &url, "m").unwrap().chat(ChatRequest::default(), &mut |d| got.push_str(d)).await.unwrap();
+    let r = OpenAiCompat::new("t", &url, "m")
+        .unwrap()
+        .chat(ChatRequest::default(), &mut |d| got.push_str(d))
+        .await
+        .unwrap();
     assert_eq!((r.text.as_str(), got.as_str()), ("hello", "hello"));
 }
 
@@ -198,18 +290,26 @@ async fn openai_compat_accepts_a_non_streamed_answer() {
 async fn live_default_provider() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/llm.toml");
     let c = LlmConfig::load(&path).unwrap();
-    let name = c.selected(std::env::var("FDV_LLM_PROVIDER").ok().as_deref()).unwrap();
+    let name = c
+        .selected(std::env::var("FDV_LLM_PROVIDER").ok().as_deref())
+        .unwrap();
     let p = build(&name, &c.providers[&name]).unwrap();
     let info = p.health().await.unwrap();
     eprintln!("{name}: {} ({} listed)", info.model, info.available.len());
     let mut deltas = 0;
     let req = ChatRequest {
-        messages: vec![Message::system("Answer in at most five words."), Message::user("Say hello.\nThen say done.")],
+        messages: vec![
+            Message::system("Answer in at most five words."),
+            Message::user("Say hello.\nThen say done."),
+        ],
         max_tokens: Some(20),
         ..Default::default()
     };
     let r = p.chat(req, &mut |_| deltas += 1).await.unwrap();
-    eprintln!("{:?} in {} ms (first token {:?} ms, {deltas} deltas)", r.text, r.total_ms, r.first_token_ms);
+    eprintln!(
+        "{:?} in {} ms (first token {:?} ms, {deltas} deltas)",
+        r.text, r.total_ms, r.first_token_ms
+    );
     assert!(!r.text.trim().is_empty());
     assert!(deltas >= 1);
 }

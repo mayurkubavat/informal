@@ -100,14 +100,21 @@ impl LlmConfig {
     pub fn selected(&self, env_override: Option<&str>) -> Result<String> {
         if let Some(n) = env_override.filter(|n| !n.is_empty()) {
             if !self.providers.contains_key(n) {
-                bail!("{DEFAULT_PROVIDER_ENV}={n}: no such provider (have {})", self.names().join(", "));
+                bail!(
+                    "{DEFAULT_PROVIDER_ENV}={n}: no such provider (have {})",
+                    self.names().join(", ")
+                );
             }
             return Ok(n.to_string());
         }
         if let Some(d) = &self.default.provider {
             return Ok(d.clone());
         }
-        self.providers.keys().next().cloned().context("no LLM providers configured")
+        self.providers
+            .keys()
+            .next()
+            .cloned()
+            .context("no LLM providers configured")
     }
 }
 

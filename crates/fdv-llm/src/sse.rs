@@ -36,7 +36,8 @@ impl SseParser {
                     self.data.clear();
                 }
             } else if let Some(rest) = line.strip_prefix("data:") {
-                self.data.push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
+                self.data
+                    .push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
             }
             // `event:`, `id:`, `retry:` and `:` comments carry nothing we use.
         }
@@ -48,7 +49,9 @@ impl SseParser {
     pub fn finish(&mut self) -> Option<String> {
         if !self.buf.is_empty() {
             let rest = std::mem::take(&mut self.buf);
-            let line = String::from_utf8_lossy(&rest).trim_end_matches('\r').to_string();
+            let line = String::from_utf8_lossy(&rest)
+                .trim_end_matches('\r')
+                .to_string();
             if let Some(d) = line.strip_prefix("data:") {
                 self.data.push(d.strip_prefix(' ').unwrap_or(d).to_string());
             }
@@ -71,16 +74,27 @@ pub struct Chunk {
 pub fn parse_chunk(data: &str) -> Result<Chunk> {
     let data = data.trim();
     if data == "[DONE]" {
-        return Ok(Chunk { done: true, ..Default::default() });
+        return Ok(Chunk {
+            done: true,
+            ..Default::default()
+        });
     }
-    let v: Value = serde_json::from_str(data).map_err(|e| anyhow!("bad stream chunk ({e}): {}", clip(data)))?;
+    let v: Value = serde_json::from_str(data)
+        .map_err(|e| anyhow!("bad stream chunk ({e}): {}", clip(data)))?;
     if let Some(err) = v.get("error") {
-        let msg = err.get("message").and_then(Value::as_str).map(String::from).unwrap_or_else(|| err.to_string());
+        let msg = err
+            .get("message")
+            .and_then(Value::as_str)
+            .map(String::from)
+            .unwrap_or_else(|| err.to_string());
         return Err(anyhow!("server error: {msg}"));
     }
     let choice = &v["choices"][0];
     Ok(Chunk {
-        text: choice["delta"]["content"].as_str().unwrap_or_default().to_string(),
+        text: choice["delta"]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         model: v["model"].as_str().map(String::from),
         finish_reason: choice["finish_reason"].as_str().map(String::from),
         done: false,
@@ -101,7 +115,8 @@ mod tests {
 
     #[test]
     fn splits_events_across_arbitrary_chunk_boundaries() {
-        let stream = "data: {\"a\":1}\n\n: keep-alive\n\ndata: x\r\ndata: y\r\n\r\ndata: [DONE]\n\n";
+        let stream =
+            "data: {\"a\":1}\n\n: keep-alive\n\ndata: x\r\ndata: y\r\n\r\ndata: [DONE]\n\n";
         for step in 1..stream.len() {
             let mut p = SseParser::new();
             let mut got = Vec::new();
@@ -133,7 +148,10 @@ mod tests {
 
     #[test]
     fn chunk_errors_are_reported() {
-        assert!(parse_chunk("{\"error\":{\"message\":\"model not found\"}}").unwrap_err().to_string().contains("model not found"));
+        assert!(parse_chunk("{\"error\":{\"message\":\"model not found\"}}")
+            .unwrap_err()
+            .to_string()
+            .contains("model not found"));
         assert!(parse_chunk("not json").is_err());
         assert!(parse_chunk("[DONE]").unwrap().done);
     }

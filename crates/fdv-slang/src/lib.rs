@@ -405,8 +405,13 @@ mod tests {
         })
         .unwrap();
         assert!(d.ok, "{:?}", d.diagnostics);
-        let [top] = d.hierarchy.as_slice() else { panic!("{:?}", d.hierarchy) };
-        assert_eq!((top.path.as_str(), top.name.as_str(), top.module.as_str()), ("counter", "counter", "counter"));
+        let [top] = d.hierarchy.as_slice() else {
+            panic!("{:?}", d.hierarchy)
+        };
+        assert_eq!(
+            (top.path.as_str(), top.name.as_str(), top.module.as_str()),
+            ("counter", "counter", "counter")
+        );
         assert!(top.children.is_empty());
         let ports: Vec<_> = top
             .signals
@@ -416,14 +421,23 @@ mod tests {
             .collect();
         assert_eq!(
             ports,
-            [("clk", "input", 1), ("rst_n", "input", 1), ("en", "input", 1), ("q", "output", 4), ("done", "output", 1)]
+            [
+                ("clk", "input", 1),
+                ("rst_n", "input", 1),
+                ("en", "input", 1),
+                ("q", "output", 4),
+                ("done", "output", 1)
+            ]
         );
         // Internal signals follow the ports, each listed once.
         assert_eq!(sig(top, "nxt").width, 4);
         assert_eq!(sig(top, "nxt").dir, None);
         assert_eq!(top.signals.iter().filter(|s| s.name == "q").count(), 1);
         let json = serde_json::to_value(top).unwrap();
-        assert_eq!(json["signals"][0], serde_json::json!({"name": "clk", "width": 1, "kind": "port", "dir": "input"}));
+        assert_eq!(
+            json["signals"][0],
+            serde_json::json!({"name": "clk", "width": 1, "kind": "port", "dir": "input"})
+        );
     }
 
     #[test]
@@ -439,19 +453,40 @@ mod tests {
         })
         .unwrap();
         assert!(d.ok, "{:?}", d.diagnostics);
-        let [top] = d.hierarchy.as_slice() else { panic!("{:?}", d.hierarchy) };
+        let [top] = d.hierarchy.as_slice() else {
+            panic!("{:?}", d.hierarchy)
+        };
         assert_eq!(top.module, "fifo");
-        let kids: Vec<_> = top.children.iter().map(|c| (c.path.as_str(), c.name.as_str(), c.module.as_str())).collect();
-        assert_eq!(kids, [("fifo.u_wp", "u_wp", "ptr"), ("fifo.u_rp", "u_rp", "ptr")]);
+        let kids: Vec<_> = top
+            .children
+            .iter()
+            .map(|c| (c.path.as_str(), c.name.as_str(), c.module.as_str()))
+            .collect();
+        assert_eq!(
+            kids,
+            [("fifo.u_wp", "u_wp", "ptr"), ("fifo.u_rp", "u_rp", "ptr")]
+        );
         assert_eq!(top.walk().len(), 3);
         // Parameterised widths are elaborated: DEPTH_LOG2 = 2, DW = 8.
-        assert_eq!((sig(top, "din").width, sig(top, "din").dir.as_deref()), (8, Some("input")));
-        assert_eq!((sig(top, "status").width, sig(top, "status").dir.as_deref()), (2, Some("output")));
-        assert_eq!((sig(top, "count").width, sig(top, "count").kind.as_str()), (3, "variable"));
+        assert_eq!(
+            (sig(top, "din").width, sig(top, "din").dir.as_deref()),
+            (8, Some("input"))
+        );
+        assert_eq!(
+            (sig(top, "status").width, sig(top, "status").dir.as_deref()),
+            (2, Some("output"))
+        );
+        assert_eq!(
+            (sig(top, "count").width, sig(top, "count").kind.as_str()),
+            (3, "variable")
+        );
         assert_eq!(sig(top, "mem").width, 32);
         assert_eq!(sig(top, "DEPTH").kind, "parameter");
         let wp = &top.children[0];
-        assert_eq!((sig(wp, "p").width, sig(wp, "p").dir.as_deref()), (2, Some("output")));
+        assert_eq!(
+            (sig(wp, "p").width, sig(wp, "p").dir.as_deref()),
+            (2, Some("output"))
+        );
         assert_eq!(sig(wp, "W").kind, "parameter");
     }
 
@@ -469,7 +504,10 @@ mod tests {
              always_ff @(posedge clk) if (en && !done) q <= nxt;\n\
              always_comb begin a_ok: assert (q <= 2'd3); end\nendmodule\n",
         );
-        let mut req = Request { files: vec![f], ..Default::default() };
+        let mut req = Request {
+            files: vec![f],
+            ..Default::default()
+        };
         let plain = lower(&req).unwrap();
         assert!(plain.ok, "{:?}", plain.errors);
         assert!(!plain.btor2.contains(TRACE_MARKER) && !plain.btor2.contains(" output "));

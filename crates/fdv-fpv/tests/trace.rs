@@ -57,7 +57,8 @@ unsafe = '(?m)^SAT$'
         engines = fdv_engines_ext::parse_config(toml).unwrap();
     }
     if engine.starts_with("ric3") {
-        let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("ric3").is_file()));
+        let on_path = std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("ric3").is_file()));
         if !on_path {
             eprintln!("skipping: needs ric3 on PATH");
             return None;
@@ -72,9 +73,16 @@ unsafe = '(?m)^SAT$'
     let dir = root().join("tests/fpv/counter");
     let script: String = std::fs::read_to_string(dir.join("counter.jg.tcl"))
         .unwrap()
-        .replace("[file join [file dirname [info script]] counter.sv]", &dir.join("counter.sv").display().to_string())
+        .replace(
+            "[file join [file dirname [info script]] counter.sv]",
+            &dir.join("counter.sv").display().to_string(),
+        )
         .lines()
-        .filter(|l| !["a_max ", "a_step ", "a_hold ", "a_no_wrap ", "c_10 "].iter().any(|n| l.contains(&format!("-name {n}"))))
+        .filter(|l| {
+            !["a_max ", "a_step ", "a_hold ", "a_no_wrap ", "c_10 "]
+                .iter()
+                .any(|n| l.contains(&format!("-name {n}")))
+        })
         .map(|l| format!("{l}\n"))
         .collect();
     std::fs::create_dir_all(&work).unwrap();
@@ -91,31 +99,55 @@ fn check_counter_traces(sh: &Shell, engine: &str) {
     for name in ["a_never9", "c_done"] {
         let p = get(name);
         let depth = match &p.status {
-            Status::Cex { depth, .. } | Status::Covered { depth, .. } => depth.expect("depth") as u64,
+            Status::Cex { depth, .. } | Status::Covered { depth, .. } => {
+                depth.expect("depth") as u64
+            }
             other => panic!("{name}: {other:?}"),
         };
-        let path = p.trace.as_ref().unwrap_or_else(|| panic!("{name} has no trace"));
+        let path = p
+            .trace
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name} has no trace"));
         assert!(path.ends_with(&format!("{name}.vcd")), "{path}");
         let vcd = std::fs::read_to_string(path).unwrap();
         // q reaches 9 in the last cycle; the property lane rises there only.
-        assert_eq!(value_at(&vcd, "q", 10 * depth).as_deref(), Some("1001"), "{vcd}");
+        assert_eq!(
+            value_at(&vcd, "q", 10 * depth).as_deref(),
+            Some("1001"),
+            "{vcd}"
+        );
         assert_eq!(value_at(&vcd, name, 10 * depth).as_deref(), Some("1"));
         assert_eq!(value_at(&vcd, name, 10 * depth - 10).as_deref(), Some("0"));
         assert!(vcd.contains("$scope module counter $end"));
-        assert!(vcd.contains(" clk $end") && vcd.contains(" en $end") && vcd.contains(" rst_n $end"));
+        assert!(
+            vcd.contains(" clk $end") && vcd.contains(" en $end") && vcd.contains(" rst_n $end")
+        );
         assert!(vcd.trim_end().ends_with(&format!("#{}", 10 * (depth + 1))));
         // Combinational nets come from the named outputs (slang front end
         // only): `done` = (q == 9) rises with q in the last cycle.
         if s.frontend == "slang" {
-            assert_eq!(value_at(&vcd, "done", 10 * depth).as_deref(), Some("1"), "{vcd}");
-            assert_eq!(value_at(&vcd, "done", 10 * depth - 10).as_deref(), Some("0"));
-            assert_eq!(value_at(&vcd, "nxt", 10 * depth - 10).as_deref(), Some("1001"));
+            assert_eq!(
+                value_at(&vcd, "done", 10 * depth).as_deref(),
+                Some("1"),
+                "{vcd}"
+            );
+            assert_eq!(
+                value_at(&vcd, "done", 10 * depth - 10).as_deref(),
+                Some("0")
+            );
+            assert_eq!(
+                value_at(&vcd, "nxt", 10 * depth - 10).as_deref(),
+                Some("1001")
+            );
             assert_eq!(value_at(&vcd, "wrap", 0).as_deref(), Some("0"));
         }
     }
     assert_eq!(get("m_en_burst").trace, None);
     let json = serde_json::to_value(&*s).unwrap();
-    assert!(json["props"][0]["trace"].as_str().unwrap().ends_with("a_never9.vcd"));
+    assert!(json["props"][0]["trace"]
+        .as_str()
+        .unwrap()
+        .ends_with("a_never9.vcd"));
     // The proof profiler's record: the one engine ran and won.
     let runs = json["props"][0]["engines"].as_array().unwrap();
     assert_eq!(runs.len(), 1, "{runs:?}");
@@ -128,9 +160,17 @@ fn check_counter_traces(sh: &Shell, engine: &str) {
 
 #[test]
 fn counter_traces_from_bmc_witness() {
-    let Some(sh) = prove_counter("fdv-bmc", "bmc") else { return };
+    let Some(sh) = prove_counter("fdv-bmc", "bmc") else {
+        return;
+    };
     check_counter_traces(&sh, "fdv-bmc");
-    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        sh.session
+            .borrow()
+            .trace_reruns
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
 }
 
@@ -138,17 +178,33 @@ fn counter_traces_from_bmc_witness() {
 fn counter_traces_from_ric3_witness_without_a_rerun() {
     // rIC3 IC3 prints its counterexample (--cex, Btor2 witness format);
     // fdv converts it to a named witness, so no BMC re-run is needed.
-    let Some(sh) = prove_counter("ric3-ic3", "ric3") else { return };
+    let Some(sh) = prove_counter("ric3-ic3", "ric3") else {
+        return;
+    };
     check_counter_traces(&sh, "ric3-ic3");
-    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        sh.session
+            .borrow()
+            .trace_reruns
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
 }
 
 #[test]
 fn a_witness_that_does_not_replay_falls_back_to_bmc() {
-    let Some(sh) = prove_counter("fake-cex", "fake") else { return };
+    let Some(sh) = prove_counter("fake-cex", "fake") else {
+        return;
+    };
     check_counter_traces(&sh, "fake-cex");
-    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        sh.session
+            .borrow()
+            .trace_reruns
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
 }
 
@@ -156,10 +212,18 @@ fn a_witness_that_does_not_replay_falls_back_to_bmc() {
 fn counter_traces_when_the_winner_has_no_witness() {
     // fdv-kind finds the counterexamples in its base case but exports no
     // witness, so the session re-runs BMC for the trace.
-    let Some(sh) = prove_counter("fdv-kind", "kind") else { return };
+    let Some(sh) = prove_counter("fdv-kind", "kind") else {
+        return;
+    };
     check_counter_traces(&sh, "fdv-kind");
     // One re-run per trace (a_never9, c_done).
-    assert_eq!(sh.session.borrow().trace_reruns.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        sh.session
+            .borrow()
+            .trace_reruns
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
     let _ = std::fs::remove_dir_all(&sh.session.borrow().workdir);
 }
 
@@ -173,13 +237,15 @@ fn an_aiger_witness_replays_on_the_counter() {
     let name = |l: u32| g.names.get(&fdv_aig::var(l)).cloned();
     let inputs: Vec<_> = g.inputs.iter().map(|&i| name(i)).collect();
     let latches: Vec<_> = g.latches.iter().map(|l| name(l.lit)).collect();
-    let named = fdv_engine::witness::from_aiger("1\nb0\n00\n1\n1\n1\n0\n.\n", &inputs, &latches).unwrap();
+    let named =
+        fdv_engine::witness::from_aiger("1\nb0\n00\n1\n1\n1\n0\n.\n", &inputs, &latches).unwrap();
     let w = fdv_fpv::trace::parse_witness(&named).expect("a named witness");
     assert_eq!(w.depth, 3);
     let vcd = fdv_fpv::trace::vcd_from_witness(&model, &w, "q_is_3", "clk").unwrap();
     assert_eq!(value_at(&vcd, "q", 0).as_deref(), Some("00"));
     assert_eq!(value_at(&vcd, "q", 30).as_deref(), Some("11"), "{vcd}");
-    let idle = fdv_engine::witness::from_aiger("1\nb0\n00\n0\n0\n0\n0\n.\n", &inputs, &latches).unwrap();
+    let idle =
+        fdv_engine::witness::from_aiger("1\nb0\n00\n0\n0\n0\n0\n.\n", &inputs, &latches).unwrap();
     let w = fdv_fpv::trace::parse_witness(&idle).unwrap();
     assert!(fdv_fpv::trace::vcd_from_witness(&model, &w, "q_is_3", "clk").is_err());
 }

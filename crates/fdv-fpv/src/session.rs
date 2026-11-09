@@ -583,14 +583,22 @@ impl Session {
                     }
                 });
             }
-            let r = self.prove_targets(&targets, &files, lowered.as_deref(), &engines, tracker.as_ref());
+            let r = self.prove_targets(
+                &targets,
+                &files,
+                lowered.as_deref(),
+                &engines,
+                tracker.as_ref(),
+            );
             looping.store(false, Ordering::SeqCst);
             r
         });
         // A Stop that came while the last property finished still counts.
         let stopped = reached < targets.len() || self.stop.load(Ordering::SeqCst);
         for &i in &targets[reached..] {
-            self.props[i].status = Status::Undetermined { reason: "stopped".into() };
+            self.props[i].status = Status::Undetermined {
+                reason: "stopped".into(),
+            };
             self.props[i].trace = None;
             self.props[i].engines.clear();
         }
@@ -660,7 +668,9 @@ impl Session {
             // A verdict that landed just before the Stop is kept.
             let halt = self.stop.load(Ordering::SeqCst);
             if halt && matches!(status, Status::Undetermined { .. }) {
-                status = Status::Undetermined { reason: "stopped".into() };
+                status = Status::Undetermined {
+                    reason: "stopped".into(),
+                };
             }
             if let Some(t) = tracker {
                 t.finished(slot, &status, &runs);
@@ -789,8 +799,21 @@ impl Session {
         }
         // The profiler's winner row gets the same depth when it had none.
         let mut runs = o.profile;
-        if let Status::Cex { depth: Some(d), engine, .. } | Status::Covered { depth: Some(d), engine, .. } = &status {
-            for r in runs.iter_mut().filter(|r| &r.engine == engine && r.depth.is_none()) {
+        if let Status::Cex {
+            depth: Some(d),
+            engine,
+            ..
+        }
+        | Status::Covered {
+            depth: Some(d),
+            engine,
+            ..
+        } = &status
+        {
+            for r in runs
+                .iter_mut()
+                .filter(|r| &r.engine == engine && r.depth.is_none())
+            {
                 r.depth = Some(*d);
             }
         }
@@ -804,12 +827,22 @@ impl Session {
     /// the reported depth that only serves to produce one. Returns the path
     /// and the trace's depth. Failures are logged and give no trace; the
     /// verdict stands either way.
-    fn write_trace(&self, i: usize, model: &Path, witness: Option<&str>, depth: Option<u32>) -> Option<(String, usize)> {
+    fn write_trace(
+        &self,
+        i: usize,
+        model: &Path,
+        witness: Option<&str>,
+        depth: Option<u32>,
+    ) -> Option<(String, usize)> {
         let name = &self.props[i].name;
         let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
         // Replay on the copy with named combinational nets when there is one.
         let with_nets = trace_model(model);
-        let replay = if with_nets.is_file() { with_nets.as_path() } else { model };
+        let replay = if with_nets.is_file() {
+            with_nets.as_path()
+        } else {
+            model
+        };
         let from_winner = witness.and_then(trace::parse_witness).and_then(|w| {
             match trace::vcd_from_witness(replay, &w, name, clock) {
                 Ok(v) => Some((v, w.depth)),
@@ -824,7 +857,9 @@ impl Session {
             None => {
                 self.trace_reruns.fetch_add(1, Ordering::SeqCst);
                 if witness.is_none() {
-                    self.note(&format!("{name}: the winning engine gave no witness; tracing with a BMC re-run"));
+                    self.note(&format!(
+                        "{name}: the winning engine gave no witness; tracing with a BMC re-run"
+                    ));
                 }
                 let w = match self.trace_bmc(model, depth) {
                     Ok(w) => w,
@@ -868,7 +903,10 @@ impl Session {
             timeout: self.time_limit.min(Duration::from_secs(30)),
         };
         let r = bmc.check(&req, &fdv_engine::RunContext::new(req.timeout))?;
-        match (&r.verdict, r.witness.as_deref().and_then(trace::parse_witness)) {
+        match (
+            &r.verdict,
+            r.witness.as_deref().and_then(trace::parse_witness),
+        ) {
             (Verdict::Unsafe { .. }, Some(w)) => Ok(w),
             (Verdict::Unsafe { .. }, None) => anyhow::bail!("fdv-bmc gave no named witness"),
             (v, _) => anyhow::bail!("fdv-bmc could not reproduce it ({})", v.label()),

@@ -60,7 +60,13 @@ safe = '(?m)^UNSAT$'
     let lines = rec.0.lock().unwrap().clone();
     let texts: Vec<(&str, &str, bool)> = lines
         .iter()
-        .map(|l| (l.prop.as_str(), l.text.split(' ').next().unwrap_or(""), l.err))
+        .map(|l| {
+            (
+                l.prop.as_str(),
+                l.text.split(' ').next().unwrap_or(""),
+                l.err,
+            )
+        })
         .collect();
     assert!(texts.contains(&("a_max", "reading", false)), "{lines:?}");
     assert!(texts.contains(&("a_max", "note:", true)), "{lines:?}");

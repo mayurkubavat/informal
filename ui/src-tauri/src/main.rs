@@ -91,9 +91,16 @@ async fn call(w: &Worker, req: Request) -> Reply {
     let w = w.clone();
     let r = tauri::async_runtime::spawn_blocking(move || w.call(req))
         .await
-        .unwrap_or_else(|e| Reply { ok: false, result: e.to_string(), session: serde_json::Value::Null });
+        .unwrap_or_else(|e| Reply {
+            ok: false,
+            result: e.to_string(),
+            session: serde_json::Value::Null,
+        });
     if let Some(a) = r.session["design"]["files"].as_array() {
-        let files = a.iter().filter_map(|f| f.as_str().map(PathBuf::from)).collect();
+        let files = a
+            .iter()
+            .filter_map(|f| f.as_str().map(PathBuf::from))
+            .collect();
         if let Ok(mut g) = DESIGN_FILES.lock() {
             *g = files;
         }
@@ -104,7 +111,10 @@ async fn call(w: &Worker, req: Request) -> Reply {
         }
     }
     if let Some(a) = r.session["props"].as_array() {
-        let names = a.iter().filter_map(|p| p["name"].as_str().map(String::from)).collect();
+        let names = a
+            .iter()
+            .filter_map(|p| p["name"].as_str().map(String::from))
+            .collect();
         if let Ok(mut g) = PROP_NAMES.lock() {
             *g = names;
         }
@@ -152,7 +162,11 @@ fn shell_complete(prefix: String) -> Vec<String> {
 #[tauri::command]
 async fn shell_stop(w: State<'_, Worker>) -> Result<Reply, String> {
     w.stop();
-    Ok(Reply { ok: true, result: String::new(), session: serde_json::Value::Null })
+    Ok(Reply {
+        ok: true,
+        result: String::new(),
+        session: serde_json::Value::Null,
+    })
 }
 
 /// The session's work directory, relative to the repo root the app runs
@@ -186,13 +200,20 @@ fn vcd_in(workdir: &Path, path: &Path) -> Result<PathBuf, String> {
 /// An executable called `name` in one of the `path` directories (a PATH
 /// value). Plain names only: anything with a path separator is refused.
 fn find_on_path(name: &str, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return None;
     }
-    std::env::split_paths(path?).map(|d| d.join(name)).find(|f| {
-        use std::os::unix::fs::PermissionsExt;
-        f.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    })
+    std::env::split_paths(path?)
+        .map(|d| d.join(name))
+        .find(|f| {
+            use std::os::unix::fs::PermissionsExt;
+            f.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
 }
 
 /// Whether an external tool (e.g. `surfer`) is on PATH; the UI enables its
@@ -249,7 +270,10 @@ fn text_in(root: &Path, files: &[PathBuf], path: &Path) -> Result<String, String
         .iter()
         .any(|f| std::fs::canonicalize(f).is_ok_and(|f| f == p));
     if !p.starts_with(&root) && !listed {
-        return Err(format!("{shown}: not under {} or in the design files", root.display()));
+        return Err(format!(
+            "{shown}: not under {} or in the design files",
+            root.display()
+        ));
     }
     std::fs::read_to_string(&p).map_err(|e| format!("{shown}: {e}"))
 }
@@ -278,7 +302,12 @@ impl Llm {
             running: Mutex::new(Default::default()),
         };
         let env = std::env::var(fdv_llm::DEFAULT_PROVIDER_ENV).ok();
-        match llm.config.as_ref().map_err(String::clone).and_then(|c| c.selected(env.as_deref()).map_err(|e| e.to_string())) {
+        match llm
+            .config
+            .as_ref()
+            .map_err(String::clone)
+            .and_then(|c| c.selected(env.as_deref()).map_err(|e| e.to_string()))
+        {
             Ok(name) => {
                 let _ = llm.select(&name);
             }
@@ -289,7 +318,10 @@ impl Llm {
 
     fn select(&self, name: &str) -> Result<(), String> {
         let c = self.config.as_ref().map_err(String::clone)?;
-        let p = c.providers.get(name).ok_or_else(|| format!("no LLM provider {name}"))?;
+        let p = c
+            .providers
+            .get(name)
+            .ok_or_else(|| format!("no LLM provider {name}"))?;
         match fdv_llm::build(name, p) {
             Ok(b) => {
                 *self.current.lock().unwrap() = Some((name.to_string(), Arc::from(b)));
@@ -308,7 +340,12 @@ impl Llm {
         if let Some((_, p)) = self.current.lock().unwrap().as_ref() {
             return Ok(p.clone());
         }
-        Err(self.build_error.lock().unwrap().clone().unwrap_or_else(|| "no LLM provider".into()))
+        Err(self
+            .build_error
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "no LLM provider".into()))
     }
 }
 
@@ -326,7 +363,14 @@ struct LlmStatus {
 async fn llm_status(llm: State<'_, Llm>) -> Result<LlmStatus, String> {
     let p = match llm.provider() {
         Ok(p) => p,
-        Err(e) => return Ok(LlmStatus { provider: String::new(), model: String::new(), ok: false, error: Some(e) }),
+        Err(e) => {
+            return Ok(LlmStatus {
+                provider: String::new(),
+                model: String::new(),
+                ok: false,
+                error: Some(e),
+            })
+        }
     };
     let (provider, model) = (p.name().to_string(), p.model().to_string());
     let h = tokio::time::timeout(std::time::Duration::from_secs(8), p.health()).await;
@@ -335,7 +379,12 @@ async fn llm_status(llm: State<'_, Llm>) -> Result<LlmStatus, String> {
         Ok(Err(e)) => Some(format!("{e:#}")),
         Err(_) => Some("health check timed out".into()),
     };
-    Ok(LlmStatus { provider, model, ok: error.is_none(), error })
+    Ok(LlmStatus {
+        provider,
+        model,
+        ok: error.is_none(),
+        error,
+    })
 }
 
 #[derive(Clone, Serialize)]
@@ -396,17 +445,29 @@ struct AskDone {
 /// that arrive before this call returns. `context` is extra text from the
 /// UI (e.g. the selected property). The command is only ever shown.
 #[tauri::command]
-fn ask(llm: State<'_, Llm>, id: u64, prompt: String, context: Option<String>) -> Result<u64, String> {
+fn ask(
+    llm: State<'_, Llm>,
+    id: u64,
+    prompt: String,
+    context: Option<String>,
+) -> Result<u64, String> {
     let p = llm.provider()?;
     let flavor = FLAVOR.lock().map(|g| *g).unwrap_or(Flavor::Jg);
     let session = LAST_SESSION.lock().map(|g| g.clone()).unwrap_or_default();
     let flavor_word = if flavor == Flavor::Vcf { "vcf" } else { "jg" };
-    let system = ask::system_prompt(flavor_word, &fdv_fpv::compat::command_names(flavor), &session);
+    let system = ask::system_prompt(
+        flavor_word,
+        &fdv_fpv::compat::command_names(flavor),
+        &session,
+    );
     let user = match context.filter(|c| !c.trim().is_empty()) {
         Some(c) => format!("{prompt}\n\n(Context from the UI: {c})"),
         None => prompt,
     };
-    let req = fdv_llm::ChatRequest::new(vec![fdv_llm::Message::system(system), fdv_llm::Message::user(user)]);
+    let req = fdv_llm::ChatRequest::new(vec![
+        fdv_llm::Message::system(system),
+        fdv_llm::Message::user(user),
+    ]);
     // Held across the spawn, so a very quick answer cannot remove its
     // entry before it is inserted.
     let mut running = llm.running.lock().unwrap();
@@ -420,7 +481,15 @@ fn ask(llm: State<'_, Llm>, id: u64, prompt: String, context: Option<String>) ->
         let done = match p.chat(req, &mut on_delta).await {
             Ok(r) => {
                 let (explanation, command) = ask::split_answer(&r.text);
-                AskDone { id, command, explanation, error: None, model: r.model, first_token_ms: r.first_token_ms, total_ms: r.total_ms }
+                AskDone {
+                    id,
+                    command,
+                    explanation,
+                    error: None,
+                    model: r.model,
+                    first_token_ms: r.first_token_ms,
+                    total_ms: r.total_ms,
+                }
             }
             Err(e) => AskDone {
                 id,
@@ -454,7 +523,15 @@ fn ask_cancel(llm: State<'_, Llm>, id: u64) -> bool {
     if let Some(app) = APP.get() {
         let _ = app.emit(
             "ask-done",
-            AskDone { id, command: None, explanation: String::new(), error: Some("cancelled".into()), model: String::new(), first_token_ms: None, total_ms: 0 },
+            AskDone {
+                id,
+                command: None,
+                explanation: String::new(),
+                error: Some("cancelled".into()),
+                model: String::new(),
+                first_token_ms: None,
+                total_ms: 0,
+            },
         );
     }
     true
@@ -481,7 +558,11 @@ fn main() {
     }
     let worker = Worker::spawn(flavor, move || {
         let engines = config
-            .and_then(|c| fdv_engines_ext::load(&c).map_err(|e| eprintln!("fdv: {e:#}")).ok())
+            .and_then(|c| {
+                fdv_engines_ext::load(&c)
+                    .map_err(|e| eprintln!("fdv: {e:#}"))
+                    .ok()
+            })
             .unwrap_or_default()
             .into_iter()
             .chain(fdv_bmc::engines())
@@ -541,8 +622,12 @@ mod tests {
         std::fs::write(base.join("ip.sv"), "module ip; endmodule\n").unwrap();
         std::fs::write(base.join("secret.txt"), "no").unwrap();
         let files = vec![base.join("ip.sv")];
-        assert!(text_in(&repo, &files, &repo.join("tests/run.tcl")).unwrap().contains("assert"));
-        assert!(text_in(&repo, &files, &base.join("ip.sv")).unwrap().contains("module ip"));
+        assert!(text_in(&repo, &files, &repo.join("tests/run.tcl"))
+            .unwrap()
+            .contains("assert"));
+        assert!(text_in(&repo, &files, &base.join("ip.sv"))
+            .unwrap()
+            .contains("module ip"));
         assert!(text_in(&repo, &files, &base.join("secret.txt")).is_err());
         assert!(text_in(&repo, &files, &repo.join("../secret.txt")).is_err());
         assert!(text_in(&repo, &[], &base.join("ip.sv")).is_err());
@@ -557,7 +642,9 @@ mod tests {
         std::fs::write(work.join("a.vcd"), "$enddefinitions $end\n").unwrap();
         std::fs::write(work.join("prop_0.btor2"), "1 sort bitvec 1\n").unwrap();
         std::fs::write(base.join("outside.vcd"), "x").unwrap();
-        assert!(trace_in(&work, &work.join("a.vcd")).unwrap().contains("$enddefinitions"));
+        assert!(trace_in(&work, &work.join("a.vcd"))
+            .unwrap()
+            .contains("$enddefinitions"));
         assert!(trace_in(&work, &work.join("prop_0.btor2")).is_err());
         assert!(trace_in(&work, &work.join("../outside.vcd")).is_err());
         assert!(trace_in(&work, &base.join("outside.vcd")).is_err());
@@ -577,8 +664,17 @@ mod tests {
         let ok = vcd_in(&work, &work.join("a.vcd")).unwrap();
         assert!(ok.is_absolute() && ok.ends_with("fdv_work/a.vcd"));
         assert!(vcd_in(&work, &work.join("sub/../a.vcd")).is_ok());
-        for bad in ["prop_0.btor2", "../outside.vcd", "link.vcd", "missing.vcd", "sub"] {
-            assert!(vcd_in(&work, &work.join(bad)).is_err(), "{bad} must be refused");
+        for bad in [
+            "prop_0.btor2",
+            "../outside.vcd",
+            "link.vcd",
+            "missing.vcd",
+            "sub",
+        ] {
+            assert!(
+                vcd_in(&work, &work.join(bad)).is_err(),
+                "{bad} must be refused"
+            );
         }
         assert!(vcd_in(&work, &base.join("outside.vcd")).is_err());
         let _ = std::fs::remove_dir_all(&base);
@@ -592,12 +688,19 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::create_dir_all(&other).unwrap();
         let exe = bin.join("surfer");
-        std::fs::write(&exe, "#!/bin/sh\necho \"$1\" > \"$(dirname \"$0\")/opened\"\n").unwrap();
+        std::fs::write(
+            &exe,
+            "#!/bin/sh\necho \"$1\" > \"$(dirname \"$0\")/opened\"\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(other.join("surfer"), "not executable").unwrap();
         let path = std::env::join_paths([&other, &bin]).unwrap();
         assert_eq!(find_on_path("surfer", Some(&path)), Some(exe.clone()));
-        assert_eq!(find_on_path("surfer", Some(&std::env::join_paths([&other]).unwrap())), None);
+        assert_eq!(
+            find_on_path("surfer", Some(&std::env::join_paths([&other]).unwrap())),
+            None
+        );
         assert_eq!(find_on_path("../bin/surfer", Some(&path)), None);
         assert_eq!(find_on_path("", Some(&path)), None);
         assert_eq!(find_on_path("surfer", None), None);
@@ -608,7 +711,10 @@ mod tests {
         while !opened.exists() && t.elapsed() < std::time::Duration::from_secs(5) {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert_eq!(std::fs::read_to_string(&opened).unwrap().trim(), base.join("t.vcd").display().to_string());
+        assert_eq!(
+            std::fs::read_to_string(&opened).unwrap().trim(),
+            base.join("t.vcd").display().to_string()
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

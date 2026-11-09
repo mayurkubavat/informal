@@ -950,7 +950,11 @@ mod tests {
 
     #[test]
     fn completes_commands_then_properties() {
-        let props = vec!["a_max".to_string(), "prove_me".to_string(), "a_hold".to_string()];
+        let props = vec![
+            "a_max".to_string(),
+            "prove_me".to_string(),
+            "a_hold".to_string(),
+        ];
         assert_eq!(complete(Flavor::Jg, &props, "prov"), ["prove", "prove_me"]);
         assert_eq!(complete(Flavor::Jg, &props, "a_"), ["a_hold", "a_max"]);
         assert!(complete(Flavor::Jg, &props, "").is_empty());

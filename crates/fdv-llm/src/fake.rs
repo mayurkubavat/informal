@@ -31,13 +31,20 @@ impl Fake {
 
     /// A fake whose health check fails with `why` (and whose chat errors).
     pub fn offline(why: &str) -> Self {
-        Fake { offline: Some(why.to_string()), ..Fake::new(Vec::new()) }
+        Fake {
+            offline: Some(why.to_string()),
+            ..Fake::new(Vec::new())
+        }
     }
 
     pub fn from_config(name: &str, cfg: &ProviderConfig) -> Self {
         Fake {
             name: name.to_string(),
-            model: if cfg.model.is_empty() { "scripted".into() } else { cfg.model.clone() },
+            model: if cfg.model.is_empty() {
+                "scripted".into()
+            } else {
+                cfg.model.clone()
+            },
             offline: cfg.offline.clone(),
             ..Fake::new(cfg.replies.clone())
         }
@@ -73,7 +80,11 @@ impl LlmProvider for Fake {
         &self.model
     }
 
-    async fn chat(&self, req: ChatRequest, on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send)) -> Result<ChatResponse> {
+    async fn chat(
+        &self,
+        req: ChatRequest,
+        on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ChatResponse> {
         if let Some(why) = &self.offline {
             bail!("{why}");
         }
@@ -81,7 +92,11 @@ impl LlmProvider for Fake {
         self.seen.lock().unwrap().push(req);
         let text = {
             let mut n = self.next.lock().unwrap();
-            let r = if self.replies.is_empty() { String::new() } else { self.replies[*n % self.replies.len()].clone() };
+            let r = if self.replies.is_empty() {
+                String::new()
+            } else {
+                self.replies[*n % self.replies.len()].clone()
+            };
             *n += 1;
             r
         };
@@ -102,7 +117,11 @@ impl LlmProvider for Fake {
         if let Some(why) = &self.offline {
             bail!("{why}");
         }
-        Ok(ModelInfo { provider: self.name.clone(), model: self.model.clone(), available: vec![self.model.clone()] })
+        Ok(ModelInfo {
+            provider: self.name.clone(),
+            model: self.model.clone(),
+            available: vec![self.model.clone()],
+        })
     }
 }
 

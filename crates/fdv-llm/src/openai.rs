@@ -65,7 +65,9 @@ impl OpenAiCompat {
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let mut r = self.client.request(method, format!("{}{path}", self.base_url));
+        let mut r = self
+            .client
+            .request(method, format!("{}{path}", self.base_url));
         if let Some(k) = &self.api_key {
             r = r.bearer_auth(k);
         }
@@ -93,7 +95,12 @@ async fn http_error(resp: reqwest::Response) -> anyhow::Error {
     let text = resp.text().await.unwrap_or_default();
     let msg = serde_json::from_str::<Value>(&text)
         .ok()
-        .and_then(|v| v["error"]["message"].as_str().or(v["error"].as_str()).map(String::from))
+        .and_then(|v| {
+            v["error"]["message"]
+                .as_str()
+                .or(v["error"].as_str())
+                .map(String::from)
+        })
         .unwrap_or_else(|| clip(text.trim()));
     anyhow!("HTTP {status}: {msg}")
 }
@@ -107,7 +114,11 @@ impl LlmProvider for OpenAiCompat {
         &self.model
     }
 
-    async fn chat(&self, req: ChatRequest, on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send)) -> Result<ChatResponse> {
+    async fn chat(
+        &self,
+        req: ChatRequest,
+        on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ChatResponse> {
         let t = Instant::now();
         let resp = self
             .request(reqwest::Method::POST, "/chat/completions")
@@ -118,7 +129,10 @@ impl LlmProvider for OpenAiCompat {
         if !resp.status().is_success() {
             return Err(http_error(resp).await);
         }
-        let mut out = ChatResponse { model: self.model.clone(), ..Default::default() };
+        let mut out = ChatResponse {
+            model: self.model.clone(),
+            ..Default::default()
+        };
         let is_json = resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -128,9 +142,15 @@ impl LlmProvider for OpenAiCompat {
             // A server that ignored `stream: true`: one plain JSON answer.
             let v: Value = resp.json().await.context("chat response")?;
             if let Some(e) = v.get("error") {
-                bail!("server error: {}", e["message"].as_str().unwrap_or(&e.to_string()));
+                bail!(
+                    "server error: {}",
+                    e["message"].as_str().unwrap_or(&e.to_string())
+                );
             }
-            out.text = v["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_string();
+            out.text = v["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             out.finish_reason = v["choices"][0]["finish_reason"].as_str().map(String::from);
             if let Some(m) = v["model"].as_str() {
                 out.model = m.to_string();
@@ -154,7 +174,8 @@ impl LlmProvider for OpenAiCompat {
                 out.finish_reason = c.finish_reason;
             }
             if !c.text.is_empty() {
-                out.first_token_ms.get_or_insert(t.elapsed().as_millis() as u64);
+                out.first_token_ms
+                    .get_or_insert(t.elapsed().as_millis() as u64);
                 out.text.push_str(&c.text);
                 on_delta(&c.text);
             }
@@ -163,7 +184,11 @@ impl LlmProvider for OpenAiCompat {
         'read: while let Some(bytes) = stream.next().await {
             let bytes = bytes.map_err(|e| {
                 if e.is_timeout() {
-                    anyhow!("{}: timed out after {} s", self.base_url, t.elapsed().as_secs())
+                    anyhow!(
+                        "{}: timed out after {} s",
+                        self.base_url,
+                        t.elapsed().as_secs()
+                    )
                 } else {
                     anyhow!("{}: {e}", self.base_url)
                 }
@@ -194,13 +219,26 @@ impl LlmProvider for OpenAiCompat {
         let v: Value = resp.json().await.context("model list")?;
         let available: Vec<String> = v["data"]
             .as_array()
-            .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["id"].as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         // An empty list means the server does not list models; trust the config.
         if !available.is_empty() && !available.iter().any(|m| m == &self.model) {
-            bail!("model {} is not served at {} (it has {})", self.model, self.base_url, available.join(", "));
+            bail!(
+                "model {} is not served at {} (it has {})",
+                self.model,
+                self.base_url,
+                available.join(", ")
+            );
         }
-        Ok(ModelInfo { provider: self.name.clone(), model: self.model.clone(), available })
+        Ok(ModelInfo {
+            provider: self.name.clone(),
+            model: self.model.clone(),
+            available,
+        })
     }
 }
 

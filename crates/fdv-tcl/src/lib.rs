@@ -167,7 +167,12 @@ pub fn caller_location() -> Option<(String, u32)> {
     // command's return value afterwards, so clobbering it here is fine.
     let script = "info frame -1";
     let code = unsafe {
-        ffi::Tcl_EvalEx(raw, script.as_ptr() as *const c_char, script.len() as c_int, 0)
+        ffi::Tcl_EvalEx(
+            raw,
+            script.as_ptr() as *const c_char,
+            script.len() as c_int,
+            0,
+        )
     };
     let text = unsafe { CStr::from_ptr(ffi::Tcl_GetStringResult(raw)) }
         .to_string_lossy()
@@ -196,7 +201,12 @@ pub fn current_script() -> Option<String> {
     }
     let script = "info script";
     let code = unsafe {
-        ffi::Tcl_EvalEx(raw, script.as_ptr() as *const c_char, script.len() as c_int, 0)
+        ffi::Tcl_EvalEx(
+            raw,
+            script.as_ptr() as *const c_char,
+            script.len() as c_int,
+            0,
+        )
     };
     let text = unsafe { CStr::from_ptr(ffi::Tcl_GetStringResult(raw)) }
         .to_string_lossy()

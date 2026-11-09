@@ -43,13 +43,22 @@ pub struct Message {
 
 impl Message {
     pub fn system(s: impl Into<String>) -> Self {
-        Message { role: Role::System, content: s.into() }
+        Message {
+            role: Role::System,
+            content: s.into(),
+        }
     }
     pub fn user(s: impl Into<String>) -> Self {
-        Message { role: Role::User, content: s.into() }
+        Message {
+            role: Role::User,
+            content: s.into(),
+        }
     }
     pub fn assistant(s: impl Into<String>) -> Self {
-        Message { role: Role::Assistant, content: s.into() }
+        Message {
+            role: Role::Assistant,
+            content: s.into(),
+        }
     }
 }
 
@@ -64,7 +73,10 @@ pub struct ChatRequest {
 
 impl ChatRequest {
     pub fn new(messages: Vec<Message>) -> Self {
-        ChatRequest { messages, ..Default::default() }
+        ChatRequest {
+            messages,
+            ..Default::default()
+        }
     }
 }
 
@@ -101,7 +113,11 @@ pub trait LlmProvider: Send + Sync {
     fn model(&self) -> &str;
     /// Send `req`, calling `on_delta` with each piece of text as it
     /// streams in. Dropping the future cancels the call.
-    async fn chat(&self, req: ChatRequest, on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send)) -> Result<ChatResponse>;
+    async fn chat(
+        &self,
+        req: ChatRequest,
+        on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<ChatResponse>;
     /// Whether the server answers and serves the model.
     async fn health(&self) -> Result<ModelInfo>;
 }
@@ -111,6 +127,8 @@ pub fn build(name: &str, cfg: &ProviderConfig) -> Result<Box<dyn LlmProvider>> {
     match cfg.kind.as_str() {
         "openai-compat" => Ok(Box::new(OpenAiCompat::from_config(name, cfg)?)),
         "fake" => Ok(Box::new(Fake::from_config(name, cfg))),
-        other => anyhow::bail!("provider {name}: unknown kind {other:?} (expected \"openai-compat\" or \"fake\")"),
+        other => anyhow::bail!(
+            "provider {name}: unknown kind {other:?} (expected \"openai-compat\" or \"fake\")"
+        ),
     }
 }

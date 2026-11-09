@@ -36,7 +36,13 @@ fn procs_with(marker: &str) -> Vec<u32> {
         // Zombies are dead already; only a running leftover counts.
         .filter(|pid| {
             std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .map(|s| !s.rsplit(')').next().unwrap_or("").trim_start().starts_with('Z'))
+                .map(|s| {
+                    !s.rsplit(')')
+                        .next()
+                        .unwrap_or("")
+                        .trim_start()
+                        .starts_with('Z')
+                })
                 .unwrap_or(false)
         })
         .collect()
@@ -116,11 +122,7 @@ safe = '(?m)^UNSAT$'
         assert_eq!(*status, "undetermined", "{name}");
     }
     let s = sh.session.borrow();
-    let reasons: Vec<String> = s
-        .props
-        .iter()
-        .map(|p| format!("{:?}", p.status))
-        .collect();
+    let reasons: Vec<String> = s.props.iter().map(|p| format!("{:?}", p.status)).collect();
     for r in &reasons {
         assert!(r.contains("stopped"), "not stopped: {r}");
     }
