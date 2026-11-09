@@ -235,3 +235,84 @@ Ordered roughly by expected payoff for HWMCC-style models.
 - A minimal CI substitute that runs `check.sh` on every local commit (git
   hook) and a nightly benchmark.
 - Cross-platform status table for the desktop app (Linux, macOS, Windows).
+
+---
+
+## Gemini Deep Research review (2026-11-09)
+
+Source: `research/gemini-deep-research-decisions/report.md` (127 KB, prompt in
+`prompt.txt`). It reviewed D1-D12 and the ideas above. **Treat it as a
+literature-backed hypothesis list, not as measured fact:** its HWMCC'24/'25
+numbers, arXiv references (some dated 2026) and projected solve counts
+were not checked by us. Every projection below becomes a plan only after our own
+before/after run, with the prediction written down first. Section numbers
+refer to the report.
+
+### Headline findings
+
+1. **Certify every SAFE verdict now (report P1).** Check IC3's final frame with
+   three independent CaDiCaL queries (Init, Consecution, Safety) against the
+   *un-preprocessed* AIG, then Certifaiger/BtorSim; optionally LRAT proofs.
+   Predicted under 0.5% wall-clock. Re-introducing the old a03/a11 and
+   `scorr` bugs on a test branch should make the gate catch both.
+2. **Close the gap to rIC3 (report P2-P4).** The report says rIC3 solves
+   248/319 in the official 16-thread HWMCC'24 run (274 in '25), against our
+   204. Proposed causes and fixes, in order: EXCTG + DynAMic + A-IC3 bandit +
+   stall-aware push budgets (predicted 219-226 solved); turn `Mini` into a
+   GipSAT-class solver with DAG cone-of-influence restriction, O(1) bucket
+   VSIDS and temporary clauses (predicted 3x faster queries); parent-lemma
+   CTP prediction. Note the 248 figure is a 16-thread official run, our 204 is
+   a 300 s local run: the gap may be smaller than it looks, so re-measure
+   rIC3 on the same box first.
+3. **Backup the repo (report P1/D12).** Biggest operational risk is no remote.
+   Needs your decision, since "no GitHub remote" was a deliberate choice; a
+   local bare repo on another disk or machine keeps that policy.
+
+### Where the report agrees, disagrees or adds to each decision
+
+| Decision | Report verdict | Our read |
+| --- | --- | --- |
+| D1 wrap engines | Modify: stop parsing stdout; validate certificate/witness files; add SuperCAR and AVR; fix Pono/BtorMC args. | Agree on file-based verdicts (matches D8). New engines: add after the P1 gate exists. |
+| D2 Rust + FFI | Change: make missing C++ libs a hard compile error via Cargo features; do **not** port CaDiCaL, Bitwuzla or slang to Rust; put pure-Rust effort into `Mini`. | Agree. This **narrows** the "move must-have libs to Rust over time" plan: only the IC3 solver is worth owning. Needs your confirmation. |
+| D3 GPL ok | Keep; skip Verific unless VHDL needed; says rIC3 and Pono are BSD-3. | **Check:** rIC3's `LICENSE` file is BSD-3-Clause but its `Cargo.toml` says `GPL-3.0`. Conflicting upstream; irrelevant while internal, but settle before any sharing. |
+| D4 pinning | Modify: reproducible build script or container; automated sample gate on pin update. | Agree; the build steps are still reconstructed, not logged. |
+| D5 slang + Yosys | Change: use `yosys-slang` (the fork rIC3 uses) instead of raw Yosys, with `chformal -early`, to remove the 1-cycle depth mismatch and the second parser. | Plausible and cheap to try; verify with a bounded miter between the two paths. |
+| D6 Btor2 + AIG | Keep, plus a sidecar `FdvSymbolMap` from AIG literals to Btor2 nodes and slang scopes; enables IC3-INN and sub-instance lookup. | Agree; it also fixes the "top-scope signals only" limit. |
+| D7 portfolio | Change: share one `Arc<Aig>` across workers; cap variable-elimination blowup (|pos|,|neg| <= 8, no literal growth); select 3-4 engines per model instead of a fixed set; add SuperCAR/CAR-DT, Pono, AVR; IC3 with internal signals. | Agree with memory and selection fixes (addresses the 18 GB and 10.9 GB spikes). Engine additions are speculative until measured. |
+| D8 trust | Change now: the P1 gate moves from phase 2 to phase 1. | Agree; reverses the "deferred" note above. |
+| D9 Tcl shell | Change: run the Tcl REPL on its own thread with an async channel and shared cancel flag polled inside slang lowering, CaDiCaL terminate callback and `Mini`; warn rather than error on benign tuning flags. | Agree; fixes two known limitations (typed commands wait, Stop race). The "warn on unknown options" part conflicts with our deliberate strictness: only for flags known to be tuning-only. |
+| D10 UI | Modify: FST traces with streamed windows; WebDriver tests on the real WebKitGTK window. | Agree, medium priority. |
+| D11 AI | Change: use AI only where the solver checks it: engine selection (`Btor2-Select`), A-IC3 bandit, and CTI-guided invariant synthesis ("CIll") gated by three solver checks. | Agrees with the existing "advisory only" rule and the ideas above; Ask mode stays. |
+| D12 process | Change today: backup remote, merge Mac research docs, git hook + nightly run. | Agree on backup and hook; see headline 3. |
+
+### New ideas from the report to add to the lists above
+
+- Liveness: L2S + BMC for lasso bugs, k-liveness with stabilizing constraints
+  and IC3 frame reuse; checked against another tool (report P8).
+- Complete SVA through an automaton/Büchi lowering on the slang AST,
+  validated against SymbiYosys (report P9).
+- `Btor2-Select`: a learned engine selector trained on our own run database
+  with cross-validation (report P7).
+- IC3 with internal signals (comparators, mux selects) to compress
+  miter/datapath invariants (report P6).
+- Interval abstract interpretation as invariant seeding and SyGuS/ICE
+  word-level lemma synthesis (report section 7).
+
+### Report's ranking, with our status
+
+| # | Item | Effort (report) | Status |
+| --- | --- | --- | --- |
+| 1 | Backup + 3-query CaDiCaL gate + Certifaiger/BtorSim | 3 days | proposed |
+| 2 | EXCTG, DynAMic, A-IC3, stall-aware push | 5 days | proposed |
+| 3 | GipSAT-class `Mini` | 8 days | proposed |
+| 4 | Parent-lemma CTP prediction | 5 days | proposed |
+| 5 | SuperCAR/CAR-DT, Pono, AVR, file-validated verdicts | 6 days | proposed |
+| 6 | IC3-INN + `FdvSymbolMap` | 8 days | proposed |
+| 7 | `Btor2-Select`, shared `Arc<Aig>`, bounded CNF elimination | 6 days | proposed |
+| 8 | Liveness subsystem | 7 days | proposed |
+| 9 | Full SVA + `yosys-slang` + async Tcl | 12 days | proposed |
+| 10 | Solver-verified CTI-guided LLM invariants | 8 days | proposed |
+
+Effort figures and solve-count gains are the report's, not ours. Suggested
+first step: items 1 and 2 together, since the gate makes the IC3 changes safe
+to try.
