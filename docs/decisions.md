@@ -29,17 +29,20 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D2. Rust core, C/C++ libraries through FFI
 
-- **Chosen:** Rust workspace; slang, Bitwuzla, CaDiCaL, Tcl 8.6 via FFI shims;
-  move must-have libraries to Rust over time.
+- **Chosen:** Rust workspace; slang, Bitwuzla, CaDiCaL, Tcl 8.6 via FFI shims.
+  **Decided 2026-11-09: no ports.** CaDiCaL, Bitwuzla and slang stay C/C++
+  behind FFI for good; the only solver we own in Rust is IC3 (with its small
+  `Mini` CDCL). Library and dependency upgrades wait until the portfolio is
+  level with rIC3.
 - **Alternatives:** C++ throughout; pure Rust from day one.
 - **Why:** safe concurrency for multi-threaded IC3 with lemma sharing, while
   reusing mature solvers and parser now.
 - **Open issues**
   - Two build worlds (cargo plus cmake/meson); `build.rs` links whatever it
     finds, so a missing library silently drops engines or the front end.
-  - Rust-native replacements are not yet scoped: which libraries are
-    "must-have" is undecided. A pure-Rust SAT solver (e.g. a CaDiCaL port)
-    would remove C++ from the engine path but costs performance and effort.
+  - Porting was considered and rejected (2026-11-09): a pure-Rust CaDiCaL,
+    Bitwuzla or SystemVerilog front end would cost years of tuning for no
+    verdict gained; effort goes into IC3, preprocessing and certification.
 - **Ideas:** make "library missing" a loud warning in `informal info`/CI gate;
   list which engines a given build contains.
 
@@ -109,7 +112,9 @@ Sources: README, `docs/`, git log, project notes.
   CNF.
 - **Why:** IC3 proves, stepped BMC finds deep bugs, Houdini turns IC3 lemmas
   into k-induction strengthening. 204 of 319 HWMCC'24 bit-level models solved
-  with no wrong verdicts, level with rIC3's portfolio.
+  with no wrong verdicts across separate per-engine runs, level with rIC3's
+  portfolio; as one in-process portfolio run (300 s, 14 GB) it was 184 on
+  2026-11-09, 191 after memory shedding (9d161b8).
 - **Open issues**
   - We only match rIC3's portfolio, not beat it. 115 models still unsolved.
   - IC3 lacks EXCTG and DynAMic; CTP is off by default and on in one worker.
@@ -119,7 +124,10 @@ Sources: README, `docs/`, git log, project notes.
     on a03/a11; a `scorr` equality proof needed a fix). Those were caught by
     comparison, which suggests more may be hiding.
   - Engine memory: 16 rIC3 workers reached 18 GB; a CNF stage once needed
-    10.9 GB.
+    10.9 GB. In one process the engines share one memory budget: over it,
+    the portfolio sheds engines one at a time, deep BMC first (9d161b8), and
+    every engine shares one prepared model and CNF template (d699008); each
+    engine still loads its own SAT solvers (Problem07 still peaks at ~10 GB).
 - **Ideas:** see "Math and algorithm ideas" below.
 
 ## D8. Soundness and trust
