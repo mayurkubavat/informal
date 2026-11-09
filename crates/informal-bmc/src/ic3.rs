@@ -150,7 +150,7 @@ impl Ord for Obligation {
 
 pub struct Ic3<'g> {
     g: &'g Aig,
-    t: Template,
+    t: std::sync::Arc<Template>,
     nvars: usize,
     /// solvers[i] holds F_i: init for i = 0, else lemmas of level >= i.
     solvers: Vec<Solver>,
@@ -196,7 +196,7 @@ impl<'g> Ic3<'g> {
         if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
             return None;
         }
-        let tpl = cnf::build(g);
+        let tpl = cnf::template(g);
         let nvars = g.nodes.len() + 1;
         let lift = Solver::new(&tpl, nvars, make_sat());
         // One literal for "some bad output": an extra variable when needed.

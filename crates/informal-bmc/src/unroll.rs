@@ -12,7 +12,7 @@ use informal_sat::{Lit, Sat};
 
 pub struct Unroll<'g> {
     g: &'g Aig,
-    template: Template,
+    template: std::sync::Arc<Template>,
     pub sat: Box<dyn Sat>,
     next_var: Lit,
     tru: Lit,
@@ -27,7 +27,7 @@ impl<'g> Unroll<'g> {
         sat.add_clause(&[1]);
         Unroll {
             g,
-            template: cnf::build(g),
+            template: cnf::template(g),
             sat,
             next_var: 2,
             tru: 1,

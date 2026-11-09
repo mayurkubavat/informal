@@ -13,6 +13,7 @@
 //! one CNF stage once needed 10.9 GB.
 
 use informal_aig::{is_neg, var, Aig, Init, Node};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Template literal: `+v` / `-v` over template variables 1.. (1 is the
 /// AIG's constant-false variable 0, shifted by one).
@@ -40,11 +41,51 @@ const MAX_OCC: usize = 16;
 const PASSES: usize = 1;
 
 pub fn build(g: &Aig) -> Template {
+    build_until(g, &|| false)
+}
+
+/// [`build`], ending variable elimination early once `stop` says so: the
+/// template is then still exact, only larger (elimination is optional).
+/// Elimination is the slow part (37 s on sosylab Problem07).
+pub fn build_until(g: &Aig, stop: &dyn Fn() -> bool) -> Template {
     if std::env::var_os("INFORMAL_CNF_PAIRWISE").is_some() {
         build_pairwise(g)
     } else {
-        build_dag(g)
+        build_dag(g, stop)
     }
+}
+
+/// Templates in use, by the address of the AIG they were built for (see
+/// [`share`]). Weak: a template goes when its last user drops it.
+type SharedEntry = (usize, usize, usize, Weak<Template>);
+static SHARED: Mutex<Vec<SharedEntry>> = Mutex::new(Vec::new());
+
+fn aig_key(g: &Aig) -> (usize, usize, usize) {
+    (g as *const Aig as usize, g.nodes.len(), g.latches.len())
+}
+
+/// Offer `t`, built for `g`, to every later [`template`] call on the same
+/// AIG (same address) while `t` is alive: the portfolio's engines share one
+/// prepared model, so its template is built once instead of once per
+/// engine, IC3 worker and k-induction unrolling.
+pub fn share(g: &Aig, t: &Arc<Template>) {
+    let (a, n, l) = aig_key(g);
+    let mut s = SHARED.lock().unwrap_or_else(|p| p.into_inner());
+    s.retain(|e| e.3.strong_count() > 0 && e.0 != a);
+    s.push((a, n, l, Arc::downgrade(t)));
+}
+
+/// The template of `g`: the shared one when [`share`] offered one for this
+/// AIG, else a new build.
+pub fn template(g: &Aig) -> Arc<Template> {
+    let key = aig_key(g);
+    let found = SHARED
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .find(|e| (e.0, e.1, e.2) == key)
+        .and_then(|e| e.3.upgrade());
+    found.unwrap_or_else(|| Arc::new(build(g)))
 }
 
 /// Variables the engines must see: constant, inputs, latches, next-state
@@ -78,7 +119,7 @@ fn frozen_vars(g: &Aig) -> Vec<bool> {
 /// so a gate's definition is already rewritten over surviving variables
 /// when it is eliminated; it stays a definition of that gate. Accepted
 /// when the clause count does not grow; resolvents are subsumption-reduced.
-fn build_dag(g: &Aig) -> Template {
+fn build_dag(g: &Aig, stop: &dyn Fn() -> bool) -> Template {
     let n = g.nodes.len() + 1;
     let frozen = frozen_vars(g);
     let max_occ: usize = std::env::var("INFORMAL_BVE_OCC")
@@ -183,6 +224,9 @@ fn build_dag(g: &Aig) -> Template {
     }
     let mut live_cls = clauses.len();
     for v in 1..n {
+        if v % 1024 == 0 && stop() {
+            break;
+        }
         // Eliminations create and delete many clauses (113M created for
         // 1.4M kept on sosylab Problem101): once dead clauses outnumber
         // live ones 3 to 1, renumber the live ones and rebuild the lists,
@@ -567,5 +611,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_shared_template_is_reused_until_dropped_and_a_stop_keeps_it_exact() {
+        let mut g = Aig::new();
+        let (a, b, c) = (g.input(), g.input(), g.input());
+        let ab = g.and(a, b);
+        let bad = g.and(ab, c);
+        g.bads.push(bad);
+        let t = Arc::new(build(&g));
+        share(&g, &t);
+        assert!(Arc::ptr_eq(&template(&g), &t));
+        drop(t);
+        // Gone with its last user: a new build.
+        let fresh = template(&g);
+        assert_eq!(fresh.eliminated, 1);
+        // Stopped before elimination: nothing eliminated, same models.
+        let s = build_until(&g, &|| true);
+        assert!(s.eliminated <= fresh.eliminated);
+        assert!(s.clauses.len() >= fresh.clauses.len());
     }
 }

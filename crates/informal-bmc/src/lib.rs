@@ -32,17 +32,52 @@ fn prepare(req: &CheckRequest) -> Result<Aig, String> {
     Ok(informal_aig::preprocess::simplify(&g).0)
 }
 
+/// The model as the engines see it: simplified, latch-merged, and its CNF
+/// template, built once per model and process and shared by every engine
+/// and worker that runs on it at the same time (derefs to the AIG).
+pub struct Prepared {
+    // Field order: the AIG is dropped before the template it keys.
+    aig: Aig,
+    _template: Arc<cnf::Template>,
+}
+
+impl std::ops::Deref for Prepared {
+    type Target = Aig;
+    fn deref(&self) -> &Aig {
+        &self.aig
+    }
+}
+
+enum SlotState {
+    Empty,
+    Building,
+    Ready(std::sync::Weak<Prepared>),
+    /// The model cannot be prepared (a load error): the same for everyone.
+    Failed(String),
+}
+
+struct Slot {
+    state: std::sync::Mutex<SlotState>,
+    ready: std::sync::Condvar,
+}
+
+/// Model file, its length and mtime, and whether scorr is on.
+type SlotKey = (std::path::PathBuf, u64, Option<std::time::SystemTime>, bool);
+
+static SLOTS: std::sync::Mutex<Vec<(SlotKey, Arc<Slot>)>> = std::sync::Mutex::new(Vec::new());
+
 /// [`prepare`], then latch correspondence ([`scorr`]) within 5% of the
-/// time left (at most 10 s): on the big CPU models of HWMCC'24 1-induction
-/// peels off about one candidate per SAT call and never finishes, so the
-/// budget only bounds the waste. `INFORMAL_NO_SCORR` turns it off.
+/// time left (at most 10 s), then the CNF template; see [`Prepared`].
+/// On the big CPU models of HWMCC'24 1-induction peels off about one
+/// scorr candidate per SAT call and never finishes, so the budget only
+/// bounds the waste. `INFORMAL_NO_SCORR` turns scorr off.
 ///
-/// Every engine prepares its own copy, so with a portfolio over budget
-/// this checks between phases: stopping only in the SAT loop lets the
-/// load, scorr and CNF build of each engine run on past the budget.
-fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Aig, String> {
-    // TODO(D7, Gemini P7): build the prepared AIG once and share it as
-    // Arc<Aig> across portfolio workers instead of one copy per engine.
+/// The first engine to ask builds, with its own stop and deadline (a
+/// stop ends scorr and variable elimination early; both stay sound); the
+/// others wait, polling their own stop. Before this, every engine, IC3
+/// worker and k-induction unrolling built its own template (37 s and
+/// 1.5 GB each on sosylab Problem07, about 15 copies per portfolio).
+fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Arc<Prepared>, String> {
     let stop = || {
         if ctx.should_stop() {
             Err(ctx.stop_reason().to_string())
@@ -51,32 +86,115 @@ fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Aig, String> {
         }
     };
     stop()?;
-    let g = prepare(req)?;
-    stop()?;
-    if std::env::var_os("INFORMAL_NO_SCORR").is_some() {
-        return Ok(g);
-    }
-    let now = Instant::now();
-    let left = ctx.deadline.saturating_duration_since(now);
-    let mut c = ctx.clone();
-    c.deadline = now + (left / 20).min(std::time::Duration::from_secs(10));
-    match scorr::latch_correspondence(&g, solver(&c), &c) {
-        Some((h, st)) => {
-            if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
-                eprintln!(
-                    "scorr: merged {} latches ({} -> {}), {} refinements, {:.2} s",
-                    st.merged,
-                    g.latches.len(),
-                    h.latches.len(),
-                    st.refinements,
-                    now.elapsed().as_secs_f64()
-                );
+    let meta = std::fs::metadata(&req.model).ok();
+    let key: SlotKey = (
+        req.model.clone(),
+        meta.as_ref().map_or(0, |m| m.len()),
+        meta.and_then(|m| m.modified().ok()),
+        std::env::var_os("INFORMAL_NO_SCORR").is_none(),
+    );
+    let slot = {
+        let mut slots = SLOTS.lock().unwrap_or_else(|p| p.into_inner());
+        // Forget models nobody is using any more.
+        slots.retain(|(_, s)| {
+            Arc::strong_count(s) > 1
+                || match &*s.state.lock().unwrap_or_else(|p| p.into_inner()) {
+                    SlotState::Ready(w) => w.strong_count() > 0,
+                    _ => false,
+                }
+        });
+        match slots.iter().find(|(k, _)| *k == key) {
+            Some((_, s)) => s.clone(),
+            None => {
+                let s = Arc::new(Slot {
+                    state: std::sync::Mutex::new(SlotState::Empty),
+                    ready: std::sync::Condvar::new(),
+                });
+                slots.push((key.clone(), s.clone()));
+                s
             }
-            Ok(h)
         }
-        None => Ok(g),
+    };
+    let mut st = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+    loop {
+        match &*st {
+            SlotState::Ready(w) => {
+                if let Some(p) = w.upgrade() {
+                    drop(st);
+                    stop()?;
+                    return Ok(p);
+                }
+                *st = SlotState::Empty;
+            }
+            SlotState::Failed(e) => return Err(e.clone()),
+            SlotState::Building => {
+                st = slot
+                    .ready
+                    .wait_timeout(st, std::time::Duration::from_millis(50))
+                    .unwrap_or_else(|p| p.into_inner())
+                    .0;
+                if ctx.should_stop() {
+                    return Err(ctx.stop_reason().to_string());
+                }
+            }
+            SlotState::Empty => {
+                *st = SlotState::Building;
+                drop(st);
+                let built = build_prepared(req, ctx);
+                let mut s = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+                let out = match built {
+                    Ok(p) => {
+                        let p = Arc::new(p);
+                        cnf::share(&p.aig, &p._template);
+                        *s = SlotState::Ready(Arc::downgrade(&p));
+                        Ok(p)
+                    }
+                    Err(e) => {
+                        *s = SlotState::Failed(e.clone());
+                        Err(e)
+                    }
+                };
+                drop(s);
+                slot.ready.notify_all();
+                let p = out?;
+                stop()?;
+                return Ok(p);
+            }
+        }
     }
-    .and_then(|g| stop().map(|()| g))
+}
+
+fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, String> {
+    let g = prepare(req)?;
+    let g = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
+        g
+    } else {
+        let now = Instant::now();
+        let left = ctx.deadline.saturating_duration_since(now);
+        let mut c = ctx.clone();
+        c.deadline = now + (left / 20).min(std::time::Duration::from_secs(10));
+        match scorr::latch_correspondence(&g, solver(&c), &c) {
+            Some((h, st)) => {
+                if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+                    eprintln!(
+                        "scorr: merged {} latches ({} -> {}), {} refinements, {:.2} s",
+                        st.merged,
+                        g.latches.len(),
+                        h.latches.len(),
+                        st.refinements,
+                        now.elapsed().as_secs_f64()
+                    );
+                }
+                h
+            }
+            None => g,
+        }
+    };
+    let t = cnf::build_until(&g, &|| ctx.should_stop());
+    Ok(Prepared {
+        aig: g,
+        _template: Arc::new(t),
+    })
 }
 
 fn solver(ctx: &RunContext) -> Box<dyn Sat> {
