@@ -133,6 +133,10 @@ impl CancelToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+    /// True when both are clones of the same token.
+    pub fn same(&self, other: &CancelToken) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// Everything an engine gets besides the request itself.
@@ -157,7 +161,7 @@ impl RunContext {
     }
     /// Why [`Self::should_stop`] said stop: "memory" or "timeout".
     pub fn stop_reason(&self) -> &'static str {
-        if memory::exceeded() {
+        if memory::exceeded() || memory::was_shed(&self.cancel) {
             "memory"
         } else {
             "timeout"
@@ -177,4 +181,10 @@ pub trait Engine: Send + Sync {
     /// Run until a verdict, cancellation or the deadline. Must return
     /// promptly (well under a second) once `ctx.should_stop()` is true.
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult>;
+    /// Order in which a portfolio over its memory budget stops engines:
+    /// higher first (see [`memory::register`]). 0 is never stopped for
+    /// memory: an external engine, whose memory is capped on its own.
+    fn shed_rank(&self) -> u32 {
+        1
+    }
 }

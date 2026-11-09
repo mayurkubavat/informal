@@ -131,6 +131,14 @@ impl Engine for Bmc {
             ..Default::default()
         }
     }
+    /// BMC grows with depth: shed first, deepest steps before shallow.
+    fn shed_rank(&self) -> u32 {
+        match self.step {
+            0 | 1 => 3,
+            2..=10 => 4,
+            _ => 5,
+        }
+    }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
         let g = match prepare_ctx(req, ctx) {
@@ -154,8 +162,15 @@ impl Engine for Bmc {
             }
             let mut bads = Vec::new();
             for f in k..=last {
+                // A deep step adds many frames before its one SAT call.
+                if ctx.should_stop() {
+                    break;
+                }
                 u.add_frame();
                 bads.push(u.bad(f));
+            }
+            if bads.len() < last + 1 - k {
+                break unknown(ctx.stop_reason());
             }
             // One call: is any of frames k..=last bad?
             let assume = if let [b] = bads[..] {
@@ -310,6 +325,9 @@ impl Engine for KInduction {
             finds_bugs: true,
             ..Default::default()
         }
+    }
+    fn shed_rank(&self) -> u32 {
+        2
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
@@ -601,6 +619,10 @@ impl Engine for Ic3Mt {
             finds_bugs: true,
             ..Default::default()
         }
+    }
+    /// Four IC3 workers, each with its own solvers.
+    fn shed_rank(&self) -> u32 {
+        2
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();

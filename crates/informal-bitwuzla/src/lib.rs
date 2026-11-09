@@ -188,6 +188,9 @@ impl Engine for WordBmc {
             ..Default::default()
         }
     }
+    fn shed_rank(&self) -> u32 {
+        3
+    }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
         let text = std::fs::read_to_string(&req.model)?;

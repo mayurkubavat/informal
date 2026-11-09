@@ -4,7 +4,9 @@
 //! Phase 0 runs every eligible engine at once. Phase 3 replaces "all at
 //! once" with the learned selector and online time-slicing.
 
-use crate::{CheckRequest, Engine, EngineResult, Progress, RunContext, Verdict};
+use crate::{
+    memory, CancelToken, CheckRequest, Engine, EngineResult, Progress, RunContext, Verdict,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -124,9 +126,27 @@ pub fn run_until(
                 }
             });
         }
-        for (slot, engine) in eligible.iter().enumerate() {
-            let (tx, ctx, engine) = (tx.clone(), ctx.clone(), engine.clone());
+        // Each engine gets its own token, so the memory sampler can stop
+        // one engine (see memory::register); cancelling the run's token
+        // (a winner, or the caller's stop) cancels them all.
+        let tokens: Vec<CancelToken> = eligible.iter().map(|_| CancelToken::new()).collect();
+        {
+            let (run, tokens, finished) = (ctx.cancel.clone(), tokens.clone(), &finished);
             s.spawn(move || {
+                while !finished.load(Ordering::SeqCst) {
+                    if run.is_cancelled() {
+                        tokens.iter().for_each(CancelToken::cancel);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            });
+        }
+        for (slot, engine) in eligible.iter().enumerate() {
+            let (tx, mut ctx, engine) = (tx.clone(), ctx.clone(), engine.clone());
+            ctx.cancel = tokens[slot].clone();
+            s.spawn(move || {
+                let _shed = memory::register(engine.name(), engine.shed_rank(), ctx.cancel.clone());
                 let r = engine
                     .check(req, &ctx)
                     .map_err(|e| format!("{}: {e:#}", engine.name()));

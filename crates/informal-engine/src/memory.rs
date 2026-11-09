@@ -20,19 +20,25 @@
 //! that cgroup's non-file memory: what the limit is enforced on, children
 //! included, without the page cache the kernel reclaims first.
 //!
+//! **Shedding.** A portfolio [`register`]s each in-process engine's cancel
+//! token with a shed rank. From 80% of the budget on, the sampler first cancels the
+//! running engine with the highest rank (the likeliest memory hog: deep
+//! BMC before IC3), waits for it to return its memory, and only sheds the
+//! next one if usage is still over. [`exceeded`] (stop everything) turns
+//! true only when at most one registered engine is left running. Before
+//! this, going over the budget stopped every engine at once, and 30 of
+//! the 319 HWMCC'24 models in the 2026-11-09 full run lost engines that
+//! solve them alone.
+//!
 //! When several models run in one process, they all stop while it is over
 //! budget: run one model per process (scripts/inhouse_capped.sh) to keep
 //! the others going.
-//!
-//! TODO(portfolio memouts): when the budget is exceeded, stop only the
-//! engine using the most memory and let the rest finish; today one
-//! engine's memout ends the whole portfolio (30 models lost in the
-//! 2026-11-09 full run).
 
+use crate::CancelToken;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static BUDGET: AtomicU64 = AtomicU64::new(0);
 static HARD: AtomicU64 = AtomicU64::new(0);
@@ -227,7 +233,25 @@ pub fn set_budget(bytes: u64) {
                 let u = usage_bytes().unwrap_or(0);
                 match level(u, b, h) {
                     Level::Memout => memout(u, b, h),
-                    l => OVER.store(l == Level::Over, Ordering::Relaxed),
+                    l => {
+                        // Shed from 80% of the budget on: a shed engine
+                        // may be in a phase that does not poll, and the
+                        // others keep allocating until it returns.
+                        let shed = if u > shed_threshold(b) {
+                            shed_step(Instant::now())
+                        } else {
+                            None
+                        };
+                        if let Some(name) = &shed {
+                            eprintln!(
+                                "informal: {} MiB in use (budget {} MiB); stopping {name} to free memory",
+                                u >> 20,
+                                b >> 20
+                            );
+                        }
+                        let waiting = shed.is_some() || shedding_in_flight(Instant::now());
+                        OVER.store(l == Level::Over && !waiting, Ordering::Relaxed)
+                    }
                 }
                 // Poll faster near the hard limit: engines in a phase that
                 // does not poll can allocate a few GB/s.
@@ -236,6 +260,136 @@ pub fn set_budget(bytes: u64) {
             })
             .expect("spawn memory sampler");
     });
+}
+
+/// An engine that the sampler may stop on its own when the process is
+/// over budget (see the module docs).
+struct Shedable {
+    id: u64,
+    name: String,
+    rank: u32,
+    token: CancelToken,
+    /// When the sampler cancelled it; `None` while it runs.
+    shed_at: Option<Instant>,
+}
+
+static ENGINES: Mutex<Vec<Shedable>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// How long the sampler waits for a shed engine to return (and free its
+/// memory) before it sheds the next one. A shed engine is unregistered
+/// when it returns, so the wait usually ends much sooner.
+const SHED_WAIT: Duration = Duration::from_secs(10);
+
+fn engines() -> std::sync::MutexGuard<'static, Vec<Shedable>> {
+    ENGINES.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Keeps an engine registered for shedding; dropping it (when the engine
+/// returns) unregisters it.
+#[must_use]
+pub struct Registration(u64);
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        let was_shed = {
+            let mut es = engines();
+            let i = es.iter().position(|e| e.id == self.0);
+            i.map(|i| es.remove(i))
+                .and_then(|e| Some((e.name, e.shed_at?)))
+        };
+        if let Some((name, at)) = was_shed {
+            trim();
+            eprintln!(
+                "informal: {name} stopped {} ms after it was shed",
+                at.elapsed().as_millis()
+            );
+        }
+    }
+}
+
+/// Register a running engine: over the budget, the sampler cancels
+/// `token` before stopping everything. Higher `rank` is shed first; rank
+/// 0 is never shed (an external engine, whose memory is not ours).
+pub fn register(name: &str, rank: u32, token: CancelToken) -> Registration {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    if rank > 0 {
+        engines().push(Shedable {
+            id,
+            name: name.to_string(),
+            rank,
+            token,
+            shed_at: None,
+        });
+    }
+    Registration(id)
+}
+
+/// True when `token` was cancelled by shedding (its engine should say it
+/// stopped for "memory").
+pub fn was_shed(token: &CancelToken) -> bool {
+    engines()
+        .iter()
+        .any(|e| e.shed_at.is_some() && e.token.same(token))
+}
+
+/// One sampler step over the budget: shed the highest-ranked running
+/// engine if no earlier shed is still waiting to return and more than
+/// one engine is running. Returns the shed engine's name.
+fn shed_step(now: Instant) -> Option<String> {
+    let mut es = engines();
+    let i = pick_shed(&es, now)?;
+    let e = &mut es[i];
+    e.shed_at = Some(now);
+    e.token.cancel();
+    Some(e.name.clone())
+}
+
+/// Usage above which engines are shed: 80% of the budget.
+fn shed_threshold(budget: u64) -> u64 {
+    budget / 10 * 8
+}
+
+/// The engine [`shed_step`] sheds, if any (pure, for the tests).
+fn pick_shed(es: &[Shedable], now: Instant) -> Option<usize> {
+    if es
+        .iter()
+        .any(|e| e.shed_at.is_some_and(|t| now < t + SHED_WAIT))
+    {
+        return None;
+    }
+    if es.iter().filter(|e| e.shed_at.is_none()).count() < 2 {
+        return None;
+    }
+    // Highest rank; among equals the one registered last.
+    es.iter()
+        .enumerate()
+        .filter(|(_, e)| e.shed_at.is_none())
+        .max_by_key(|(_, e)| (e.rank, e.id))
+        .map(|(i, _)| i)
+}
+
+/// True while a shed engine is still returning: wait for its
+/// memory before stopping everything.
+fn shedding_in_flight(now: Instant) -> bool {
+    engines()
+        .iter()
+        .any(|e| e.shed_at.is_some_and(|t| now < t + SHED_WAIT))
+}
+
+/// Give freed heap memory back to the system (glibc keeps it otherwise,
+/// and the budget is measured on what the process holds).
+fn trim() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        // SAFETY: malloc_trim only releases free heap pages.
+        unsafe {
+            malloc_trim(0);
+        }
+    }
 }
 
 pub fn budget() -> u64 {
@@ -318,5 +472,46 @@ mod tests {
         assert_eq!(level(1100, b, h), Level::Memout);
         // Budget 0 is off, whatever the usage.
         assert_eq!(level(u64::MAX, 0, 0), Level::Under);
+    }
+
+    fn shedable(id: u64, rank: u32, shed_at: Option<Instant>) -> Shedable {
+        Shedable {
+            id,
+            name: format!("e{id}"),
+            rank,
+            token: CancelToken::new(),
+            shed_at,
+        }
+    }
+
+    #[test]
+    fn sheds_the_highest_rank_one_at_a_time_and_keeps_the_last() {
+        let now = Instant::now();
+        let mut es = vec![
+            shedable(1, 1, None),
+            shedable(2, 5, None),
+            shedable(3, 2, None),
+        ];
+        assert_eq!(pick_shed(&es, now), Some(1));
+        // While a shed engine has not returned, nothing more is shed.
+        es[1].shed_at = Some(now);
+        assert_eq!(pick_shed(&es, now + Duration::from_millis(100)), None);
+        // After it, the next highest rank.
+        let later = now + SHED_WAIT + Duration::from_millis(1);
+        assert_eq!(pick_shed(&es, later), Some(2));
+        // The last engine running is never shed (exceeded() stops it).
+        es[2].shed_at = Some(now);
+        assert_eq!(pick_shed(&es, later), None);
+        // Equal ranks: the one registered last.
+        let es = vec![shedable(7, 2, None), shedable(9, 2, None)];
+        assert_eq!(pick_shed(&es, now), Some(1));
+    }
+
+    #[test]
+    fn rank_zero_is_never_registered() {
+        let t = CancelToken::new();
+        let r = register("external", 0, t.clone());
+        assert!(!engines().iter().any(|e| e.id == r.0));
+        assert!(!was_shed(&t));
     }
 }

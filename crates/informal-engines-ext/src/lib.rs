@@ -272,6 +272,11 @@ impl Engine for ExternalEngine {
         }
     }
 
+    /// Runs in its own process under its own memory cap.
+    fn shed_rank(&self) -> u32 {
+        0
+    }
+
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let start = Instant::now();
         // Kept alive until the child exits: the engine reads it by path.
