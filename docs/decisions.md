@@ -9,7 +9,7 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D1. Wrap existing engines first, then build our own
 
-- **Chosen:** a Rust portfolio (`fdv-engine`) over external checkers (rIC3,
+- **Chosen:** a Rust portfolio (`informal-engine`) over external checkers (rIC3,
   ABC, Pono, BtorMC) as child processes, then in-house engines behind the same
   `Engine` trait. Phase 0 gate: wrapped engines reproduce published HWMCC'24
   counts.
@@ -40,7 +40,7 @@ Sources: README, `docs/`, git log, project notes.
   - Rust-native replacements are not yet scoped: which libraries are
     "must-have" is undecided. A pure-Rust SAT solver (e.g. a CaDiCaL port)
     would remove C++ from the engine path but costs performance and effort.
-- **Ideas:** make "library missing" a loud warning in `fdv info`/CI gate;
+- **Ideas:** make "library missing" a loud warning in `informal info`/CI gate;
   list which engines a given build contains.
 
 ## D3. Internal tool, so GPL engines are fine; Verific optional
@@ -54,7 +54,7 @@ Sources: README, `docs/`, git log, project notes.
 ## D4. Pin third-party tools; local patches only, never upstream
 
 - **Chosen:** exact commits in `docs/third-party.md`; patches live on a local
-  `fdv` branch and are dropped when upstream fixes them.
+  `informal` branch and are dropped when upstream fixes them.
 - **Why:** reproducible builds without maintaining forks.
 - **Open issues**
   - Build steps were reconstructed, not logged; the first rebuild may differ.
@@ -94,7 +94,7 @@ Sources: README, `docs/`, git log, project notes.
 - **Open issues**
   - Arrays and liveness (`fair`/`justice`) are unsupported at bit level, so
     those runs report unknown. Array witnesses are not supported either.
-  - Word-level engines cover only BMC (`fdv-wbmc`), no unbounded proof.
+  - Word-level engines cover only BMC (`informal-wbmc`), no unbounded proof.
   - rIC3 also lacks liveness, so we have no oracle for it.
 - **Ideas:** liveness-to-safety (Biere/Artho/Schuppan), k-liveness
   (Claessen/Sörensson), and ranking-function synthesis; word-level IC3 with
@@ -103,8 +103,8 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D7. Engine portfolio and its pieces
 
-- **Chosen:** `fdv-kind-ic3`, `fdv-ic3-mt`, `fdv-kind`, `fdv-bmc`,
-  `fdv-bmc-10`, `fdv-bmc-65`; in-house small CDCL solver (`Mini`) for IC3 and
+- **Chosen:** `informal-kind-ic3`, `informal-ic3-mt`, `informal-kind`, `informal-bmc`,
+  `informal-bmc-10`, `informal-bmc-65`; in-house small CDCL solver (`Mini`) for IC3 and
   CaDiCaL for unrolling; `scorr` latch correspondence; variable-eliminating
   CNF.
 - **Why:** IC3 proves, stepped BMC finds deep bugs, Houdini turns IC3 lemmas
@@ -135,7 +135,7 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D9. Tcl shell compatible with JasperGold and VC Formal
 
-- **Chosen:** real embedded Tcl 8.6, vendor commands implemented by fdv.
+- **Chosen:** real embedded Tcl 8.6, vendor commands implemented by informal.
 - **Alternatives:** a new scripting language; Python API; Tcl look-alike.
 - **Why:** existing scripts run unchanged and habits carry over.
 - **Open issues**
@@ -182,6 +182,8 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D12. Process: local repo, HWMCC'24 benchmark, check.sh as gate
 
+- **Update 2026-11-09:** renamed to InFormal and pushed to a private GitHub
+  repo (`mayurkubavat/InFormal`), which retires the backup concern below.
 - **Open issues:** no CI, no remote, so a disk loss loses the history; the
   Mac copy holds research docs that the repo does not; benchmark runs
   compete with other work on the same box.
@@ -277,7 +279,7 @@ refer to the report.
 | D3 GPL ok | Keep; skip Verific unless VHDL needed; says rIC3 and Pono are BSD-3. | **Check:** rIC3's `LICENSE` file is BSD-3-Clause but its `Cargo.toml` says `GPL-3.0`. Conflicting upstream; irrelevant while internal, but settle before any sharing. |
 | D4 pinning | Modify: reproducible build script or container; automated sample gate on pin update. | Agree; the build steps are still reconstructed, not logged. |
 | D5 slang + Yosys | Change: use `yosys-slang` (the fork rIC3 uses) instead of raw Yosys, with `chformal -early`, to remove the 1-cycle depth mismatch and the second parser. | Plausible and cheap to try; verify with a bounded miter between the two paths. |
-| D6 Btor2 + AIG | Keep, plus a sidecar `FdvSymbolMap` from AIG literals to Btor2 nodes and slang scopes; enables IC3-INN and sub-instance lookup. | Agree; it also fixes the "top-scope signals only" limit. |
+| D6 Btor2 + AIG | Keep, plus a sidecar `InformalSymbolMap` from AIG literals to Btor2 nodes and slang scopes; enables IC3-INN and sub-instance lookup. | Agree; it also fixes the "top-scope signals only" limit. |
 | D7 portfolio | Change: share one `Arc<Aig>` across workers; cap variable-elimination blowup (|pos|,|neg| <= 8, no literal growth); select 3-4 engines per model instead of a fixed set; add SuperCAR/CAR-DT, Pono, AVR; IC3 with internal signals. | Agree with memory and selection fixes (addresses the 18 GB and 10.9 GB spikes). Engine additions are speculative until measured. |
 | D8 trust | Change now: the P1 gate moves from phase 2 to phase 1. | Agree; reverses the "deferred" note above. |
 | D9 Tcl shell | Change: run the Tcl REPL on its own thread with an async channel and shared cancel flag polled inside slang lowering, CaDiCaL terminate callback and `Mini`; warn rather than error on benign tuning flags. | Agree; fixes two known limitations (typed commands wait, Stop race). The "warn on unknown options" part conflicts with our deliberate strictness: only for flags known to be tuning-only. |
@@ -307,7 +309,7 @@ refer to the report.
 | 3 | GipSAT-class `Mini` | 8 days | proposed |
 | 4 | Parent-lemma CTP prediction | 5 days | proposed |
 | 5 | SuperCAR/CAR-DT, Pono, AVR, file-validated verdicts | 6 days | proposed |
-| 6 | IC3-INN + `FdvSymbolMap` | 8 days | proposed |
+| 6 | IC3-INN + `InformalSymbolMap` | 8 days | proposed |
 | 7 | `Btor2-Select`, shared `Arc<Aig>`, bounded CNF elimination | 6 days | proposed |
 | 8 | Liveness subsystem | 7 days | proposed |
 | 9 | Full SVA + `yosys-slang` + async Tcl | 12 days | proposed |

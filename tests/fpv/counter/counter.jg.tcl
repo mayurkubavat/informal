@@ -1,4 +1,4 @@
-# JasperGold-style FPV setup for the counter (runs unchanged under fdv).
+# JasperGold-style FPV setup for the counter (runs unchanged under informal).
 clear -all
 analyze -sv12 [file join [file dirname [info script]] counter.sv]
 elaborate -top counter

@@ -15,7 +15,7 @@ describe("Profiler", () => {
     render(<Profiler prop={props[0]} props={props} />);
     const pane = screen.getByRole("region", { name: "Engines on the selected property" });
     const rows = within(pane).getAllByRole("row").slice(1);
-    expect(rows.map((r) => r.textContent)).toEqual(["ric3-ic3Killed31 ms2", "ric3-bmcWon30 ms11", "fdv-kindKilled31 ms9"]);
+    expect(rows.map((r) => r.textContent)).toEqual(["ric3-ic3Killed31 ms2", "ric3-bmcWon30 ms11", "informal-kindKilled31 ms9"]);
     // Plain bars: only the winner's is marked (drawn in --text, not a colour).
     const bars = pane.querySelectorAll(".prof-bar");
     expect([...bars].map((b) => b.classList.contains("win"))).toEqual([false, true, false]);
@@ -28,7 +28,7 @@ describe("Profiler", () => {
     const rows = within(pane).getAllByRole("row").slice(1).map((r) => r.textContent);
     expect(rows[0]).toBe("ric3-bmc1272 ms30 ms");
     expect(rows[1]).toBe("ric3-ic31272 ms41 ms");
-    expect(rows[2]).toBe("fdv-kind0274 ms—");
+    expect(rows[2]).toBe("informal-kind0274 ms—");
     expect(screen.getByText("Select a property to see how each engine did on it.")).toBeInTheDocument();
   });
   it("explains an unprofiled property and an empty run", () => {

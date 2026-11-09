@@ -1,7 +1,7 @@
-//! Formal DV desktop app: a Tauri window over one fdv shell.
+//! InFormal desktop app: a Tauri window over one informal shell.
 //!
 //! The shell (Tcl interpreter plus FPV session) lives on its own thread
-//! (`fdv_fpv::Worker`); each command below forwards one request to it and
+//! (`informal_fpv::Worker`); each command below forwards one request to it and
 //! returns the Tcl result together with the session, which the property
 //! table redraws from. Commands are `async` so a long prove never blocks
 //! the window.
@@ -21,7 +21,7 @@
 
 mod ask;
 
-use fdv_fpv::{EngineLine, Flavor, ProveProgress, ProveSink, Reply, Request, Session, Worker};
+use informal_fpv::{EngineLine, Flavor, ProveProgress, ProveSink, Reply, Request, Session, Worker};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -60,10 +60,10 @@ impl ProveSink for EventSink {
     }
 }
 
-/// `config/engines.toml` from `FDV_ENGINES`, or the nearest one above the
+/// `config/engines.toml` from `INFORMAL_ENGINES`, or the nearest one above the
 /// working directory (the repo root when run with `npm run tauri dev`).
 fn engines_config() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("FDV_ENGINES") {
+    if let Some(p) = std::env::var_os("INFORMAL_ENGINES") {
         return Some(p.into());
     }
     let mut dir = std::env::current_dir().ok()?;
@@ -147,13 +147,13 @@ async fn shell_flavor(w: State<'_, Worker>, flavor: String) -> Result<Reply, Str
 }
 
 /// Console Tab completion: the active flavor's command names, then
-/// property names, starting with `prefix` (fdv_fpv::compat::complete).
+/// property names, starting with `prefix` (informal_fpv::compat::complete).
 /// Answered here from the last reply, so it works while a prove runs.
 #[tauri::command]
 fn shell_complete(prefix: String) -> Vec<String> {
     let flavor = FLAVOR.lock().map(|g| *g).unwrap_or(Flavor::Jg);
     let props = PROP_NAMES.lock().map(|g| g.clone()).unwrap_or_default();
-    fdv_fpv::compat::complete(flavor, &props, &prefix)
+    informal_fpv::compat::complete(flavor, &props, &prefix)
 }
 
 /// Stop the running prove. Not sent through the shell thread, which is
@@ -171,7 +171,7 @@ async fn shell_stop(w: State<'_, Worker>) -> Result<Reply, String> {
 
 /// The session's work directory, relative to the repo root the app runs
 /// from: generated models and trace VCDs land here.
-const WORKDIR: &str = "fdv_work";
+const WORKDIR: &str = "informal_work";
 
 /// A trace VCD for the trace tab (`Property.trace`). Only `.vcd` files
 /// inside the work directory are served, whatever the path says.
@@ -281,8 +281,8 @@ fn text_in(root: &Path, files: &[PathBuf], path: &Path) -> Result<String, String
 /// Ask mode's providers (config/llm.toml) and the one in use. Switching
 /// with `llm_select` lasts until the app closes; the file is not written.
 struct Llm {
-    config: Result<fdv_llm::LlmConfig, String>,
-    current: Mutex<Option<(String, Arc<dyn fdv_llm::LlmProvider>)>>,
+    config: Result<informal_llm::LlmConfig, String>,
+    current: Mutex<Option<(String, Arc<dyn informal_llm::LlmProvider>)>>,
     /// Why the current provider could not be built, if it could not.
     build_error: Mutex<Option<String>>,
     /// Running asks by id, so `ask_cancel` can abort one.
@@ -291,8 +291,8 @@ struct Llm {
 
 impl Llm {
     fn load(root: &Path) -> Llm {
-        let config = match fdv_llm::find_config(root) {
-            Some(p) => fdv_llm::LlmConfig::load(&p).map_err(|e| format!("{e:#}")),
+        let config = match informal_llm::find_config(root) {
+            Some(p) => informal_llm::LlmConfig::load(&p).map_err(|e| format!("{e:#}")),
             None => Err("no config/llm.toml".into()),
         };
         let llm = Llm {
@@ -301,7 +301,7 @@ impl Llm {
             build_error: Mutex::new(None),
             running: Mutex::new(Default::default()),
         };
-        let env = std::env::var(fdv_llm::DEFAULT_PROVIDER_ENV).ok();
+        let env = std::env::var(informal_llm::DEFAULT_PROVIDER_ENV).ok();
         match llm
             .config
             .as_ref()
@@ -322,7 +322,7 @@ impl Llm {
             .providers
             .get(name)
             .ok_or_else(|| format!("no LLM provider {name}"))?;
-        match fdv_llm::build(name, p) {
+        match informal_llm::build(name, p) {
             Ok(b) => {
                 *self.current.lock().unwrap() = Some((name.to_string(), Arc::from(b)));
                 *self.build_error.lock().unwrap() = None;
@@ -336,7 +336,7 @@ impl Llm {
         }
     }
 
-    fn provider(&self) -> Result<Arc<dyn fdv_llm::LlmProvider>, String> {
+    fn provider(&self) -> Result<Arc<dyn informal_llm::LlmProvider>, String> {
         if let Some((_, p)) = self.current.lock().unwrap().as_ref() {
             return Ok(p.clone());
         }
@@ -457,16 +457,16 @@ fn ask(
     let flavor_word = if flavor == Flavor::Vcf { "vcf" } else { "jg" };
     let system = ask::system_prompt(
         flavor_word,
-        &fdv_fpv::compat::command_names(flavor),
+        &informal_fpv::compat::command_names(flavor),
         &session,
     );
     let user = match context.filter(|c| !c.trim().is_empty()) {
         Some(c) => format!("{prompt}\n\n(Context from the UI: {c})"),
         None => prompt,
     };
-    let req = fdv_llm::ChatRequest::new(vec![
-        fdv_llm::Message::system(system),
-        fdv_llm::Message::user(user),
+    let req = informal_llm::ChatRequest::new(vec![
+        informal_llm::Message::system(system),
+        informal_llm::Message::user(user),
     ]);
     // Held across the spawn, so a very quick answer cannot remove its
     // entry before it is inserted.
@@ -539,33 +539,33 @@ fn ask_cancel(llm: State<'_, Llm>, id: u64) -> bool {
 
 fn main() {
     // Run from the repo root (the directory holding config/engines.toml), so
-    // script paths read as they do for `fdv shell` and generated models land
-    // in its fdv_work/ rather than under src-tauri, which the dev watcher
+    // script paths read as they do for `informal shell` and generated models land
+    // in its informal_work/ rather than under src-tauri, which the dev watcher
     // would take as a source change.
     let config = engines_config();
     if let Some(root) = config.as_ref().and_then(|c| c.parent()?.parent()) {
         let _ = std::env::set_current_dir(root);
     }
     let config = config.and_then(|c| std::fs::canonicalize(c).ok());
-    // `fdv-app script.tcl` sources a script at start, flavor detected from it.
+    // `informal-app script.tcl` sources a script at start, flavor detected from it.
     let script = std::env::args().nth(1).map(PathBuf::from);
     let flavor = script
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .map_or(Flavor::Jg, |t| fdv_fpv::detect_flavor(&t));
+        .map_or(Flavor::Jg, |t| informal_fpv::detect_flavor(&t));
     if let Ok(mut g) = FLAVOR.lock() {
         *g = flavor;
     }
     let worker = Worker::spawn(flavor, move || {
         let engines = config
             .and_then(|c| {
-                fdv_engines_ext::load(&c)
-                    .map_err(|e| eprintln!("fdv: {e:#}"))
+                informal_engines_ext::load(&c)
+                    .map_err(|e| eprintln!("informal: {e:#}"))
                     .ok()
             })
             .unwrap_or_default()
             .into_iter()
-            .chain(fdv_bmc::engines())
+            .chain(informal_bmc::engines())
             .collect();
         let mut session = Session::new(engines, PathBuf::from(WORKDIR));
         session.sink = Some(Arc::new(EventSink));
@@ -576,7 +576,7 @@ fn main() {
         std::thread::spawn(move || {
             let r = w.call(Request::Source(p));
             if !r.ok {
-                eprintln!("fdv: {}", r.result);
+                eprintln!("informal: {}", r.result);
             }
         });
     }
@@ -606,7 +606,7 @@ fn main() {
             ask_cancel
         ])
         .run(tauri::generate_context!())
-        .expect("error while running the Formal DV app");
+        .expect("error while running the InFormal app");
 }
 
 #[cfg(test)]
@@ -615,7 +615,7 @@ mod tests {
 
     #[test]
     fn text_reads_only_the_repo_and_design_files() {
-        let base = std::env::temp_dir().join(format!("fdv-app-text-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("informal-app-text-{}", std::process::id()));
         let repo = base.join("repo");
         std::fs::create_dir_all(repo.join("tests")).unwrap();
         std::fs::write(repo.join("tests/run.tcl"), "assert -name a {x}\n").unwrap();
@@ -636,8 +636,8 @@ mod tests {
 
     #[test]
     fn trace_reads_only_vcd_inside_the_workdir() {
-        let base = std::env::temp_dir().join(format!("fdv-app-trace-{}", std::process::id()));
-        let work = base.join("fdv_work");
+        let base = std::env::temp_dir().join(format!("informal-app-trace-{}", std::process::id()));
+        let work = base.join("informal_work");
         std::fs::create_dir_all(&work).unwrap();
         std::fs::write(work.join("a.vcd"), "$enddefinitions $end\n").unwrap();
         std::fs::write(work.join("prop_0.btor2"), "1 sort bitvec 1\n").unwrap();
@@ -654,15 +654,15 @@ mod tests {
 
     #[test]
     fn surfer_opens_only_vcd_inside_the_workdir() {
-        let base = std::env::temp_dir().join(format!("fdv-app-surfer-{}", std::process::id()));
-        let work = base.join("fdv_work");
+        let base = std::env::temp_dir().join(format!("informal-app-surfer-{}", std::process::id()));
+        let work = base.join("informal_work");
         std::fs::create_dir_all(work.join("sub")).unwrap();
         std::fs::write(work.join("a.vcd"), "$enddefinitions $end\n").unwrap();
         std::fs::write(work.join("prop_0.btor2"), "1 sort bitvec 1\n").unwrap();
         std::fs::write(base.join("outside.vcd"), "x").unwrap();
         std::os::unix::fs::symlink(base.join("outside.vcd"), work.join("link.vcd")).unwrap();
         let ok = vcd_in(&work, &work.join("a.vcd")).unwrap();
-        assert!(ok.is_absolute() && ok.ends_with("fdv_work/a.vcd"));
+        assert!(ok.is_absolute() && ok.ends_with("informal_work/a.vcd"));
         assert!(vcd_in(&work, &work.join("sub/../a.vcd")).is_ok());
         for bad in [
             "prop_0.btor2",
@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn tools_are_found_on_path_by_plain_name_only() {
         use std::os::unix::fs::PermissionsExt;
-        let base = std::env::temp_dir().join(format!("fdv-app-path-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("informal-app-path-{}", std::process::id()));
         let (bin, other) = (base.join("bin"), base.join("other"));
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::create_dir_all(&other).unwrap();

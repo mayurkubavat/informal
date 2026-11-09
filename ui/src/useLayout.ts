@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BottomTab, Center, LeftTab } from "./model";
 
 // Dock sizes and open tabs, kept across sessions in localStorage.
-export const LAYOUT_KEY = "fdv-layout";
+export const LAYOUT_KEY = "informal-layout";
 export const LEFT_MIN = 160;
 export const LEFT_MAX = 480;
 export const BOTTOM_MIN = 120;

@@ -1,6 +1,6 @@
 # Third-party tools and libraries
 
-What fdv builds against on the Linux box, pinned to the exact commits in
+What informal builds against on the Linux box, pinned to the exact commits in
 use. Everything lives under `~/Silicon/DV/tools` (`~/DV/tools` is a
 symlink), outside this repository. The build scripts find each library
 there by default, or through the environment variable listed.
@@ -8,23 +8,23 @@ there by default, or through the environment variable listed.
 Policy: we keep local patches only, never upstream ones. As of 2026-11-08
 none of the checkouts below carries a local patch (all working trees are
 clean at the listed commit). When a patch is needed, commit it on a local
-branch named `fdv` in that checkout and list it in the table at the end.
+branch named `informal` in that checkout and list it in the table at the end.
 
 ## Pinned versions
 
 | Tool | Commit | Upstream | Used for | Found through |
 | --- | --- | --- | --- | --- |
-| slang | `d02b7cd` (2026-11-02, master) | github.com/MikePopoloski/slang | SystemVerilog front end (crate `fdv-slang`) | `FDV_SLANG_DIR`, needs `build/lib/libsvlang.a` |
-| Bitwuzla | `9d391d1` (2026-10-30, main) | github.com/bitwuzla/bitwuzla | Word-level BMC `fdv-wbmc`; its bundled CaDiCaL is also fdv's SAT solver | `FDV_BITWUZLA_DIR`, needs `install/` |
+| slang | `d02b7cd` (2026-11-02, master) | github.com/MikePopoloski/slang | SystemVerilog front end (crate `informal-slang`) | `INFORMAL_SLANG_DIR`, needs `build/lib/libsvlang.a` |
+| Bitwuzla | `9d391d1` (2026-10-30, main) | github.com/bitwuzla/bitwuzla | Word-level BMC `informal-wbmc`; its bundled CaDiCaL is also informal's SAT solver | `INFORMAL_BITWUZLA_DIR`, needs `install/` |
 | CaDiCaL (bundled) | `rel-3.0.1` with Bitwuzla's patches | via Bitwuzla's meson subproject | SAT for all in-house bit-level engines | linked from Bitwuzla's static library |
-| CaDiCaL (standalone) | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `FDV_CADICAL_DIR`, needs `build/libcadical.a` |
+| CaDiCaL (standalone) | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
 | rIC3 | `4d63899` (`v1.5.2-117`) | github.com/gipsyh/rIC3 | External engine and soundness oracle (`ric3`, `ric3-ic3`, `ric3-bmc`) | `~/.local/bin/ric3` symlink |
 | ABC | `77875a3b6` (2026-11-01, master) | github.com/berkeley-abc/abc | External engines `abc-pdr`, `abc-pdr-pp`, `abc-bmc3` | `~/.local/bin/abc` symlink |
 
-System packages (Ubuntu 26.04): `tcl8.6-dev` 8.6.17 (crate `fdv-tcl`),
+System packages (Ubuntu 26.04): `tcl8.6-dev` 8.6.17 (crate `informal-tcl`),
 meson (Bitwuzla build), and for the desktop app webkit2gtk-4.1, gtk3,
 libsoup3 and librsvg2 dev packages. Yosys 0.69 in `/tools/yosys/current`
-is the fallback RTL front end (`FDV_FRONTEND=yosys`); its `yosys-abc` is
+is the fallback RTL front end (`INFORMAL_FRONTEND=yosys`); its `yosys-abc` is
 not used.
 
 Not installed: Pono and BtorMC (their `engines.toml` entries are
@@ -32,7 +32,7 @@ unchecked), Surfer (the app's trace hand-off hides itself without it).
 
 ## Build steps
 
-Run from `~/Silicon/DV/tools`. Rebuild fdv afterwards (`cargo build`),
+Run from `~/Silicon/DV/tools`. Rebuild informal afterwards (`cargo build`),
 since the build scripts link whatever they find. The original builds
 were run by hand and not logged; these commands are reconstructed from
 the recorded build configuration (slang `CMakeCache.txt`: Release,
@@ -64,7 +64,7 @@ ln -sf "$PWD/abc/abc" ~/.local/bin/abc
 ## Updating a pin
 
 1. `git -C <tool> fetch && git -C <tool> checkout <new commit>`, rebuild
-   it with the steps above, then rebuild fdv.
+   it with the steps above, then rebuild informal.
 2. Run `scripts/check.sh`, then the HWMCC'24 sample
    (`scripts/inhouse_sample.sh`) and `scripts/hwmcc_check.py`: an engine
    or SAT update must show 0 disagreements before it is kept.

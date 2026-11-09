@@ -39,11 +39,11 @@ describe("Console", () => {
       { kind: "err" as const, text: "oops" },
     ];
     const { rerender, container } = render(<Console hidden={false} log={log} busy={false} flavor="jg" onSubmit={() => {}} />);
-    expect(container.querySelector(".prompt")).toHaveTextContent("fdv[jg]>");
-    expect(screen.getByText("fdv[jg]> check_fv")).toHaveClass("in");
+    expect(container.querySelector(".prompt")).toHaveTextContent("informal[jg]>");
+    expect(screen.getByText("informal[jg]> check_fv")).toHaveClass("in");
     rerender(<Console hidden={false} log={log} busy={false} flavor="vcf" onSubmit={() => {}} />);
-    expect(container.querySelector(".prompt")).toHaveTextContent("fdv[vcf]>");
-    expect(screen.getByText("fdv[vcf]> check_fv")).toBeInTheDocument();
+    expect(container.querySelector(".prompt")).toHaveTextContent("informal[vcf]>");
+    expect(screen.getByText("informal[vcf]> check_fv")).toBeInTheDocument();
     expect(screen.getByText("proven 2")).toHaveClass("out");
     expect(screen.getByText("oops")).toHaveClass("err");
   });
@@ -153,7 +153,7 @@ describe("Console in Ask mode", () => {
     const onSubmit = vi.fn();
     const onSuggestion = vi.fn();
     render(<Console {...base} mode="ask" suggestion="prove -property a_never9" onSubmit={onSubmit} onSuggestion={onSuggestion} />);
-    expect(screen.getByText("fdv[jg]>")).toBeInTheDocument();
+    expect(screen.getByText("informal[jg]>")).toBeInTheDocument();
     expect(screen.getByText("Enter runs · Esc discards")).toBeInTheDocument();
     const input = screen.getByLabelText("Suggested Tcl command");
     expect(input).toHaveValue("prove -property a_never9");

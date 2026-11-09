@@ -9,8 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 list=$1; db=$2; timeout=${3:-60}; jobs=${4:-3}; mem=${5:-7G}
-engines=${engines:-fdv-bmc,fdv-kind,fdv-ic3,fdv-kind-ic3,abc-pdr-pp}
-# fdv stops its own engines at 90% of the cap; the scope kill is the backstop.
+engines=${engines:-informal-bmc,informal-kind,informal-ic3,informal-kind-ic3,abc-pdr-pp}
+# informal stops its own engines at 90% of the cap; the scope kill is the backstop.
 budget=$(echo "${mem%G} * 0.9" | bc)
 # mem in MiB (accepts K/M/G suffix or plain bytes), for MemoryHigh and the fit check.
 mem_mib=$(awk -v m="$mem" 'BEGIN{n=m+0; u=toupper(substr(m,length(m)))
@@ -23,7 +23,7 @@ if [ "$jobs" -gt "$fit" ]; then
   jobs=$fit
 fi
 slice=$(systemctl --user cat rdev.slice >/dev/null 2>&1 && echo "--slice=rdev.slice" || echo "")
-fdv=${fdv:-$PWD/target/release/fdv}
+informal=${informal:-$PWD/target/release/informal}
 # each=1 (default): every engine alone; each=0: all engines as one
 # in-process portfolio per model (first definitive verdict wins).
 each=$([ "${each:-1}" = 0 ] && echo "" || echo "--each")
@@ -54,7 +54,7 @@ one() {
   mkdir -p "$d/m"; ln -s "$PWD/$m" "$d/m/$(basename "$m")"
   systemd-run --user --scope -q $slice -p MemoryMax="$mem" -p MemoryHigh="$high" \
     -p MemorySwapMax=0 \
-    "$fdv" --mem-gb "$budget" bench "$d/m" $each --only "$engines" \
+    "$informal" --mem-gb "$budget" bench "$d/m" $each --only "$engines" \
     --timeout "$timeout" --jobs 1 --db "$d/runs.jsonl" >"$d/out.log" 2>&1 \
     || echo "  memout/error  $m"
   # Report the real model path, not the temp link.
@@ -65,6 +65,6 @@ one() {
   grep "ms  " "$d/out.log" || true
   rm -rf "$d"
 }
-export -f one; export tmp timeout engines mem budget fdv each slice high db
+export -f one; export tmp timeout engines mem budget informal each slice high db
 xargs -a "$todo" -P "$jobs" -I{} bash -c 'one "$@"' _ {}
 echo "== end $(date -Is)"

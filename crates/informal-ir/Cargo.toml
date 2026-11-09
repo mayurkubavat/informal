@@ -1,0 +1,11 @@
+[package]
+name = "informal-ir"
+description = "Word-level model IR with lossless Btor2 parsing and printing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true

@@ -1,4 +1,4 @@
-/* Formal DV workbench: quiet EDA frame, colour only for status glyphs.
+/* InFormal workbench: quiet EDA frame, colour only for status glyphs.
    Tokens on :root; dark via prefers-color-scheme unless [data-theme] pins
    one. Fonts are local stacks only (no runtime fetch). */
 
@@ -356,8 +356,8 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .st-error { color: var(--st-error); }
 .st-unprocessed, .st-assume { color: var(--st-assume); }
 /* running: accent dashed ring, turning; the only moving thing in the window */
-.st-running { color: var(--accent); transform-origin: 50% 50%; animation: fdv-spin 1.4s linear infinite; }
-@keyframes fdv-spin { to { transform: rotate(360deg); } }
+.st-running { color: var(--accent); transform-origin: 50% 50%; animation: informal-spin 1.4s linear infinite; }
+@keyframes informal-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .st-running { animation: none; } }
 
 /* ---- console ---- */

@@ -1,4 +1,4 @@
-# Formal DV desktop app
+# InFormal desktop app
 
 A Tauri 2 app: a native window whose views are React, over the Rust core
 linked in-process. UI v1 has the property manager, a Tcl console that
@@ -9,7 +9,7 @@ waveforms (Surfer) come once the engines export traces.
 ```
 ui/
   src/            React views (App.tsx) and the bridge to Rust (backend.ts)
-  src-tauri/      the app crate: Tauri commands over fdv_fpv::Worker
+  src-tauri/      the app crate: Tauri commands over informal_fpv::Worker
 ```
 
 ## Run

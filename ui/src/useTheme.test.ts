@@ -20,14 +20,14 @@ describe("useTheme", () => {
     const { result } = renderHook(() => useTheme());
     act(() => result.current[1]("dark"));
     expect(root()).toHaveAttribute("data-theme", "dark");
-    expect(localStorage.getItem("fdv-theme")).toBe("dark");
+    expect(localStorage.getItem("informal-theme")).toBe("dark");
     act(() => result.current[1]("system"));
     expect(root()).not.toHaveAttribute("data-theme");
-    expect(localStorage.getItem("fdv-theme")).toBe("system");
+    expect(localStorage.getItem("informal-theme")).toBe("system");
   });
 
   it("restores a stored theme", () => {
-    localStorage.setItem("fdv-theme", "light");
+    localStorage.setItem("informal-theme", "light");
     const { result } = renderHook(() => useTheme());
     expect(result.current[0]).toBe("light");
     expect(root()).toHaveAttribute("data-theme", "light");

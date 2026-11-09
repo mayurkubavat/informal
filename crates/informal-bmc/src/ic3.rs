@@ -1,0 +1,999 @@
+//! IC3 / PDR (Bradley 2011; Een, Mishchenko, Brayton 2011), the first cut
+//! of the stage-2 engine on rIC3's design: one solver per frame holding
+//! the transition relation (the CNF template) and that frame's lemmas,
+//! predecessor states shrunk by lifting with a separate solver, cubes
+//! generalized from the unsat core and then by dropping literals (MIC),
+//! and lemmas pushed forward after every round.
+//!
+//! It runs on the SAT interface (CaDiCaL today); the IC3-only solver of
+//! the round-2 plan replaces it underneath without changing this file's
+//! logic. Generalization uses CTGs. Several IC3s can share lemmas through
+//! a [`LemmaPool`]: a lemma of frame j excludes no state reachable in j
+//! steps, whichever IC3 found it, but it is only relatively inductive to
+//! its finder's frames, so an importer re-checks it against its own
+//! frames and adds it at the highest level where it holds there. Not yet: CTP, EXCTG, DynAMic.
+//!
+//! TODO(D7, Gemini P2): EXCTG and DynAMic generalization, an A-IC3 bandit
+//! over generalization strategies, and stall-aware push budgets.
+//! TODO(D7, Gemini P4): parent-lemma CTP prediction (CTP is off by
+//! default today, on in one informal-ic3-mt worker).
+//! TODO(D8, Gemini P1): certify every SAFE verdict: check the final frame
+//! (init, consecution, safety) with independent CaDiCaL queries against
+//! the un-preprocessed AIG, then Certifaiger.
+
+use crate::cnf::{self, TLit, Template};
+use informal_aig::{is_neg, neg, var, Aig, Init, Lit};
+use informal_engine::{RunContext, Verdict};
+use informal_sat::{Answer, Sat};
+use std::collections::BinaryHeap;
+
+pub static DIAG_LI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DIAG_LIVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DIAG_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How one IC3 generalizes; portfolio workers differ here.
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    /// CTGs blocked per literal drop, and how deep CTG blocking recurses.
+    pub max_ctgs: usize,
+    pub max_ctg_depth: usize,
+    /// Try dropping literals from the highest variable down.
+    pub reverse_drop: bool,
+    /// Counterexamples to propagation blocked per lemma when pushing it.
+    pub max_ctps: usize,
+    /// Close each query's decision domain over the frame's lemmas.
+    pub lemma_domain: bool,
+    /// Try dropping the literals that occur least in recent lemmas first
+    /// (IC3ref / rIC3 ordering) instead of by variable index.
+    pub activity_order: bool,
+    /// Parent-lemma MIC (Xia et al., CAV'23): start from the lemma of
+    /// level i-1 that covers the cube, keep its literals for last.
+    pub parent_lemma: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            max_ctgs: 3,
+            max_ctg_depth: 1,
+            reverse_drop: false,
+            // Off: on the HWMCC'24 sample CTP lost more models than it
+            // won (frames converge later); one informal-ic3-mt worker uses it.
+            max_ctps: 0,
+            lemma_domain: std::env::var_os("INFORMAL_IC3_LEMMA_DOMAIN").is_some(),
+            // Off by default: on the 75-model set it lost more models than
+            // it won; parent-lemma alone does better (INFORMAL_IC3_ACTIVITY on).
+            activity_order: std::env::var_os("INFORMAL_IC3_ACTIVITY").is_some(),
+            // Off by default: on 75 models it traded 3 models for 2 and
+            // was slower; two informal-ic3-mt workers use it for diversity.
+            parent_lemma: std::env::var_os("INFORMAL_IC3_PARENT").is_some(),
+        }
+    }
+}
+
+/// Lemmas published by several IC3s: (cube, frame, publisher).
+#[derive(Default)]
+pub struct LemmaPool {
+    lemmas: std::sync::Mutex<Vec<(Cube, usize, usize)>>,
+    len: std::sync::atomic::AtomicUsize,
+}
+
+impl LemmaPool {
+    fn publish(&self, cube: &Cube, level: usize, id: usize) {
+        let mut v = self.lemmas.lock().unwrap();
+        v.push((cube.clone(), level, id));
+        self.len
+            .store(v.len(), std::sync::atomic::Ordering::Release);
+    }
+}
+
+struct Share {
+    pool: std::sync::Arc<LemmaPool>,
+    id: usize,
+    seen: usize,
+}
+
+/// A cube over latch literals (AIG literals), sorted.
+pub type Cube = Vec<Lit>;
+
+/// One SAT solver over the template: SAT variable = template variable.
+struct Solver {
+    sat: Box<dyn Sat>,
+    next: i32,
+}
+
+impl Solver {
+    fn new(t: &Template, nvars: usize, mut sat: Box<dyn Sat>) -> Self {
+        sat.reserve(nvars as i32 + 1);
+        sat.add_clause(&[-1]); // template variable 1 is the AIG constant false
+        for c in &t.clauses {
+            sat.add_clause(c);
+        }
+        Solver {
+            sat,
+            next: nvars as i32 + 1,
+        }
+    }
+
+    fn fresh(&mut self) -> i32 {
+        self.sat.reserve(1);
+        let v = self.next;
+        self.next += 1;
+        v
+    }
+}
+
+struct Obligation {
+    level: usize,
+    /// Steps from this state to a bad state.
+    depth: usize,
+    cube: Cube,
+}
+
+impl PartialEq for Obligation {
+    fn eq(&self, o: &Self) -> bool {
+        self.level == o.level && self.depth == o.depth
+    }
+}
+impl Eq for Obligation {}
+impl PartialOrd for Obligation {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl Ord for Obligation {
+    // Lowest level first (BinaryHeap is a max-heap), then deepest.
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        o.level.cmp(&self.level).then(self.depth.cmp(&o.depth))
+    }
+}
+
+pub struct Ic3<'g> {
+    g: &'g Aig,
+    t: Template,
+    nvars: usize,
+    /// solvers[i] holds F_i: init for i = 0, else lemmas of level >= i.
+    solvers: Vec<Solver>,
+    /// Lemmas by the highest frame they are known to hold in.
+    frames: Vec<Vec<Cube>>,
+    lift: Solver,
+    bad: TLit,
+    /// latch variable -> template literal of its next-state function
+    next_of: std::collections::HashMap<u32, TLit>,
+    make_sat: Box<dyn Fn() -> Box<dyn Sat>>,
+    /// DFS marks for domain computation (epoch-stamped).
+    mark: Vec<u32>,
+    epoch: u32,
+    cfg: Config,
+    share: Option<Share>,
+    /// Per AIG variable: how often it occurred in recent lemmas (decayed).
+    act: Vec<f64>,
+    act_inc: f64,
+    pub stats_lemmas: usize,
+    pub stats_imported: usize,
+    pub stats_ctps: usize,
+    pub stats_lift_fallbacks: usize,
+    /// MIC calls, total length of their results and inputs, and literal
+    /// drops that succeeded / failed.
+    pub stats_mic: usize,
+    pub stats_parent_hits: usize,
+    pub stats_mic_len: usize,
+    pub stats_mic_in_len: usize,
+    pub stats_drop_ok: usize,
+    pub stats_drop_fail: usize,
+    pub stats_queries: usize,
+    pub stats_query_time: std::time::Duration,
+    pub stats_lift_time: std::time::Duration,
+}
+
+fn t(l: Lit) -> TLit {
+    cnf::tlit(l)
+}
+
+impl<'g> Ic3<'g> {
+    /// `None` when the model has inits IC3 cannot express here.
+    pub fn new(g: &'g Aig, make_sat: Box<dyn Fn() -> Box<dyn Sat>>) -> Option<Self> {
+        if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
+            return None;
+        }
+        let tpl = cnf::build(g);
+        let nvars = g.nodes.len() + 1;
+        let lift = Solver::new(&tpl, nvars, make_sat());
+        // One literal for "some bad output": an extra variable when needed.
+        let bad = if g.bads.len() == 1 {
+            t(g.bads[0])
+        } else {
+            nvars as i32 + 1
+        };
+        let nvars = if g.bads.len() == 1 { nvars } else { nvars + 1 };
+        let mut ic3 = Ic3 {
+            g,
+            t: tpl,
+            nvars,
+            solvers: Vec::new(),
+            frames: Vec::new(),
+            lift,
+            bad,
+            next_of: g.latches.iter().map(|l| (var(l.lit), t(l.next))).collect(),
+            make_sat,
+            mark: vec![0; nvars + 2],
+            epoch: 0,
+            cfg: Config::default(),
+            share: None,
+            act: vec![0.0; g.nodes.len()],
+            act_inc: 1.0,
+            stats_lemmas: 0,
+            stats_imported: 0,
+            stats_ctps: 0,
+            stats_lift_fallbacks: 0,
+            stats_mic: 0,
+            stats_parent_hits: 0,
+            stats_mic_len: 0,
+            stats_mic_in_len: 0,
+            stats_drop_ok: 0,
+            stats_drop_fail: 0,
+            stats_queries: 0,
+            stats_query_time: Default::default(),
+            stats_lift_time: Default::default(),
+        };
+        // The lifting solver has no constraint units: lifting must keep
+        // states that satisfy the constraints (see `lifted_state`).
+        ic3.lift.next = ic3.nvars as i32 + 1;
+        if g.bads.len() > 1 {
+            let mut c = vec![-ic3.bad];
+            c.extend(g.bads.iter().map(|&b| t(b)));
+            ic3.lift.sat.add_clause(&c);
+        }
+        ic3.push_frame(); // F_0
+        for l in &g.latches {
+            match l.init {
+                Init::Zero => ic3.solvers[0].sat.add_clause(&[-t(l.lit)]),
+                Init::One => ic3.solvers[0].sat.add_clause(&[t(l.lit)]),
+                _ => {}
+            }
+        }
+        Some(ic3)
+    }
+
+    /// Constraints and the bad definition on top of the template.
+    fn base_solver_from(&self, mut s: Solver) -> Solver {
+        if s.next < self.nvars as i32 + 1 {
+            s.next = self.nvars as i32 + 1;
+        }
+        for &c in &self.g.constraints {
+            s.sat.add_clause(&[t(c)]);
+        }
+        if self.g.bads.len() > 1 {
+            let mut c = vec![-self.bad];
+            c.extend(self.g.bads.iter().map(|&b| t(b)));
+            s.sat.add_clause(&c);
+        }
+        s
+    }
+
+    fn push_frame(&mut self) {
+        // A new top frame has no lemmas yet: a lemma of level j lives in
+        // solvers 1..=j only.
+        let s = Solver::new(&self.t, self.nvars, (self.make_sat)());
+        let s = self.base_solver_from(s);
+        self.solvers.push(s);
+        self.frames.push(Vec::new());
+    }
+
+    fn top(&self) -> usize {
+        self.frames.len() - 1
+    }
+
+    fn intersects_init(&self, cube: &[Lit]) -> bool {
+        cube.iter().all(|&l| {
+            let latch = self.g.latches.iter().find(|x| x.lit == (l & !1)).unwrap();
+            match latch.init {
+                Init::Zero => is_neg(l),
+                Init::One => !is_neg(l),
+                _ => true,
+            }
+        })
+    }
+
+    pub fn set_config(&mut self, cfg: Config) {
+        self.cfg = cfg;
+    }
+
+    /// Publish this IC3's lemmas to `pool` as `id` and take the others'.
+    pub fn share(&mut self, pool: std::sync::Arc<LemmaPool>, id: usize) {
+        self.share = Some(Share { pool, id, seen: 0 });
+    }
+
+    fn publish(&self, cube: &Cube, level: usize) {
+        if let Some(sh) = &self.share {
+            sh.pool.publish(cube, level, sh.id);
+        }
+    }
+
+    /// Add the other IC3s' new lemmas, each at its frame or our top.
+    fn import(&mut self, ctx: &RunContext) {
+        let Some(sh) = &mut self.share else { return };
+        if sh.pool.len.load(std::sync::atomic::Ordering::Acquire) == sh.seen {
+            return;
+        }
+        let new: Vec<(Cube, usize)> = {
+            let v = sh.pool.lemmas.lock().unwrap();
+            let new = v[sh.seen..]
+                .iter()
+                .filter(|(_, _, id)| *id != sh.id)
+                .map(|(c, l, _)| (c.clone(), *l))
+                .collect();
+            sh.seen = v.len();
+            new
+        };
+        // A lemma is only relatively inductive to its publisher's frames.
+        // The convergence proof needs every lemma of level L to be
+        // inductive relative to *our* F_{L-1}, so each import is
+        // re-checked here and added at the highest level where it is.
+        // (Unchecked imports gave wrong "safe" verdicts on a03/a11.)
+        for (c, l) in new {
+            if ctx.should_stop() {
+                return;
+            }
+            let mut lvl = l.min(self.top());
+            while lvl >= 1 && !self.already_blocked(&c, lvl) {
+                if self.relative_inductive(&c, lvl, false).is_ok() {
+                    self.add_lemma_quiet(c, lvl);
+                    self.stats_imported += 1;
+                    break;
+                }
+                lvl -= 1;
+            }
+        }
+    }
+
+    fn add_lemma(&mut self, cube: Cube, level: usize) {
+        self.publish(&cube, level);
+        self.add_lemma_quiet(cube, level);
+    }
+
+    fn add_lemma_quiet(&mut self, cube: Cube, level: usize) {
+        for &l in &cube {
+            self.act[var(l) as usize] += self.act_inc;
+        }
+        self.act_inc *= 1.0 / 0.99;
+        if self.act_inc > 1e100 {
+            for a in &mut self.act {
+                *a *= 1e-100;
+            }
+            self.act_inc *= 1e-100;
+        }
+        let clause: Vec<i32> = cube.iter().map(|&l| -t(l)).collect();
+        for i in 1..=level {
+            self.solvers[i].sat.add_clause(&clause);
+        }
+        self.frames[level].push(cube);
+        self.stats_lemmas += 1;
+    }
+
+    /// Latch and input values of solver `i`'s current model. Read it
+    /// before adding clauses: that discards the model.
+    fn model(&self, i: usize) -> (Cube, Vec<TLit>) {
+        let g = self.g;
+        let s = &self.solvers[i].sat;
+        let latches = g
+            .latches
+            .iter()
+            .map(|l| if s.value(t(l.lit)) { l.lit } else { neg(l.lit) })
+            .collect();
+        let inputs = g
+            .inputs
+            .iter()
+            .map(|&x| if s.value(t(x)) { t(x) } else { -t(x) })
+            .collect();
+        (latches, inputs)
+    }
+
+    /// Shrink a state by lifting: the part of `latches` that, with these
+    /// inputs, still forces every `target` literal (and the constraints).
+    /// Template variables (by index) that justify `target` and the
+    /// constraints under the given latch and input values: an AND that is
+    /// true needs both inputs, a false one needs one false input (one
+    /// already needed if possible). Values come from simulating the AIG.
+    fn justify(&self, latches: &[Lit], inputs: &[TLit], target: &[TLit]) -> Vec<bool> {
+        let g = self.g;
+        let n = g.nodes.len();
+        let mut val = vec![false; n];
+        for &l in latches {
+            val[var(l) as usize] = !is_neg(l);
+        }
+        for &x in inputs {
+            val[x.unsigned_abs() as usize - 1] = x > 0;
+        }
+        let lv = |val: &[bool], l: Lit| val[var(l) as usize] ^ is_neg(l);
+        for v in 0..n {
+            if let informal_aig::Node::And(a, b) = g.nodes[v] {
+                val[v] = lv(&val, a) && lv(&val, b);
+            }
+        }
+        let mut need = vec![false; self.nvars + 2];
+        // Roots: the target (or the bads that hold, for the extra bad
+        // variable) and every constraint.
+        let mut roots: Vec<u32> = Vec::new();
+        for &x in target {
+            let v = x.unsigned_abs() as usize;
+            if v - 1 < n {
+                roots.push(v as u32 - 1);
+            } else {
+                roots.extend(g.bads.iter().filter(|&&b| lv(&val, b)).map(|&b| var(b)));
+            }
+        }
+        roots.extend(g.constraints.iter().map(|&c| var(c)));
+        let mut mark = vec![false; n];
+        for r in roots {
+            mark[r as usize] = true;
+        }
+        for v in (0..n).rev() {
+            if !mark[v] {
+                continue;
+            }
+            need[v + 1] = true;
+            if let informal_aig::Node::And(a, b) = g.nodes[v] {
+                let (va, vb) = (var(a) as usize, var(b) as usize);
+                if val[v] {
+                    mark[va] = true;
+                    mark[vb] = true;
+                } else {
+                    let fa = !lv(&val, a);
+                    let fb = !lv(&val, b);
+                    // One controlling (false) input is enough.
+                    let pick = match (fa, fb) {
+                        (true, true) if mark[vb] && !mark[va] => vb,
+                        (true, _) => va,
+                        _ => vb,
+                    };
+                    mark[pick] = true;
+                }
+            }
+        }
+        need
+    }
+
+    fn lift(&mut self, latches: Cube, inputs: &[TLit], target: &[TLit]) -> Cube {
+        let g = self.g;
+        // The target and the constraints hold in the model; ask for one
+        // where some of them fail, with the same inputs and latches: UNSAT,
+        // and its core names the latches that force them all. Every state of
+        // the lifted cube then satisfies the constraints and reaches target.
+        // Only latches and inputs in the cone of the target (and the
+        // constraints) can matter; the rest are left out of the query.
+        let roots: Vec<TLit> = target.to_vec();
+        let dom = self.domain(&roots, 0);
+        // Justification first: only latches and inputs that some path of
+        // controlling values needs go to the SAT core below.
+        let need = self.justify(&latches, inputs, target);
+        let in_cone = |x: TLit| need[x.unsigned_abs() as usize];
+        let all = latches.clone();
+        let latches: Cube = latches.into_iter().filter(|&l| in_cone(t(l))).collect();
+        let act = self.lift.fresh();
+        let mut clause = vec![-act];
+        clause.extend(target.iter().map(|&x| -x));
+        clause.extend(g.constraints.iter().map(|&c| -t(c)));
+        self.lift.sat.add_clause(&clause);
+        let mut assume = vec![act];
+        assume.extend(inputs.iter().copied().filter(|&x| in_cone(x)));
+        assume.extend(latches.iter().map(|&l| t(l)));
+        let t0 = std::time::Instant::now();
+        let r = self.lift.sat.solve_domain(&assume, &dom);
+        self.stats_lift_time += t0.elapsed();
+        let cube = if r == Answer::Unsat {
+            latches
+                .iter()
+                .copied()
+                .filter(|&l| self.lift.sat.failed(t(l)))
+                .collect()
+        } else {
+            // Justification missed something (or the solver stopped):
+            // keep the full state, which always reaches the target.
+            self.stats_lift_fallbacks += 1;
+            all
+        };
+        self.lift.sat.add_clause(&[-act]);
+        cube
+    }
+
+    fn primed(&self, cube: &[Lit]) -> Vec<TLit> {
+        cube.iter()
+            .map(|&l| {
+                let n = self.next_of[&var(l)];
+                if is_neg(l) {
+                    -n
+                } else {
+                    n
+                }
+            })
+            .collect()
+    }
+
+    /// Variables a query needs decisions on (GipSAT): the cone of `roots`
+    /// and of the constraints through the AND gates, closed under the
+    /// lemmas of frames `>= level` that touch it. Everything outside can be
+    /// completed afterwards: gates by evaluation, and the remaining latches
+    /// by an initial state, which every lemma of a frame >= 1 admits.
+    fn domain(&mut self, roots: &[TLit], level: usize) -> Vec<TLit> {
+        self.epoch += 1;
+        let ep = self.epoch;
+        let mut out = Vec::new();
+        let mut stack: Vec<u32> = roots
+            .iter()
+            .map(|r| r.unsigned_abs())
+            .chain(self.g.constraints.iter().map(|&c| var(c) + 1))
+            .collect();
+        if self.g.bads.len() > 1 && roots.contains(&self.bad) {
+            stack.extend(self.g.bads.iter().map(|&b| var(b) + 1));
+        }
+        let grow = |stack: &mut Vec<u32>, mark: &mut Vec<u32>, out: &mut Vec<TLit>| {
+            while let Some(tv) = stack.pop() {
+                let tv = tv as usize;
+                if tv >= mark.len() || mark[tv] == ep {
+                    continue;
+                }
+                mark[tv] = ep;
+                out.push(tv as TLit);
+                if tv >= 1 && tv - 1 < self.g.nodes.len() {
+                    if let informal_aig::Node::And(a, b) = self.g.nodes[tv - 1] {
+                        stack.push(var(a) + 1);
+                        stack.push(var(b) + 1);
+                    }
+                }
+            }
+        };
+        grow(&mut stack, &mut self.mark, &mut out);
+        // Closing over lemmas keeps predecessors inside F_i; without it a
+        // predecessor may break a lemma outside the cone. Both are sound:
+        // UNSAT on part of the clauses is UNSAT, the cone holds the whole
+        // transition into the cube, and init units always propagate.
+        if level >= 1 && self.cfg.lemma_domain {
+            loop {
+                let mut added = false;
+                for lemma in self.frames[level..].iter().flatten() {
+                    let touches = lemma.iter().any(|&l| self.mark[var(l) as usize + 1] == ep);
+                    if touches {
+                        for &l in lemma {
+                            let tv = var(l) + 1;
+                            if self.mark[tv as usize] != ep {
+                                stack.push(tv);
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                if !added {
+                    break;
+                }
+                grow(&mut stack, &mut self.mark, &mut out);
+            }
+        }
+        // Variables the CNF template eliminated are in no clause: deciding
+        // them is pure waste (they were over half of each domain on the
+        // cv32e40x models).
+        let live = &self.t.live;
+        out.retain(|&tv| live.get(tv as usize).copied().unwrap_or(true));
+        // Latches and inputs first: Mini decides in this order, and once
+        // they are set the gates mostly follow by propagation.
+        let nodes = &self.g.nodes;
+        out.sort_by_key(|&tv| {
+            let v = tv as usize;
+            !(v >= 1
+                && v - 1 < nodes.len()
+                && matches!(
+                    nodes[v - 1],
+                    informal_aig::Node::Latch | informal_aig::Node::Input
+                ))
+        });
+        if std::env::var_os("INFORMAL_DIAG_DOM").is_some() {
+            let li = out
+                .iter()
+                .filter(|&&tv| {
+                    let v = tv as usize;
+                    v >= 1
+                        && v - 1 < nodes.len()
+                        && matches!(
+                            nodes[v - 1],
+                            informal_aig::Node::Latch | informal_aig::Node::Input
+                        )
+                })
+                .count();
+            let live = out
+                .iter()
+                .filter(|&&tv| self.t.live.get(tv as usize).copied().unwrap_or(true))
+                .count();
+            DIAG_LI.fetch_add(li as u64, std::sync::atomic::Ordering::Relaxed);
+            DIAG_LIVE.fetch_add(live as u64, std::sync::atomic::Ordering::Relaxed);
+            DIAG_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        out
+    }
+
+    /// Is `cube` blocked at level `i` relative to F_{i-1}: is
+    /// F_{i-1} & !cube & T & cube' unsatisfiable? `Ok(core)`: yes, with the
+    /// core-reduced cube (still disjoint from init). `Err(pred)`: no, with a
+    /// lifted predecessor when `want_pred`.
+    fn relative_inductive(
+        &mut self,
+        cube: &[Lit],
+        i: usize,
+        want_pred: bool,
+    ) -> Result<Cube, Option<Cube>> {
+        let primed = self.primed(cube);
+        let roots: Vec<TLit> = primed
+            .iter()
+            .copied()
+            .chain(cube.iter().map(|&l| t(l)))
+            .collect();
+        let dom = self.domain(&roots, i - 1);
+        let s = &mut self.solvers[i - 1];
+        let act = s.fresh();
+        let mut clause = vec![-act];
+        clause.extend(cube.iter().map(|&l| -t(l)));
+        s.sat.add_clause(&clause);
+        let mut assume = vec![act];
+        assume.extend(&primed);
+        let t0 = std::time::Instant::now();
+        let r = s.sat.solve_domain(&assume, &dom);
+        self.stats_queries += 1;
+        self.stats_query_time += t0.elapsed();
+        let out = match r {
+            Answer::Unsat => Ok(cube
+                .iter()
+                .zip(&primed)
+                .filter(|(_, &p)| s.sat.failed(p))
+                .map(|(&l, _)| l)
+                .collect::<Cube>()),
+            Answer::Sat if want_pred => Err(Some(self.model(i - 1))),
+            _ => Err(None),
+        };
+        self.solvers[i - 1].sat.add_clause(&[-act]);
+        match out {
+            Ok(core) => Ok(self.keep_out_of_init(core, cube)),
+            Err(Some((latches, inputs))) => Err(Some(self.lift(latches, &inputs, &primed))),
+            Err(None) => Err(None),
+        }
+    }
+
+    /// Add back a literal of `orig` if `core` intersects init.
+    fn keep_out_of_init(&self, mut core: Cube, orig: &[Lit]) -> Cube {
+        if core.is_empty() || self.intersects_init(&core) {
+            if let Some(&l) = orig.iter().find(|&&l| !self.intersects_init(&[l])) {
+                core.push(l);
+                core.sort();
+                core.dedup();
+            }
+        }
+        core
+    }
+
+    /// Drop literals one at a time while the cube stays blocked (MIC),
+    /// using counterexamples to generalization (CTG, Hassan, Bradley and
+    /// Somenzi 2013) to make room: a predecessor that blocks a drop is
+    /// itself blocked one level down when it can be, then the drop is
+    /// retried; otherwise the candidate shrinks to what it shares with it.
+    fn generalize(&mut self, mut cube: Cube, i: usize, depth: usize, ctx: &RunContext) -> Cube {
+        let mut order = cube.clone();
+        if self.cfg.activity_order {
+            // Least active first; reverse_drop breaks ties the other way.
+            let act = &self.act;
+            if self.cfg.reverse_drop {
+                order.reverse();
+            }
+            order.sort_by(|&a, &b| act[var(a) as usize].total_cmp(&act[var(b) as usize]));
+        } else if self.cfg.reverse_drop {
+            order.reverse();
+        }
+        if depth == 0 {
+            self.stats_mic += 1;
+            self.stats_mic_in_len += cube.len();
+        }
+        // Parent lemma: a lemma of level i-1 whose literals all occur in
+        // the cube. If it holds at level i too, it is the result (already
+        // general); otherwise its literals are tried last.
+        let mut parent: Option<Cube> = None;
+        if self.cfg.parent_lemma && depth == 0 && i >= 2 {
+            parent = self.frames[i - 1]
+                .iter()
+                .filter(|p| p.iter().all(|l| cube.binary_search(l).is_ok()))
+                .min_by_key(|p| p.len())
+                .cloned();
+            if let Some(p) = &parent {
+                if p.len() < cube.len() {
+                    if let Ok(core) = self.relative_inductive(p, i, false) {
+                        self.stats_parent_hits += 1;
+                        self.stats_mic_len += core.len();
+                        return core;
+                    }
+                }
+            }
+        }
+        if let Some(p) = &parent {
+            // Stable: literals outside the parent first.
+            order.sort_by_key(|l| p.binary_search(l).is_ok());
+        }
+        for l in order {
+            if ctx.should_stop() {
+                break;
+            }
+            let Ok(pos) = cube.binary_search(&l) else {
+                continue; // already gone with an earlier core
+            };
+            let mut cand = cube.clone();
+            cand.remove(pos);
+            if let Some(core) = self.ctg_down(cand, i, depth, ctx) {
+                cube = core;
+                self.stats_drop_ok += 1;
+            } else {
+                self.stats_drop_fail += 1;
+            }
+        }
+        if depth == 0 {
+            self.stats_mic_len += cube.len();
+        }
+        cube
+    }
+
+    fn ctg_down(
+        &mut self,
+        mut cube: Cube,
+        i: usize,
+        depth: usize,
+        ctx: &RunContext,
+    ) -> Option<Cube> {
+        let mut ctgs = 0;
+        loop {
+            if cube.is_empty() || self.intersects_init(&cube) || ctx.should_stop() {
+                return None;
+            }
+            match self.relative_inductive(&cube, i, true) {
+                Ok(core) => return (!self.intersects_init(&core)).then_some(core),
+                Err(None) => return None,
+                Err(Some(ctg)) => {
+                    if depth < self.cfg.max_ctg_depth
+                        && ctgs < self.cfg.max_ctgs
+                        && i > 1
+                        && !self.intersects_init(&ctg)
+                    {
+                        if let Ok(core) = self.relative_inductive(&ctg, i - 1, false) {
+                            ctgs += 1;
+                            let g = self.generalize(core, i - 1, depth + 1, ctx);
+                            let mut lvl = i - 1;
+                            while lvl < self.top()
+                                && self.relative_inductive(&g, lvl + 1, false).is_ok()
+                            {
+                                lvl += 1;
+                            }
+                            self.add_lemma(g, lvl);
+                            continue;
+                        }
+                    }
+                    // Join: keep only the literals the CTG state shares.
+                    ctgs = 0;
+                    let joined: Cube = cube
+                        .iter()
+                        .copied()
+                        .filter(|l| ctg.binary_search(l).is_ok())
+                        .collect();
+                    if joined.len() == cube.len() {
+                        return None;
+                    }
+                    cube = joined;
+                }
+            }
+        }
+    }
+
+    /// Block a bad cube found at the top frame; `Err(depth)` on a real
+    /// counterexample, `Ok(false)` when stopped.
+    fn block(&mut self, cube: Cube, ctx: &RunContext) -> Result<bool, usize> {
+        let mut q = BinaryHeap::new();
+        q.push(Obligation {
+            level: self.top(),
+            depth: 0,
+            cube,
+        });
+        while let Some(ob) = q.pop() {
+            if ctx.should_stop() {
+                return Ok(false);
+            }
+            self.import(ctx);
+            // Every state of an obligation's cube reaches a bad state, so a
+            // cube that meets the initial states is a real counterexample.
+            if ob.level == 0 || self.intersects_init(&ob.cube) {
+                return Err(ob.depth);
+            }
+            if self.already_blocked(&ob.cube, ob.level) {
+                if ob.level < self.top() {
+                    q.push(Obligation {
+                        level: ob.level + 1,
+                        ..ob
+                    });
+                }
+                continue;
+            }
+            match self.relative_inductive(&ob.cube, ob.level, true) {
+                Ok(core) => {
+                    let g = self.generalize(core, ob.level, 0, ctx);
+                    // Push the lemma as high as it stays inductive.
+                    let mut lvl = ob.level;
+                    while lvl < self.top() && self.relative_inductive(&g, lvl + 1, false).is_ok() {
+                        lvl += 1;
+                    }
+                    self.add_lemma(g, lvl);
+                    if lvl < self.top() {
+                        q.push(Obligation {
+                            level: lvl + 1,
+                            ..ob
+                        });
+                    }
+                }
+                Err(pred) => {
+                    // A predecessor in F_{level-1}.
+                    let Some(pred) = pred else { return Ok(false) };
+                    let (lvl, depth) = (ob.level, ob.depth);
+                    q.push(ob);
+                    q.push(Obligation {
+                        level: lvl - 1,
+                        depth: depth + 1,
+                        cube: pred,
+                    });
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Is the cube already excluded by some lemma at `level` or above?
+    fn already_blocked(&self, cube: &[Lit], level: usize) -> bool {
+        self.frames[level..]
+            .iter()
+            .flatten()
+            .any(|lemma| lemma.iter().all(|l| cube.binary_search(l).is_ok()))
+    }
+
+    /// Push lemmas forward; true when two frames become equal (proof).
+    /// A lemma that fails to push is retried after blocking, one frame
+    /// down, the state that stopped it (counterexample to propagation,
+    /// CTP), up to `max_ctps` times.
+    fn propagate(&mut self, ctx: &RunContext) -> bool {
+        for i in 1..self.top() {
+            let lemmas = std::mem::take(&mut self.frames[i]);
+            let mut stay = Vec::new();
+            for c in lemmas {
+                if ctx.should_stop() {
+                    stay.push(c);
+                    continue;
+                }
+                if self.push_lemma(&c, i, ctx) {
+                    self.publish(&c, i + 1);
+                    let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
+                    self.solvers[i + 1].sat.add_clause(&clause);
+                    self.frames[i + 1].push(c);
+                } else {
+                    stay.push(c);
+                }
+            }
+            // Lemmas CTP added at level i while its list was taken.
+            stay.append(&mut self.frames[i]);
+            self.frames[i] = stay;
+            if self.frames[i].is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Does lemma `c` of frame `i` hold in frame `i + 1`?
+    fn push_lemma(&mut self, c: &Cube, i: usize, ctx: &RunContext) -> bool {
+        let mut ctps = 0;
+        loop {
+            // Only at the frontier: lower down, CTP lemmas cost more than
+            // the pushes they win (measured on the HWMCC'24 sample).
+            let want = ctps < self.cfg.max_ctps && i + 1 == self.top();
+            match self.relative_inductive(c, i + 1, want) {
+                Ok(_) => return true,
+                Err(None) => return false,
+                Err(Some(p)) => {
+                    if ctx.should_stop() || self.intersects_init(&p) {
+                        return false;
+                    }
+                    // Block the predecessor in frame i, if it is not
+                    // reachable there; then the push may succeed.
+                    match self.relative_inductive(&p, i, false) {
+                        Ok(core) => {
+                            ctps += 1;
+                            self.stats_ctps += 1;
+                            let g = self.generalize(core, i, 1, ctx);
+                            // As high as it holds: left at level i it would
+                            // keep frame i from emptying (convergence).
+                            let mut lvl = i;
+                            while lvl < self.top()
+                                && self.relative_inductive(&g, lvl + 1, false).is_ok()
+                            {
+                                lvl += 1;
+                            }
+                            self.add_lemma(g, lvl);
+                        }
+                        Err(_) => return false,
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn check(&mut self, ctx: &RunContext) -> Verdict {
+        // Depth 0: a bad initial state.
+        match self.solvers[0].sat.solve(&[self.bad]) {
+            Answer::Sat => return Verdict::Unsafe { depth: Some(0) },
+            Answer::Unknown => {
+                return Verdict::Unknown {
+                    reason: ctx.stop_reason().into(),
+                }
+            }
+            Answer::Unsat => {}
+        }
+        self.push_frame(); // F_1
+        loop {
+            // Block every bad state in the top frame.
+            loop {
+                if ctx.should_stop() {
+                    return Verdict::Unknown {
+                        reason: ctx.stop_reason().into(),
+                    };
+                }
+                self.import(ctx);
+                let k = self.top();
+                let bad = self.bad;
+                let dom = self.domain(&[bad], k);
+                match self.solvers[k].sat.solve_domain(&[bad], &dom) {
+                    Answer::Unknown => {
+                        return Verdict::Unknown {
+                            reason: ctx.stop_reason().into(),
+                        }
+                    }
+                    Answer::Unsat => break,
+                    Answer::Sat => {
+                        let bad = self.bad;
+                        let (latches, inputs) = self.model(k);
+                        let cube = self.lift(latches, &inputs, &[bad]);
+                        match self.block(cube, ctx) {
+                            Err(depth) => {
+                                return Verdict::Unsafe {
+                                    depth: Some(depth as u32),
+                                }
+                            }
+                            Ok(false) => {
+                                return Verdict::Unknown {
+                                    reason: ctx.stop_reason().into(),
+                                }
+                            }
+                            Ok(true) => {}
+                        }
+                    }
+                }
+            }
+            self.push_frame();
+            if self.propagate(ctx) {
+                return Verdict::Safe;
+            }
+            if ctx.should_stop() {
+                return Verdict::Unknown {
+                    reason: ctx.stop_reason().into(),
+                };
+            }
+        }
+    }
+
+    /// Every lemma IC3 holds, at any level. Each excludes the initial
+    /// states but is only known to hold up to its frame: run them through
+    /// [`crate::invariant::houdini`] before treating them as invariants.
+    pub fn lemmas(&self) -> Vec<Cube> {
+        self.frames.iter().flatten().cloned().collect()
+    }
+
+    pub fn depth(&self) -> usize {
+        self.top()
+    }
+}

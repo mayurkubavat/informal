@@ -252,145 +252,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
-name = "fdv-aig"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-ir",
-]
-
-[[package]]
-name = "fdv-bench"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-engine",
- "fdv-ir",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "fdv-bitwuzla"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cc",
- "fdv-engine",
- "fdv-ir",
- "fdv-sat",
-]
-
-[[package]]
-name = "fdv-bmc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-aig",
- "fdv-engine",
- "fdv-ir",
- "fdv-sat",
-]
-
-[[package]]
-name = "fdv-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "fdv-aig",
- "fdv-bench",
- "fdv-bitwuzla",
- "fdv-bmc",
- "fdv-engine",
- "fdv-engines-ext",
- "fdv-fpv",
- "fdv-ir",
- "fdv-slang",
- "fdv-tcl",
- "serde_json",
-]
-
-[[package]]
-name = "fdv-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fdv-engines-ext"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-aig",
- "fdv-engine",
- "libc",
- "regex",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "fdv-fpv"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-aig",
- "fdv-bmc",
- "fdv-engine",
- "fdv-engines-ext",
- "fdv-slang",
- "fdv-tcl",
- "regex",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fdv-ir"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "fdv-llm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures-util",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "fdv-sat"
-version = "0.1.0"
-
-[[package]]
-name = "fdv-slang"
-version = "0.1.0"
-dependencies = [
- "cc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fdv-tcl"
-version = "0.1.0"
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -735,6 +596,145 @@ dependencies = [
  "equivalent",
  "hashbrown",
 ]
+
+[[package]]
+name = "informal-aig"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-ir",
+]
+
+[[package]]
+name = "informal-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-engine",
+ "informal-ir",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "informal-bitwuzla"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "informal-engine",
+ "informal-ir",
+ "informal-sat",
+]
+
+[[package]]
+name = "informal-bmc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-engine",
+ "informal-ir",
+ "informal-sat",
+]
+
+[[package]]
+name = "informal-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "informal-aig",
+ "informal-bench",
+ "informal-bitwuzla",
+ "informal-bmc",
+ "informal-engine",
+ "informal-engines-ext",
+ "informal-fpv",
+ "informal-ir",
+ "informal-slang",
+ "informal-tcl",
+ "serde_json",
+]
+
+[[package]]
+name = "informal-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "informal-engines-ext"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-engine",
+ "libc",
+ "regex",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "informal-fpv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-engines-ext",
+ "informal-slang",
+ "informal-tcl",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "informal-ir"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "informal-llm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "informal-sat"
+version = "0.1.0"
+
+[[package]]
+name = "informal-slang"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "informal-tcl"
+version = "0.1.0"
 
 [[package]]
 name = "ipnet"

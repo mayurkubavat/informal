@@ -1,4 +1,4 @@
-"""Compare an fdv run database with HWMCC'24 expected verdicts.
+"""Compare an informal run database with HWMCC'24 expected verdicts.
 
 usage: python3 -I hwmcc_check.py <expected.json> <runs.jsonl>
 Any safe/unsafe verdict that contradicts the expected status is a bug.

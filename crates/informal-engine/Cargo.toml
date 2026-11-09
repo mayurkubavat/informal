@@ -1,0 +1,14 @@
+[package]
+name = "informal-engine"
+description = "Engine plug-in API, cancellation and the parallel portfolio runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

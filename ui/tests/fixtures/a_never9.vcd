@@ -1,4 +1,4 @@
-$comment fdv trace of a_never9 (hand-written fixture; see docs/ui/trace-format.md) $end
+$comment informal trace of a_never9 (hand-written fixture; see docs/ui/trace-format.md) $end
 $timescale 1ns $end
 $scope module counter $end
 $var wire 1 ! clk $end
@@ -7,8 +7,8 @@ $var wire 1 # en $end
 $var reg 4 $ q [3:0] $end
 $var wire 1 % done $end
 $upscope $end
-$scope module fdv $end
-$var wire 16 & fdv_cyc [15:0] $end
+$scope module informal $end
+$var wire 16 & informal_cyc [15:0] $end
 $upscope $end
 $enddefinitions $end
 #0

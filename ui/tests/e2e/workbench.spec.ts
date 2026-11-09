@@ -31,7 +31,7 @@ test("initial load shows six properties and the counter.sv tab", async ({ page }
   for (const n of ["a_max", "a_step", "a_never9", "c_done", "c_10", "m_en"]) await expect(row(page, n)).toHaveCount(1);
   await expect(statusbar(page)).toContainText("top: counter");
   await expect(statusbar(page)).toContainText("JasperGold flavor");
-  await expect(page.locator(".prompt")).toHaveText("fdv[jg]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[jg]>");
 });
 
 test("Prove all updates tree, strip and status bar", async ({ page }) => {
@@ -47,7 +47,7 @@ test("Prove all updates tree, strip and status bar", async ({ page }) => {
   await expect(row(page, "a_never9")).toContainText("11");
   await expect(row(page, "a_max")).toContainText("∞");
   await expect(statusbar(page)).toContainText("Idle");
-  await expect(page.locator(".console-log")).toContainText("fdv[jg]> prove -all");
+  await expect(page.locator(".console-log")).toContainText("informal[jg]> prove -all");
 });
 
 test("CEX tree group filters to a_never9; clear status filter restores", async ({ page }) => {
@@ -69,7 +69,7 @@ test("selecting a row opens Details with its expression", async ({ page }) => {
 
 test("flavor change switches prompt and Prove menu hint", async ({ page }) => {
   await page.getByLabel("Flavor").selectOption("vcf");
-  await expect(page.locator(".prompt")).toHaveText("fdv[vcf]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[vcf]>");
   await expect(statusbar(page)).toContainText("VC Formal flavor");
   await page.getByRole("menuitem", { name: "Prove", exact: true }).click();
   await expect(page.locator(".menu-pop .menu-hint")).toHaveText("check_fv");
@@ -79,7 +79,7 @@ test("console echoes a command and shows the mock's error line", async ({ page }
   const input = page.getByLabel("Tcl command");
   await input.fill("get_design_info");
   await input.press("Enter");
-  await expect(page.locator(".console-log .line.in").last()).toHaveText("fdv[jg]> get_design_info");
+  await expect(page.locator(".console-log .line.in").last()).toHaveText("informal[jg]> get_design_info");
   await expect(page.locator(".console-log .line.err").last()).toHaveText("browser preview: Tcl runs only in the desktop app");
   await expect(input).toHaveValue("");
   await expect(page.getByRole("tab", { name: "Messages (1)" })).toBeVisible();
@@ -173,7 +173,7 @@ test.describe("row context menu", () => {
     await item(page, /^Prove/).click();
     await expect(row(page, "c_done")).toContainText("Covered");
     await expect(row(page, "a_max")).toContainText("Unprocessed");
-    await expect(page.locator(".console-log")).toContainText("fdv[jg]> prove -property c_done");
+    await expect(page.locator(".console-log")).toContainText("informal[jg]> prove -property c_done");
   });
 
   test("Show source opens the script at the line that made the property", async ({ page }) => {
@@ -203,7 +203,7 @@ test.describe("row context menu", () => {
 
   test("VC Formal disables and re-enables via fvdisable/fvenable", async ({ page }) => {
     await page.getByLabel("Flavor").selectOption("vcf");
-    await expect(page.locator(".prompt")).toHaveText("fdv[vcf]>");
+    await expect(page.locator(".prompt")).toHaveText("informal[vcf]>");
     await row(page, "a_max").click({ button: "right" });
     await expect(item(page, /Disable/)).toContainText("fvdisable {a_max}");
     await item(page, /Disable/).click();
@@ -212,7 +212,7 @@ test.describe("row context menu", () => {
     await row(page, "a_max").click({ button: "right" });
     await item(page, /Enable/).click();
     await expect(row(page, "a_max")).toContainText("Unprocessed");
-    await expect(page.locator(".console-log")).toContainText("fdv[vcf]> fvenable {a_max}");
+    await expect(page.locator(".console-log")).toContainText("informal[vcf]> fvenable {a_max}");
   });
 
   test("Shift+F10 opens it from the keyboard; arrows move; focus returns", async ({ page }) => {
@@ -370,7 +370,7 @@ test.describe("engine log", () => {
     await logTab(page).click();
     await expect(page.getByText(/No engine output yet/)).toBeVisible();
     await proveAll(page);
-    await expect(log(page)).toContainText("a_never9 ric3-bmcreading fdv_work/a_never9.btor2");
+    await expect(log(page)).toContainText("a_never9 ric3-bmcreading informal_work/a_never9.btor2");
     await expect(log(page)).toContainText("a_max ric3-ic3unsat");
     await expect(page.locator(".log-bar")).toContainText(/\d+ lines/);
     await page.getByRole("button", { name: "Clear" }).click();
@@ -606,14 +606,14 @@ test.describe("layout", () => {
     await expect.poll(() => bottomHeight(page)).toBe(h0 + 16);
   });
 
-  test("sizes and open tabs persist across reloads in fdv-layout", async ({ page }) => {
+  test("sizes and open tabs persist across reloads in informal-layout", async ({ page }) => {
     await dragBy(page, "Resize left dock", 64, 0);
     await dragBy(page, "Resize bottom dock", 0, -100);
     await page.getByRole("tab", { name: "Design" }).click();
     await page.getByRole("tab", { name: "counter.sv" }).click();
     await page.getByRole("tab", { name: "Messages" }).click();
     const h = await bottomHeight(page);
-    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("fdv-layout") ?? "{}"))).toMatchObject({
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("informal-layout") ?? "{}"))).toMatchObject({
       leftW: 300, left: "design", center: "source", bottom: "messages", leftOpen: true,
     });
     await page.reload();
@@ -624,8 +624,8 @@ test.describe("layout", () => {
     await expect(page.getByRole("tab", { name: "Messages" })).toHaveAttribute("aria-selected", "true");
   });
 
-  test("a corrupt fdv-layout falls back to the default layout", async ({ page }) => {
-    await page.evaluate(() => localStorage.setItem("fdv-layout", "{oops"));
+  test("a corrupt informal-layout falls back to the default layout", async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem("informal-layout", "{oops"));
     await page.reload();
     await expect(rows(page)).toHaveCount(6);
     expect(await leftWidth(page)).toBe(236);
@@ -731,7 +731,7 @@ test.describe("live progress", () => {
     await start(page, "freeze=4");
     const log = page.locator(".console-log");
     await expect(statusbar(page)).toContainText("Proving · 3/5");
-    await expect(log.locator(".line.in").last()).toHaveText("fdv[jg]> prove -all");
+    await expect(log.locator(".line.in").last()).toHaveText("informal[jg]> prove -all");
     await expect(log.locator(".line.out")).toHaveText([
       "a_max: proven [ric3-ic3, 41 ms]",
       "a_step: proven [ric3, 55 ms]",
@@ -870,7 +870,7 @@ test.describe("trace tab", () => {
     await page.getByRole("button", { name: "Close Trace: c_done" }).click();
 
     await row(page, "a_never9").click();
-    await page.getByRole("button", { name: "Trace: fdv_work/a_never9.vcd · 12 cycles" }).click();
+    await page.getByRole("button", { name: "Trace: informal_work/a_never9.vcd · 12 cycles" }).click();
     await expect(traceTab(page)).toHaveText("Trace: a_never9");
   });
 
@@ -915,7 +915,7 @@ test.describe("trace tab", () => {
     await page.getByLabel("Filter signals").fill("cyc");
     await page.getByLabel("Filter signals").press("Enter");
     await expect(page.locator(".trace-names .trace-name")).toHaveCount(1 + 1 + 6);
-    await expect(page.locator(".trace-name", { hasText: "fdv.fdv_cyc" }).locator(".trace-val")).toHaveText("b");
+    await expect(page.locator(".trace-name", { hasText: "informal.informal_cyc" }).locator(".trace-val")).toHaveText("b");
   });
 
   test("Export VCD downloads the trace", async ({ page }) => {
@@ -1014,14 +1014,14 @@ test.describe("Surfer hand-off", () => {
     await proveAll(page);
     await row(page, "a_never9").dblclick();
     await expect(button(page)).toBeEnabled();
-    await expect(button(page)).toHaveAttribute("title", "surfer fdv_work/a_never9.vcd");
+    await expect(button(page)).toHaveAttribute("title", "surfer informal_work/a_never9.vcd");
     await button(page).click();
     await page.getByRole("tab", { name: /^Messages/ }).click();
-    await expect(page.locator(".messages")).toContainText("Opened fdv_work/a_never9.vcd in Surfer");
+    await expect(page.locator(".messages")).toContainText("Opened informal_work/a_never9.vcd in Surfer");
     await page.getByRole("tab", { name: "Property Table" }).click();
     await row(page, "c_done").click({ button: "right" });
     await page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" }).click();
-    await expect(page.locator(".messages")).toContainText("Opened fdv_work/c_done.vcd in Surfer");
+    await expect(page.locator(".messages")).toContainText("Opened informal_work/c_done.vcd in Surfer");
     // A result without a trace has nothing to open.
     await row(page, "a_max").click({ button: "right" });
     await expect(page.getByRole("menu").getByRole("menuitem", { name: "Open trace in Surfer" })).toHaveAttribute("aria-disabled", "true");

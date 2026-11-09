@@ -13,7 +13,7 @@ describe("parseVcd on the counter fixture", () => {
       ["counter.en", 1],
       ["counter.q", 4],
       ["counter.done", 1],
-      ["fdv.fdv_cyc", 16],
+      ["informal.informal_cyc", 16],
     ]);
     expect(vcd.signals[3].name).toBe("q");
   });

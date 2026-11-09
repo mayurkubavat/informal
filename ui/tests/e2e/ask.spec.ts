@@ -29,7 +29,7 @@ test("status bar names the provider; the switch starts on Tcl", async ({ page })
   await expect(statusbar(page)).toContainText("LLM: fake/scripted");
   await expect(tclSwitch(page)).toHaveAttribute("aria-pressed", "true");
   await expect(askSwitch(page)).toBeEnabled();
-  await expect(page.locator(".prompt")).toHaveText("fdv[jg]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[jg]>");
 });
 
 test("switch, View menu and Ctrl+Shift+A change the input mode", async ({ page }) => {
@@ -38,12 +38,12 @@ test("switch, View menu and Ctrl+Shift+A change the input mode", async ({ page }
   await expect(page.locator(".prompt")).toHaveText("ask>");
   await expect(page.getByLabel("Ask a question")).toBeFocused();
   await page.keyboard.press("Control+Shift+A");
-  await expect(page.locator(".prompt")).toHaveText("fdv[jg]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[jg]>");
   await page.keyboard.press("Control+Shift+A");
   await expect(page.locator(".prompt")).toHaveText("ask>");
   await page.getByRole("menuitem", { name: "View", exact: true }).click();
   await page.getByRole("menuitem", { name: /Input mode: Tcl/ }).click();
-  await expect(page.locator(".prompt")).toHaveText("fdv[jg]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[jg]>");
 });
 
 test("ask streams plain ask: lines and pre-fills the suggested command; nothing runs", async ({ page }) => {
@@ -53,10 +53,10 @@ test("ask streams plain ask: lines and pre-fills the suggested command; nothing 
   await expect(consoleLog(page).locator(".line.ask")).toHaveText("ask: Proving only that property:\nask: prove -property a_never9");
   const input = page.getByLabel("Suggested Tcl command");
   await expect(input).toHaveValue("prove -property a_never9");
-  await expect(page.locator(".prompt")).toHaveText("fdv[jg]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[jg]>");
   await expect(page.locator(".prompt-hint")).toHaveText("Enter runs · Esc discards");
   // Not run: no echo, a_never9 still unprocessed.
-  await expect(consoleLog(page)).not.toContainText("fdv[jg]> prove");
+  await expect(consoleLog(page)).not.toContainText("informal[jg]> prove");
   await expect(row(page, "a_never9")).not.toContainText("CEX");
 });
 
@@ -66,7 +66,7 @@ test("Enter runs the suggestion as a normal Tcl command, then the prompt is ask>
   const input = page.getByLabel("Suggested Tcl command");
   await expect(input).toHaveValue("prove -property a_never9");
   await input.press("Enter");
-  await expect(consoleLog(page)).toContainText("fdv[jg]> prove -property a_never9");
+  await expect(consoleLog(page)).toContainText("informal[jg]> prove -property a_never9");
   await expect(row(page, "a_never9")).toContainText("CEX");
   await expect(row(page, "a_max")).not.toContainText("Proven");
   await expect(page.locator(".prompt")).toHaveText("ask>");
@@ -82,7 +82,7 @@ test("Esc discards the suggestion without running it", async ({ page }) => {
   await expect(page.locator(".prompt")).toHaveText("ask>");
   await expect(page.getByLabel("Ask a question")).toHaveValue("");
   await expect(page.locator(".prompt-hint")).toHaveCount(0);
-  await expect(consoleLog(page)).not.toContainText("fdv[jg]> prove");
+  await expect(consoleLog(page)).not.toContainText("informal[jg]> prove");
   await expect(row(page, "a_never9")).not.toContainText("CEX");
 });
 
@@ -111,7 +111,7 @@ test("offline: Ask is disabled with the error as tooltip, and the status bar say
   await expect(askSwitch(page)).toBeDisabled();
   await expect(askSwitch(page)).toHaveAttribute("title", /Connection refused/);
   await page.keyboard.press("Control+Shift+A");
-  await expect(page.locator(".prompt")).toHaveText("fdv[jg]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[jg]>");
   await page.getByRole("menuitem", { name: "View", exact: true }).click();
   await expect(page.getByRole("menuitem", { name: /Input mode: Ask/ })).toBeDisabled();
 });
@@ -125,7 +125,7 @@ test("status bar menu switches provider; an offline one disables Ask, back again
   await menu.getByRole("menuitem", { name: /ollama-gemma/ }).click();
   await expect(statusbar(page)).toContainText("LLM: offline");
   await expect(askSwitch(page)).toBeDisabled();
-  await expect(page.locator(".prompt")).toHaveText("fdv[jg]>");
+  await expect(page.locator(".prompt")).toHaveText("informal[jg]>");
   await statusbar(page).getByRole("button", { name: /LLM:/ }).click();
   await page.getByRole("menu", { name: "LLM provider" }).getByRole("menuitem", { name: /fake/ }).click();
   await expect(statusbar(page)).toContainText("LLM: fake/scripted");

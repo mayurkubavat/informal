@@ -5,7 +5,7 @@ import type { Theme } from "./model";
 export function useTheme(): [Theme, (t: Theme) => void] {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
-      return (localStorage.getItem("fdv-theme") as Theme) || "system";
+      return (localStorage.getItem("informal-theme") as Theme) || "system";
     } catch {
       return "system";
     }
@@ -15,7 +15,7 @@ export function useTheme(): [Theme, (t: Theme) => void] {
     if (theme === "system") root.removeAttribute("data-theme");
     else root.setAttribute("data-theme", theme);
     try {
-      localStorage.setItem("fdv-theme", theme);
+      localStorage.setItem("informal-theme", theme);
     } catch {
       /* storage unavailable */
     }

@@ -1,4 +1,4 @@
-# VC Formal-style FPV setup for the counter (runs unchanged under fdv).
+# VC Formal-style FPV setup for the counter (runs unchanged under informal).
 set_fml_appmode FPV
 set_fml_var fml_max_time 60s
 read_file -top counter -format sverilog -sva -vcs "[file join [file dirname [info script]] counter.sv]"

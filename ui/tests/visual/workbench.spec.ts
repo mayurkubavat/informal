@@ -114,7 +114,7 @@ for (const s of sizes)
 
       test("restored custom layout", async ({ page }) => {
         await page.addInitScript(() =>
-          localStorage.setItem("fdv-layout", JSON.stringify({ leftW: 320, bottomH: 320, left: "design", center: "table", bottom: "console", leftOpen: true })),
+          localStorage.setItem("informal-layout", JSON.stringify({ leftW: 320, bottomH: 320, left: "design", center: "table", bottom: "console", leftOpen: true })),
         );
         await ready(page);
         await expect(page.getByRole("tab", { name: "Design" })).toHaveAttribute("aria-selected", "true");

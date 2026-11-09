@@ -36,7 +36,7 @@ pub fn system_prompt(flavor: &str, commands: &[&str], session: &Value) -> String
         "Cadence JasperGold"
     };
     format!(
-        "You are the Ask assistant of FormalDV, a formal property verification shell. \
+        "You are the Ask assistant of InFormal, a formal property verification shell. \
          The shell accepts {tool} Tcl commands.\n\
          Rules:\n\
          - Answer briefly, in plain text: a sentence or two, no headings, no tables.\n\

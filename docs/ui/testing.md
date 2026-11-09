@@ -29,7 +29,7 @@ them with the reply), for the provisional-row path. Unit tests set `mockOptions`
 and call `resetMock()` instead.
 
 Traces: after a prove, the mock gives `a_never9` (cex) and `c_done` (covered)
-`trace` paths (`fdv_work/<prop>.vcd`), and `readTrace` serves the hand-written
+`trace` paths (`informal_work/<prop>.vcd`), and `readTrace` serves the hand-written
 counter VCD `ui/tests/fixtures/a_never9.vcd` for both (12 cycles, `en` low in
 cycle 3, `q` reaches 9 and `done` rises in cycle 11). `src/vcd.test.ts` parses
 it; `TraceView.test.tsx`, the e2e "trace tab" block and the `trace*` baselines

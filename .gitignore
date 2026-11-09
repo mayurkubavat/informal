@@ -1,9 +1,38 @@
-/target
-/bench/runs*.jsonl
+# Build output
+/target/
+**/target/
+
+# Shell work directories (FPV session output: btor2, vcd, logs)
+/informal_work/
+*_work/
+
+# Benchmark data and results stay local (multi-GB; see bench/README.md)
 /bench/hwmcc*/
+/bench/bin/
+/bench/.work/
+/bench/runs*.jsonl
 *.log
-.DS_Store
+
+# Research notes and reports stay local (not for the repo)
+/research/
+
+# Tool droppings
 abc.history
-/fdv_work/
-bench/bin/
-bench/.work/
+yosys.history
+/*.vcd
+/*.fst
+
+# Secrets and local config overrides
+.env
+.env.*
+*.local.toml
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Papers are copyrighted; keep PDFs local
+/refs/*.pdf

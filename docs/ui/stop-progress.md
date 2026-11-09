@@ -61,21 +61,21 @@ each line to the console under the echoed command.
 ### `engine-log`
 
 `{ prop, engine, text, err }`: one line of an external engine's own output
-while it works on `prop` (`err` = stderr). fdv-engines-ext reads the
+while it works on `prop` (`err` = stderr). informal-engines-ext reads the
 engine's pipes line by line and forwards each line through the run's
-progress channel (`fdv_engine::Progress::output`), up to 2,000 lines per
+progress channel (`informal_engine::Progress::output`), up to 2,000 lines per
 stream per engine run, then one "further output not shown" line. Lines
 arrive as the engine flushes them: Rust engines (rIC3) flush per line; C
 programs that block-buffer a pipe (ABC) deliver theirs when they exit. Only
-sessions with a progress sink (the app) pay for this; `fdv bench` and the
-CLI pass no channel. In-process engines (fdv-bmc, fdv-ic3, ...) print
+sessions with a progress sink (the app) pay for this; `informal bench` and the
+CLI pass no channel. In-process engines (informal-bmc, informal-ic3, ...) print
 nothing. The UI shows these in the bottom dock's Log tab (Ctrl+4), capped
 at 5,000 lines.
 
 ### `shell_complete`
 
 `shell_complete(prefix) -> string[]`: the active flavor's command names
-(fdv_fpv::compat::command_names), then property names, starting with
+(informal_fpv::compat::command_names), then property names, starting with
 `prefix`. Answered from the app's cache of the last reply, so it works
 while a prove runs. The console's Tab inserts a single match with a space;
 several insert the first and list them under the prompt, and Tab /
@@ -124,17 +124,17 @@ prove. It sets the session's stop flag. The UI shows "Stopping…" until the
 
 | File | Change |
 | --- | --- |
-| `crates/fdv-engine/src/portfolio.rs` | `run_until(engines, req, progress, stop: Option<&AtomicBool>)`. A watcher thread copies the caller's flag into the run's own `CancelToken` every 20 ms. `run` calls it with `None`. Taking a winner cancels the run's token, not the caller's flag. New test `a_stop_flag_cancels_the_run_and_is_left_alone`. |
-| `crates/fdv-fpv/src/progress.rs` (new) | `ProveProgress` / `PropProgress` / `ProgressKind`: the payload above, serde-serialised. `ProveSink` trait (`progress`, `line`). `Tracker` holds a run's state and emits events. Two unit tests. |
-| `crates/fdv-fpv/src/session.rs` | Two `#[serde(skip)]` fields: `stop: Arc<AtomicBool>` and `sink: Option<Arc<dyn ProveSink>>`. `clear()` keeps both. `prove()` clears `stop`, starts a `Tracker` when there is a sink, runs a 500 ms heartbeat thread, and runs the per-property loop (now `prove_targets`). The loop checks `stop` before each property and passes it to `portfolio::run_until`. When it halts, the running property and every property not reached become `Undetermined { reason: "stopped" }`. `check_one` forwards engine `Progress` (bound) to the tracker. |
-| `crates/fdv-fpv/src/worker.rs` | `Worker` holds the session's stop flag. `Worker::stop()` sets it from any thread without queueing. The test also calls `stop()` while idle. |
-| `crates/fdv-fpv/src/lib.rs` | `pub mod progress` and re-exports. |
+| `crates/informal-engine/src/portfolio.rs` | `run_until(engines, req, progress, stop: Option<&AtomicBool>)`. A watcher thread copies the caller's flag into the run's own `CancelToken` every 20 ms. `run` calls it with `None`. Taking a winner cancels the run's token, not the caller's flag. New test `a_stop_flag_cancels_the_run_and_is_left_alone`. |
+| `crates/informal-fpv/src/progress.rs` (new) | `ProveProgress` / `PropProgress` / `ProgressKind`: the payload above, serde-serialised. `ProveSink` trait (`progress`, `line`). `Tracker` holds a run's state and emits events. Two unit tests. |
+| `crates/informal-fpv/src/session.rs` | Two `#[serde(skip)]` fields: `stop: Arc<AtomicBool>` and `sink: Option<Arc<dyn ProveSink>>`. `clear()` keeps both. `prove()` clears `stop`, starts a `Tracker` when there is a sink, runs a 500 ms heartbeat thread, and runs the per-property loop (now `prove_targets`). The loop checks `stop` before each property and passes it to `portfolio::run_until`. When it halts, the running property and every property not reached become `Undetermined { reason: "stopped" }`. `check_one` forwards engine `Progress` (bound) to the tracker. |
+| `crates/informal-fpv/src/worker.rs` | `Worker` holds the session's stop flag. `Worker::stop()` sets it from any thread without queueing. The test also calls `stop()` while idle. |
+| `crates/informal-fpv/src/lib.rs` | `pub mod progress` and re-exports. |
 | `ui/src-tauri/src/main.rs` | `EventSink` (a `ProveSink`) emits `prove-progress` / `console-line` through `AppHandle::emit` (`use tauri::Emitter`). The `AppHandle` is stored in a `OnceLock` in `setup`. New `shell_stop` command, registered in `generate_handler!`. The session gets the sink in the worker's `make` closure. |
 
-How the engines actually stop: external engines (`fdv-engines-ext`) already
+How the engines actually stop: external engines (`informal-engines-ext`) already
 poll `ctx.should_stop()` every 10 ms. When it turns true they kill their
 process group (`killpg SIGKILL`), so rIC3 workers and grandchildren go with
-them. In-process engines (`fdv-bmc`) already check `should_stop()` in their
+them. In-process engines (`informal-bmc`) already check `should_stop()` in their
 loops. Stop therefore needs no change in either crate: it only has to reach
 the run's `CancelToken`, which `run_until` does.
 
@@ -163,10 +163,10 @@ the run's `CancelToken`, which `run_until` does.
 
 ## To verify once Rust may be compiled
 
-1. `cargo test -p fdv-engine -p fdv-fpv`. This covers the new portfolio
+1. `cargo test -p informal-engine -p informal-fpv`. This covers the new portfolio
    test, the progress tests and the worker test.
-2. `cargo clippy -p fdv-fpv -p fdv-engine`, then `cd ui && npm run tauri dev`
-   (builds `fdv-app`).
+2. `cargo clippy -p informal-fpv -p informal-engine`, then `cd ui && npm run tauri dev`
+   (builds `informal-app`).
 3. In the app, run `source tests/fpv/counter/counter.jg.tcl` and then
    Prove all. Check that rows go Running, Bound counts up where engines
    report bounds, the progress bar and status bar advance, and console
@@ -182,5 +182,5 @@ the run's `CancelToken`, which `run_until` does.
    closes the menu).
 6. Type a command in the console during a prove. Its reply should appear
    after the prove; that is expected (see the limitations above).
-7. Check that the `fdv` CLI's `prove` still behaves the same: no sink, and
+7. Check that the `informal` CLI's `prove` still behaves the same: no sink, and
    the stop flag is never set.

@@ -11,7 +11,7 @@ the far right of the bottom-dock tabs, View > Input mode, or Ctrl+Shift+A.
 - In Ask mode the prompt reads `ask>`. The answer streams into the console as
   plain `ask:` lines (no bubbles, no colour).
 - If the answer contains a Tcl command, the prompt turns back into a Tcl prompt
-  (`fdv[jg]>`) holding the command, with the hint **Enter runs · Esc discards**.
+  (`informal[jg]>`) holding the command, with the hint **Enter runs · Esc discards**.
   You can edit the command before pressing Enter. Enter runs it as a normal Tcl
   command (echoed, logged in Messages). Esc drops it.
 - Esc while an answer is streaming cancels it.
@@ -34,7 +34,7 @@ It gets no file access and no shell, only the prompt below.
 `ui/src-tauri/src/ask.rs` `system_prompt` covers:
 
 - the flavor (JasperGold or VC Formal);
-- that flavor's command names (`fdv_fpv::compat::command_names`, the same list
+- that flavor's command names (`informal_fpv::compat::command_names`, the same list
   Tab completion uses), plus usage examples for the common commands;
 - a session summary built from the last reply: top, design file count,
   clocks, reset, the failed assertions and unreachable covers spelled out, and
@@ -81,18 +81,18 @@ API adapter is still a TODO in the file.
 
 1. **For one run of the app:** click `LLM: …` in the status bar and pick a
    provider. The file is not rewritten.
-2. **For one launch:** set `FDV_LLM_PROVIDER=ollama-gemma-4b` (it overrides
+2. **For one launch:** set `INFORMAL_LLM_PROVIDER=ollama-gemma-4b` (it overrides
    `[default] provider`).
 3. **Permanently:** edit `[default] provider`, or add a `[providers.<name>]`
    block for another server.
-4. To use another file, set `FDV_LLM_CONFIG=/path/to/llm.toml`.
+4. To use another file, set `INFORMAL_LLM_CONFIG=/path/to/llm.toml`.
    Otherwise the nearest `config/llm.toml` above the working directory is used.
 
 ### Adding a new kind of API
 
-Implement `fdv_llm::LlmProvider` (`crates/fdv-llm/src/lib.rs`): `name`,
+Implement `informal_llm::LlmProvider` (`crates/informal-llm/src/lib.rs`): `name`,
 `model`, a streaming `chat(req, on_delta)`, and `health`. Then add a `kind` arm
-in `fdv_llm::build`. The app holds providers as `Arc<dyn LlmProvider>`, so
+in `informal_llm::build`. The app holds providers as `Arc<dyn LlmProvider>`, so
 nothing else changes.
 
 ## Events (backend ↔ UI)
@@ -109,10 +109,10 @@ nothing else changes.
 
 ## Tests
 
-- `cargo test -p fdv-llm` covers config parsing, SSE on a recorded Ollama
+- `cargo test -p informal-llm` covers config parsing, SSE on a recorded Ollama
   gemma3:12b stream and on a llama-server-style stream (at every chunk size),
   the client against a local stand-in HTTP server, and the Fake provider.
-  `cargo test -p fdv-llm -- --ignored --nocapture` talks to the real default
+  `cargo test -p informal-llm -- --ignored --nocapture` talks to the real default
   provider.
 - `ui/src-tauri` unit tests cover answer splitting, the session summary and
   its 200-property cap, and the prompt contents.
@@ -139,5 +139,5 @@ model:
   lines were added to the summary, Gemma also listed the unreachable cover c_10
   as a failure.
 
-`gemma3:4b` (`FDV_LLM_PROVIDER=ollama-gemma-4b`) should answer faster when speed
+`gemma3:4b` (`INFORMAL_LLM_PROVIDER=ollama-gemma-4b`) should answer faster when speed
 matters more than accuracy.

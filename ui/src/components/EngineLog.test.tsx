@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { EngineLog } from "./EngineLog";
 
 const lines = [
-  { prop: "a_max", engine: "ric3-ic3", text: "reading fdv_work/a_max.btor2", err: false },
+  { prop: "a_max", engine: "ric3-ic3", text: "reading informal_work/a_max.btor2", err: false },
   { prop: "a_max", engine: "ric3-ic3", text: "warning: x", err: true },
 ];
 
@@ -12,7 +12,7 @@ describe("EngineLog", () => {
   it("shows tagged lines, stderr dimmed by class, and a count", () => {
     render(<EngineLog hidden={false} lines={lines} dropped={3} autoscroll onAutoscroll={() => {}} onClear={() => {}} />);
     const log = screen.getByRole("log", { name: "Engine output" });
-    expect(log).toHaveTextContent("a_max ric3-ic3reading fdv_work/a_max.btor2");
+    expect(log).toHaveTextContent("a_max ric3-ic3reading informal_work/a_max.btor2");
     expect(screen.getByText("warning: x")).toHaveClass("stderr");
     expect(screen.getByText("2 lines (3 older dropped)")).toBeInTheDocument();
   });

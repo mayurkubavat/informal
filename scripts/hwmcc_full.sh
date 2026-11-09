@@ -12,13 +12,13 @@ jobs=${2:-8}
 db=bench/runs-linux-full.jsonl
 log=bench/full.log
 models=bench/hwmcc24/extracted
-fdv=target/release/fdv
+informal=target/release/informal
 {
   echo "== start $(date -Is) timeout=${timeout}s jobs=$jobs"
-  $fdv bench "$models" --each --only ric3-ic3,ric3-bmc,abc-pdr \
+  $informal bench "$models" --each --only ric3-ic3,ric3-bmc,abc-pdr \
     --timeout "$timeout" --jobs "$jobs" --db "$db"
   echo "== singles done $(date -Is)"
-  $fdv bench "$models" --only ric3 --timeout "$timeout" --jobs 1 --db "$db"
+  $informal bench "$models" --only ric3 --timeout "$timeout" --jobs 1 --db "$db"
   echo "== portfolio done $(date -Is)"
   python3 -I scripts/hwmcc_check.py bench/hwmcc24/expected.json "$db"
   echo "== end $(date -Is)"

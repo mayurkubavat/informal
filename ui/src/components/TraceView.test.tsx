@@ -5,18 +5,18 @@ import vcdText from "../../tests/fixtures/a_never9.vcd?raw";
 import { prop } from "../test/fixtures";
 import { TraceView } from "./TraceView";
 
-const cex = prop("a_never9", { expr: "q != 4'd9", trace: "fdv_work/a_never9.vcd" }, { status: "cex", engine: "fdv-bmc", depth: 11, ms: 30 });
+const cex = prop("a_never9", { expr: "q != 4'd9", trace: "informal_work/a_never9.vcd" }, { status: "cex", engine: "informal-bmc", depth: 11, ms: 30 });
 const view = (over: Partial<Parameters<typeof TraceView>[0]> = {}) =>
-  render(<TraceView tabs={<div />} prop={cex} path="fdv_work/a_never9.vcd" text={vcdText} {...over} />);
+  render(<TraceView tabs={<div />} prop={cex} path="informal_work/a_never9.vcd" text={vcdText} {...over} />);
 const lane = (path: string) => screen.getByTitle(new RegExp(`^${path.replace(".", "\\.")}`));
 
 describe("TraceView", () => {
   it("shows the strip, default signals and the cursor on the failing cycle", () => {
     view();
-    expect(screen.getByText("CEX · depth 11 · fdv-bmc · 12 cycles")).toBeInTheDocument();
+    expect(screen.getByText("CEX · depth 11 · informal-bmc · 12 cycles")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Cursor" })).toHaveTextContent("cycle 11");
     const names = [...document.querySelectorAll(".trace-names .trace-name .ellipsis")].map((e) => e.textContent);
-    // fdv.* helpers are hidden until added
+    // informal.* helpers are hidden until added
     expect(names).toEqual(["a_never9", "counter.clk", "counter.rst_n", "counter.en", "counter.q", "counter.done"]);
     expect(within(lane("counter.q")).getByText("9")).toBeInTheDocument();
     expect(document.querySelectorAll('[data-signal="counter.q"] text')).toHaveLength(10); // 0,1,2,...,9 (2 and 0 held)
@@ -65,25 +65,25 @@ describe("TraceView", () => {
     view();
     await userEvent.click(screen.getByRole("button", { name: "Add signal…" }));
     const dialog = screen.getByRole("dialog", { name: "Add signal" });
-    expect(within(dialog).getAllByRole("option").map((o) => o.textContent)).toEqual(["fdv.fdv_cyc [15:0]"]);
+    expect(within(dialog).getAllByRole("option").map((o) => o.textContent)).toEqual(["informal.informal_cyc [15:0]"]);
     await userEvent.type(within(dialog).getByLabelText("Filter signals"), "zzz");
     expect(within(dialog).getByText("No signal matches.")).toBeInTheDocument();
     await userEvent.clear(within(dialog).getByLabelText("Filter signals"));
     await userEvent.click(within(dialog).getByRole("option"));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(within(lane("fdv.fdv_cyc")).getByText("b")).toBeInTheDocument(); // cycle 11 in hex
+    expect(within(lane("informal.informal_cyc")).getByText("b")).toBeInTheDocument(); // cycle 11 in hex
   });
 
   it("marks a cover with the covered colour", () => {
-    view({ prop: { ...cex, name: "c_done", kind: "cover", status: { status: "covered", engine: "fdv-bmc", depth: 11 } } });
-    expect(screen.getByText("Covered · depth 11 · fdv-bmc · 12 cycles")).toBeInTheDocument();
+    view({ prop: { ...cex, name: "c_done", kind: "cover", status: { status: "covered", engine: "informal-bmc", depth: 11 } } });
+    expect(screen.getByText("Covered · depth 11 · informal-bmc · 12 cycles")).toBeInTheDocument();
     expect(document.querySelector(".trace-marker")).toHaveClass("st-covered");
     expect(document.querySelector(".trace-markertext")).toHaveTextContent("cover");
   });
 
   it("says when the trace cannot be read", () => {
     view({ text: null, error: "no such trace" });
-    expect(screen.getByText("Could not read fdv_work/a_never9.vcd: no such trace")).toBeInTheDocument();
+    expect(screen.getByText("Could not read informal_work/a_never9.vcd: no such trace")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export VCD" })).toBeDisabled();
   });
 
@@ -91,13 +91,13 @@ describe("TraceView", () => {
     const results: [string, string][] = [];
     const onAddResult = (p: string, r: string) => results.push([p, r]);
     const names = () => [...document.querySelectorAll(".trace-names .trace-name .ellipsis")].map((e) => e.textContent);
-    const { rerender } = view({ addRequest: { path: "fdv.fdv_cyc", n: 1 }, onAddResult });
-    expect(names()).toContain("fdv.fdv_cyc");
+    const { rerender } = view({ addRequest: { path: "informal.informal_cyc", n: 1 }, onAddResult });
+    expect(names()).toContain("informal.informal_cyc");
     // The same request again (a re-render) does nothing.
-    rerender(<TraceView tabs={<div />} prop={cex} path="fdv_work/a_never9.vcd" text={vcdText} addRequest={{ path: "fdv.fdv_cyc", n: 1 }} onAddResult={onAddResult} />);
-    rerender(<TraceView tabs={<div />} prop={cex} path="fdv_work/a_never9.vcd" text={vcdText} addRequest={{ path: "counter.q", n: 2 }} onAddResult={onAddResult} />);
-    rerender(<TraceView tabs={<div />} prop={cex} path="fdv_work/a_never9.vcd" text={vcdText} addRequest={{ path: "counter.nosuch", n: 3 }} onAddResult={onAddResult} />);
-    expect(results).toEqual([["fdv.fdv_cyc", "added"], ["counter.q", "shown"], ["counter.nosuch", "missing"]]);
-    expect(names().filter((n) => n === "fdv.fdv_cyc")).toHaveLength(1);
+    rerender(<TraceView tabs={<div />} prop={cex} path="informal_work/a_never9.vcd" text={vcdText} addRequest={{ path: "informal.informal_cyc", n: 1 }} onAddResult={onAddResult} />);
+    rerender(<TraceView tabs={<div />} prop={cex} path="informal_work/a_never9.vcd" text={vcdText} addRequest={{ path: "counter.q", n: 2 }} onAddResult={onAddResult} />);
+    rerender(<TraceView tabs={<div />} prop={cex} path="informal_work/a_never9.vcd" text={vcdText} addRequest={{ path: "counter.nosuch", n: 3 }} onAddResult={onAddResult} />);
+    expect(results).toEqual([["informal.informal_cyc", "added"], ["counter.q", "shown"], ["counter.nosuch", "missing"]]);
+    expect(names().filter((n) => n === "informal.informal_cyc")).toHaveLength(1);
   });
 });

@@ -41,7 +41,7 @@ export function Console({
   const edit = useRef(0);
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const tclPrompt = `fdv[${flavor}]>`;
+  const tclPrompt = `informal[${flavor}]>`;
   const pending = suggestion !== null;
   const askPrompt = mode === "ask" && !pending;
   const prompt = askPrompt ? "ask>" : tclPrompt;

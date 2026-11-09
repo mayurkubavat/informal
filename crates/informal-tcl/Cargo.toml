@@ -1,0 +1,10 @@
+[package]
+name = "informal-tcl"
+description = "Embedded Tcl 8.6 interpreter (C library through FFI) for informal scripts and JasperGold / VC Formal compatibility"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "tcl8.6"
+
+[dependencies]

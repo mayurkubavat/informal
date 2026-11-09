@@ -1,8 +1,8 @@
-# The Formal DV desktop app. Kept out of the main workspace because Tauri
+# The InFormal desktop app. Kept out of the main workspace because Tauri
 # needs the GTK / WebKitGTK development packages on Linux; build it from
 # ui/ with `npm run tauri dev` or `npm run tauri build`.
 [package]
-name = "fdv-app"
+name = "informal-app"
 version = "0.1.0"
 edition = "2021"
 license = "Proprietary"
@@ -17,8 +17,8 @@ tauri-build = { version = "2.2.0", features = [] }
 tauri = { version = "2.5.1", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-fdv-fpv = { path = "../../crates/fdv-fpv" }
-fdv-engines-ext = { path = "../../crates/fdv-engines-ext" }
-fdv-bmc = { path = "../../crates/fdv-bmc" }
-fdv-llm = { path = "../../crates/fdv-llm" }
+informal-fpv = { path = "../../crates/informal-fpv" }
+informal-engines-ext = { path = "../../crates/informal-engines-ext" }
+informal-bmc = { path = "../../crates/informal-bmc" }
+informal-llm = { path = "../../crates/informal-llm" }
 tokio = { version = "1", features = ["time"] }

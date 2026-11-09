@@ -1,8 +1,8 @@
-# LLM providers for the console's Ask mode (crate fdv-llm, docs/ui/ask-mode.md).
+# LLM providers for the console's Ask mode (crate informal-llm, docs/ui/ask-mode.md).
 #
 # Every provider here speaks the OpenAI chat-completions API with streaming
 # (kind = "openai-compat"), so swapping the model server is an edit to this
-# file, the FDV_LLM_PROVIDER environment variable, or the status-bar menu in
+# file, the INFORMAL_LLM_PROVIDER environment variable, or the status-bar menu in
 # the app (that one lasts until the app closes; this file is not rewritten).
 #
 # Keys are never written here: api_key_env names the environment variable

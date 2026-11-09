@@ -31,7 +31,7 @@ and a sample of HWMCC'24 models with published answers.
   entries (`ric3-ic3`, `ric3-bmc`) and comment out the `ric3` portfolio
   entry, which is enabled in `engines.toml` for Linux.
 - **Counterexamples**: entries with `cex_witness = true` (rIC3 `--cex`,
-  ABC `write_cex`) hand their witness to fdv, which turns it into the
+  ABC `write_cex`) hand their witness to informal, which turns it into the
   trace; other engines' bugs get a BMC re-run for the trace.
 - **rIC3 has no liveness support** for Btor2 `fair`/`justice`: it panics
   (`unsupport fair op`), which reads as unknown.
@@ -48,7 +48,7 @@ and a sample of HWMCC'24 models with published answers.
 
 ## Memory caps
 
-`mem_limit_mb` on an `[[engine]]` entry (or `FDV_ENGINE_MEM_MB` for all)
+`mem_limit_mb` on an `[[engine]]` entry (or `INFORMAL_ENGINE_MEM_MB` for all)
 runs the engine in a systemd user scope with `MemoryMax`, so the engine
 and every process it forks share one cap and only they die when it is
 exceeded (the run reads as unknown). The rIC3 portfolio is capped at
@@ -57,7 +57,7 @@ the kernel then killed unrelated processes.
 
 ## Preprocessed models for external engines
 
-An `[[engine]]` entry with `preprocess = true` gets fdv's simplified model
+An `[[engine]]` entry with `preprocess = true` gets informal's simplified model
 instead of the original file: cone of influence, constant latches and
 strash, written as binary AIGER into an anonymous in-memory file
 (`memfd_create`) that the engine opens as `/proc/self/fd/N`. Nothing is
@@ -67,38 +67,38 @@ become 89), though PDR's luck varies the other way on some models.
 
 ## In-house engines (phase 1)
 
-`fdv-bmc` and `fdv-kind` run in-process on CaDiCaL (crate `fdv-sat`,
-C API through FFI). They load the model at bit level with `fdv-aig`
+`informal-bmc` and `informal-kind` run in-process on CaDiCaL (crate `informal-sat`,
+C API through FFI). They load the model at bit level with `informal-aig`
 (AIGER directly, Btor2 bit-blasted), simplify it (cone of influence,
 sequential constant latches by ternary simulation, structural hashing),
 and unroll it one frame at a time, declaring variables to CaDiCaL ahead
-of use. `fdv simp <model>` shows a model's size before and after.
+of use. `informal simp <model>` shows a model's size before and after.
 
 | Engine | Proves | Finds bugs | Notes |
 | --- | --- | --- | --- |
-| `fdv-bmc` | no | yes | Shortest counterexample first; every counterexample is replayed before it is reported |
-| `fdv-bmc-10`, `fdv-bmc-65` | no | yes | Stepped BMC: 10 or 65 frames per SAT call (like rIC3 `bmc --step`), for deep bugs |
-| `fdv-kind` | yes | yes | k-induction with lazy simple-path constraints, BMC base case |
-| `fdv-ic3` | yes | yes | IC3 / PDR on fdv's small CDCL solver (`fdv_sat::Mini`): lifting, core + MIC generalization, propagation |
-| `fdv-ic3-cadical` | yes | yes | The same IC3 on CaDiCaL |
-| `fdv-ic3-mt` | yes | yes | 4 IC3 workers with different options sharing lemmas (imports re-checked against each worker's frames) |
-| `fdv-kind-ic3` | yes | yes | IC3 for part of the budget, Houdini on its lemmas, then k-induction strengthened by the proved invariant |
-| `fdv-wbmc` | no | yes | Word-level BMC on Bitwuzla: Btor2 unrolled into terms, arrays included (skips `.aig` models) |
+| `informal-bmc` | no | yes | Shortest counterexample first; every counterexample is replayed before it is reported |
+| `informal-bmc-10`, `informal-bmc-65` | no | yes | Stepped BMC: 10 or 65 frames per SAT call (like rIC3 `bmc --step`), for deep bugs |
+| `informal-kind` | yes | yes | k-induction with lazy simple-path constraints, BMC base case |
+| `informal-ic3` | yes | yes | IC3 / PDR on informal's small CDCL solver (`informal_sat::Mini`): lifting, core + MIC generalization, propagation |
+| `informal-ic3-cadical` | yes | yes | The same IC3 on CaDiCaL |
+| `informal-ic3-mt` | yes | yes | 4 IC3 workers with different options sharing lemmas (imports re-checked against each worker's frames) |
+| `informal-kind-ic3` | yes | yes | IC3 for part of the budget, Houdini on its lemmas, then k-induction strengthened by the proved invariant |
+| `informal-wbmc` | no | yes | Word-level BMC on Bitwuzla: Btor2 unrolled into terms, arrays included (skips `.aig` models) |
 
-The in-house portfolio used for HWMCC'24 runs is `fdv-kind-ic3`,
-`fdv-ic3-mt`, `fdv-kind`, `fdv-bmc`, `fdv-bmc-10` and `fdv-bmc-65`.
+The in-house portfolio used for HWMCC'24 runs is `informal-kind-ic3`,
+`informal-ic3-mt`, `informal-kind`, `informal-bmc`, `informal-bmc-10` and `informal-bmc-65`.
 The front end encodes the AIG to CNF with DAG-aware variable elimination
 and compact ITE / XOR clauses, and `scorr` merges equivalent latches
 before the engines start.
 
 Not supported yet at bit level (they report unknown): arrays and
-liveness; `fdv-wbmc` covers arrays for bug finding. Bitwuzla is built
+liveness; `informal-wbmc` covers arrays for bug finding. Bitwuzla is built
 under `~/Silicon/DV/tools/bitwuzla` with its own patched CaDiCaL, and
-fdv links that one library for both (crate `fdv-sat` decides).
+informal links that one library for both (crate `informal-sat` decides).
 
 Build CaDiCaL once (`./configure -fPIC && make` in
-`~/Silicon/DV/tools/cadical`, or point `FDV_CADICAL_DIR` at a checkout)
-and rebuild fdv; without it these engines are left out of the portfolio.
+`~/Silicon/DV/tools/cadical`, or point `INFORMAL_CADICAL_DIR` at a checkout)
+and rebuild informal; without it these engines are left out of the portfolio.
 Tests run them on a small built-in DPLL solver instead.
 
 ## Adding an engine
@@ -107,10 +107,10 @@ Tests run them on a small built-in DPLL solver instead.
 2. Say how its verdict is read: `exit_codes` (`safe`, `unsafe`) and/or
    regex `patterns` (`safe`, `unsafe`, `depth`). Exit codes are checked
    first, then `unsafe`, then `safe`.
-3. Run `fdv bench tests/models --each --only <name>` and check every
+3. Run `informal bench tests/models --each --only <name>` and check every
    verdict against the expected answers in the model comments.
 
-An in-process engine implements `fdv_engine::Engine` directly instead.
+An in-process engine implements `informal_engine::Engine` directly instead.
 
 ## Verdict trust
 

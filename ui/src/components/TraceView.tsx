@@ -4,6 +4,8 @@
 // buses as boxed values, and the property's own lane with its fail / cover
 // marker at the depth cycle. Strokes stay neutral; only the marker, the
 // cursor and the depth cycle number carry the status colour.
+//
+// TODO(D10): FST traces with streamed windows for large waveforms.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { STATUS_LABEL, type ViewProp } from "../model";
@@ -14,9 +16,9 @@ export const ZOOM_DEFAULT = 60;
 const LANE = 26;
 const HEAD = 22;
 
-// Signals under the `fdv` scope are FPV helpers (cycle counter, $past
+// Signals under the `informal` scope are FPV helpers (cycle counter, $past
 // registers): listed under Add signal…, not shown by default.
-const helper = (s: Signal) => s.path === "fdv" || s.path.startsWith("fdv.");
+const helper = (s: Signal) => s.path === "informal" || s.path.startsWith("informal.");
 
 export function TraceView({
   tabs,

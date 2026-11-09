@@ -29,7 +29,7 @@ describe("proof profiler aggregation", () => {
   it("summarises the mock's full run with ric3-ic3 and ric3-bmc ahead", () => {
     const props = ["a_max", "a_step", "a_never9", "c_done", "c_10"].map((n) => ({ engines: MOCK_ENGINES[n] }));
     const s = profileSummary(props);
-    expect(s.map((e) => [e.engine, e.wins])).toEqual([["ric3-bmc", 2], ["ric3-ic3", 2], ["ric3", 1], ["fdv-kind", 0]]);
+    expect(s.map((e) => [e.engine, e.wins])).toEqual([["ric3-bmc", 2], ["ric3-ic3", 2], ["ric3", 1], ["informal-kind", 0]]);
     expect(s.find((e) => e.engine === "ric3-ic3")!.meanWinMs).toBe(35);
   });
   it("scales bars to the longest time and formats times", () => {

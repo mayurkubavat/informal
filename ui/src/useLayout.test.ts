@@ -35,7 +35,7 @@ describe("parseLayout", () => {
 describe("useLayout", () => {
   afterEach(() => localStorage.clear());
 
-  it("persists changes under fdv-layout", () => {
+  it("persists changes under informal-layout", () => {
     const { result } = renderHook(() => useLayout());
     expect(result.current.layout).toEqual(DEFAULT_LAYOUT);
     act(() => result.current.set("leftW")(300));

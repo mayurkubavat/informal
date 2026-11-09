@@ -752,116 +752,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fdv-aig"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-ir",
-]
-
-[[package]]
-name = "fdv-app"
-version = "0.1.0"
-dependencies = [
- "fdv-bmc",
- "fdv-engines-ext",
- "fdv-fpv",
- "fdv-llm",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
-]
-
-[[package]]
-name = "fdv-bmc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-aig",
- "fdv-engine",
- "fdv-ir",
- "fdv-sat",
-]
-
-[[package]]
-name = "fdv-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
-]
-
-[[package]]
-name = "fdv-engines-ext"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-aig",
- "fdv-engine",
- "libc",
- "regex",
- "serde",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "fdv-fpv"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fdv-aig",
- "fdv-bmc",
- "fdv-engine",
- "fdv-slang",
- "fdv-tcl",
- "regex",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fdv-ir"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "fdv-llm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures-util",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "tokio",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "fdv-sat"
-version = "0.1.0"
-
-[[package]]
-name = "fdv-slang"
-version = "0.1.0"
-dependencies = [
- "cc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fdv-tcl"
-version = "0.1.0"
-
-[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1631,6 +1521,116 @@ checksum = "f4200d433cbd5178df7797c9c2e75b348b728e39631cf14520d1e2fc424201f4"
 dependencies = [
  "cfb",
 ]
+
+[[package]]
+name = "informal-aig"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-ir",
+]
+
+[[package]]
+name = "informal-app"
+version = "0.1.0"
+dependencies = [
+ "informal-bmc",
+ "informal-engines-ext",
+ "informal-fpv",
+ "informal-llm",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
+]
+
+[[package]]
+name = "informal-bmc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-engine",
+ "informal-ir",
+ "informal-sat",
+]
+
+[[package]]
+name = "informal-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
+name = "informal-engines-ext"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-engine",
+ "libc",
+ "regex",
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "informal-fpv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-slang",
+ "informal-tcl",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "informal-ir"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "informal-llm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "informal-sat"
+version = "0.1.0"
+
+[[package]]
+name = "informal-slang"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "informal-tcl"
+version = "0.1.0"
 
 [[package]]
 name = "ipnet"

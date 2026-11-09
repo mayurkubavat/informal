@@ -1,6 +1,6 @@
 // A small VCD (IEEE 1364 value change dump) reader for the trace tab: the
 // header's timescale, scopes and variables, then value changes per time.
-// Enough for the traces fdv writes (docs/ui/trace-format.md) and the usual
+// Enough for the traces informal writes (docs/ui/trace-format.md) and the usual
 // simulator dumps; reals and strings are kept as text, not interpreted.
 
 export interface Signal {

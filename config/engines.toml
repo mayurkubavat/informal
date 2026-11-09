@@ -1,4 +1,4 @@
-# External engines for the fdv portfolio (phase 0).
+# External engines for the informal portfolio (phase 0).
 #
 # Each [[engine]] says how to run one model checker and how to read its
 # verdict. `{model}` is replaced with the model path. Exit codes are checked
@@ -15,7 +15,7 @@ name = "ric3-ic3"
 program = "ric3"
 args = ["check", "--ui", "false", "--cex", "{model}", "ic3"]
 # --cex prints the counterexample (Btor2 or AIGER witness, by model format);
-# fdv turns it into the trace, so no BMC re-run is needed.
+# informal turns it into the trace, so no BMC re-run is needed.
 cex_witness = true
 formats = ["aiger", "btor2"]
 proves = true
@@ -29,7 +29,7 @@ name = "ric3-bmc"
 program = "ric3"
 args = ["check", "--ui", "false", "--cex", "{model}", "bmc"]
 # --cex prints the counterexample (Btor2 or AIGER witness, by model format);
-# fdv turns it into the trace, so no BMC re-run is needed.
+# informal turns it into the trace, so no BMC re-run is needed.
 cex_witness = true
 formats = ["aiger", "btor2"]
 finds_bugs = true
@@ -46,7 +46,7 @@ name = "ric3"
 program = "ric3"
 args = ["check", "--ui", "false", "--cex", "{model}", "portfolio"]
 # --cex prints the counterexample (Btor2 or AIGER witness, by model format);
-# fdv turns it into the trace, so no BMC re-run is needed.
+# informal turns it into the trace, so no BMC re-run is needed.
 cex_witness = true
 # Its 16 workers can reach 18 GB together on some HWMCC models, which on a
 # 26 GB machine makes the kernel kill unrelated processes. Capped as a group.
@@ -95,7 +95,7 @@ program = "abc"
 args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; pdr; write_cex -a -t /dev/stdout"]
 # write_cex prints the CEX as an AIGER witness. It is for ABC's own network:
 # when undc/zero/fold changed the inputs or latches it does not fit the
-# model, fdv says so in the engine log and falls back to a BMC re-run.
+# model, informal says so in the engine log and falls back to a BMC re-run.
 cex_witness = true
 formats = ["aiger"]
 proves = true
@@ -105,7 +105,7 @@ safe = 'Property proved\.'
 unsafe = 'was asserted in frame \d+'
 depth = 'was asserted in frame (\d+)'
 
-# The same, on fdv's preprocessed model (cone of influence, constant
+# The same, on informal's preprocessed model (cone of influence, constant
 # latches, strash), handed over in memory through memfd.
 [[engine]]
 name = "abc-pdr-pp"

@@ -71,7 +71,7 @@ export function mockText(path: string): string | null {
 }
 const at = (file: string, line: number) => ({ file, line });
 
-// slang's scope tree for the counter above (fdv_slang::Scope, as the app's
+// slang's scope tree for the counter above (informal_slang::Scope, as the app's
 // snapshot carries it in design.hierarchy).
 const port = (name: string, dir: "input" | "output", width = 1) => ({ name, width, kind: "port" as const, dir });
 export const MOCK_HIERARCHY: DesignScope[] = [
@@ -112,7 +112,7 @@ const mockSession: SessionView = {
     { name: "m_en", source: at(MOCK_RTL, 7), kind: "assume", expr: "en |=> en", enabled: true, status: { status: "unprocessed" } },
   ],
   time_limit: { secs: 60, nanos: 0 },
-  workdir: "fdv_work",
+  workdir: "informal_work",
 };
 
 const mockResults: Record<string, PropStatus> = {
@@ -130,24 +130,24 @@ const mockResults: Record<string, PropStatus> = {
 const run = (engine: string, outcome: EngineRun["outcome"], ms: number, depth?: number): EngineRun =>
   depth === undefined ? { engine, outcome, ms } : { engine, outcome, ms, depth };
 export const MOCK_ENGINES: Record<string, EngineRun[]> = {
-  a_max: [run("ric3-ic3", "won", 41, 3), run("ric3-bmc", "killed", 42, 24), run("fdv-kind", "killed", 43, 6)],
+  a_max: [run("ric3-ic3", "won", 41, 3), run("ric3-bmc", "killed", 42, 24), run("informal-kind", "killed", 43, 6)],
   a_step: [run("ric3-ic3", "killed", 56, 4), run("ric3-bmc", "killed", 56, 31), run("ric3", "won", 55, 2)],
-  a_never9: [run("ric3-ic3", "killed", 31, 2), run("ric3-bmc", "won", 30, 11), run("fdv-kind", "killed", 31, 9)],
-  c_done: [run("ric3-ic3", "killed", 32, 2), run("ric3-bmc", "won", 31, 11), run("fdv-kind", "error", 2)],
-  c_10: [run("ric3-ic3", "won", 29, 5), run("ric3-bmc", "timeout", 29, 20), run("fdv-kind", "lost", 12, 4)],
+  a_never9: [run("ric3-ic3", "killed", 31, 2), run("ric3-bmc", "won", 30, 11), run("informal-kind", "killed", 31, 9)],
+  c_done: [run("ric3-ic3", "killed", 32, 2), run("ric3-bmc", "won", 31, 11), run("informal-kind", "error", 2)],
+  c_10: [run("ric3-ic3", "won", 29, 5), run("ric3-bmc", "timeout", 29, 20), run("informal-kind", "lost", 12, 4)],
   a_src_ok: [run("ric3-ic3", "won", 44, 3), run("ric3-bmc", "killed", 45, 26)],
   c_src_hit: [run("ric3-ic3", "killed", 23, 1), run("ric3-bmc", "won", 22, 4)],
 };
 
 // Properties whose result comes with a trace: both get the counter's 12
 // cycle fixture (q reaches 9, so done rises, in cycle 11).
-export const MOCK_TRACES: Record<string, string> = { a_never9: "fdv_work/a_never9.vcd", c_done: "fdv_work/c_done.vcd" };
+export const MOCK_TRACES: Record<string, string> = { a_never9: "informal_work/a_never9.vcd", c_done: "informal_work/c_done.vcd" };
 // The app's open_in_surfer: refuses when Surfer is missing or the path is
 // not one of the traces; otherwise records the path (for the tests).
 export const mockSurferOpened: string[] = [];
 export async function mockOpenInSurfer(path: string): Promise<void> {
   if (!mockOptions.surfer) throw new Error("surfer is not on PATH (install it from surfer-project.org)");
-  if (mockTrace(path) === null) throw new Error(`${path}: not a trace in fdv_work`);
+  if (mockTrace(path) === null) throw new Error(`${path}: not a trace in informal_work`);
   mockSurferOpened.push(path);
 }
 export function mockTrace(path: string): string | null {
@@ -242,7 +242,7 @@ function engineLine(prop: string, engine: string, text: string, err = false) {
 }
 
 // Tab completion: a static list of each flavor's commands, then the
-// session's property names (crates/fdv-fpv compat::complete in the app).
+// session's property names (crates/informal-fpv compat::complete in the app).
 export const MOCK_COMMANDS: Record<string, string[]> = {
   jg: ["analyze", "assert", "assume", "clear", "clock", "cover", "elaborate", "get_property_list", "get_status", "include", "prove", "report", "reset", "set_prove_time_limit"],
   vcf: ["check_fv", "create_clock", "create_reset", "fvassert", "fvassume", "fvcover", "fvdisable", "fvenable", "get_props", "read_file", "report_fv", "set_fml_appmode", "set_fml_var"],
@@ -279,7 +279,7 @@ function fill(run: Run) {
     const engine = mockResults[p.name]?.engine ?? "ric3";
     reset(p, { status: "running", engine, depth: 1, ms: 0 });
     run.ran.set(p.name, 0);
-    engineLine(p.name, engine, `reading fdv_work/${p.name}.btor2`);
+    engineLine(p.name, engine, `reading informal_work/${p.name}.btor2`);
   }
 }
 
@@ -476,7 +476,7 @@ export async function mock(cmd: string, args: Record<string, unknown>): Promise<
     stopProve(run);
     return { ok: true, result: "", session: mockSession };
   }
-  // VC Formal only, as in crates/fdv-fpv/src/compat.rs.
+  // VC Formal only, as in crates/informal-fpv/src/compat.rs.
   const toggle = script.match(/^\s*(fvdisable|fvenable)\b/);
   if (cmd === "shell_eval" && toggle && mockFlavor === "vcf") {
     const want = names(script);

@@ -33,7 +33,7 @@ describe("browser mock", () => {
     const off = mockEvents.on("engine-log", (l) => got.push(l as EngineLine));
     await mock("shell_eval", { script: "prove -property a_never9" });
     off();
-    expect(got.map((l) => l.text)).toEqual(["reading fdv_work/a_never9.btor2", "frame 6", "sat"]);
+    expect(got.map((l) => l.text)).toEqual(["reading informal_work/a_never9.btor2", "frame 6", "sat"]);
     expect(got.every((l) => l.prop === "a_never9" && l.engine === "ric3-bmc" && !l.err)).toBe(true);
   });
 
@@ -189,16 +189,16 @@ describe("browser mock: Surfer hand-off", () => {
   it("is unavailable by default and refuses to open", async () => {
     const { backend } = await import("./backend");
     expect(await backend.toolAvailable("surfer")).toBe(false);
-    await expect(mockOpenInSurfer("fdv_work/a_never9.vcd")).rejects.toThrow(/surfer is not on PATH/);
+    await expect(mockOpenInSurfer("informal_work/a_never9.vcd")).rejects.toThrow(/surfer is not on PATH/);
   });
   it("with ?surfer=1 opens known traces only", async () => {
     mockOptions.surfer = true;
     const { backend } = await import("./backend");
     expect(await backend.toolAvailable("surfer")).toBe(true);
     expect(await backend.toolAvailable("gtkwave")).toBe(false);
-    await mockOpenInSurfer("fdv_work/a_never9.vcd");
-    await expect(mockOpenInSurfer("fdv_work/prop_0.btor2")).rejects.toThrow(/not a trace/);
-    expect(mockSurferOpened).toEqual(["fdv_work/a_never9.vcd"]);
+    await mockOpenInSurfer("informal_work/a_never9.vcd");
+    await expect(mockOpenInSurfer("informal_work/prop_0.btor2")).rejects.toThrow(/not a trace/);
+    expect(mockSurferOpened).toEqual(["informal_work/a_never9.vcd"]);
   });
 });
 

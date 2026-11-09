@@ -24,7 +24,7 @@ export interface Property {
   enabled: boolean;
   status: PropStatus;
   // Path of the VCD written for a CEX or cover (inside the session's
-  // workdir, e.g. "fdv_work/a_never9.vcd"); absent or null when there is
+  // workdir, e.g. "informal_work/a_never9.vcd"); absent or null when there is
   // none. See docs/ui/trace-format.md.
   trace?: string | null;
   // Where the property was written: the script line of the Tcl command that
@@ -37,7 +37,7 @@ export interface Property {
   engines?: EngineRun[];
 }
 
-// How one portfolio engine's run on a property ended (fdv-engine
+// How one portfolio engine's run on a property ended (informal-engine
 // portfolio::EngineRun): the winner, a loser that finished, one out of
 // time, one cancelled by the winner or a Stop, or one that failed to run.
 export type RunOutcome = "won" | "lost" | "timeout" | "killed" | "error";
@@ -55,7 +55,7 @@ export interface SourceLoc {
   line: number;
 }
 
-// One instance in slang's scope tree (fdv_slang::Scope): its ports and
+// One instance in slang's scope tree (informal_slang::Scope): its ports and
 // named signals, and its child instances. Signal names are relative to the
 // scope; `path + "." + name` is the hierarchical name (and the VCD path).
 export interface ScopeSignal {

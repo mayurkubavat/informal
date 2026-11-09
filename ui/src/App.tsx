@@ -1,4 +1,4 @@
-// UI v2: a quiet EDA workbench over one fdv shell, laid out the way
+// UI v2: a quiet EDA workbench over one informal shell, laid out the way
 // JasperGold / VC Formal users expect: menu bar, tool row, task tree on the
 // left, property table in the centre, a bottom dock with the Tcl console,
 // property details and messages, and a status bar. Colour is reserved for
@@ -511,7 +511,7 @@ export default function App() {
             label: ctxProp.enabled ? "Disable" : "Enable",
             hint: cmd ?? undefined,
             disabled: !cmd || !idle,
-            title: cmd ? undefined : "The JasperGold flavor of the fdv shell has no disable command yet; switch to VC Formal (fvdisable)",
+            title: cmd ? undefined : "The JasperGold flavor of the informal shell has no disable command yet; switch to VC Formal (fvdisable)",
             onClick: () => cmd && run(() => backend.evalTcl(cmd), cmd),
           };
         })(),
@@ -635,7 +635,7 @@ export default function App() {
           },
         },
         { sep: true },
-        { label: "Formal DV v0.1", disabled: true },
+        { label: "InFormal v0.1", disabled: true },
       ],
     },
   ];

@@ -14,7 +14,7 @@ assert -name a_status      {status == 2'd2 |-> full}
 assert -name a_data        {push && empty && !pop ##1 !pop |-> dout == $past(din)}
 assert -name a_wrong       {count != 3'd3}
 # Internal signal of a sub-instance (slang front end only).
-if {[info exists ::fdv_frontend_yosys] == 0} {
+if {[info exists ::informal_frontend_yosys] == 0} {
     assert -name a_sub_ptr {u_wp.p == wp}
 }
 cover  -name c_full        {full}

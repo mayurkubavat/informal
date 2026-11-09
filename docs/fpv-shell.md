@@ -1,41 +1,41 @@
 # FPV shell and the JasperGold / VC Formal compatibility layer
 
-`fdv shell` runs FPV setup scripts written for JasperGold (`jg`) or VC
+`informal shell` runs FPV setup scripts written for JasperGold (`jg`) or VC
 Formal (`vcf`) without rewriting them. Scripts run in a real Tcl 8.6
-interpreter (the C library, linked through FFI in `fdv-tcl`), so `proc`,
+interpreter (the C library, linked through FFI in `informal-tcl`), so `proc`,
 `foreach`, `source`, namespaces and `[info script]` behave as they do in
-the vendor tools. Only the tool commands are fdv's.
+the vendor tools. Only the tool commands are informal's.
 
 ```sh
-fdv shell tests/fpv/counter/counter.jg.tcl          # flavor detected from the script
-fdv shell setup.tcl --flavor vcf --workdir run1     # explicit flavor and scratch dir
-fdv shell --flavor jg                               # interactive prompt
-fdv shell --flavor jg -c 'analyze -sv a.sv' -c 'elaborate -top a'
+informal shell tests/fpv/counter/counter.jg.tcl          # flavor detected from the script
+informal shell setup.tcl --flavor vcf --workdir run1     # explicit flavor and scratch dir
+informal shell --flavor jg                               # interactive prompt
+informal shell --flavor jg -c 'analyze -sv a.sv' -c 'elaborate -top a'
 ```
 
-Needs Yosys (`yosys` on `PATH`, `FDV_YOSYS`, or `/tools/yosys/current/bin/yosys`)
+Needs Yosys (`yosys` on `PATH`, `INFORMAL_YOSYS`, or `/tools/yosys/current/bin/yosys`)
 and the engines in `config/engines.toml`. Generated files go to the work
-directory (`fdv_work/` by default).
+directory (`informal_work/` by default).
 
 ## How a prove runs
 
 1. `analyze` / `read_file` collect files, `+define+`, `+incdir+` and `-f`
    filelists (paths resolve the way VCS does; `$VAR` expands).
-2. `elaborate` runs slang over the design (when fdv is built with it):
+2. `elaborate` runs slang over the design (when informal is built with it):
    SystemVerilog errors come back with file, line and column, the top
    module comes from slang, and from then on every property is checked
    against the names the top module declares, so a typo is an error rather
    than an implicit net that makes the check vacuous. It then runs Yosys
    once, which builds the model.
-3. The models are built by slang's AST lowering (`crates/fdv-slang/cpp/lower.cpp`)
-   when fdv has slang, else by Yosys. `FDV_FRONTEND=yosys` forces Yosys,
+3. The models are built by slang's AST lowering (`crates/informal-slang/cpp/lower.cpp`)
+   when informal has slang, else by Yosys. `INFORMAL_FRONTEND=yosys` forces Yosys,
    and a design using something the lowering does not handle yet (memories,
    loops, functions, interfaces) falls back to Yosys with a note. Both give
    the same verdicts on `tests/fpv`; counterexample depths from the slang
    path are one cycle shorter, since Yosys registers clocked assertions.
-   `fdv lower design.sv -D NAME` prints the slang Btor2 for a design whose
+   `informal lower design.sv -D NAME` prints the slang Btor2 for a design whose
    labelled immediate assertions become bad states.
-4. Each property is lowered by the SVA subset compiler (`fdv-fpv/src/sva.rs`)
+4. Each property is lowered by the SVA subset compiler (`informal-fpv/src/sva.rs`)
    into an immediate assertion over `$past`, and the checker block is
    inserted before the top module's `endmodule`, so properties see every
    signal in the top module's scope (not yet signals inside sub-instances).
@@ -51,7 +51,7 @@ directory (`fdv_work/` by default).
 
 Each property in the session JSON carries `source: {file, line}` (or
 `null`): the absolute script path and 1-based line of the Tcl command that
-created it, from Tcl's `info frame` (`fdv_tcl::caller_location`). Tcl 8.6
+created it, from Tcl's `info frame` (`informal_tcl::caller_location`). Tcl 8.6
 tracks lines for code read by `source`, including `foreach` and proc bodies
 written in that file. A property made by `eval` of a built string has no
 line info; then the first line of the sourced script (`info script`) naming
@@ -82,7 +82,7 @@ and ignored with a note on stderr. Options that would change what is
 checked and are not implemented are errors, so a migrated script never
 passes on a different setup without saying so.
 
-| JasperGold | VC Formal | fdv behaviour |
+| JasperGold | VC Formal | informal behaviour |
 | --- | --- | --- |
 | `clear -all` | (new session) | Forget design and properties |
 | `analyze -sv12 [-f F] [+define+X] [+incdir+D] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources; VHDL is an error for now |
@@ -95,23 +95,23 @@ passes on a different setup without saying so.
 | `assert -disable/-enable pattern` | `fvdisable / fvenable pattern` | Glob patterns |
 | `prove -all`, `prove -property {names}` | `check_fv [-property {names}]` | Prove; prints the report, returns a count summary |
 | `set_prove_time_limit 1h` | `set_fml_var fml_max_time 1H` | Per-property time limit |
-| `set_engine_mode {Ht B N}` | — | Mapped to fdv engines (Ht/Hp → `ric3-ic3`, `abc-pdr`; B → `ric3-bmc`; N → `ric3`) |
+| `set_engine_mode {Ht B N}` | — | Mapped to informal engines (Ht/Hp → `ric3-ic3`, `abc-pdr`; B → `ric3-bmc`; N → `ric3`) |
 | `get_property_list -include {type assert status proven}` | `get_props -type assert -status proven` | Tcl list of names |
 | `get_status name` | — | `proven`, `cex`, `covered`, `unreachable`, `undetermined`, `error`, `unprocessed` |
 | `report` | `report_fv -list` | Property table |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |
 
-Extra fdv commands in every flavor: `fdv::session` (the session as JSON)
-and `fdv::set_engines name ...` (pick engines by name). Each flavor's
+Extra informal commands in every flavor: `informal::session` (the session as JSON)
+and `informal::set_engines name ...` (pick engines by name). Each flavor's
 commands also stay reachable by namespace (`jg::prove`, `vcf::check_fv`).
 
 ## Building with slang
 
-slang is found in `FDV_SLANG_DIR` or `~/Silicon/DV/tools/slang` (a
+slang is found in `INFORMAL_SLANG_DIR` or `~/Silicon/DV/tools/slang` (a
 checkout built with `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build`). The C++
-shim in `crates/fdv-slang/cpp` is compiled against it. Without slang, fdv
+shim in `crates/informal-slang/cpp` is compiled against it. Without slang, informal
 still builds and falls back to a regex guess of the top module.
 
 ## Known gaps

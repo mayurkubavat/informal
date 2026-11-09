@@ -1,0 +1,26 @@
+[package]
+name = "informal-cli"
+description = "The informal command-line tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "informal"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+informal-ir.workspace = true
+informal-engine.workspace = true
+informal-engines-ext.workspace = true
+informal-bench.workspace = true
+informal-tcl.workspace = true
+informal-fpv.workspace = true
+informal-bmc.workspace = true
+informal-slang.workspace = true
+informal-aig.workspace = true
+informal-bitwuzla.workspace = true

@@ -1,7 +1,7 @@
-# EDA GUI references for the Formal DV workbench
+# EDA GUI references for the InFormal workbench
 
 Notes on how the established formal/simulation GUIs are laid out, and what
-Formal DV should take from them. Written from general familiarity with the
+InFormal should take from them. Written from general familiarity with the
 tools (JasperGold, VC Formal on Verdi, Xcelium/SimVision); the vendor user
 guides for your release are the authority on exact menu and window names.
 Public web material on these GUIs is thin.
