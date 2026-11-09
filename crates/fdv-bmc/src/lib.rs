@@ -327,8 +327,8 @@ fn kind(
     max_depth: Option<usize>,
     invariants: &[ic3::Cube],
 ) -> Verdict {
-    let mut base = Unroll::new(&g, solver(ctx), false);
-    let mut step = Unroll::new(&g, solver(ctx), true);
+    let mut base = Unroll::new(g, solver(ctx), false);
+    let mut step = Unroll::new(g, solver(ctx), true);
     let mut k = 0;
     let v = 'outer: loop {
         if ctx.should_stop() {
@@ -800,16 +800,18 @@ mod tests {
         let w = 6u32;
         let mask = (1u64 << w) - 1;
         let sx = |v: u64| -> i64 { ((v << (64 - w)) as i64) >> (64 - w) };
-        let cases: &[(&str, fn(u64, u64, u32) -> u64)] = &[
+        type Unsigned = fn(u64, u64, u32) -> u64;
+        type Signed = fn(i64, i64) -> i64;
+        let cases: &[(&str, Unsigned)] = &[
             ("add", |a, b, _| a + b),
             ("sub", |a, b, _| a.wrapping_sub(b)),
             ("mul", |a, b, _| a * b),
-            ("udiv", |a, b, _| if b == 0 { u64::MAX } else { a / b }),
+            ("udiv", |a, b, _| a.checked_div(b).unwrap_or(u64::MAX)),
             ("urem", |a, b, _| if b == 0 { a } else { a % b }),
             ("sll", |a, b, w| if b >= w as u64 { 0 } else { a << b }),
             ("srl", |a, b, w| if b >= w as u64 { 0 } else { a >> b }),
         ];
-        let signed: &[(&str, fn(i64, i64) -> i64)] = &[
+        let signed: &[(&str, Signed)] = &[
             ("sdiv", |a, b| {
                 if b == 0 {
                     if a < 0 {

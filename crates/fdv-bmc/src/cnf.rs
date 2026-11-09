@@ -501,7 +501,7 @@ mod tests {
             for bv in [false, true] {
                 let sat = t.clauses.iter().all(|cl| {
                     cl.iter().any(|&l| {
-                        if l.unsigned_abs() as u32 == var(bad) + 1 {
+                        if l.unsigned_abs() == var(bad) + 1 {
                             bv ^ (l < 0)
                         } else {
                             val(l).unwrap_or(false)

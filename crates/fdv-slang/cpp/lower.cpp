@@ -1259,7 +1259,8 @@ char* fdv_slang_lower(const char* args) {
         driver.options.compilationFlags[CompilationFlags::DisableInstanceCaching] = true;
         if (!driver.parseCommandLine((int)argv.size(), argv.data()) || !driver.processOptions())
             throw std::runtime_error("bad front-end options");
-        driver.parseAllSources();
+        // Parse errors are reported through the compilation diagnostics below.
+        (void)driver.parseAllSources();
         auto comp = driver.createCompilation();
         auto& sm = driver.sourceManager;
         DiagnosticEngine engine(sm);

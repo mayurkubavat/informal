@@ -261,7 +261,7 @@ impl Dpll {
 
     fn search(&self, assign: &mut Vec<i8>, steps: &mut u64) -> Option<bool> {
         *steps += 1;
-        if *steps % 1024 == 0 && self.terminate.as_ref().is_some_and(|f| f()) {
+        if (*steps).is_multiple_of(1024) && self.terminate.as_ref().is_some_and(|f| f()) {
             return None;
         }
         let mut trail = Vec::new();

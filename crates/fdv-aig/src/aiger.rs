@@ -293,7 +293,7 @@ pub fn write_binary(g: &Aig) -> Vec<u8> {
     for &b in g.bads.iter().chain(&g.constraints) {
         out.extend(format!("{}\n", m(b)).bytes());
     }
-    let mut varint = |out: &mut Vec<u8>, mut x: u32| {
+    let varint = |out: &mut Vec<u8>, mut x: u32| {
         while x >= 0x80 {
             out.push((x as u8 & 0x7f) | 0x80);
             x >>= 7;

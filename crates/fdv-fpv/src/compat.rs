@@ -573,7 +573,7 @@ const JG: &[(&str, Body)] = &[
         if let Some(t) = a.val("-time_limit") {
             s.time_limit = parse_duration(t)?;
         }
-        let which: Vec<String> = a.all("-property").cloned().flatten().collect();
+        let which: Vec<String> = a.all("-property").flatten().cloned().collect();
         let which = if which.is_empty() {
             Vec::new()
         } else {
@@ -804,7 +804,7 @@ const VCF: &[(&str, Body)] = &[
             &[("-property", 1)],
             &[("-block", 0), ("-run_finish", 1), ("-break", 1)],
         )?;
-        let which: Vec<String> = a.all("-property").cloned().flatten().collect();
+        let which: Vec<String> = a.all("-property").flatten().cloned().collect();
         let which = if which.is_empty() {
             Vec::new()
         } else {

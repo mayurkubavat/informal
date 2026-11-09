@@ -548,7 +548,7 @@ impl Mini {
                 }
                 self.var_inc /= 0.95;
                 self.cla_inc /= 0.999;
-                if conflicts % 256 == 0 && self.terminate.as_ref().is_some_and(|f| f()) {
+                if conflicts.is_multiple_of(256) && self.terminate.as_ref().is_some_and(|f| f()) {
                     return None;
                 }
                 continue;
