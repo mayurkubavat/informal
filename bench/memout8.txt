@@ -1,0 +1,8 @@
+bench/hwmcc24/extracted/2019/mann/data-integrity/unsafe/arbitrated_top_n5_w128_d128_e0.aig
+bench/hwmcc24/extracted/2024/sosylab/eca-programs/Problem101_label01.aig
+bench/hwmcc24/extracted/2024/sosylab/eca-rers2012/Problem07_label01.aig
+bench/hwmcc24/extracted/2024/sosylab/eca-rers2012/Problem13_label23.aig
+bench/hwmcc24/extracted/2024/sosylab/eca-rers2012/Problem19_label00.aig
+bench/hwmcc24/extracted/2024/sosylab/eca-rers2012/Problem19_label14.aig
+bench/hwmcc24/extracted/2024/sosylab/eca-rers2012/Problem19_label36.aig
+bench/hwmcc24/extracted/2024/sosylab/eca-rers2018/Problem17.aig
