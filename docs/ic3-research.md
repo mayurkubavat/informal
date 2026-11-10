@@ -106,11 +106,34 @@ needed before reading anything into that.
 
 ### Candidate hypotheses not yet tested
 
-- **H3. Push failures are caused by lower-level lemmas.** For each failed
-  push, check whether its counterexample state is excluded by a lemma at a
-  lower level. If it usually is, that confirms H2's mechanism and argues
-  for running Houdini when pushes start failing instead of on a fixed
-  schedule.
+### H3. Push failures are caused by lemmas stuck one level lower
+
+*Claim.* The state that breaks a failed push is usually excluded by a
+lemma sitting at a lower level: H2's mechanism.
+
+*Measurement.* The trace now records, for every failed push (`X` events),
+the highest lower level whose lemmas exclude the counterexample state.
+informal-ic3 for 90 s with H2 off:
+
+| Model | Failed pushes | CTI excluded by a lower lemma | Of those, exactly one level lower |
+|-------|---------------|-------------------------------|-----------------------------------|
+| ILA_Piccolo_JALR_sanity | 1,909 | 1,854 (97%) | 1,804 |
+| cv32e40x-p514 | 2,183 | 2,163 (99%) | 2,133 |
+
+*Result: the mechanism is confirmed.* Pushes fail almost only because the
+lemma that would block the counterexample sits one level lower and
+can't move up either. That chain ends only at a set that is inductive as
+a whole, which is what Houdini finds.
+
+*Follow-up rejected: trigger Houdini on push failures.* Running Houdini
+when more than half of a propagation's pushes failed (at most every 2
+frames) fired early, at frames 5, 8 and 10 with few lemmas, and solved
+neither model in 300 s. The fixed N=4 schedule, rerun under the same
+load, solved both again (JALR 161 s, p514 199 s), with its big moves late
+(p514: 318 lemmas at frame 12, 1,075 at frame 16). Houdini pays off once
+the lemma pool is large, so a better trigger would look at pool size, not
+failure rate. That's untested.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against

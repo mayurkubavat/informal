@@ -173,6 +173,7 @@ pub struct Ic3<'g> {
     /// Proved invariants given up front ([`Ic3::assume_invariant`]): in
     /// every frame >= 1 and part of the final invariant.
     inf: Vec<Cube>,
+
     /// Lemmas by the highest frame they are known to hold in.
     frames: Vec<Vec<Cube>>,
     /// The frame that emptied when the proof closed (see [`Ic3::invariant`]).
@@ -239,6 +240,7 @@ impl<'g> Ic3<'g> {
             single: std::env::var_os("INFORMAL_IC3_PER_FRAME").is_none(),
             acts: Vec::new(),
             inf: Vec::new(),
+
             frames: Vec::new(),
             proof_level: None,
             lift,
@@ -1012,11 +1014,32 @@ impl<'g> Ic3<'g> {
         loop {
             // Only at the frontier: lower down, CTP lemmas cost more than
             // the pushes they win (measured on the HWMCC'24 sample).
-            let want = ctps < self.cfg.max_ctps && i + 1 == self.top();
+            let ctp = ctps < self.cfg.max_ctps && i + 1 == self.top();
+            // Tracing (H3) also asks for the counterexample state.
+            let want = ctp || self.trace.is_some();
             match self.relative_inductive(c, i + 1, want) {
                 Ok(_) => return true,
                 Err(None) => return false,
                 Err(Some(p)) => {
+                    if self.trace.is_some() {
+                        // Is the state that breaks the push excluded by a
+                        // lemma stuck below level i (H3)?
+                        let low = (1..i)
+                            .rev()
+                            .find(|&j| {
+                                self.frames[j]
+                                    .iter()
+                                    .any(|l| l.iter().all(|x| p.binary_search(x).is_ok()))
+                            })
+                            .unwrap_or(0);
+                        let n = p.len();
+                        self.tr(format_args!(
+                            "{{\"e\":\"X\",\"from\":{i},\"low\":{low},\"n\":{n}}}"
+                        ));
+                    }
+                    if !ctp {
+                        return false;
+                    }
                     if ctx.should_stop() || self.intersects_init(&p) {
                         return false;
                     }
