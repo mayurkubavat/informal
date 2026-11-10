@@ -153,7 +153,15 @@ pub struct Ic3<'g> {
     t: std::sync::Arc<Template>,
     nvars: usize,
     /// solvers[i] holds F_i: init for i = 0, else lemmas of level >= i.
+    /// With `single`, there is one solver for every frame instead: a lemma
+    /// of level j is guarded by `acts[j]`, init by `acts[0]`, and a query
+    /// on F_i assumes the guards of the levels it needs (GipSAT keeps all
+    /// frames in one solver too). One copy of the transition relation per
+    /// IC3 instead of one per frame. Default; `INFORMAL_IC3_PER_FRAME`
+    /// restores the per-frame solvers.
     solvers: Vec<Solver>,
+    single: bool,
+    acts: Vec<i32>,
     /// Lemmas by the highest frame they are known to hold in.
     frames: Vec<Vec<Cube>>,
     /// The frame that emptied when the proof closed (see [`Ic3::invariant`]).
@@ -213,6 +221,8 @@ impl<'g> Ic3<'g> {
             t: tpl,
             nvars,
             solvers: Vec::new(),
+            single: std::env::var_os("INFORMAL_IC3_PER_FRAME").is_none(),
+            acts: Vec::new(),
             frames: Vec::new(),
             proof_level: None,
             lift,
@@ -250,8 +260,8 @@ impl<'g> Ic3<'g> {
         ic3.push_frame(); // F_0
         for l in &g.latches {
             match l.init {
-                Init::Zero => ic3.solvers[0].sat.add_clause(&[-t(l.lit)]),
-                Init::One => ic3.solvers[0].sat.add_clause(&[t(l.lit)]),
+                Init::Zero => ic3.add_frame_clause(0, &[-t(l.lit)]),
+                Init::One => ic3.add_frame_clause(0, &[t(l.lit)]),
                 _ => {}
             }
         }
@@ -277,10 +287,44 @@ impl<'g> Ic3<'g> {
     fn push_frame(&mut self) {
         // A new top frame has no lemmas yet: a lemma of level j lives in
         // solvers 1..=j only.
-        let s = Solver::new(&self.t, self.nvars, (self.make_sat)());
-        let s = self.base_solver_from(s);
-        self.solvers.push(s);
+        if !self.single || self.solvers.is_empty() {
+            let s = Solver::new(&self.t, self.nvars, (self.make_sat)());
+            let s = self.base_solver_from(s);
+            self.solvers.push(s);
+        }
+        if self.single {
+            let a = self.solvers[0].fresh();
+            self.acts.push(a);
+        }
         self.frames.push(Vec::new());
+    }
+
+    /// The solver that answers queries on F_i.
+    fn sol(&mut self, i: usize) -> &mut Solver {
+        let k = if self.single { 0 } else { i };
+        &mut self.solvers[k]
+    }
+
+    /// Assumptions that make the solver of F_i hold exactly F_i.
+    fn frame_assumptions(&self, i: usize) -> Vec<i32> {
+        match (self.single, i) {
+            (false, _) => Vec::new(),
+            (true, 0) => vec![self.acts[0]],
+            (true, _) => self.acts[i..].to_vec(),
+        }
+    }
+
+    /// Add `clause` to frame `level` only (level 0: init) — in the
+    /// per-frame layout, to that frame's solver; in the single layout,
+    /// guarded by the level's activation literal.
+    fn add_frame_clause(&mut self, level: usize, clause: &[i32]) {
+        if self.single {
+            let mut c = clause.to_vec();
+            c.push(-self.acts[level]);
+            self.solvers[0].sat.add_clause(&c);
+        } else {
+            self.solvers[level].sat.add_clause(clause);
+        }
     }
 
     fn top(&self) -> usize {
@@ -367,8 +411,12 @@ impl<'g> Ic3<'g> {
             self.act_inc *= 1e-100;
         }
         let clause: Vec<i32> = cube.iter().map(|&l| -t(l)).collect();
-        for i in 1..=level {
-            self.solvers[i].sat.add_clause(&clause);
+        if self.single {
+            self.add_frame_clause(level, &clause);
+        } else {
+            for i in 1..=level {
+                self.solvers[i].sat.add_clause(&clause);
+            }
         }
         self.frames[level].push(cube);
         self.stats_lemmas += 1;
@@ -378,7 +426,7 @@ impl<'g> Ic3<'g> {
     /// before adding clauses: that discards the model.
     fn model(&self, i: usize) -> (Cube, Vec<TLit>) {
         let g = self.g;
-        let s = &self.solvers[i].sat;
+        let s = &self.solvers[if self.single { 0 } else { i }].sat;
         let latches = g
             .latches
             .iter()
@@ -630,12 +678,14 @@ impl<'g> Ic3<'g> {
             .chain(cube.iter().map(|&l| t(l)))
             .collect();
         let dom = self.domain(&roots, i - 1);
-        let s = &mut self.solvers[i - 1];
+        let mut assume = self.frame_assumptions(i - 1);
+        let k = if self.single { 0 } else { i - 1 };
+        let s = &mut self.solvers[k];
         let act = s.fresh();
         let mut clause = vec![-act];
         clause.extend(cube.iter().map(|&l| -t(l)));
         s.sat.add_clause(&clause);
-        let mut assume = vec![act];
+        assume.push(act);
         assume.extend(&primed);
         let t0 = std::time::Instant::now();
         let r = s.sat.solve_domain(&assume, &dom);
@@ -651,7 +701,7 @@ impl<'g> Ic3<'g> {
             Answer::Sat if want_pred => Err(Some(self.model(i - 1))),
             _ => Err(None),
         };
-        self.solvers[i - 1].sat.add_clause(&[-act]);
+        self.sol(i - 1).sat.add_clause(&[-act]);
         match out {
             Ok(core) => Ok(self.keep_out_of_init(core, cube)),
             Err(Some((latches, inputs))) => Err(Some(self.lift(latches, &inputs, &primed))),
@@ -872,7 +922,7 @@ impl<'g> Ic3<'g> {
                 if self.push_lemma(&c, i, ctx) {
                     self.publish(&c, i + 1);
                     let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
-                    self.solvers[i + 1].sat.add_clause(&clause);
+                    self.add_frame_clause(i + 1, &clause);
                     self.frames[i + 1].push(c);
                 } else {
                     stay.push(c);
@@ -929,7 +979,9 @@ impl<'g> Ic3<'g> {
 
     pub fn check(&mut self, ctx: &RunContext) -> Verdict {
         // Depth 0: a bad initial state.
-        match self.solvers[0].sat.solve(&[self.bad]) {
+        let mut a0 = self.frame_assumptions(0);
+        a0.push(self.bad);
+        match self.sol(0).sat.solve(&a0) {
             Answer::Sat => return Verdict::Unsafe { depth: Some(0) },
             Answer::Unknown => {
                 return Verdict::Unknown {
@@ -951,7 +1003,9 @@ impl<'g> Ic3<'g> {
                 let k = self.top();
                 let bad = self.bad;
                 let dom = self.domain(&[bad], k);
-                match self.solvers[k].sat.solve_domain(&[bad], &dom) {
+                let mut ak = self.frame_assumptions(k);
+                ak.push(bad);
+                match self.sol(k).sat.solve_domain(&ak, &dom) {
                     Answer::Unknown => {
                         return Verdict::Unknown {
                             reason: ctx.stop_reason().into(),
