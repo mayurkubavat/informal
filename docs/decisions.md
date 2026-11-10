@@ -134,12 +134,28 @@ Sources: README, `docs/`, git log, project notes.
 
 - **Chosen:** replay every BMC counterexample by simulation; conflicting
   engines give "unknown (engine conflict)"; imported IC3 lemmas are
-  re-checked.
-- **Open issues:** invariants are not certified. Certifaiger (for safe
-  verdicts) and BtorSim (for witnesses) are planned for phase 2.
-- **Ideas:** emit an inductive-invariant certificate from IC3 and check it
-  with an independent SAT call (or a verified checker); proof logging
-  (DRAT/LRAT) from CaDiCaL for the underlying UNSAT answers.
+  re-checked. **Every IC3 SAFE is certified (2026-11-09, 7dd61c4):** the
+  final invariant is carried back through simplification and `scorr` (latch
+  maps, plus the constant and merged latches they assumed) and checked with
+  three fresh SAT queries (init, consecution, safety) on a plain Tseitin
+  encoding of the model as loaded, in the cone of the bads, constraints and
+  invariant latches (`informal-bmc/src/certify.rs`). A failure withdraws the
+  SAFE (unknown, with a loud message).
+  - Evidence: re-introducing the old unchecked lemma import made
+    `informal-ic3-mt` say SAFE on x-epic a03/a11 (both unsafe); with the
+    gate both were withdrawn ("consecution fails"). Merging scorr's
+    simulation candidates without proof gave 4+ wrong SAFE on sample60;
+    with the gate 36 SAFE were withdrawn and 0 wrong remained.
+  - Cost: 4.1 s of checking in 31 s of SAFE runs on sample60 at 30 s (13%,
+    mostly sub-second checks on fast solves; at most 0.85 s per model).
+- **Open issues:** k-induction SAFE verdicts (`informal-kind`, the
+  k-induction phase of `informal-kind-ic3`) are not certified yet; that
+  needs a k-inductive check or turning the proof into an invariant. Still
+  trusted: the AIGER/Btor2 reader and bit-blaster, `certify.rs`, and
+  CaDiCaL's UNSAT answers. Certifaiger (safe) and BtorSim (witnesses) as
+  outside checkers are still planned.
+- **Ideas:** proof logging (DRAT/LRAT) from CaDiCaL for the three UNSAT
+  answers; a verified checker.
 
 ## D9. Tcl shell compatible with JasperGold and VC Formal
 
