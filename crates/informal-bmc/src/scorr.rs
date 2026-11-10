@@ -15,6 +15,7 @@
 //! are left alone.
 
 use crate::unroll::Unroll;
+use informal_aig::preprocess::LatchMap;
 use informal_aig::{is_neg, var, Aig, Init, Lit, Node, FALSE};
 use informal_engine::RunContext;
 use informal_sat::{Answer, Sat};
@@ -292,9 +293,14 @@ fn refine(
     }
 }
 
-/// `g` with proved-equivalent latches merged, or `None` when nothing
-/// merges (or the model is out of scope, or time runs out).
-pub fn latch_correspondence(g: &Aig, sat: Box<dyn Sat>, ctx: &RunContext) -> Option<(Aig, Stats)> {
+/// `g` with proved-equivalent latches merged, and the map from `g`'s latches
+/// to the result's literals, or `None` when nothing merges (or the model is
+/// out of scope, or time runs out).
+pub fn latch_correspondence(
+    g: &Aig,
+    sat: Box<dyn Sat>,
+    ctx: &RunContext,
+) -> Option<(Aig, Stats, LatchMap)> {
     if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
         return None;
     }
@@ -329,13 +335,14 @@ pub fn latch_correspondence(g: &Aig, sat: Box<dyn Sat>, ctx: &RunContext) -> Opt
     if subst.is_empty() {
         return None;
     }
-    Some((substitute(g, &subst), stats))
+    let (h, map) = substitute(g, &subst);
+    Some((h, stats, map))
 }
 
 /// Rebuild `g` with each latch in `subst` replaced by its representative
 /// (an earlier node), then simplify (the merged latches fall out of the
 /// cone).
-fn substitute(g: &Aig, subst: &HashMap<u32, (Lit, bool)>) -> Aig {
+fn substitute(g: &Aig, subst: &HashMap<u32, (Lit, bool)>) -> (Aig, LatchMap) {
     let mut out = Aig::new();
     let mut map = vec![FALSE; g.nodes.len()];
     let m = |map: &[Lit], l: Lit| map[var(l) as usize] ^ (l & 1);
@@ -378,7 +385,10 @@ fn substitute(g: &Aig, subst: &HashMap<u32, (Lit, bool)>) -> Aig {
     }
     out.bads = g.bads.iter().map(|&b| m(&map, b)).collect();
     out.constraints = g.constraints.iter().map(|&c| m(&map, c)).collect();
-    informal_aig::preprocess::simplify(&out).0
+    let to_out: LatchMap = g.latches.iter().map(|l| Some(m(&map, l.lit))).collect();
+    let (h, _, to_h) = informal_aig::preprocess::simplify_map(&out);
+    let lmap = informal_aig::preprocess::compose(&to_out, &out, &to_h);
+    (h, lmap)
 }
 
 /// Debug (INFORMAL_SCORR_CHECK): BMC the equalities on `g` itself, from the

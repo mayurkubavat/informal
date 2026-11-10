@@ -76,9 +76,41 @@ fn lit_t(vals: &[T], l: Lit) -> T {
     vals[var(l) as usize].map(|b| b ^ is_neg(l))
 }
 
+/// For each latch of a model, by index: the literal of the simplified model
+/// that always has the same value (a latch literal, possibly negated, or a
+/// constant), or `None` for a latch that was dropped from the cone. A
+/// certificate checker uses it to carry an invariant back to the original.
+pub type LatchMap = Vec<Option<Lit>>;
+
+/// The map from `g`'s latches to `c`'s literals when `b` was made from `g`
+/// by `ab` and `c` from `b` by `bc`.
+pub fn compose(ab: &[Option<Lit>], b: &Aig, bc: &[Option<Lit>]) -> LatchMap {
+    let index: std::collections::HashMap<u32, usize> = b
+        .latches
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (var(l.lit), i))
+        .collect();
+    ab.iter()
+        .map(|&l| {
+            let l = l?;
+            if l == TRUE || l == FALSE {
+                return Some(l);
+            }
+            bc[*index.get(&var(l))?].map(|x| x ^ (l & 1))
+        })
+        .collect()
+}
+
 /// Cone of influence of the bad and constraint outputs, constant latches
 /// replaced by their value, and the rest rebuilt with structural hashing.
 pub fn simplify(g: &Aig) -> (Aig, Stats) {
+    let (out, stats, _) = simplify_map(g);
+    (out, stats)
+}
+
+/// [`simplify`], also returning the [`LatchMap`] from `g` to the result.
+pub fn simplify_map(g: &Aig) -> (Aig, Stats, LatchMap) {
     let stuck = constant_latches(g);
     let mut stats = Stats {
         latches_before: g.latches.len(),
@@ -198,7 +230,20 @@ pub fn simplify(g: &Aig) -> (Aig, Stats) {
     stats.latches_after = out.latches.len();
     stats.ands_after = out.num_ands();
     stats.inputs_after = out.inputs.len();
-    (out, stats)
+    let lmap = g
+        .latches
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let v = var(l.lit) as usize;
+            if need[v] {
+                Some(map[v])
+            } else {
+                stuck[i].map(|c| if c { TRUE } else { FALSE })
+            }
+        })
+        .collect();
+    (out, stats, lmap)
 }
 
 #[cfg(test)]

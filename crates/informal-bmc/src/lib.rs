@@ -6,12 +6,14 @@
 //! round-2 plan; IC3 follows in stage 2. Arrays and liveness are not
 //! supported at bit level yet and report unknown.
 
+pub mod certify;
 pub mod cnf;
 pub mod ic3;
 pub mod invariant;
 pub mod scorr;
 pub mod unroll;
 
+use informal_aig::preprocess::LatchMap;
 use informal_aig::Aig;
 use informal_engine::{
     Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
@@ -23,13 +25,15 @@ use unroll::Unroll;
 
 pub use informal_aig::load as load_aig;
 
-/// The simplified model, or the reason this engine cannot take it.
-fn prepare(req: &CheckRequest) -> Result<Aig, String> {
+/// The simplified model and the map from the loaded model's latches to it,
+/// or the reason this engine cannot take it.
+fn prepare(req: &CheckRequest) -> Result<(Aig, LatchMap), String> {
     let g = load_aig(&req.model).map_err(|e| format!("{e:#}"))?;
     if g.bads.is_empty() {
         return Err("model has no bad-state property".into());
     }
-    Ok(informal_aig::preprocess::simplify(&g).0)
+    let (s, _, map) = informal_aig::preprocess::simplify_map(&g);
+    Ok((s, map))
 }
 
 /// The model as the engines see it: simplified, latch-merged, and its CNF
@@ -39,6 +43,8 @@ pub struct Prepared {
     // Field order: the AIG is dropped before the template it keys.
     aig: Aig,
     _template: Arc<cnf::Template>,
+    /// From the loaded model's latches to `aig`'s literals (certificates).
+    pub latch_map: LatchMap,
 }
 
 impl std::ops::Deref for Prepared {
@@ -164,17 +170,62 @@ fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Arc<Prepared>, St
     }
 }
 
+/// `v`, IC3's verdict, with a SAFE kept only when its invariant passes the
+/// independent check on the model as loaded ([`certify`]); otherwise it
+/// becomes unknown, loudly. `INFORMAL_NO_CERT` skips the check (for
+/// measuring its cost only).
+fn certified(
+    req: &CheckRequest,
+    p: &Prepared,
+    ic3: &ic3::Ic3,
+    v: Verdict,
+    ctx: &RunContext,
+) -> Verdict {
+    if v != Verdict::Safe || std::env::var_os("INFORMAL_NO_CERT").is_some() {
+        return v;
+    }
+    let t = Instant::now();
+    let r = (|| {
+        let lemmas = ic3
+            .invariant()
+            .ok_or("missing: IC3 said safe without an invariant")?;
+        let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
+        let inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
+        certify::check(&orig, &inv, &|| solver(ctx))
+    })();
+    if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+        eprintln!(
+            "certificate: {:?} in {:.3} s ({} lemmas) {}",
+            r,
+            t.elapsed().as_secs_f64(),
+            ic3.invariant().map_or(0, |l| l.len()),
+            req.model.display()
+        );
+    }
+    match r {
+        Ok(()) => Verdict::Safe,
+        Err(e) if e.ends_with("check stopped") => unknown(ctx.stop_reason()),
+        Err(e) => {
+            eprintln!(
+                "informal: SAFE withdrawn, certificate {e}: {}",
+                req.model.display()
+            );
+            unknown(format!("certificate {e}"))
+        }
+    }
+}
+
 fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, String> {
-    let g = prepare(req)?;
-    let g = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
-        g
+    let (g, map) = prepare(req)?;
+    let (g, map) = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
+        (g, map)
     } else {
         let now = Instant::now();
         let left = ctx.deadline.saturating_duration_since(now);
         let mut c = ctx.clone();
         c.deadline = now + (left / 20).min(std::time::Duration::from_secs(10));
         match scorr::latch_correspondence(&g, solver(&c), &c) {
-            Some((h, st)) => {
+            Some((h, st, hmap)) => {
                 if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
                     eprintln!(
                         "scorr: merged {} latches ({} -> {}), {} refinements, {:.2} s",
@@ -185,15 +236,17 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, Stri
                         now.elapsed().as_secs_f64()
                     );
                 }
-                h
+                let m = informal_aig::preprocess::compose(&map, &g, &hmap);
+                (h, m)
             }
-            None => g,
+            None => (g, map),
         }
     };
     let t = cnf::build_until(&g, &|| ctx.should_stop());
     Ok(Prepared {
         aig: g,
         _template: Arc::new(t),
+        latch_map: map,
     })
 }
 
@@ -580,6 +633,7 @@ impl Engine for Ic3Engine {
             ));
         };
         let v = ic3.check(ctx);
+        let v = certified(req, &g, &ic3, v, ctx);
         if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
             eprintln!(
                 "{}: frames {} lemmas {} ctps {} queries {} ({:.2} s) lift {:.2} s ({} fallbacks)",
@@ -667,7 +721,10 @@ impl Engine for KindIc3 {
         let mut inv = Vec::new();
         let c = phase.clone();
         if let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(move || solver(&c))) {
-            match ic3.check(&phase) {
+            // A SAFE whose certificate fails is withdrawn; k-induction
+            // still gets its turn.
+            let v = ic3.check(&phase);
+            match certified(req, &g, &ic3, v, ctx) {
                 Verdict::Unknown { .. } => {}
                 v => return Ok(result(self.name(), v, t0)),
             }
@@ -791,6 +848,7 @@ impl Engine for Ic3Mt {
                         ic3.set_config(cfg);
                         ic3.share(pool, id);
                         let v = ic3.check(inner);
+                        let v = certified(req, g, &ic3, v, inner);
                         if !matches!(v, Verdict::Unknown { .. }) {
                             inner.cancel.cancel();
                         }
@@ -1076,9 +1134,9 @@ mod tests {
             timeout: Duration::from_secs(10),
         };
         let ctx = RunContext::new(req.timeout);
-        let g = prepare(&req).unwrap();
+        let g = prepare(&req).unwrap().0;
         assert_eq!(g.latches.len(), 6);
-        let (h, st) = scorr::latch_correspondence(&g, solver(&ctx), &ctx).unwrap();
+        let (h, st, _) = scorr::latch_correspondence(&g, solver(&ctx), &ctx).unwrap();
         assert_eq!(st.merged, 3);
         assert_eq!(h.latches.len(), 3);
         let ic3 = Ic3Engine { mini: true };
@@ -1116,7 +1174,8 @@ mod tests {
             format: ModelFormat::Btor2,
             timeout: Duration::from_secs(10),
         })
-        .unwrap();
+        .unwrap()
+        .0;
         let ctx = RunContext::new(Duration::from_secs(10));
         // Latch bits b0..b2 as AIG literals, lowest bit first.
         let bits: Vec<_> = g.latches.iter().map(|l| l.lit).collect();

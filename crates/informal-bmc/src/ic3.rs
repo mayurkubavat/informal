@@ -156,6 +156,8 @@ pub struct Ic3<'g> {
     solvers: Vec<Solver>,
     /// Lemmas by the highest frame they are known to hold in.
     frames: Vec<Vec<Cube>>,
+    /// The frame that emptied when the proof closed (see [`Ic3::invariant`]).
+    proof_level: Option<usize>,
     lift: Solver,
     bad: TLit,
     /// latch variable -> template literal of its next-state function
@@ -212,6 +214,7 @@ impl<'g> Ic3<'g> {
             nvars,
             solvers: Vec::new(),
             frames: Vec::new(),
+            proof_level: None,
             lift,
             bad,
             next_of: g.latches.iter().map(|l| (var(l.lit), t(l.next))).collect(),
@@ -879,6 +882,7 @@ impl<'g> Ic3<'g> {
             stay.append(&mut self.frames[i]);
             self.frames[i] = stay;
             if self.frames[i].is_empty() {
+                self.proof_level = Some(i);
                 return true;
             }
         }
@@ -991,6 +995,13 @@ impl<'g> Ic3<'g> {
     /// [`crate::invariant::houdini`] before treating them as invariants.
     pub fn lemmas(&self) -> Vec<Cube> {
         self.frames.iter().flatten().cloned().collect()
+    }
+
+    /// After [`Ic3::check`] said safe: the inductive invariant, as the cubes
+    /// it blocks (the lemmas above the frame that emptied). `None` before.
+    pub fn invariant(&self) -> Option<Vec<Cube>> {
+        let i = self.proof_level?;
+        Some(self.frames[i + 1..].iter().flatten().cloned().collect())
     }
 
     pub fn depth(&self) -> usize {
