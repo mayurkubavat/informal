@@ -192,7 +192,17 @@ impl Mini {
     }
 
     /// Unit propagation; the conflicting clause on failure.
+    /// Above level 0 in a restricted solve, propagation stays inside the
+    /// domain (GipSAT): a clause with an unassigned literal outside the
+    /// domain counts as satisfied, since the caller guarantees that any
+    /// conflict-free assignment of the domain extends to every clause.
+    /// Without this, each IC3 query propagated through the whole
+    /// transition relation (about twice its domain on ILA_Piccolo).
     fn propagate(&mut self) -> Option<u32> {
+        let dom = self.restricted && self.decision_level() > 0;
+        let outside = |s: &Self, l: Lit| -> bool {
+            dom && !s.in_domain.get(var(l)).copied().unwrap_or(false)
+        };
         while self.qhead < self.trail.len() {
             let p = self.trail[self.qhead];
             self.qhead += 1;
@@ -203,7 +213,7 @@ impl Mini {
             while i < ws.len() {
                 let w = ws[i];
                 i += 1;
-                if self.lit_value(w.blocker) == Val::True {
+                if self.lit_value(w.blocker) == Val::True || outside(self, w.blocker) {
                     ws[j] = w;
                     j += 1;
                     continue;
@@ -220,7 +230,10 @@ impl Mini {
                     }
                 }
                 let first = self.clauses[ci].lits[0];
-                if first != w.blocker && self.lit_value(first) == Val::True {
+                if first != w.blocker
+                    && (self.lit_value(first) == Val::True
+                        || (self.lit_value(first) == Val::Undef && outside(self, first)))
+                {
                     ws[j] = Watch {
                         clause: w.clause,
                         blocker: first,
