@@ -42,7 +42,12 @@ struct Member {
 /// initial states (`start` = None; uninitialized latches random) or from
 /// one given state. Per latch and step its value word, and per step the
 /// mask of runs that have kept every constraint so far.
-fn simulate(g: &Aig, start: Option<&[bool]>, steps: usize, seed: u64) -> (Vec<Vec<u64>>, Vec<u64>) {
+pub(crate) fn simulate(
+    g: &Aig,
+    start: Option<&[bool]>,
+    steps: usize,
+    seed: u64,
+) -> (Vec<Vec<u64>>, Vec<u64>) {
     let mut rng = seed | 1;
     let mut rnd = move || {
         rng ^= rng << 13;

@@ -1,0 +1,121 @@
+# IC3 research: our own hypotheses
+
+Working notes for closing the gap to rIC3 on the CPU-style models
+(cv32e40x, rocket, ILA_Piccolo, veer). The rule from the project: every
+experiment writes its prediction down before it runs, and keeps the
+measured result next to it, hit or miss. Copying another tool's
+heuristics is not the plan; measurements of our own IC3 are.
+
+## Instrument: the IC3 event trace
+
+`INFORMAL_IC3_TRACE=<file>` writes one JSON line per event:
+
+| `e` | When | Fields |
+|-----|------|--------|
+| `L` | a lemma is added | `src` (`po` from an obligation, `ctg`, `ctp`, `import`), `lvl`, `top`, `q` (queries so far), `sub` (older lemmas it subsumes), `lits` |
+| `P` | a push is tried | `from`, `ok`, `lits` |
+| `F` | propagation starts | `q`, `sizes` (lemmas per level) |
+| `O` | an obligation is taken | `lvl`, `d` (depth), `n` (cube length) |
+| `H` | H2 moves lemmas to the invariant | `inv`, `moved`, `ms` |
+
+## Baseline facts (ILA_Piccolo_JALR_sanity, informal-ic3, 90 s)
+
+rIC3's IC3 proves this model in about 11 s (17 frames, about 560 lemmas,
+7,354 solver calls). Ours did not finish in 200 s.
+
+- Preprocessing is not the gap: after scorr rIC3 has 5,893 latches, we
+  have 5,886.
+- Solver calls cost 3.5 ms each before e3751bf and 1.8 ms after it
+  (rIC3: 0.54 ms), and we make several times as many.
+- 867 lemmas: 512 from obligations, 355 from CTGs. Lengths: 102 with
+  1 literal, 344 with 2, 189 with 3, 94 with 4.
+- They spread over 792 different latches (the top 100 latches cover
+  only 50% of lemma literals), and almost every lemma has its own latch
+  set (782 sets for 867 lemmas).
+- Two-literal lemmas: 193 are "these two latches are never both 1",
+  146 are implications, 5 are "never both 0". Only 8 are halves of an
+  equivalence, so latch merging (scorr) can't capture them.
+- Pushes: 2,824 tried, 1,915 failed (68%). 40 lemmas were learned
+  again, up to 5 times.
+- Obligations: 2,657, spread over every level, with full-state cubes of
+  about 2,950 literals.
+
+## Hypotheses
+
+### H1. The invariant is mostly two-latch relations; mine them up front
+
+*Claim.* The lemmas IC3 needs are mostly two-literal clauses that are
+only inductive as a group. IC3 finds them one counterexample at a time,
+in every frame. Simulation can propose them all at once, and Houdini can
+prove the inductive subset before IC3 starts.
+
+*Algorithm (src/mine.rs).* Sample reachable states. Keep every
+two-literal clause over the 1,500 latches nearest the property that no
+sample violates. Rank the clauses by support, run Houdini, and assume
+the result in every frame (`Ic3::assume_invariant`).
+
+*Prediction.* On JALR, half the lemmas or fewer, and solved within 120 s.
+
+*Result: not testable on JALR yet.* Its input constraint kills nearly
+every random run at step 0 (2 of 64 runs survive one step). Redrawing
+inputs for failed runs does not help. SAT-sampled traces (64 traces of
+16 frames from init) show none of the 1,500 latches changing. Parked
+until the sampling reaches deeper states, for example from IC3's own
+counterexamples to induction.
+
+### H2. Lemmas that only hold together get stuck at staggered levels
+
+*Claim.* A lemma at level j can only be pushed when the lemmas it
+depends on are already at level j or higher. When a group of lemmas is
+inductive only as a group and its members sit at different levels, each
+one blocks the others, so they fail to push frame after frame and get
+re-derived in the higher frames. Pushes fail 68% of the time on JALR.
+
+*Algorithm.* Every N frames, run Houdini on all lemmas (plus the
+invariant found so far). The subset that is inductive as a whole holds
+in every reachable state, so it moves out of the frames into an
+invariant that every frame from 1 up assumes. It needs no more pushing,
+it strengthens every frame at once, and it becomes part of the final
+certificate (`Ic3::houdini_to_inf`, `INFORMAL_IC3_HOUDINI=N`, Houdini
+limited to a tenth of the time left).
+
+*Prediction.* JALR solves within 200 s. On the sample there is no net
+loss, and a gain on the CPU models.
+
+*Result so far.* JALR with N=4: solved and certified in 144 s (Houdini at
+frames 4, 8, 12 moved 2, 27, 27 lemmas). With N=2 it was still
+unsolved at 180 s, so the gain is sensitive to N and may partly be
+luck. sample60 at 30 s, with Houdini in every IC3 (ic3-mt runs it in all
+4 workers): informal-ic3 20 -> 21, informal-ic3-mt 25 -> 22 (lost
+cv32e40x-p128 and p363 and one x-epic bug), 0 wrong. At 30 s, Houdini's
+share of the time costs more than it gains. The gap set (23 models rIC3
+solves and we don't) at 300 s is the real test.
+
+Gap set, informal-ic3, 300 s: baseline 1 (veer-p28 in 55 s), H2 with N=4
+3 (JALR in 170 s, cv32e40x-p514 in 216 s, veer-p28 in 158 s), 0 wrong,
+every SAFE certified. The prediction holds, modestly: 2 of 23 gained, and
+one solve slowed down by 3x.
+
+*Adopted (default):* N=4 in `informal-ic3`, and in one of the four
+`informal-ic3-mt` workers (`INFORMAL_IC3_HOUDINI=N` overrides; 0 turns it
+off). With only one worker running it, ic3-mt on sample60 at 30 s gave 22.
+The ic3-mt counts in this session ranged from 22 to 25 between runs of the
+same code, because a full benchmark was running on the same machine, and
+the models that changed were all near the 30 s limit. A clean run is
+needed before reading anything into that.
+
+### Candidate hypotheses not yet tested
+
+- **H3. Push failures are caused by lower-level lemmas.** For each failed
+  push, check whether its counterexample state is excluded by a lemma at a
+  lower level. If it usually is, that confirms H2's mechanism and argues
+  for running Houdini when pushes start failing instead of on a fixed
+  schedule.
+- **H4. The obligation queue revisits the same region.** 2,657
+  obligations, rising level by level. Measure how many obligations a new
+  lemma would already have blocked. If that's high, generalising against
+  the queue (blocking several obligations with one lemma) cuts queries.
+- **H5. Short lemmas, wasted drops.** MIC starts from cores of about 4.7
+  literals and ends at 3.6, with 84% of drop attempts failing. A cheap
+  ternary-simulation pre-check for each drop could skip most failing SAT
+  calls.

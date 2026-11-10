@@ -9,7 +9,7 @@
 
 use crate::ic3::Cube;
 use crate::unroll::Unroll;
-use informal_aig::Aig;
+use informal_aig::{Aig, Init};
 use informal_engine::RunContext;
 use informal_sat::{Answer, Sat};
 
@@ -27,9 +27,30 @@ pub fn houdini(
     let mut init = Unroll::new(g, make(), false);
     init.add_frame();
     let mut keep = Vec::with_capacity(cands.len());
+    // Latches with a constant init decide initiation without SAT: a cube
+    // over them meets the initial states iff every literal agrees.
+    let init_of: std::collections::HashMap<u32, Init> = g
+        .latches
+        .iter()
+        .map(|l| (informal_aig::var(l.lit), l.init))
+        .collect();
     for c in cands {
         if ctx.should_stop() {
             return None;
+        }
+        let consts: Option<Vec<bool>> = c
+            .iter()
+            .map(|&l| match init_of.get(&informal_aig::var(l)) {
+                Some(Init::Zero) => Some(informal_aig::is_neg(l)),
+                Some(Init::One) => Some(!informal_aig::is_neg(l)),
+                _ => None,
+            })
+            .collect();
+        if let Some(agree) = consts {
+            if !agree.iter().all(|&x| x) {
+                keep.push(c);
+            }
+            continue;
         }
         let a: Vec<i32> = c.iter().map(|&l| init.lit(0, l)).collect();
         match init.sat.solve(&a) {
@@ -39,6 +60,9 @@ pub fn houdini(
         }
     }
     let cands = keep;
+    if std::env::var_os("INFORMAL_HOUDINI_STATS").is_some() {
+        eprintln!("houdini: {} pass initiation", cands.len());
+    }
     if cands.is_empty() {
         return Some(cands);
     }
@@ -92,6 +116,13 @@ pub fn houdini(
         debug_assert!(!dropped.is_empty());
         if dropped.is_empty() {
             return None;
+        }
+        if std::env::var_os("INFORMAL_HOUDINI_STATS").is_some() {
+            eprintln!(
+                "houdini: dropped {} ({} left)",
+                dropped.len(),
+                alive.iter().filter(|&&a| a).count() - dropped.len()
+            );
         }
         for i in dropped {
             alive[i] = false;

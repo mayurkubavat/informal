@@ -49,6 +49,10 @@ pub struct Config {
     /// Parent-lemma MIC (Xia et al., CAV'23): start from the lemma of
     /// level i-1 that covers the cube, keep its literals for last.
     pub parent_lemma: bool,
+    /// Every this many frames (0: never), run Houdini on all lemmas and
+    /// move the inductive subset to the invariant every frame assumes
+    /// (hypothesis H2 in docs/ic3-research.md).
+    pub houdini_every: usize,
 }
 
 impl Default for Config {
@@ -67,6 +71,10 @@ impl Default for Config {
             // Off by default: on 75 models it traded 3 models for 2 and
             // was slower; two informal-ic3-mt workers use it for diversity.
             parent_lemma: std::env::var_os("INFORMAL_IC3_PARENT").is_some(),
+            houdini_every: std::env::var("INFORMAL_IC3_HOUDINI")
+                .ok()
+                .and_then(|x| x.parse().ok())
+                .unwrap_or(0),
         }
     }
 }
@@ -162,6 +170,9 @@ pub struct Ic3<'g> {
     solvers: Vec<Solver>,
     single: bool,
     acts: Vec<i32>,
+    /// Proved invariants given up front ([`Ic3::assume_invariant`]): in
+    /// every frame >= 1 and part of the final invariant.
+    inf: Vec<Cube>,
     /// Lemmas by the highest frame they are known to hold in.
     frames: Vec<Vec<Cube>>,
     /// The frame that emptied when the proof closed (see [`Ic3::invariant`]).
@@ -179,6 +190,10 @@ pub struct Ic3<'g> {
     /// Per AIG variable: how often it occurred in recent lemmas (decayed).
     act: Vec<f64>,
     act_inc: f64,
+    /// INFORMAL_IC3_TRACE=<file>: one JSON line per lemma, push, frame
+    /// and obligation event (diagnostics for generalization research).
+    trace: Option<std::io::BufWriter<std::fs::File>>,
+    trace_src: &'static str,
     pub stats_lemmas: usize,
     pub stats_imported: usize,
     pub stats_ctps: usize,
@@ -223,6 +238,7 @@ impl<'g> Ic3<'g> {
             solvers: Vec::new(),
             single: std::env::var_os("INFORMAL_IC3_PER_FRAME").is_none(),
             acts: Vec::new(),
+            inf: Vec::new(),
             frames: Vec::new(),
             proof_level: None,
             lift,
@@ -235,6 +251,10 @@ impl<'g> Ic3<'g> {
             share: None,
             act: vec![0.0; g.nodes.len()],
             act_inc: 1.0,
+            trace: std::env::var_os("INFORMAL_IC3_TRACE")
+                .and_then(|p| std::fs::File::create(p).ok())
+                .map(std::io::BufWriter::new),
+            trace_src: "po",
             stats_lemmas: 0,
             stats_imported: 0,
             stats_ctps: 0,
@@ -289,7 +309,13 @@ impl<'g> Ic3<'g> {
         // solvers 1..=j only.
         if !self.single || self.solvers.is_empty() {
             let s = Solver::new(&self.t, self.nvars, (self.make_sat)());
-            let s = self.base_solver_from(s);
+            let mut s = self.base_solver_from(s);
+            if !self.solvers.is_empty() {
+                for c in &self.inf {
+                    let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
+                    s.sat.add_clause(&clause);
+                }
+            }
             self.solvers.push(s);
         }
         if self.single {
@@ -385,7 +411,9 @@ impl<'g> Ic3<'g> {
             let mut lvl = l.min(self.top());
             while lvl >= 1 && !self.already_blocked(&c, lvl) {
                 if self.relative_inductive(&c, lvl, false).is_ok() {
+                    self.trace_src = "import";
                     self.add_lemma_quiet(c, lvl);
+                    self.trace_src = "po";
                     self.stats_imported += 1;
                     break;
                 }
@@ -399,7 +427,26 @@ impl<'g> Ic3<'g> {
         self.add_lemma_quiet(cube, level);
     }
 
+    fn tr(&mut self, line: std::fmt::Arguments) {
+        if let Some(w) = &mut self.trace {
+            use std::io::Write;
+            let _ = writeln!(w, "{line}");
+        }
+    }
+
     fn add_lemma_quiet(&mut self, cube: Cube, level: usize) {
+        if self.trace.is_some() {
+            // Lemmas the new one subsumes (its cube is a subset of theirs).
+            let sub = self.frames[1..=level]
+                .iter()
+                .flatten()
+                .filter(|o| cube.iter().all(|l| o.binary_search(l).is_ok()))
+                .count();
+            let (src, top, q) = (self.trace_src, self.top(), self.stats_queries);
+            self.tr(format_args!(
+                "{{\"e\":\"L\",\"src\":\"{src}\",\"lvl\":{level},\"top\":{top},\"q\":{q},\"sub\":{sub},\"lits\":{cube:?}}}"
+            ));
+        }
         for &l in &cube {
             self.act[var(l) as usize] += self.act_inc;
         }
@@ -818,7 +865,9 @@ impl<'g> Ic3<'g> {
                             {
                                 lvl += 1;
                             }
+                            self.trace_src = "ctg";
                             self.add_lemma(g, lvl);
+                            self.trace_src = "po";
                             continue;
                         }
                     }
@@ -852,6 +901,12 @@ impl<'g> Ic3<'g> {
                 return Ok(false);
             }
             self.import(ctx);
+            if self.trace.is_some() {
+                let (l, d, n) = (ob.level, ob.depth, ob.cube.len());
+                self.tr(format_args!(
+                    "{{\"e\":\"O\",\"lvl\":{l},\"d\":{d},\"n\":{n}}}"
+                ));
+            }
             // Every state of an obligation's cube reaches a bad state, so a
             // cube that meets the initial states is a real counterexample.
             if ob.level == 0 || self.intersects_init(&ob.cube) {
@@ -911,6 +966,12 @@ impl<'g> Ic3<'g> {
     /// down, the state that stopped it (counterexample to propagation,
     /// CTP), up to `max_ctps` times.
     fn propagate(&mut self, ctx: &RunContext) -> bool {
+        if self.trace.is_some() {
+            let (sizes, q) = (self.frame_sizes(), self.stats_queries);
+            self.tr(format_args!(
+                "{{\"e\":\"F\",\"q\":{q},\"sizes\":{sizes:?}}}"
+            ));
+        }
         for i in 1..self.top() {
             let lemmas = std::mem::take(&mut self.frames[i]);
             let mut stay = Vec::new();
@@ -919,7 +980,13 @@ impl<'g> Ic3<'g> {
                     stay.push(c);
                     continue;
                 }
-                if self.push_lemma(&c, i, ctx) {
+                let pushed = self.push_lemma(&c, i, ctx);
+                if self.trace.is_some() {
+                    self.tr(format_args!(
+                        "{{\"e\":\"P\",\"from\":{i},\"ok\":{pushed},\"lits\":{c:?}}}"
+                    ));
+                }
+                if pushed {
                     self.publish(&c, i + 1);
                     let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
                     self.add_frame_clause(i + 1, &clause);
@@ -968,7 +1035,9 @@ impl<'g> Ic3<'g> {
                             {
                                 lvl += 1;
                             }
+                            self.trace_src = "ctp";
                             self.add_lemma(g, lvl);
+                            self.trace_src = "po";
                         }
                         Err(_) => return false,
                     }
@@ -1036,6 +1105,9 @@ impl<'g> Ic3<'g> {
             if self.propagate(ctx) {
                 return Verdict::Safe;
             }
+            if self.cfg.houdini_every > 0 && self.top().is_multiple_of(self.cfg.houdini_every) {
+                self.houdini_to_inf(ctx);
+            }
             if ctx.should_stop() {
                 return Verdict::Unknown {
                     reason: ctx.stop_reason().into(),
@@ -1055,7 +1127,81 @@ impl<'g> Ic3<'g> {
     /// it blocks (the lemmas above the frame that emptied). `None` before.
     pub fn invariant(&self) -> Option<Vec<Cube>> {
         let i = self.proof_level?;
-        Some(self.frames[i + 1..].iter().flatten().cloned().collect())
+        Some(
+            self.frames[i + 1..]
+                .iter()
+                .flatten()
+                .chain(&self.inf)
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// Assume `cubes` blocked in every frame from 1 up: they must be a
+    /// proved invariant (Houdini's output). They hold initially, so the
+    /// single-solver layout adds them unguarded.
+    pub fn assume_invariant(&mut self, cubes: Vec<Cube>) {
+        for c in &cubes {
+            let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
+            let from = if self.single { 0 } else { 1 };
+            for s in self.solvers.iter_mut().skip(from) {
+                s.sat.add_clause(&clause);
+            }
+        }
+        self.inf.extend(cubes);
+    }
+
+    /// H2: the lemmas that are inductive together (Houdini, within a tenth
+    /// of the time left) go to [`Ic3::assume_invariant`] and leave the
+    /// frames, so they need no more pushing in later frames.
+    fn houdini_to_inf(&mut self, ctx: &RunContext) {
+        let t0 = std::time::Instant::now();
+        // The invariant so far is inductive on its own, so it survives and
+        // helps the new lemmas through.
+        let cands: Vec<Cube> = self.frames[1..]
+            .iter()
+            .flatten()
+            .chain(&self.inf)
+            .cloned()
+            .collect();
+        let mut h = ctx.clone();
+        let rest = ctx.deadline.saturating_duration_since(t0);
+        h.deadline = t0 + rest / 10;
+        let make = &self.make_sat;
+        let Some(inv) = crate::invariant::houdini(self.g, cands, || make(), &h) else {
+            return;
+        };
+        let keep: std::collections::HashSet<Cube> = inv.iter().cloned().collect();
+        let mut moved = 0;
+        for f in self.frames.iter_mut().skip(1) {
+            let before = f.len();
+            f.retain(|c| !keep.contains(c));
+            moved += before - f.len();
+        }
+        if self.trace.is_some() {
+            let (n, q) = (inv.len(), self.stats_queries);
+            self.tr(format_args!(
+                "{{\"e\":\"H\",\"q\":{q},\"inv\":{n},\"moved\":{moved},\"ms\":{}}}",
+                t0.elapsed().as_millis()
+            ));
+        }
+        if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+            eprintln!(
+                "ic3 houdini at frame {}: {} lemmas inductive ({} moved), {:.2} s",
+                self.top(),
+                inv.len(),
+                moved,
+                t0.elapsed().as_secs_f64()
+            );
+        }
+        let had: std::collections::HashSet<&Cube> = self.inf.iter().collect();
+        let new: Vec<Cube> = inv.iter().filter(|c| !had.contains(c)).cloned().collect();
+        self.assume_invariant(new);
+    }
+
+    /// Lemmas held at each level.
+    pub fn frame_sizes(&self) -> Vec<usize> {
+        self.frames.iter().map(Vec::len).collect()
     }
 
     pub fn depth(&self) -> usize {

@@ -10,6 +10,7 @@ pub mod certify;
 pub mod cnf;
 pub mod ic3;
 pub mod invariant;
+pub mod mine;
 pub mod scorr;
 pub mod unroll;
 
@@ -168,6 +169,43 @@ fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Arc<Prepared>, St
             }
         }
     }
+}
+
+/// Experiment H1: mine two-literal invariants by simulation, prove them
+/// with Houdini (up to 10% of the time left, at most 30 s) and give them
+/// to `ic3` up front.
+fn mine_into(g: &Aig, ic3: &mut ic3::Ic3, ctx: &RunContext, name: &str) {
+    let t = Instant::now();
+    let k = std::env::var("INFORMAL_MINE_K")
+        .ok()
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(1500);
+    let cap = std::env::var("INFORMAL_MINE_CAP")
+        .ok()
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(50_000);
+    let cands = mine::candidates(g, k, cap, std::time::Duration::from_secs(10));
+    let nc = cands.len();
+    let mut h = ctx.clone();
+    let rest = ctx.deadline.saturating_duration_since(Instant::now());
+    let cap_s: f64 = std::env::var("INFORMAL_MINE_TL")
+        .ok()
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(30.0);
+    h.deadline = Instant::now() + (rest / 10).min(std::time::Duration::from_secs_f64(cap_s));
+    if std::env::var_os("INFORMAL_MINE_TL").is_some() {
+        h.deadline = Instant::now() + std::time::Duration::from_secs_f64(cap_s);
+    }
+    let inv = invariant::houdini(g, cands, || solver(&h), &h).unwrap_or_default();
+    if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+        eprintln!(
+            "{name}: mined {} candidates, {} proved invariant, {:.2} s",
+            nc,
+            inv.len(),
+            t.elapsed().as_secs_f64()
+        );
+    }
+    ic3.assume_invariant(inv);
 }
 
 /// `v`, IC3's verdict, with a SAFE kept only when its invariant passes the
@@ -672,6 +710,16 @@ impl Engine for Ic3Engine {
                 t0,
             ));
         };
+        if std::env::var_os("INFORMAL_IC3_MINE").is_some() {
+            mine_into(&g, &mut ic3, ctx, self.name());
+        }
+        if std::env::var_os("INFORMAL_IC3_HOUDINI").is_none() {
+            // H2 on by default here: gap set 1 -> 3 at 300 s, sample 20 -> 21.
+            ic3.set_config(ic3::Config {
+                houdini_every: 4,
+                ..ic3::Config::default()
+            });
+        }
         let v = ic3.check(ctx);
         let v = certified(req, &g, &ic3, v, ctx);
         if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
@@ -796,7 +844,19 @@ impl Default for Ic3Mt {
         let d = Config::default();
         Ic3Mt {
             workers: vec![
-                (true, d),
+                // H2 (docs/ic3-research.md) in one worker: Houdini every
+                // 4 frames costs too much in all four at short timeouts.
+                (
+                    true,
+                    Config {
+                        houdini_every: if d.houdini_every == 0 {
+                            4
+                        } else {
+                            d.houdini_every
+                        },
+                        ..d
+                    },
+                ),
                 (false, d),
                 (
                     true,
