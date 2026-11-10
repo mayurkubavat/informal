@@ -193,12 +193,47 @@ fn certified(
         let inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
         certify::check(&orig, &inv, &|| solver(ctx))
     })();
+    report_certificate(req, r, t, ctx)
+}
+
+/// [`certified`] for k-induction: `v` with the depth it was proved at,
+/// `strengthening` the invariant cubes it blocked in every frame.
+fn kind_certified(
+    req: &CheckRequest,
+    p: &Prepared,
+    v: (Verdict, Option<usize>),
+    strengthening: &[ic3::Cube],
+    ctx: &RunContext,
+) -> Verdict {
+    let (v, k) = v;
+    if v != Verdict::Safe || std::env::var_os("INFORMAL_NO_CERT").is_some() {
+        return v;
+    }
+    let t = Instant::now();
+    let r = (|| {
+        let k = k.ok_or("missing: k-induction said safe without a depth")?;
+        let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
+        let (inv, reps) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;
+        // Depth k here is the number of good frames before the bad one.
+        certify::check_kind(&orig, &inv, &reps, k.max(1), &|| solver(ctx), &|| {
+            ctx.should_stop()
+        })
+    })();
+    report_certificate(req, r, t, ctx)
+}
+
+/// Turn a certificate check's outcome into the verdict to report.
+fn report_certificate(
+    req: &CheckRequest,
+    r: Result<(), String>,
+    t: Instant,
+    ctx: &RunContext,
+) -> Verdict {
     if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
         eprintln!(
-            "certificate: {:?} in {:.3} s ({} lemmas) {}",
+            "certificate: {:?} in {:.3} s {}",
             r,
             t.elapsed().as_secs_f64(),
-            ic3.invariant().map_or(0, |l| l.len()),
             req.model.display()
         );
     }
@@ -507,6 +542,7 @@ impl Engine for KInduction {
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
         let v = kind(&g, ctx, self.name(), self.max_depth, &[]);
+        let v = kind_certified(req, &g, v, &[], ctx);
         Ok(result(self.name(), v, t0))
     }
 }
@@ -519,10 +555,11 @@ fn kind(
     name: &str,
     max_depth: Option<usize>,
     invariants: &[ic3::Cube],
-) -> Verdict {
+) -> (Verdict, Option<usize>) {
     let mut base = Unroll::new(g, solver(ctx), false);
     let mut step = Unroll::new(g, solver(ctx), true);
     let mut k = 0;
+    let mut proved_at = None;
     let v = 'outer: loop {
         if ctx.should_stop() {
             break unknown(ctx.stop_reason());
@@ -550,7 +587,10 @@ fn kind(
         let bad = step.bad(k);
         loop {
             match step.sat.solve(&[bad]) {
-                Answer::Unsat => break 'outer Verdict::Safe,
+                Answer::Unsat => {
+                    proved_at = Some(k);
+                    break 'outer Verdict::Safe;
+                }
                 Answer::Unknown => break 'outer unknown(ctx.stop_reason()),
                 Answer::Sat => match step.repeated_states(k) {
                     Some((i, j)) => step.differ(i, j),
@@ -567,7 +607,7 @@ fn kind(
         });
         k += 1;
     };
-    v
+    (v, proved_at)
 }
 
 /// IC3 / PDR on the AIG (see [`ic3`]). `mini` picks informal's own small CDCL
@@ -738,6 +778,7 @@ impl Engine for KindIc3 {
             eprintln!("{}: invariant of {} clauses", self.name(), inv.len());
         }
         let v = kind(&g, ctx, self.name(), None, &inv);
+        let v = kind_certified(req, &g, v, &inv, ctx);
         Ok(result(self.name(), v, t0))
     }
 }

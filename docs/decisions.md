@@ -148,10 +148,16 @@ Sources: README, `docs/`, git log, project notes.
     with the gate 36 SAFE were withdrawn and 0 wrong remained.
   - Cost: 4.1 s of checking in 31 s of SAFE runs on sample60 at 30 s (13%,
     mostly sub-second checks on fast solves; at most 0.85 s per model).
-- **Open issues:** k-induction SAFE verdicts (`informal-kind`, the
-  k-induction phase of `informal-kind-ic3`) are not certified yet; that
-  needs a k-inductive check or turning the proof into an invariant. Still
-  trusted: the AIGER/Btor2 reader and bit-blaster, `certify.rs`, and
+  - k-induction SAFE verdicts are certified too: the strengthening (Houdini
+    cubes plus the preprocessing facts) is checked inductive, then the base
+    (no bad state in frames 0..k-1 from init) and the k-step induction with
+    lazily added simple-path constraints over the representative latches.
+    sample60 at 30 s: 30 SAFE from `informal-kind`/`informal-kind-ic3`, all
+    certified, 8.2 s of checking in 90 s of SAFE runs (9%). With unproved
+    scorr merges, `informal-kind` gave 6+ wrong SAFE; the gate withdrew 37
+    and left 0 wrong.
+- **Open issues:** still trusted: the AIGER/Btor2 reader and bit-blaster,
+  `certify.rs`, and
   CaDiCaL's UNSAT answers. Certifaiger (safe) and BtorSim (witnesses) as
   outside checkers are still planned.
 - **Ideas:** proof logging (DRAT/LRAT) from CaDiCaL for the three UNSAT

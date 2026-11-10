@@ -35,6 +35,18 @@ pub fn lift(
     prepared: &Aig,
     lemmas: &[Vec<Lit>],
 ) -> Result<Vec<Clause>, String> {
+    lift_reps(orig, map, prepared, lemmas).map(|(c, _)| c)
+}
+
+/// [`lift`], also returning, for each of `prepared`'s latches that some
+/// loaded latch maps to, one loaded literal equal to it: two states differ
+/// as `prepared` sees them exactly when they differ on these.
+pub fn lift_reps(
+    orig: &Aig,
+    map: &LatchMap,
+    prepared: &Aig,
+    lemmas: &[Vec<Lit>],
+) -> Result<(Vec<Clause>, Vec<Lit>), String> {
     if map.len() != orig.latches.len() {
         return Err(format!(
             "latch map has {} entries for {} latches",
@@ -83,7 +95,9 @@ pub fn lift(
         }
         inv.push(c);
     }
-    Ok(inv)
+    let mut reps: Vec<Lit> = rep.into_values().collect();
+    reps.sort_unstable();
+    Ok((inv, reps))
 }
 
 /// SAT literal of every AIG variable in one time frame.
@@ -227,62 +241,182 @@ fn cone(g: &Aig, inv: &[Clause]) -> Vec<bool> {
     need
 }
 
-/// Check that `inv` is an inductive invariant of `g` that excludes every
-/// bad state. Each query gets a fresh solver from `new_sat`.
-pub fn check(g: &Aig, inv: &[Clause], new_sat: &dyn Fn() -> Box<dyn Sat>) -> Result<(), String> {
-    let cone = cone(g, inv);
-    // Init.
-    let mut e = Enc::new(new_sat());
-    let f0 = e.frame(g, &cone, None);
-    for l in g.latches.iter().filter(|l| cone[var(l.lit) as usize]) {
-        let x = f0.lit(l.lit);
-        match l.init {
-            Init::Zero => e.sat.add_clause(&[-x]),
-            Init::One => e.sat.add_clause(&[x]),
-            Init::Expr(i) => {
-                let y = f0.lit(i);
-                e.sat.add_clause(&[-x, y]);
-                e.sat.add_clause(&[x, -y]);
+impl Enc {
+    /// The initial-state constraints on frame `f`.
+    fn init(&mut self, g: &Aig, cone: &[bool], f: &Frame) {
+        for l in g.latches.iter().filter(|l| cone[var(l.lit) as usize]) {
+            let x = f.lit(l.lit);
+            match l.init {
+                Init::Zero => self.sat.add_clause(&[-x]),
+                Init::One => self.sat.add_clause(&[x]),
+                Init::Expr(i) => {
+                    let y = f.lit(i);
+                    self.sat.add_clause(&[-x, y]);
+                    self.sat.add_clause(&[x, -y]);
+                }
+                Init::Free => {}
             }
-            Init::Free => {}
         }
     }
+    /// The frame after `f`.
+    fn step(&mut self, g: &Aig, cone: &[bool], f: &Frame) -> Frame {
+        let next: Vec<i32> = g
+            .latches
+            .iter()
+            .map(|l| {
+                if cone[var(l.lit) as usize] {
+                    f.lit(l.next)
+                } else {
+                    0
+                }
+            })
+            .collect();
+        self.frame(g, cone, Some(&next))
+    }
+    /// A literal true when some bad output is true in `f`.
+    fn any_bad(&mut self, g: &Aig, f: &Frame) -> i32 {
+        let any = self.fresh();
+        let mut or = vec![-any];
+        or.extend(g.bads.iter().map(|&b| f.lit(b)));
+        self.sat.add_clause(&or);
+        // and back: any <- each bad, so that -any means no bad.
+        for &b in &g.bads {
+            self.sat.add_clause(&[any, -f.lit(b)]);
+        }
+        any
+    }
+}
+
+/// Init and consecution: `inv` holds in every reachable state.
+fn check_inductive(
+    g: &Aig,
+    cone: &[bool],
+    inv: &[Clause],
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+) -> Result<(), String> {
+    let mut e = Enc::new(new_sat());
+    let f0 = e.frame(g, cone, None);
+    e.init(g, cone, &f0);
     e.constraints(g, &f0);
     let s = e.violate_inv(&f0, inv);
     e.unsat(&[s], "init")?;
 
-    // Consecution.
     let mut e = Enc::new(new_sat());
-    let f0 = e.frame(g, &cone, None);
+    let f0 = e.frame(g, cone, None);
     e.assert_inv(&f0, inv);
     e.constraints(g, &f0);
-    let next: Vec<i32> = g
-        .latches
-        .iter()
-        .map(|l| {
-            if cone[var(l.lit) as usize] {
-                f0.lit(l.next)
-            } else {
-                0
-            }
-        })
-        .collect();
-    let f1 = e.frame(g, &cone, Some(&next));
+    let f1 = e.step(g, cone, &f0);
     e.constraints(g, &f1);
     let s = e.violate_inv(&f1, inv);
-    e.unsat(&[s], "consecution")?;
+    e.unsat(&[s], "consecution")
+}
 
-    // Safety.
+/// Check that `inv` is an inductive invariant of `g` that excludes every
+/// bad state. Each query gets a fresh solver from `new_sat`.
+pub fn check(g: &Aig, inv: &[Clause], new_sat: &dyn Fn() -> Box<dyn Sat>) -> Result<(), String> {
+    let cone = cone(g, inv);
+    check_inductive(g, &cone, inv, new_sat)?;
     let mut e = Enc::new(new_sat());
     let f0 = e.frame(g, &cone, None);
     e.assert_inv(&f0, inv);
     e.constraints(g, &f0);
-    let bads: Vec<i32> = g.bads.iter().map(|&b| f0.lit(b)).collect();
-    let any = e.fresh();
-    let mut or = vec![-any];
-    or.extend(&bads);
-    e.sat.add_clause(&or);
+    let any = e.any_bad(g, &f0);
     e.unsat(&[any], "safety")
+}
+
+/// Check a k-induction proof at depth `k` (k >= 1) on `g`: `inv` (the
+/// strengthening, and what preprocessing assumed) is an inductive
+/// invariant; no bad state is reachable in fewer than `k` steps; and on
+/// every path of `k` good states that satisfy `inv` and differ pairwise
+/// on `reps`, the next state is good. The simple-path constraints are
+/// added lazily, as the engine does, but with this file's own encoding.
+pub fn check_kind(
+    g: &Aig,
+    inv: &[Clause],
+    reps: &[Lit],
+    k: usize,
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+    stop: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    if k == 0 {
+        return Err("k-induction at depth 0".into());
+    }
+    let mut cone = cone(g, inv);
+    // The distinctness constraints read the rep latches too.
+    {
+        let extra: Vec<Clause> = reps.iter().map(|&r| vec![r]).collect();
+        let c2 = self::cone(g, &extra);
+        for (a, b) in cone.iter_mut().zip(c2) {
+            *a |= b;
+        }
+    }
+    check_inductive(g, &cone, inv, new_sat)?;
+
+    // Base: no bad state in frames 0..k-1 from the initial states.
+    let mut e = Enc::new(new_sat());
+    let mut f = e.frame(g, &cone, None);
+    e.init(g, &cone, &f);
+    for j in 0..k {
+        if stop() {
+            return Err("base check stopped".into());
+        }
+        if j > 0 {
+            f = e.step(g, &cone, &f);
+        }
+        e.constraints(g, &f);
+        let bad = e.any_bad(g, &f);
+        e.unsat(&[bad], "base")?;
+        e.sat.add_clause(&[-bad]);
+    }
+
+    // Step: frames 0..k-1 good and in inv, frame k bad.
+    let mut e = Enc::new(new_sat());
+    let mut frames = vec![e.frame(g, &cone, None)];
+    for j in 0..=k {
+        if j > 0 {
+            let f = e.step(g, &cone, &frames[j - 1]);
+            frames.push(f);
+        }
+        let f = &frames[j];
+        e.assert_inv(f, inv);
+        e.constraints(g, f);
+    }
+    for f in &frames[..k] {
+        let bad = e.any_bad(g, f);
+        e.sat.add_clause(&[-bad]);
+    }
+    let bad = e.any_bad(g, &frames[k]);
+    loop {
+        if stop() {
+            return Err("step check stopped".into());
+        }
+        match e.sat.solve(&[bad]) {
+            Answer::Unsat => return Ok(()),
+            Answer::Unknown => return Err("step check stopped".into()),
+            Answer::Sat => {}
+        }
+        // Two equal states on the path: require them to differ.
+        let val = |f: &Frame, e: &Enc| -> Vec<bool> {
+            reps.iter().map(|&r| e.sat.value(f.lit(r))).collect()
+        };
+        let vals: Vec<Vec<bool>> = frames.iter().map(|f| val(f, &e)).collect();
+        let pair = (0..=k)
+            .flat_map(|i| (i + 1..=k).map(move |j| (i, j)))
+            .find(|&(i, j)| vals[i] == vals[j]);
+        let Some((i, j)) = pair else {
+            return Err("step fails".into());
+        };
+        let mut or = Vec::new();
+        for &r in reps {
+            let (x, y) = (frames[i].lit(r), frames[j].lit(r));
+            let d = e.fresh();
+            // d -> x != y
+            e.sat.add_clause(&[-d, x, y]);
+            e.sat.add_clause(&[-d, -x, -y]);
+            or.push(d);
+        }
+        e.sat.add_clause(&or);
+    }
 }
 
 #[cfg(test)]
@@ -345,5 +479,41 @@ mod tests {
         // Lemma cubes are blocked: cube {pa} means clause !a.
         let inv = lift(&g, &vec![Some(pa), None], &p, &[vec![pa]]).unwrap();
         assert_eq!(inv, vec![vec![neg(g.latches[0].lit)]]);
+    }
+
+    /// a' = 0, b' = a, both from `a0` / 0; bad = b. With a0 = 0 the
+    /// property is 2-inductive but not 1-inductive; with a0 = 1 it fails
+    /// at depth 1.
+    fn shift(a0: Init) -> Aig {
+        let mut g = Aig::new();
+        let a = g.latch(a0);
+        let b = g.latch(Init::Zero);
+        g.set_next(a, FALSE);
+        g.set_next(b, a);
+        g.bads.push(b);
+        g
+    }
+
+    #[test]
+    fn checks_k_induction_depth_base_and_step() {
+        let never = || false;
+        let g = shift(Init::Zero);
+        let reps: Vec<Lit> = g.latches.iter().map(|l| l.lit).collect();
+        assert_eq!(check_kind(&g, &[], &reps, 2, &sat, &never), Ok(()));
+        assert_eq!(
+            check_kind(&g, &[], &reps, 1, &sat, &never),
+            Err("step fails".into())
+        );
+        let bad = shift(Init::One);
+        assert_eq!(
+            check_kind(&bad, &[], &reps, 2, &sat, &never),
+            Err("base fails".into())
+        );
+        // A strengthening that is not inductive is caught first.
+        let a = g.latches[0].lit;
+        assert_eq!(
+            check_kind(&g, &[vec![a]], &reps, 2, &sat, &never),
+            Err("init fails".into())
+        );
     }
 }
