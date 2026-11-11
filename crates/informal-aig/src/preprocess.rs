@@ -111,6 +111,33 @@ pub fn simplify(g: &Aig) -> (Aig, Stats) {
 
 /// [`simplify`], also returning the [`LatchMap`] from `g` to the result.
 pub fn simplify_map(g: &Aig) -> (Aig, Stats, LatchMap) {
+    let (out, stats, lmap, _) = simplify_maps(g);
+    (out, stats, lmap)
+}
+
+/// For each input of a model, by index: the input literal of the
+/// simplified model that it became, or `None` when it fell out of the
+/// cone (any value will do for it in a trace).
+pub type InputMap = Vec<Option<Lit>>;
+
+/// The input map from `g` to `c` through `b` (see [`compose`]).
+pub fn compose_inputs(ab: &[Option<Lit>], b: &Aig, bc: &[Option<Lit>]) -> InputMap {
+    let index: std::collections::HashMap<u32, usize> = b
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, &l)| (var(l), i))
+        .collect();
+    ab.iter()
+        .map(|&l| {
+            let l = l?;
+            bc[*index.get(&var(l))?].map(|x| x ^ (l & 1))
+        })
+        .collect()
+}
+
+/// [`simplify`] with both the [`LatchMap`] and the [`InputMap`].
+pub fn simplify_maps(g: &Aig) -> (Aig, Stats, LatchMap, InputMap) {
     let stuck = constant_latches(g);
     let mut stats = Stats {
         latches_before: g.latches.len(),
@@ -243,7 +270,15 @@ pub fn simplify_map(g: &Aig) -> (Aig, Stats, LatchMap) {
             }
         })
         .collect();
-    (out, stats, lmap)
+    let imap = g
+        .inputs
+        .iter()
+        .map(|&i| {
+            let v = var(i) as usize;
+            need[v].then(|| map[v] ^ (i & 1))
+        })
+        .collect();
+    (out, stats, lmap, imap)
 }
 
 #[cfg(test)]

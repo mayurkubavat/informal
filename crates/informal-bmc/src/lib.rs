@@ -14,7 +14,7 @@ pub mod mine;
 pub mod scorr;
 pub mod unroll;
 
-use informal_aig::preprocess::LatchMap;
+use informal_aig::preprocess::{InputMap, LatchMap};
 use informal_aig::Aig;
 use informal_engine::{
     Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
@@ -28,13 +28,13 @@ pub use informal_aig::load as load_aig;
 
 /// The simplified model and the map from the loaded model's latches to it,
 /// or the reason this engine cannot take it.
-fn prepare(req: &CheckRequest) -> Result<(Aig, LatchMap), String> {
+fn prepare(req: &CheckRequest) -> Result<(Aig, LatchMap, InputMap), String> {
     let g = load_aig(&req.model).map_err(|e| format!("{e:#}"))?;
     if g.bads.is_empty() {
         return Err("model has no bad-state property".into());
     }
-    let (s, _, map) = informal_aig::preprocess::simplify_map(&g);
-    Ok((s, map))
+    let (s, _, map, imap) = informal_aig::preprocess::simplify_maps(&g);
+    Ok((s, map, imap))
 }
 
 /// The model as the engines see it: simplified, latch-merged, and its CNF
@@ -46,6 +46,8 @@ pub struct Prepared {
     _template: Arc<cnf::Template>,
     /// From the loaded model's latches to `aig`'s literals (certificates).
     pub latch_map: LatchMap,
+    /// From the loaded model's inputs to `aig`'s (UNSAFE certificates).
+    pub input_map: InputMap,
 }
 
 impl std::ops::Deref for Prepared {
@@ -234,6 +236,111 @@ fn certified(
     report_certificate(req, r, t, ctx)
 }
 
+/// `v` with an UNSAFE kept only when [`certify::check_unsafe`] finds a
+/// counterexample of that depth on the model as loaded and simulates it
+/// to a bad state; otherwise unknown, loudly (a stop on the way also
+/// gives unknown). `INFORMAL_NO_CERT` skips the check.
+fn unsafe_certified(
+    req: &CheckRequest,
+    v: Verdict,
+    ctx: &RunContext,
+    trace: Option<(&Prepared, PreparedTrace)>,
+) -> Verdict {
+    let Verdict::Unsafe { depth } = v else {
+        return v;
+    };
+    if std::env::var_os("INFORMAL_NO_CERT").is_some() {
+        return v;
+    }
+    let t = Instant::now();
+    let r = (|| {
+        let d = depth.ok_or("missing: UNSAFE without a depth")? as usize;
+        let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
+        // The engine's own trace, carried back to the loaded model, is
+        // checked by simulation alone; without one (IC3), or if it does
+        // not replay, a fresh search at the same depth decides.
+        if let Some((p, pt)) = &trace {
+            let t = pt.lift(p, &orig);
+            match certify::replay_unsafe(&orig, d, &t) {
+                Ok(()) => return Ok(()),
+                Err(e) => eprintln!(
+                    "informal: engine trace did not replay on the loaded model ({e}); searching: {}",
+                    req.model.display()
+                ),
+            }
+        }
+        certify::check_unsafe(&orig, d, &|| solver(ctx), &|| ctx.should_stop())
+    })();
+    match report_certificate(req, r, t, ctx) {
+        Verdict::Safe => Verdict::Unsafe { depth },
+        other => other,
+    }
+}
+
+/// A counterexample on the prepared model: each latch's initial value and
+/// each input's value per frame, by index.
+struct PreparedTrace {
+    init: Vec<bool>,
+    inputs: Vec<Vec<bool>>,
+}
+
+impl PreparedTrace {
+    fn from_unroll(g: &Aig, u: &Unroll, d: usize) -> Self {
+        PreparedTrace {
+            init: g
+                .latches
+                .iter()
+                .map(|l| u.sat.value(u.lit(0, l.lit)))
+                .collect(),
+            inputs: (0..=d)
+                .map(|f| g.inputs.iter().map(|&i| u.sat.value(u.lit(f, i))).collect())
+                .collect(),
+        }
+    }
+
+    /// The same trace on the loaded model, through `p`'s maps; inputs and
+    /// latches preprocessing dropped get 0.
+    fn lift(&self, p: &Prepared, orig: &Aig) -> certify::Trace {
+        use informal_aig::{is_neg, var, FALSE, TRUE};
+        let lat: std::collections::HashMap<u32, usize> = p
+            .latches
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (var(l.lit), i))
+            .collect();
+        let inp: std::collections::HashMap<u32, usize> = p
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(i, &l)| (var(l), i))
+            .collect();
+        let init = p
+            .latch_map
+            .iter()
+            .map(|m| match *m {
+                None | Some(FALSE) => false,
+                Some(TRUE) => true,
+                Some(l) => lat.get(&var(l)).is_some_and(|&i| self.init[i] ^ is_neg(l)),
+            })
+            .collect();
+        let inputs = self
+            .inputs
+            .iter()
+            .map(|frame| {
+                p.input_map
+                    .iter()
+                    .map(|m| match *m {
+                        Some(l) => inp.get(&var(l)).is_some_and(|&i| frame[i] ^ is_neg(l)),
+                        None => false,
+                    })
+                    .collect()
+            })
+            .collect();
+        let _ = orig;
+        certify::Trace { init, inputs }
+    }
+}
+
 /// [`certified`] for k-induction: `v` with the depth it was proved at,
 /// `strengthening` the invariant cubes it blocked in every frame.
 fn kind_certified(
@@ -280,7 +387,7 @@ fn report_certificate(
         Err(e) if e.ends_with("check stopped") => unknown(ctx.stop_reason()),
         Err(e) => {
             eprintln!(
-                "informal: SAFE withdrawn, certificate {e}: {}",
+                "informal: verdict withdrawn, certificate {e}: {}",
                 req.model.display()
             );
             unknown(format!("certificate {e}"))
@@ -289,16 +396,16 @@ fn report_certificate(
 }
 
 fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, String> {
-    let (g, map) = prepare(req)?;
-    let (g, map) = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
-        (g, map)
+    let (g, map, imap) = prepare(req)?;
+    let (g, map, imap) = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
+        (g, map, imap)
     } else {
         let now = Instant::now();
         let left = ctx.deadline.saturating_duration_since(now);
         let mut c = ctx.clone();
         c.deadline = now + (left / 20).min(std::time::Duration::from_secs(10));
         match scorr::latch_correspondence(&g, solver(&c), &c) {
-            Some((h, st, hmap)) => {
+            Some((h, st, hmap, himap)) => {
                 if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
                     eprintln!(
                         "scorr: merged {} latches ({} -> {}), {} refinements, {:.2} s",
@@ -310,9 +417,10 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, Stri
                     );
                 }
                 let m = informal_aig::preprocess::compose(&map, &g, &hmap);
-                (h, m)
+                let im = informal_aig::preprocess::compose_inputs(&imap, &g, &himap);
+                (h, m, im)
             }
-            None => (g, map),
+            None => (g, map, imap),
         }
     };
     let t = cnf::build_until(&g, &|| ctx.should_stop());
@@ -320,6 +428,7 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, Stri
         aig: g,
         _template: Arc::new(t),
         latch_map: map,
+        input_map: imap,
     })
 }
 
@@ -391,6 +500,7 @@ impl Engine for Bmc {
         };
         let step = self.step.max(1);
         let mut witness = None;
+        let mut cert_trace = None;
         let mut u = Unroll::new(&g, solver(ctx), false);
         let mut k = 0; // first frame not yet checked
         let v = loop {
@@ -439,6 +549,7 @@ impl Engine for Bmc {
                         ));
                     }
                     witness = Some(named_witness(&g, &u, d));
+                    cert_trace = Some(PreparedTrace::from_unroll(&g, &u, d));
                     break Verdict::Unsafe {
                         depth: Some(d as u32),
                     };
@@ -461,7 +572,11 @@ impl Engine for Bmc {
             });
             k = last + 1;
         };
-        let mut r = result(self.name(), v, t0);
+        let mut r = result(
+            self.name(),
+            unsafe_certified(req, v, ctx, cert_trace.map(|t| (&*g, t))),
+            t0,
+        );
         r.witness = witness;
         Ok(r)
     }
@@ -579,9 +694,13 @@ impl Engine for KInduction {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
-        let v = kind(&g, ctx, self.name(), self.max_depth, &[]);
-        let v = kind_certified(req, &g, v, &[], ctx);
-        Ok(result(self.name(), v, t0))
+        let (v, k, tr) = kind(&g, ctx, self.name(), self.max_depth, &[]);
+        let v = kind_certified(req, &g, (v, k), &[], ctx);
+        Ok(result(
+            self.name(),
+            unsafe_certified(req, v, ctx, tr.map(|t| (&*g, t))),
+            t0,
+        ))
     }
 }
 
@@ -593,11 +712,12 @@ fn kind(
     name: &str,
     max_depth: Option<usize>,
     invariants: &[ic3::Cube],
-) -> (Verdict, Option<usize>) {
+) -> (Verdict, Option<usize>, Option<PreparedTrace>) {
     let mut base = Unroll::new(g, solver(ctx), false);
     let mut step = Unroll::new(g, solver(ctx), true);
     let mut k = 0;
     let mut proved_at = None;
+    let mut trace = None;
     let v = 'outer: loop {
         if ctx.should_stop() {
             break unknown(ctx.stop_reason());
@@ -610,9 +730,10 @@ fn kind(
         let bad = base.bad(k);
         match base.sat.solve(&[bad]) {
             Answer::Sat => {
+                trace = Some(PreparedTrace::from_unroll(g, &base, k));
                 break Verdict::Unsafe {
                     depth: Some(k as u32),
-                }
+                };
             }
             Answer::Unsat => base.sat.add_clause(&[-bad]),
             Answer::Unknown => break unknown(ctx.stop_reason()),
@@ -645,7 +766,7 @@ fn kind(
         });
         k += 1;
     };
-    (v, proved_at)
+    (v, proved_at, trace)
 }
 
 /// IC3 / PDR on the AIG (see [`ic3`]). `mini` picks informal's own small CDCL
@@ -772,7 +893,7 @@ impl Engine for Ic3Engine {
                 informal_sat::mini::MAX_VARS.load(Relaxed)
             );
         }
-        Ok(result(self.name(), v, t0))
+        Ok(result(self.name(), unsafe_certified(req, v, ctx, None), t0))
     }
 }
 
@@ -814,7 +935,7 @@ impl Engine for KindIc3 {
             let v = ic3.check(&phase);
             match certified(req, &g, &ic3, v, ctx) {
                 Verdict::Unknown { .. } => {}
-                v => return Ok(result(self.name(), v, t0)),
+                v => return Ok(result(self.name(), unsafe_certified(req, v, ctx, None), t0)),
             }
             // Houdini gets up to half of what is left.
             let mut h = ctx.clone();
@@ -825,9 +946,13 @@ impl Engine for KindIc3 {
         if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
             eprintln!("{}: invariant of {} clauses", self.name(), inv.len());
         }
-        let v = kind(&g, ctx, self.name(), None, &inv);
-        let v = kind_certified(req, &g, v, &inv, ctx);
-        Ok(result(self.name(), v, t0))
+        let (v, k, tr) = kind(&g, ctx, self.name(), None, &inv);
+        let v = kind_certified(req, &g, (v, k), &inv, ctx);
+        Ok(result(
+            self.name(),
+            unsafe_certified(req, v, ctx, tr.map(|t| (&*g, t))),
+            t0,
+        ))
     }
 }
 
@@ -975,7 +1100,7 @@ impl Engine for Ic3Mt {
             .find(|v| !matches!(v, Verdict::Unknown { .. }))
             .cloned()
             .unwrap_or_else(|| unknown(ctx.stop_reason()));
-        Ok(result(self.name(), v, t0))
+        Ok(result(self.name(), unsafe_certified(req, v, ctx, None), t0))
     }
 }
 
@@ -1255,7 +1380,7 @@ mod tests {
         let ctx = RunContext::new(req.timeout);
         let g = prepare(&req).unwrap().0;
         assert_eq!(g.latches.len(), 6);
-        let (h, st, _) = scorr::latch_correspondence(&g, solver(&ctx), &ctx).unwrap();
+        let (h, st, _, _) = scorr::latch_correspondence(&g, solver(&ctx), &ctx).unwrap();
         assert_eq!(st.merged, 3);
         assert_eq!(h.latches.len(), 3);
         let ic3 = Ic3Engine { mini: true };

@@ -15,7 +15,7 @@
 //! are left alone.
 
 use crate::unroll::Unroll;
-use informal_aig::preprocess::LatchMap;
+use informal_aig::preprocess::{InputMap, LatchMap};
 use informal_aig::{is_neg, var, Aig, Init, Lit, Node, FALSE};
 use informal_engine::RunContext;
 use informal_sat::{Answer, Sat};
@@ -305,7 +305,7 @@ pub fn latch_correspondence(
     g: &Aig,
     sat: Box<dyn Sat>,
     ctx: &RunContext,
-) -> Option<(Aig, Stats, LatchMap)> {
+) -> Option<(Aig, Stats, LatchMap, InputMap)> {
     if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
         return None;
     }
@@ -340,14 +340,14 @@ pub fn latch_correspondence(
     if subst.is_empty() {
         return None;
     }
-    let (h, map) = substitute(g, &subst);
-    Some((h, stats, map))
+    let (h, map, imap) = substitute(g, &subst);
+    Some((h, stats, map, imap))
 }
 
 /// Rebuild `g` with each latch in `subst` replaced by its representative
 /// (an earlier node), then simplify (the merged latches fall out of the
 /// cone).
-fn substitute(g: &Aig, subst: &HashMap<u32, (Lit, bool)>) -> (Aig, LatchMap) {
+fn substitute(g: &Aig, subst: &HashMap<u32, (Lit, bool)>) -> (Aig, LatchMap, InputMap) {
     let mut out = Aig::new();
     let mut map = vec![FALSE; g.nodes.len()];
     let m = |map: &[Lit], l: Lit| map[var(l) as usize] ^ (l & 1);
@@ -391,9 +391,11 @@ fn substitute(g: &Aig, subst: &HashMap<u32, (Lit, bool)>) -> (Aig, LatchMap) {
     out.bads = g.bads.iter().map(|&b| m(&map, b)).collect();
     out.constraints = g.constraints.iter().map(|&c| m(&map, c)).collect();
     let to_out: LatchMap = g.latches.iter().map(|l| Some(m(&map, l.lit))).collect();
-    let (h, _, to_h) = informal_aig::preprocess::simplify_map(&out);
+    let in_out: InputMap = g.inputs.iter().map(|&i| Some(m(&map, i))).collect();
+    let (h, _, to_h, in_h) = informal_aig::preprocess::simplify_maps(&out);
     let lmap = informal_aig::preprocess::compose(&to_out, &out, &to_h);
-    (h, lmap)
+    let imap = informal_aig::preprocess::compose_inputs(&in_out, &out, &in_h);
+    (h, lmap, imap)
 }
 
 /// Debug (INFORMAL_SCORR_CHECK): BMC the equalities on `g` itself, from the

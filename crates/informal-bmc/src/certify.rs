@@ -419,6 +419,145 @@ pub fn check_kind(
     }
 }
 
+/// Check an UNSAFE verdict at `depth` on `g` as loaded: find a trace
+/// with this file's own encoding (initial states, constraints in every
+/// frame, some bad output in frame `depth`), then simulate the solver's
+/// inputs and free initial values through the AIG and confirm the bad
+/// output. Engines and preprocessing are not trusted: a merge or encoding
+/// bug that invents a counterexample makes this fail.
+pub fn check_unsafe(
+    g: &Aig,
+    depth: usize,
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+    stop: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let cone = cone(g, &[]);
+    let mut e = Enc::new(new_sat());
+    let mut frames = vec![e.frame(g, &cone, None)];
+    e.init(g, &cone, &frames[0]);
+    for k in 0..=depth {
+        if stop() {
+            return Err("unsafe check stopped".into());
+        }
+        if k > 0 {
+            let f = e.step(g, &cone, &frames[k - 1]);
+            frames.push(f);
+        }
+        e.constraints(g, &frames[k]);
+    }
+    let bad = e.any_bad(g, &frames[depth]);
+    match e.sat.solve(&[bad]) {
+        Answer::Sat => {}
+        Answer::Unsat => return Err(format!("unsafe fails: no counterexample of depth {depth}")),
+        Answer::Unknown => return Err("unsafe check stopped".into()),
+    }
+    // Simulate the model's inputs and free initial values.
+    let val = |e: &Enc, x: i32| -> bool {
+        match x {
+            0 | -1 => false,
+            1 => true,
+            x => e.sat.value(x),
+        }
+    };
+    let trace = Trace {
+        init: g
+            .latches
+            .iter()
+            .map(|l| cone[var(l.lit) as usize] && val(&e, frames[0].0[var(l.lit) as usize]))
+            .collect(),
+        inputs: frames
+            .iter()
+            .map(|f| {
+                g.inputs
+                    .iter()
+                    .map(|&i| cone[var(i) as usize] && val(&e, f.0[var(i) as usize]))
+                    .collect()
+            })
+            .collect(),
+    };
+    replay_unsafe(g, depth, &trace)
+}
+
+/// A counterexample on the model as loaded: the value of every latch in
+/// the initial state (used only for latches whose init is not constant)
+/// and of every input in each frame, by index.
+pub struct Trace {
+    pub init: Vec<bool>,
+    pub inputs: Vec<Vec<bool>>,
+}
+
+/// Simulate `trace` through `g` for frames 0..=depth: initial values and
+/// constraints must hold, and some bad output in frame `depth`.
+pub fn replay_unsafe(g: &Aig, depth: usize, trace: &Trace) -> Result<(), String> {
+    if trace.inputs.len() <= depth || trace.init.len() != g.latches.len() {
+        return Err("unsafe fails: trace has the wrong shape".into());
+    }
+    let index: HashMap<u32, usize> = g
+        .latches
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (var(l.lit), i))
+        .collect();
+    let input_ix: HashMap<u32, usize> = g
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, &l)| (var(l), i))
+        .collect();
+    let mut state: Vec<bool> = g
+        .latches
+        .iter()
+        .zip(&trace.init)
+        .map(|(l, &b)| match l.init {
+            Init::Zero => false,
+            Init::One => true,
+            _ => b,
+        })
+        .collect();
+    let mut v = vec![false; g.nodes.len()];
+    let lv = |v: &[bool], l: Lit| v[var(l) as usize] ^ is_neg(l);
+    let eval = |v: &mut Vec<bool>, state: &[bool], k: usize| {
+        for (n, node) in g.nodes.iter().enumerate() {
+            v[n] = match *node {
+                Node::Const => false,
+                Node::Input => trace.inputs[k][input_ix[&(n as u32)]],
+                Node::Latch => state[index[&(n as u32)]],
+                Node::And(a, b) => lv(v, a) && lv(v, b),
+            };
+        }
+    };
+    let has_expr = g.latches.iter().any(|l| matches!(l.init, Init::Expr(_)));
+    for k in 0..=depth {
+        eval(&mut v, &state, k);
+        if k == 0 && has_expr {
+            // Inits given by an expression (Btor2) are whatever it says in
+            // frame 0; the trace's values for them do not matter.
+            for (i, l) in g.latches.iter().enumerate() {
+                if let Init::Expr(x) = l.init {
+                    state[i] = lv(&v, x);
+                }
+            }
+            eval(&mut v, &state, k);
+        }
+        if g.constraints.iter().any(|&c| !lv(&v, c)) {
+            return Err(format!(
+                "unsafe fails: trace breaks a constraint in frame {k}"
+            ));
+        }
+        if k == depth {
+            break;
+        }
+        for (i, l) in g.latches.iter().enumerate() {
+            state[i] = lv(&v, l.next);
+        }
+    }
+    if g.bads.iter().any(|&b| lv(&v, b)) {
+        Ok(())
+    } else {
+        Err("unsafe fails: simulated trace does not reach a bad state".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,5 +654,21 @@ mod tests {
             check_kind(&g, &[vec![a]], &reps, 2, &sat, &never),
             Err("init fails".into())
         );
+    }
+
+    #[test]
+    fn checks_unsafe_depth_on_the_loaded_model() {
+        let never = || false;
+        // shift(One): b becomes 1 at frame 1.
+        let g = shift(Init::One);
+        assert_eq!(check_unsafe(&g, 1, &sat, &never), Ok(()));
+        assert!(check_unsafe(&g, 0, &sat, &never)
+            .unwrap_err()
+            .starts_with("unsafe fails"));
+        // shift(Zero) is safe: no depth works.
+        let s = shift(Init::Zero);
+        assert!(check_unsafe(&s, 3, &sat, &never)
+            .unwrap_err()
+            .starts_with("unsafe fails"));
     }
 }
