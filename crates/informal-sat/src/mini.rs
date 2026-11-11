@@ -66,7 +66,17 @@ pub struct Mini {
     qhead: usize,
     seen: Vec<u8>,
     ok: bool,
-    model: Vec<bool>,
+    /// The last model, as the values of the variables on the trail at
+    /// SAT: `model_val[v]` counts when `model_stamp[v] == model_id`
+    /// (unassigned variables read as false). Filled from the trail, not
+    /// by copying every variable per answer.
+    model_val: Vec<bool>,
+    model_stamp: Vec<u32>,
+    model_id: u32,
+    /// Decisions in this solver, flushed to [`DECISIONS`] once per solve
+    /// (a shared atomic per decision cost a cache line bounce per
+    /// decision across the IC3 workers: H7 in the feedback report).
+    decisions: u64,
     conflict: Vec<Lit>, // failed assumptions (negated), after Unsat
     terminate: Option<Box<dyn Fn() -> bool + Send>>,
     units_since_simplify: usize,
@@ -112,7 +122,10 @@ impl Default for Mini {
             qhead: 0,
             seen: vec![0],
             ok: true,
-            model: Vec::new(),
+            model_val: Vec::new(),
+            model_stamp: Vec::new(),
+            model_id: 0,
+            decisions: 0,
             conflict: Vec::new(),
             terminate: None,
             units_since_simplify: 0,
@@ -323,8 +336,11 @@ impl Mini {
                 self.bump_clause(confl as usize);
             }
             let start = usize::from(p != 0);
-            let lits = self.clauses[confl as usize].lits.clone();
-            for &q in &lits[start..] {
+            // By index: cloning the clause per conflict step was H7's
+            // second cost.
+            let len = self.clauses[confl as usize].lits.len();
+            for k in start..len {
+                let q = self.clauses[confl as usize].lits[k];
                 let v = var(q);
                 if self.seen[v] == 0 && self.level[v] > 0 {
                     self.seen[v] = 1;
@@ -602,7 +618,7 @@ impl Mini {
                 },
             };
             self.trail_lim.push(self.trail.len());
-            DECISIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.decisions += 1;
             self.enqueue(decision, None);
         }
     }
@@ -667,7 +683,7 @@ impl Sat for Mini {
             self.simplify();
         }
         let t0 = std::time::Instant::now();
-        let d0 = DECISIONS.load(std::sync::atomic::Ordering::Relaxed);
+        let d0 = self.decisions;
         let mut restart = 0;
         let ans = loop {
             match self.search(assumptions, 100 * Mini::luby(restart)) {
@@ -677,6 +693,7 @@ impl Sat for Mini {
             }
         };
         SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        DECISIONS.fetch_add(self.decisions - d0, std::sync::atomic::Ordering::Relaxed);
         {
             use std::sync::atomic::Ordering::Relaxed;
             let ns = t0.elapsed().as_nanos() as u64;
@@ -685,7 +702,7 @@ impl Sat for Mini {
             if ans == Answer::Sat {
                 SAT_SOLVES.fetch_add(1, Relaxed);
                 SAT_NANOS.fetch_add(ns, Relaxed);
-                SAT_DECISIONS.fetch_add(DECISIONS.load(Relaxed) - d0, Relaxed);
+                SAT_DECISIONS.fetch_add(self.decisions - d0, Relaxed);
             }
         }
         PROPS.fetch_add(
@@ -693,14 +710,30 @@ impl Sat for Mini {
             std::sync::atomic::Ordering::Relaxed,
         );
         if ans == Answer::Sat {
-            self.model = self.assign.iter().map(|&v| v == Val::True).collect();
+            self.model_id = self.model_id.wrapping_add(1);
+            if self.model_id == 0 {
+                self.model_stamp.iter_mut().for_each(|x| *x = 0);
+                self.model_id = 1;
+            }
+            let n = self.assign.len();
+            if self.model_val.len() < n {
+                self.model_val.resize(n, false);
+                self.model_stamp.resize(n, 0);
+            }
+            for &l in &self.trail {
+                let v = var(l);
+                self.model_stamp[v] = self.model_id;
+                self.model_val[v] = l > 0;
+            }
         }
         self.cancel_until(0);
         ans
     }
 
     fn value(&self, lit: Lit) -> bool {
-        self.model.get(var(lit)).is_some_and(|&v| v == (lit > 0))
+        let v = var(lit);
+        let val = self.model_stamp.get(v) == Some(&self.model_id) && self.model_val[v];
+        val == (lit > 0)
     }
 
     fn solve_domain(&mut self, assumptions: &[Lit], domain: &[Lit]) -> Answer {
