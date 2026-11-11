@@ -220,6 +220,24 @@ Sources: README, `docs/`, git log, project notes.
 - **Ideas:** a nightly bare-repo backup and a scheduled regression run that
   records PAR-2 and verdict disagreements over time.
 
+## D13. The front end fails closed
+
+- **Chosen (2026-11-10):** the slang lowering either models a construct as
+  IEEE 1800 defines it, or says it cannot. Three outcomes: lowered;
+  *unsupported* (not handled yet, Yosys may: fall back with a note);
+  *rejected* (compile errors, and constructs no front end here models:
+  the property is an error, with no fallback). Reset and clock names are
+  checked against the elaborated design.
+- **Why:** an external review (2026-11-10) reproduced wrong verdicts from
+  guesses: a misspelt reset became a free wire through the Yosys fallback,
+  `$isunknown` read as 0, `==?` as `==`, a second always_ff block on
+  another slice replaced the first. HWMCC runs cannot see these: the
+  models there never pass through the front end.
+- **Gate:** `tests/sv` (known answers, run by `cargo test` and so by
+  `scripts/check.sh`). Every lowering fix adds the design that showed it.
+- **Open issues:** UNSAFE verdicts are not replayed on the original model
+  yet; four-state values; multi-clock designs; black boxes.
+
 ---
 
 ## Math and algorithm ideas to explore

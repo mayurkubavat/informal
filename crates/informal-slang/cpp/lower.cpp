@@ -19,7 +19,9 @@
 // guarded by the path condition that reaches them; a labelled assertion
 // names its `bad` line. `$past`, `$rose`, `$fell`, `$stable`, `$changed`
 // add history states. All registers step on every model step (one clock),
-// asynchronous resets act synchronously, and X / Z read as 0.
+// asynchronous resets act synchronously, and X / Z read as 0. Blocks on
+// different clocks or edges, $isunknown and overlapping drivers are
+// rejected (not handed to Yosys, which would not model them either).
 //
 // With `--informal-trace-outputs` (an informal option, not slang's), a section after
 // the line `; informal-trace-outputs` names the combinational nets: every net
@@ -272,6 +274,20 @@ struct Lowerer {
     std::unordered_map<const ValueSymbol*, const ProceduralBlockSymbol*> combDriver;
     std::unordered_map<const ValueSymbol*, const ProceduralBlockSymbol*> ffDriver;
     std::vector<const ProceduralBlockSymbol*> ffBlocks, combBlocks;
+    // Every block that drives a symbol, with the bits it may write (a mask,
+    // most significant bit first). Blocks may share a symbol only on
+    // disjoint bits (IEEE 1800-2017 9.2.2.4: fields or slices of one
+    // variable in different always_ff / always_comb blocks).
+    struct Driver {
+        const ProceduralBlockSymbol* block;
+        std::string mask;
+    };
+    std::unordered_map<const ValueSymbol*, std::vector<Driver>> ffDrivers, combDrivers;
+    // Next-state values of a register driven by several blocks, by block.
+    std::map<const ValueSymbol*, std::vector<std::pair<int, std::string>>> ffParts;
+    std::vector<const ValueSymbol*> ffPartOrder;
+    // Constant initial values from `initial` blocks.
+    std::unordered_map<const ValueSymbol*, const Expression*> initialOf;
     std::unordered_set<const ValueSymbol*> topInputs;
     std::unordered_map<const ValueSymbol*, int> values;
     std::unordered_set<const ValueSymbol*> inProgress;
@@ -478,18 +494,24 @@ struct Lowerer {
                     contAssigns[&n].push_back({nullptr, init, nullptr});
             },
             [&](auto&, const ProceduralBlockSymbol& p) {
-                if (p.procedureKind == ProceduralBlockKind::Initial ||
-                    p.procedureKind == ProceduralBlockKind::Final) {
-                    notes.push_back("ignored an initial/final block");
+                if (p.procedureKind == ProceduralBlockKind::Initial) {
+                    if (!initialValues(p.getBody()))
+                        notes.push_back("ignored (part of) an initial block: only constant "
+                                        "assignments to whole variables are used");
                     return;
                 }
+                if (p.procedureKind == ProceduralBlockKind::Final)
+                    return;
                 std::vector<const ValueSymbol*> assigned;
                 assignedIn(p.getBody(), assigned);
+                auto masks = writeMasks(p.getBody());
                 if (isClocked(p)) {
                     noteClock(p);
                     ffBlocks.push_back(&p);
                     for (auto s : assigned)
                         ffDriver[s] = &p;
+                    for (auto& [s, m] : masks)
+                        ffDrivers[s].push_back({&p, m});
                 }
                 else {
                     if (p.procedureKind == ProceduralBlockKind::AlwaysLatch)
@@ -497,8 +519,172 @@ struct Lowerer {
                     combBlocks.push_back(&p);
                     for (auto s : assigned)
                         combDriver[s] = &p;
+                    for (auto& [s, m] : masks)
+                        combDrivers[s].push_back({&p, m});
                 }
             }));
+    }
+
+    // ---- drivers
+
+    // The bits of its root symbol that lvalue `e` may write: [lo, lo + w).
+    // A select at a non-constant position counts as all of its base.
+    void lvalueRange(const Expression& e, uint32_t& lo, uint32_t& w, bool& exact) {
+        if (e.kind == ExpressionKind::NamedValue || e.kind == ExpressionKind::HierarchicalValue) {
+            lo = 0;
+            w = widthOf(*e.type);
+            exact = true;
+            return;
+        }
+        bool constant;
+        const Expression* base;
+        switch (e.kind) {
+            case ExpressionKind::MemberAccess:
+                base = &e.as<MemberAccessExpression>().value();
+                constant = true;
+                break;
+            case ExpressionKind::ElementSelect:
+                base = &e.as<ElementSelectExpression>().value();
+                constant = constInt(e.as<ElementSelectExpression>().selector()).has_value();
+                break;
+            case ExpressionKind::RangeSelect: {
+                auto& rs = e.as<RangeSelectExpression>();
+                base = &rs.value();
+                constant = constInt(rs.left()) && constInt(rs.right());
+                break;
+            }
+            default:
+                unsupported("assignment target");
+        }
+        lvalueRange(*base, lo, w, exact);
+        if (!exact)
+            return;
+        if (!constant) {
+            exact = false;
+            return;
+        }
+        uint32_t off = offsetOf(e, nullptr).first, ew = widthOf(*e.type);
+        if (off >= w) {
+            w = 0; // out of range: writes nothing
+            return;
+        }
+        lo += off;
+        w = std::min(ew, w - off);
+    }
+
+    // For every variable assigned in `body`, the bits it may write.
+    std::map<const ValueSymbol*, std::string> writeMasks(const Statement& body) {
+        std::vector<const Expression*> targets;
+        struct V : public ASTVisitor<V, VisitFlags::Statements | VisitFlags::Expressions> {
+            std::vector<const Expression*>& out;
+            explicit V(std::vector<const Expression*>& o) : out(o) {}
+            void add(const Expression& e) {
+                if (e.kind == ExpressionKind::Concatenation) {
+                    for (auto op : e.as<ConcatenationExpression>().operands())
+                        add(*op);
+                    return;
+                }
+                out.push_back(&e);
+            }
+            void handle(const AssignmentExpression& a) {
+                add(a.left());
+                visitDefault(a);
+            }
+        } v(targets);
+        body.visit(v);
+        std::map<const ValueSymbol*, std::string> masks;
+        for (auto t : targets) {
+            auto root = rootSymbol(*t);
+            if (!root)
+                continue; // reported when the assignment is lowered
+            uint32_t rw = widthOf(root->getType()), lo = 0, w = 0;
+            bool exact = false;
+            lvalueRange(*t, lo, w, exact);
+            auto& m = masks.try_emplace(root, std::string(rw, '0')).first->second;
+            for (uint32_t i = lo; i < lo + w && i < rw; i++)
+                m[rw - 1 - i] = '1';
+        }
+        return masks;
+    }
+
+    // Blocks that share a variable must write disjoint bits of it, and be
+    // all clocked or all combinational.
+    void checkDrivers() {
+        auto disjoint = [&](const ValueSymbol* s, const std::vector<Driver>& ds) {
+            std::string seen(ds[0].mask.size(), '0');
+            for (auto& d : ds)
+                for (size_t i = 0; i < seen.size(); i++) {
+                    if (d.mask[i] == '1' && seen[i] == '1')
+                        rejected("bits of " + pathOf(*s) +
+                                 " are assigned in more than one always block");
+                    if (d.mask[i] == '1')
+                        seen[i] = '1';
+                }
+        };
+        for (auto& [s, ds] : ffDrivers) {
+            if (combDrivers.count(s))
+                rejected(pathOf(*s) + " is assigned in both clocked and combinational blocks");
+            disjoint(s, ds);
+        }
+        for (auto& [s, ds] : combDrivers)
+            disjoint(s, ds);
+    }
+
+    bool drivenBy(const std::unordered_map<const ValueSymbol*, std::vector<Driver>>& m,
+                  const ValueSymbol* s, const ProceduralBlockSymbol& p) const {
+        auto it = m.find(s);
+        if (it == m.end())
+            return false;
+        for (auto& d : it->second)
+            if (d.block == &p)
+                return true;
+        return false;
+    }
+
+    // True while one of the combinational blocks that drive `s` is being lowered.
+    bool combBusyFor(const ValueSymbol* s) const {
+        auto it = combDrivers.find(s);
+        if (it == combDrivers.end())
+            return false;
+        for (auto& d : it->second)
+            if (combBusy.count(d.block))
+                return true;
+        return false;
+    }
+
+    // Record the constant `x = value;` statements of an initial block.
+    // False when the block has anything else (which is ignored).
+    bool initialValues(const Statement& s) {
+        switch (s.kind) {
+            case StatementKind::Empty:
+                return true;
+            case StatementKind::List: {
+                bool all = true;
+                for (auto st : s.as<StatementList>().list)
+                    all &= initialValues(*st);
+                return all;
+            }
+            case StatementKind::Block:
+                return initialValues(s.as<BlockStatement>().body);
+            case StatementKind::ExpressionStatement: {
+                auto& e = s.as<ExpressionStatement>().expr;
+                if (e.kind != ExpressionKind::Assignment)
+                    return false;
+                auto& a = e.as<AssignmentExpression>();
+                if (a.isCompound() || a.timingControl ||
+                    (a.left().kind != ExpressionKind::NamedValue &&
+                     a.left().kind != ExpressionKind::HierarchicalValue))
+                    return false;
+                EvalContext ctx(*astCtx);
+                auto cv = a.right().eval(ctx);
+                if (!cv || !cv.isInteger() || cv.integer().hasUnknown())
+                    return false;
+                initialOf[&a.left().as<ValueExpressionBase>().symbol] = &a.right();
+                return true;
+            }
+            default:
+                return false;
+        }
     }
 
     // ---- values of symbols
@@ -524,11 +710,14 @@ struct Lowerer {
         if (ffDriver.count(&sym)) {
             int n = b.state(w, pathOf(sym));
             values[&sym] = n;
-            if (sym.kind == SymbolKind::Variable) {
-                if (auto init = sym.as<VariableSymbol>().getInitializer()) {
-                    int v = expr(*init, nullptr);
-                    b.init(n, b.resize(v, w, init->type->isSigned()));
-                }
+            const Expression* init = nullptr;
+            if (sym.kind == SymbolKind::Variable)
+                init = sym.as<VariableSymbol>().getInitializer();
+            if (auto it = initialOf.find(&sym); it != initialOf.end())
+                init = it->second;
+            if (init) {
+                int v = expr(*init, nullptr);
+                b.init(n, b.resize(v, w, init->type->isSigned()));
             }
             return n;
         }
@@ -536,14 +725,39 @@ struct Lowerer {
             unsupported("combinational loop through " + pathOf(sym));
         inProgress.insert(&sym);
         int n;
-        auto cb = combDriver.find(&sym);
-        if (cb != combDriver.end()) {
-            if (combBusy.count(cb->second))
+        auto cb = combDrivers.find(&sym);
+        if (cb != combDrivers.end()) {
+            if (combBusyFor(&sym))
                 unsupported("read of " + pathOf(sym) +
                             " before it is assigned in its combinational block (latch or loop)");
-            auto& env = lowerComb(*cb->second);
-            auto e = env.find(&sym);
-            n = e != env.end() ? e->second : b.input(w, pathOf(sym) + "_undriven");
+            // Each block gives the bits it writes; the rest are undriven.
+            std::string all(w, '0');
+            n = -1;
+            for (auto& d : cb->second) {
+                auto& env = lowerComb(*d.block);
+                auto e = env.find(&sym);
+                if (e == env.end())
+                    continue;
+                if (cb->second.size() == 1) {
+                    n = e->second;
+                    all = std::string(w, '1');
+                    break;
+                }
+                int part = b.bin("and", e->second, b.konst(d.mask));
+                n = n < 0 ? part : b.bin("or", n, part);
+                for (uint32_t i = 0; i < w; i++)
+                    if (d.mask[i] == '1')
+                        all[i] = '1';
+            }
+            if (n < 0)
+                n = b.input(w, pathOf(sym) + "_undriven");
+            else if (all.find('0') != std::string::npos) {
+                std::string rest(w, '0');
+                for (uint32_t i = 0; i < w; i++)
+                    rest[i] = all[i] == '1' ? '0' : '1';
+                int free = b.input(w, pathOf(sym) + "_undriven");
+                n = b.bin("or", n, b.bin("and", free, b.konst(rest)));
+            }
         }
         else {
             auto ca = contAssigns.find(&sym);
@@ -559,6 +773,11 @@ struct Lowerer {
                 env[&sym] = whole ? b.zero(w) : b.input(w, pathOf(sym) + "_undriven");
                 for (auto& a : ca->second) {
                     int rhs = a.rhsSym ? value(*a.rhsSym) : expr(*a.rhs, nullptr);
+                    // An output port wider than the net it drives extends
+                    // by the port's own signedness.
+                    if (a.lhs && a.rhsSym)
+                        rhs = b.resize(rhs, widthOf(*a.lhs->type),
+                                       a.rhsSym->getType().isSigned());
                     if (a.lhs)
                         assign(*a.lhs, rhs, env, sym);
                     else
@@ -621,18 +840,50 @@ struct Lowerer {
         Env blocking, nba;
         int path = b.ones(1);
         stmt(bodyOf(p), blocking, nba, path, true);
-        for (auto& [sym, v] : nba) {
-            if (!ffDriver.count(sym) || ffDriver[sym] != &p)
-                continue;
+        auto next = [&](const ValueSymbol* sym, int v) {
+            if (!drivenBy(ffDrivers, sym, p))
+                return;
             int s = value(*sym);
-            pendingNext.push_back({s, b.resize(v, b.width(s), false)});
-        }
+            v = b.resize(v, b.width(s), false);
+            auto& ds = ffDrivers[sym];
+            if (ds.size() == 1) {
+                pendingNext.push_back({s, v});
+                return;
+            }
+            // One of several blocks: its bits only (composeFF joins them).
+            for (auto& d : ds)
+                if (d.block == &p) {
+                    if (!ffParts.count(sym))
+                        ffPartOrder.push_back(sym);
+                    ffParts[sym].push_back({v, d.mask});
+                }
+        };
+        for (auto& [sym, v] : nba)
+            next(sym, v);
         // Blocking assignments to variables that persist (rare in always_ff).
-        for (auto& [sym, v] : blocking) {
-            if (nba.count(sym) || !ffDriver.count(sym) || ffDriver[sym] != &p)
-                continue;
+        for (auto& [sym, v] : blocking)
+            if (!nba.count(sym))
+                next(sym, v);
+    }
+
+    // Next-state values of registers driven by several blocks: each block's
+    // bits from its own result, the bits no block writes hold.
+    void composeFF() {
+        for (auto sym : ffPartOrder) {
             int s = value(*sym);
-            pendingNext.push_back({s, b.resize(v, b.width(s), false)});
+            uint32_t w = b.width(s);
+            std::string rest(w, '1');
+            int n = -1;
+            for (auto& [v, mask] : ffParts[sym]) {
+                int part = b.bin("and", v, b.konst(mask));
+                n = n < 0 ? part : b.bin("or", n, part);
+                for (uint32_t i = 0; i < w; i++)
+                    if (mask[i] == '1')
+                        rest[i] = '0';
+            }
+            if (rest.find('1') != std::string::npos)
+                n = b.bin("or", n, b.bin("and", s, b.konst(rest)));
+            pendingNext.push_back({s, n});
         }
     }
 
@@ -887,8 +1138,7 @@ struct Lowerer {
             }
             // A register keeps its value; bits of a combinational variable
             // that its own block has not written yet start free.
-            auto cb = combDriver.find(root);
-            if (cb != combDriver.end() && combBusy.count(cb->second))
+            if (combBusyFor(root))
                 return b.input(widthOf(root->getType()), pathOf(*root) + "_undriven");
             return value(*root);
         }
@@ -1035,7 +1285,13 @@ struct Lowerer {
             case ExpressionKind::Conversion: {
                 auto& op = e.as<ConversionExpression>().operand();
                 int v = expr(op, env);
-                return b.resize(v, widthOf(*e.type), op.type->isSigned());
+                // IEEE 1800-2017 11.8.2: an operand widened to its context's
+                // type extends by the context's signedness; any other
+                // conversion (assignment, cast) by the operand's own (11.8.3).
+                bool propagated = e.as<ConversionExpression>().conversionKind ==
+                                  ConversionKind::Propagated;
+                return b.resize(v, widthOf(*e.type),
+                                propagated ? e.type->isSigned() : op.type->isSigned());
             }
             case ExpressionKind::UnaryOp:
                 return unary(e.as<UnaryExpression>(), env);
@@ -1259,8 +1515,10 @@ struct Lowerer {
     std::string run(const RootSymbol& root) {
         collect(root);
         checkOneClock();
+        checkDrivers();
         for (auto p : ffBlocks)
             lowerFF(*p);
+        composeFF();
         for (auto p : combBlocks)
             lowerComb(*p);
         int bads = 0;

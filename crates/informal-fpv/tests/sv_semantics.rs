@@ -72,6 +72,11 @@ fn run(c: &Case) -> Result<(), String> {
     if let Some(want) = &c.error {
         return Err(format!("no error, want `{want}`"));
     }
+    // The Yosys fallback is not what this suite is about.
+    let frontend = sh.session.borrow().frontend.clone();
+    if frontend != "slang" {
+        return Err(format!("lowered by {frontend}, not slang"));
+    }
     let got = compat::summary(&sh.session.borrow());
     for (name, want) in &c.expect {
         let status = got.iter().find(|(n, _)| n == name).map(|(_, s)| *s);

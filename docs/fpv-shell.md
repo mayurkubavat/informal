@@ -25,12 +25,18 @@ directory (`informal_work/` by default).
    SystemVerilog errors come back with file, line and column, the top
    module comes from slang, and from then on every property is checked
    against the names the top module declares, so a typo is an error rather
-   than an implicit net that makes the check vacuous. It then runs Yosys
-   once, which builds the model.
+   than an implicit net that makes the check vacuous. The `reset`
+   expression and `clock` names are checked the same way. It then runs
+   Yosys once, to report what Yosys cannot read before the prove.
 3. The models are built by slang's AST lowering (`crates/informal-slang/cpp/lower.cpp`)
    when informal has slang, else by Yosys. `INFORMAL_FRONTEND=yosys` forces Yosys,
    and a design using something the lowering does not handle yet (memories,
-   loops, functions, interfaces) falls back to Yosys with a note. Both give
+   loops, functions, interfaces, latches) falls back to Yosys with a note.
+   Nothing else falls back: a SystemVerilog error in the harness, and a
+   construct neither front end models (`$isunknown`, blocks on different
+   clocks or edges, the same bits assigned in two always blocks), make
+   the property an error. A wrong guess there would be a wrong verdict.
+   `tests/sv` holds small designs with known answers for this. Both give
    the same verdicts on `tests/fpv`; counterexample depths from the slang
    path are one cycle shorter, since Yosys registers clocked assertions.
    `informal lower design.sv -D NAME` prints the slang Btor2 for a design whose
@@ -86,7 +92,7 @@ passes on a different setup without saying so.
 | --- | --- | --- |
 | `clear -all` | (new session) | Forget design and properties |
 | `analyze -sv12 [-f F] [+define+X] [+incdir+D] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources; VHDL is an error for now |
-| `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with Yosys; top guessed when omitted |
+| `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with slang (and Yosys); top guessed when omitted |
 | `clock clk` | `create_clock clk -period N` | Primary clock (posedge). `-both_edges`, `-factor` are errors |
 | `reset -expression {!rst_n}` | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
 | — | `sim_run -stable`, `sim_save_reset` | Accepted (reset is applied by the model) |
@@ -118,7 +124,12 @@ still builds and falls back to a regex guess of the top module.
 
 - With the slang front end, properties can name signals in sub-instances
   (`u_wp.p`); with Yosys, only signals in the top module. No `bind` yet.
-- One clock; every register steps on each model step.
-- `-bbox_m` is recorded but not applied.
-- No counterexample waveforms yet (they come with UI v1).
-- Tasks (`task -create`) are not modelled; everything runs in one task.
+- One clock and one edge; every register steps on each model step. A
+  design with blocks on two clocks or both edges is an error.
+- Values are two-state: X and Z read as 0, `$isunknown` is an error, an
+  out-of-range read is a free value.
+- `initial` blocks: constant assignments to whole registers give their
+  starting values; anything else in them is ignored with a note.
+- `-bbox_m` is recorded but not applied (the full design is proved).
+- Tasks (`task -create`) are not modelled; everything runs in one task, so
+  `assume -task T` is an error (it would constrain every property).
