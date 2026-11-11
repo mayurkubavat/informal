@@ -29,6 +29,7 @@ export function TraceView({
   addRequest,
   onAddResult,
   actions,
+  clock,
 }: {
   /** The centre tab strip; the trace's own controls follow it. */
   tabs: React.ReactNode;
@@ -42,9 +43,16 @@ export function TraceView({
   onAddResult?: (path: string, result: "added" | "shown" | "missing") => void;
   /** Extra buttons at the end of the trace bar. */
   actions?: React.ReactNode;
+  /** The session's clock: its active edges are the cycles (a `clk` / `clock` signal otherwise). */
+  clock?: { signal: string; edge?: string } | null;
 }) {
   const vcd = useMemo(() => (text ? parseVcd(text) : null), [text]);
-  const cycles = useMemo(() => (vcd ? cycleTimes(vcd) : []), [vcd]);
+  const clockSignal = clock?.signal;
+  const clockEdge = clock?.edge;
+  const cycles = useMemo(
+    () => (vcd ? cycleTimes(vcd, clockSignal ? { signal: clockSignal, edge: clockEdge } : null) : []),
+    [vcd, clockSignal, clockEdge],
+  );
   const n = cycles.length;
   const depth = prop.status.depth ?? n - 1;
   const cover = prop.status.status === "covered";

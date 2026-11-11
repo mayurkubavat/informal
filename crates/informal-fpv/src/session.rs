@@ -340,7 +340,6 @@ impl Session {
         } else if self.design.top.is_none() {
             self.design.top = Some(guess_top(&self.design.files)?);
         }
-        // A plain elaboration, to report syntax errors now rather than at prove.
         std::fs::create_dir_all(&self.workdir)?;
         let tree = self.workdir.join("design.hierarchy.json");
         if self.design.hierarchy.is_empty() {
@@ -348,11 +347,15 @@ impl Session {
         } else {
             std::fs::write(&tree, serde_json::to_string_pretty(&self.design.hierarchy)?)?;
         }
-        self.run_yosys(
-            &self.design.files.clone(),
-            &[],
-            &self.workdir.join("design.btor2"),
-        )?;
+        // slang has already reported any errors; Yosys is only run here
+        // when it is the front end (it runs at prove if a property needs it).
+        if self.slang.is_none() || std::env::var("INFORMAL_FRONTEND").is_ok_and(|v| v == "yosys") {
+            self.run_yosys(
+                &self.design.files.clone(),
+                &[],
+                &self.workdir.join("design.btor2"),
+            )?;
+        }
         self.elaborated = true;
         Ok(())
     }
@@ -531,10 +534,22 @@ impl Session {
             .cloned()
             .collect();
         if picked.is_empty() {
-            // A filter naming engines that are not installed falls back to all.
+            // set_engines rejects unknown names, so this is a filter whose
+            // engines cannot read Btor2: say so rather than switch quietly.
+            if !self.engine_filter.is_empty() {
+                self.log(&format!(
+                    "none of the selected engines ({}) reads Btor2; using all engines",
+                    self.engine_filter.join(", ")
+                ));
+            }
             return self.engines.clone();
         }
         picked
+    }
+
+    /// Names of the engines this session can run.
+    pub fn engine_names(&self) -> Vec<String> {
+        self.engines.iter().map(|e| e.name().to_string()).collect()
     }
 
     /// Prove the selected assertions and covers (all enabled ones when
@@ -546,8 +561,6 @@ impl Session {
     /// (slang, Yosys) are not interrupted; a Stop during them takes effect
     /// at the first engine run.
     pub fn prove(&mut self, which: &[usize]) -> anyhow::Result<Vec<usize>> {
-        // A Stop pressed while nothing ran must not cancel this prove.
-        self.stop.store(false, Ordering::SeqCst);
         if !self.elaborated {
             self.elaborate(None)?;
         }
@@ -818,6 +831,7 @@ impl Session {
             .map(|w| w.engine.clone())
             .unwrap_or_default();
         let ms = o.wall_ms;
+        let winner = engine.clone();
         let status = match (portfolio::verdict(&o), kind) {
             (Verdict::Safe, Kind::Cover) => Status::Unreachable { engine, ms },
             (Verdict::Safe, _) => Status::Proven { engine, ms },
@@ -827,16 +841,31 @@ impl Session {
         };
         let mut status = status;
         let mut trace = None;
+        let mut withdrawn = None;
         if let Status::Cex { depth, .. } | Status::Covered { depth, .. } = &mut status {
             if !self.stop.load(Ordering::SeqCst) {
                 let witness = o.winner.as_ref().and_then(|w| w.witness.as_deref());
-                if let Some((path, d)) = self.write_trace(i, model, witness, *depth) {
-                    // IC3 and external engines often report no depth; the
-                    // replayed trace has one.
-                    depth.get_or_insert(d as u32);
-                    trace = Some(path);
+                match self.write_trace(i, model, witness, *depth) {
+                    Ok((path, d)) => {
+                        // IC3 and external engines often report no depth; the
+                        // replayed trace has one.
+                        depth.get_or_insert(d as u32);
+                        trace = Some(path);
+                    }
+                    Err(reason) => withdrawn = reason,
                 }
             }
+        }
+        // A counterexample nothing here can reproduce is not reported: the
+        // replay is the only check an UNSAFE verdict gets.
+        if let Some(why) = withdrawn {
+            self.log(&format!(
+                "{}: {winner} reported a counterexample that does not replay ({why}); verdict withdrawn",
+                self.props[i].name
+            ));
+            status = Status::Undetermined {
+                reason: format!("counterexample did not replay ({winner})"),
+            };
         }
         // The profiler's winner row gets the same depth when it had none.
         let mut runs = o.profile;
@@ -866,15 +895,17 @@ impl Session {
     /// whose counterexample informal converts: rIC3 `--cex`, ABC `write_cex`) or,
     /// when the winner gave none or it does not replay, from a BMC re-run to
     /// the reported depth that only serves to produce one. Returns the path
-    /// and the trace's depth. Failures are logged and give no trace; the
-    /// verdict stands either way.
+    /// and the trace's depth. `Err(Some(why))` when no counterexample could
+    /// be replayed on the model (the caller withdraws the verdict);
+    /// `Err(None)` when one was but its file could not be written (logged;
+    /// the verdict stands).
     fn write_trace(
         &self,
         i: usize,
         model: &Path,
         witness: Option<&str>,
         depth: Option<u32>,
-    ) -> Option<(String, usize)> {
+    ) -> Result<(String, usize), Option<String>> {
         let name = &self.props[i].name;
         let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
         // Replay on the copy with named combinational nets when there is one.
@@ -904,30 +935,24 @@ impl Session {
                 }
                 let w = match self.trace_bmc(model, depth) {
                     Ok(w) => w,
-                    Err(e) => {
-                        self.log(&format!("{name}: no trace: {e:#}"));
-                        return None;
-                    }
+                    Err(e) => return Err(Some(format!("{e:#}"))),
                 };
                 match trace::vcd_from_witness(replay, &w, name, clock) {
                     Ok(v) => (v, w.depth),
-                    Err(e) => {
-                        self.log(&format!("{name}: no trace: {e:#}"));
-                        return None;
-                    }
+                    Err(e) => return Err(Some(format!("{e:#}"))),
                 }
             }
         };
         let path = self.workdir.join(trace::file_name(name));
         if let Err(e) = std::fs::write(&path, vcd) {
             self.log(&format!("{name}: writing {}: {e}", path.display()));
-            return None;
+            return Err(None);
         }
         let shown = std::env::current_dir()
             .ok()
             .and_then(|d| path.strip_prefix(d).ok().map(Path::to_path_buf))
             .unwrap_or(path);
-        Some((shown.display().to_string(), trace_depth))
+        Ok((shown.display().to_string(), trace_depth))
     }
 
     /// A witness from informal-bmc on `model`, searching up to `depth` (64

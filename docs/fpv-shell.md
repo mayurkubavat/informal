@@ -27,7 +27,8 @@ directory (`informal_work/` by default).
    against the names the top module declares, so a typo is an error rather
    than an implicit net that makes the check vacuous. The `reset`
    expression and `clock` names are checked the same way. It then runs
-   Yosys once, to report what Yosys cannot read before the prove.
+   Yosys once only when Yosys is the front end (no slang, or
+   `INFORMAL_FRONTEND=yosys`).
 3. The models are built by slang's AST lowering (`crates/informal-slang/cpp/lower.cpp`)
    when informal has slang, else by Yosys. `INFORMAL_FRONTEND=yosys` forces Yosys,
    and a design using something the lowering does not handle yet (memories,

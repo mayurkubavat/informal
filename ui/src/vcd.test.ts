@@ -67,6 +67,14 @@ $enddefinitions $end
     expect(v.valuesAt("top.u.data", 3)).toBe("0000001x");
   });
 
+  it("takes cycles from the session's clock, whatever its name and edge", () => {
+    const v = parseVcd("$scope module top $end $var wire 1 ! aclk $end $var wire 4 \" d[3:0] $end $upscope $end $enddefinitions $end #0 1! #5 0! #10 1! #15 0! #20 1!");
+    expect(v.signals.map((s) => s.name)).toEqual(["aclk", "d"]);
+    expect(cycleTimes(v)).toEqual([0, 5, 10, 15, 20]); // no clk / clock: every change
+    expect(cycleTimes(v, { signal: "aclk", edge: "posedge" })).toEqual([0, 10, 20]);
+    expect(cycleTimes(v, { signal: "top.aclk", edge: "negedge" })).toEqual([5, 15]);
+  });
+
   it("without a clock, every change time is a cycle", () => {
     const v = parseVcd("$var wire 1 ! a $end $enddefinitions $end #0 0! #4 1! #9 0!");
     expect(cycleTimes(v)).toEqual([0, 4, 9]);

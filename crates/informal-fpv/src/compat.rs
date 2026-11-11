@@ -422,10 +422,25 @@ const COMMON: &[(&str, Body)] = &[
             .map_err(|e| e.to_string())
     }),
     ("set_engines", |s, a| {
-        s.engine_filter = a[1..]
+        let names: Vec<String> = a[1..]
             .iter()
             .flat_map(|w| w.split_whitespace().map(String::from))
             .collect();
+        // A name that matches nothing would otherwise run every engine.
+        let known = s.engine_names();
+        let unknown: Vec<&str> = names
+            .iter()
+            .filter(|n| !known.contains(n))
+            .map(String::as_str)
+            .collect();
+        if !unknown.is_empty() {
+            return Err(format!(
+                "set_engines: unknown engine(s) {}; available: {}",
+                unknown.join(", "),
+                known.join(", ")
+            ));
+        }
+        s.engine_filter = names;
         Ok(().into())
     }),
 ];
@@ -608,11 +623,16 @@ const JG: &[(&str, Body)] = &[
         let mut names = Vec::new();
         for m in a[1..].iter().flat_map(|w| w.split_whitespace()) {
             let mapped: &[&str] = match m {
-                "Ht" | "Hp" | "Hps" | "Hts" | "Mp" | "AM" | "AD" | "M" | "L" | "R" => {
-                    &["ric3-ic3", "abc-pdr"]
+                "Ht" | "Hp" | "Hps" | "Hts" | "Mp" | "AM" | "AD" | "M" | "L" | "R" => &[
+                    "informal-kind-ic3",
+                    "informal-ic3-mt",
+                    "ric3-ic3",
+                    "abc-pdr",
+                ],
+                "B" | "Bm" | "K" | "C" | "C2" | "I" | "Tri" | "Q3" | "U" => {
+                    &["informal-bmc", "informal-wbmc", "ric3-bmc"]
                 }
-                "B" | "Bm" | "K" | "C" | "C2" | "I" | "Tri" | "Q3" | "U" => &["ric3-bmc"],
-                "N" | "D" | "G" | "G2" => &["ric3"],
+                "N" | "D" | "G" | "G2" => &["informal-kind", "ric3"],
                 _ => {
                     note(&format!("set_engine_mode: no informal engine for `{m}`"));
                     &[]
@@ -621,6 +641,12 @@ const JG: &[(&str, Body)] = &[
             names.extend(mapped.iter().map(|n| n.to_string()));
         }
         names.dedup();
+        // Vendor engine letters are a hint: keep the ones this build has.
+        let known = s.engine_names();
+        names.retain(|n| known.contains(n));
+        if names.is_empty() {
+            note("set_engine_mode: none of the matching engines is available; using all engines");
+        }
         s.engine_filter = names;
         Ok(().into())
     }),
@@ -1032,9 +1058,14 @@ mod tests {
         assert!(e.message.contains("unsupported option -frobnicate"));
         // Engine-tuning options are accepted.
         sh.eval("set_engine_mode {Ht B N}").unwrap();
-        assert_eq!(
-            sh.session.borrow().engine_filter,
-            ["ric3-ic3", "abc-pdr", "ric3-bmc", "ric3"]
+        // (kept only for engines this session has: none here)
+        assert!(sh.session.borrow().engine_filter.is_empty());
+        // A name that matches no engine is an error, not "run them all".
+        let e = sh.eval("informal::set_engines no-such-engine").unwrap_err();
+        assert!(
+            e.message.contains("unknown engine(s) no-such-engine"),
+            "{}",
+            e.message
         );
     }
 

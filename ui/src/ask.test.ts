@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askLines, llmLabel, llmTip, prefill, splitAnswer } from "./ask";
+import { askLines, llmLabel, llmTip, prefill, splitAnswer, tclWord } from "./ask";
 
 describe("splitAnswer", () => {
   it("takes the first tcl block as the command", () => {
@@ -27,6 +27,9 @@ describe("prefill", () => {
     expect(prefill("prove -property a_never9")).toBe("prove -property a_never9");
     expect(prefill("# first the limit\nset_prove_time_limit 1m\n\nprove -all\n")).toBe("set_prove_time_limit 1m; prove -all");
   });
+  it("joins the lines of a braced expression with a space", () => {
+    expect(prefill("assert -name a {\n  req |->\n  ##1 gnt\n}\nprove -all")).toBe("assert -name a { req |-> ##1 gnt }; prove -all");
+  });
 });
 
 describe("askLines", () => {
@@ -46,5 +49,13 @@ describe("status bar label and tooltip", () => {
     expect(llmLabel(off)).toBe("LLM: offline");
     expect(llmTip(off)).toContain("Connection refused");
     expect(llmLabel(null)).toBe("LLM: …");
+  });
+});
+
+describe("tclWord", () => {
+  it("braces a name Tcl would otherwise evaluate", () => {
+    expect(tclWord("a_never9")).toBe("a_never9");
+    expect(tclWord("u_fifo.a_full")).toBe("u_fifo.a_full");
+    expect(tclWord("gen[0].p")).toBe("{gen[0].p}");
   });
 });

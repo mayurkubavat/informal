@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
-import { llmLabel, llmTip, prefill, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
+import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   bound, clock, designScopes, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
   type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
@@ -323,7 +323,8 @@ export default function App() {
 
   const current = allProps.find((p) => p.name === selected) ?? null;
   const proveCmd = flavor === "jg" ? "prove -all" : "check_fv";
-  const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${n}` : `check_fv -property {${n}}`);
+  // Braces keep Tcl from reading `gen[0].p` as a command substitution.
+  const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${tclWord(n)}` : `check_fv -property {${n}}`);
   // The source view follows the selected property's own file (its script
   // line, or RTL for SVA in the design); the top file otherwise.
   const srcPath = sourceFile(current, topFile);
@@ -788,6 +789,7 @@ export default function App() {
               error={trace?.error}
               addRequest={addReq}
               onAddResult={onAddResult}
+              clock={session?.clocks[0] ?? null}
               actions={
                 // The title sits on a wrapper too: a disabled button shows none.
                 <span className="surfer-wrap" title={surferTip(tracePath)}>

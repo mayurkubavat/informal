@@ -66,7 +66,9 @@ export function parseVcd(text: string): Vcd {
         break;
       case "$var": {
         // $var <type> <width> <id> <name> [<range>] $end
-        const [, width, id, name] = until();
+        // The range may be glued to the name (`data[7:0]`) or a word of its own.
+        const [, width, id, raw] = until();
+        const name = (raw ?? "").replace(/\[-?\d+:-?\d+\]$/, "");
         const n = Number(width) || 1;
         signals.push({ name, path: [...scope, name].filter(Boolean).join("."), width: n, id });
         if (!widths.has(id)) {
@@ -156,14 +158,21 @@ export function formatValue(bits: string | null, radix: Radix): string {
 }
 
 /**
- * Cycle start times. With a 1-bit `clk` (any scope) these are its rising
- * edges; without one, every change time is a cycle.
+ * Cycle start times: the active edges of the clock. `clock` is the session's
+ * clock (a name or hierarchical path; `negedge` for a falling-edge clock);
+ * without it, or when the trace has no such signal, a 1-bit `clk` / `clock`
+ * in any scope. With no clock at all, every change time is a cycle.
  */
-export function cycleTimes(vcd: Vcd): number[] {
-  const clk = vcd.signals.find((s) => s.width === 1 && /^(clk|clock)$/i.test(s.name));
+export function cycleTimes(vcd: Vcd, clock?: { signal: string; edge?: string } | null): number[] {
+  const bit = vcd.signals.filter((s) => s.width === 1);
+  const leaf = clock?.signal.split(".").pop();
+  const clk =
+    (clock && (bit.find((s) => s.path === clock.signal) ?? bit.find((s) => s.name === leaf))) ||
+    bit.find((s) => /^(clk|clock)$/i.test(s.name));
   if (clk) {
-    const rise = vcd.changes(clk).filter((c, i, a) => c.v === "1" && (i === 0 || a[i - 1].v !== "1")).map((c) => c.t);
-    if (rise.length) return rise;
+    const active = clock?.edge === "negedge" && clk.name === leaf ? "0" : "1";
+    const edges = vcd.changes(clk).filter((c, i, a) => c.v === active && (i === 0 || a[i - 1].v !== active)).map((c) => c.t);
+    if (edges.length) return edges;
   }
   return vcd.times;
 }

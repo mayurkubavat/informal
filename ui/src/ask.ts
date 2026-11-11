@@ -63,14 +63,31 @@ export function splitAnswer(text: string): { explanation: string; command: strin
   }
 }
 
-// The prompt holds one line: a multi-line suggestion becomes one Tcl line
-// joined with "; " (comment lines dropped).
+// A property or signal name as one Tcl word: braced unless it is plain
+// (a `[`, `$` or space would otherwise be read by Tcl).
+export function tclWord(name: string): string {
+  return /^[\w.:]+$/.test(name) ? name : `{${name}}`;
+}
+
+// The prompt holds one line: a multi-line suggestion becomes one Tcl line,
+// its commands joined with "; " (comment lines dropped). Lines inside an
+// open brace belong to one word (a multi-line SVA expression) and are
+// joined with a space.
 export function prefill(command: string): string {
-  return command
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#"))
-    .join("; ");
+  let out = "";
+  let depth = 0;
+  for (const raw of command.split("\n")) {
+    const l = raw.trim();
+    if (!l || (depth === 0 && l.startsWith("#"))) continue;
+    if (out) out += depth > 0 ? " " : "; ";
+    out += l;
+    for (let i = 0; i < l.length; i++) {
+      if (l[i] === "\\") i++;
+      else if (l[i] === "{") depth++;
+      else if (l[i] === "}") depth = Math.max(0, depth - 1);
+    }
+  }
+  return out;
 }
 
 // How the console shows an answer while it streams: every line prefixed

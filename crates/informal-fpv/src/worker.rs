@@ -61,6 +61,12 @@ impl Worker {
                 session.stop = shared;
                 let shell = Shell::new(session, flavor);
                 for (req, back) in rx {
+                    // A Stop pressed while nothing ran must not cancel this
+                    // command; one pressed from here on (during elaboration
+                    // too) stops its prove.
+                    if matches!(req, Request::Eval(_) | Request::Source(_)) {
+                        shell.session.borrow().stop.store(false, Ordering::SeqCst);
+                    }
                     let (ok, result) = match req {
                         Request::Eval(s) => split(shell.eval(&s)),
                         Request::Source(p) => split(shell.source(&p)),
@@ -86,7 +92,7 @@ impl Worker {
     /// Ask a running prove to stop, from any thread, without queueing
     /// behind it. The prove's own `call` then returns with the session,
     /// unfinished properties undetermined ("stopped"). Harmless when idle:
-    /// the next prove clears the flag before it starts.
+    /// the next command clears the flag before it starts.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }
