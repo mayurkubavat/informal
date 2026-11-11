@@ -169,6 +169,37 @@ Also new since H2's first measurement: with the solver hot-loop fixes
 (dab2f70) N=4 now solves 4 of the gap set, up from 3
 (ILA_Piccolo_BEQ, 293 s).
 
+### H2c. Both schedules in the 4-worker IC3 (prediction, 2026-11-11)
+
+*Claim.* N=4 and `grow` solve different models (union 5 of 23 on the gap
+set), and `informal-ic3-mt` takes the first worker to finish. With N=4 in
+worker 0 and `grow` in worker 2 (`INFORMAL_IC3MT_GROW`), ic3-mt should get
+closer to the union.
+
+*Prediction.* Gap set at 300 s: at least 1 more model than the baseline
+ic3-mt in the same session. sample60 at 30 s over 3 runs each: the mean
+within 1 model of the baseline (no loss beyond noise). 0 wrong.
+
+*Result: no gain; not adopted.* Quiet machine, `informal-ic3-mt`, 3 models
+at a time:
+
+| Set | Baseline | `grow` in worker 2 |
+|-----|----------|--------------------|
+| sample60 at 30 s, 3 runs | 24, 23, 23 | 22, 23, 24 |
+| gap set (23) at 300 s, 1 run | 6 solved | 5 solved |
+
+0 wrong in every run. The sample is the same within noise, as predicted.
+The gap-set prediction (at least 1 more) missed: the variant gained
+cv32e40x-p363 (48 s) and lost JALR and cv32e40x-p584 (298 s in the
+baseline, so on the edge). One run each can't separate that from noise,
+and there is no sign of a gain, so the switch was removed again.
+
+What the run did show: the baseline `informal-ic3-mt` now solves 6 of the
+23 gap models at 300 s (ILA_Piccolo_BEQ 23 s, BGEU 31 s, JALR 54 s,
+veer-p28 39 s, cv32e40x-p033 254 s, p584 298 s). None of these were solved
+by our portfolio in the 197-model run on eef6f82. The changes since then
+are H1/H4, the solver hot-loop fixes and UNSAFE certification.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
