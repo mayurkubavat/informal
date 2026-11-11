@@ -1,4 +1,5 @@
-node_modules/
+# No trailing slash: a symlinked node_modules is ignored too.
+node_modules
 dist/
 src-tauri/target/
 src-tauri/gen/
