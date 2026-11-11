@@ -245,6 +245,11 @@ mod ffi {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Lowered {
     pub ok: bool,
+    /// When not `ok`: true if the only error is a construct the lowering
+    /// does not handle yet (the Yosys path may), false for compile errors
+    /// and constructs no front end here models (reject the design).
+    #[serde(default)]
+    pub fallback: bool,
     pub errors: Vec<String>,
     #[serde(default)]
     pub notes: Vec<String>,

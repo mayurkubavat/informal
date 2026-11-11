@@ -530,6 +530,10 @@ const JG: &[(&str, Body)] = &[
                 edge: "posedge",
             });
         }
+        if let Err(e) = s.check_reset_and_clocks() {
+            s.clocks.truncate(s.clocks.len() - a.pos.len());
+            return Err(e);
+        }
         if s.clocks.len() > 1 {
             note("clock: more than one clock; every register steps on each model step");
         }
@@ -541,6 +545,7 @@ const JG: &[(&str, Body)] = &[
             &[("-expression", 1), ("-none", 0)],
             &[("-non_resettable_regs", 1), ("-analyze_only", 0)],
         )?;
+        let old = s.reset.clone();
         s.reset = if a.flag("-none") {
             None
         } else if let Some(e) = a.val("-expression") {
@@ -550,6 +555,10 @@ const JG: &[(&str, Body)] = &[
         } else {
             return Ok(s.reset.clone().unwrap_or_default().into());
         };
+        if let Err(e) = s.check_reset_and_clocks() {
+            s.reset = old;
+            return Err(e);
+        }
         Ok(().into())
     }),
     ("assert", |s, a| jg_prop(s, a, Kind::Assert)),
@@ -661,13 +670,9 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
             ("-remove", 0),
             ("-env", 0),
             ("-bound", 1),
-        ],
-        &[
-            ("-severity", 1),
-            ("-tag", 1),
-            ("-from_property", 1),
             ("-task", 1),
         ],
+        &[("-severity", 1), ("-tag", 1), ("-from_property", 1)],
     )?;
     if a.flag("-disable") || a.flag("-enable") {
         return set_enabled(s, &a.pos, a.flag("-enable"));
@@ -699,6 +704,21 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     } else {
         kind
     };
+    // Tasks are not modelled: every property is in one task. That is
+    // harmless for a target, but an assumption scoped to another task would
+    // constrain every property here.
+    if let Some(t) = a.val("-task").filter(|t| *t != "<embedded>") {
+        if kind == Kind::Assume {
+            return Err(format!(
+                "{}: -task {t}: tasks are not modelled, and applying this assumption to every property could prove them vacuously",
+                a.cmd
+            ));
+        }
+        note(&format!(
+            "{}: -task {t} ignored (tasks are not modelled)",
+            a.cmd
+        ));
+    }
     add_props(s, kind, a.val("-name").map(String::from), &expr)
 }
 

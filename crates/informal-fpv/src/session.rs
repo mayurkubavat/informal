@@ -282,6 +282,21 @@ impl Session {
         Ok(())
     }
 
+    /// With slang's view of the design, reject a reset expression or clock
+    /// that names a signal the top module does not declare. (Unchecked, a
+    /// typo would leave the real reset free and give a wrong verdict.)
+    pub(crate) fn check_reset_and_clocks(&self) -> Result<(), String> {
+        if let Some(r) = &self.reset {
+            self.check_names(r)
+                .map_err(|e| format!("reset {{{r}}}: {e}"))?;
+        }
+        for c in &self.clocks {
+            self.check_names(&c.signal)
+                .map_err(|e| format!("clock {}: {e}", c.signal))?;
+        }
+        Ok(())
+    }
+
     /// Names matching a Tcl-style glob (`*`, `?`).
     pub fn matching(&self, pattern: &str) -> Vec<usize> {
         self.props
@@ -536,6 +551,7 @@ impl Session {
         if !self.elaborated {
             self.elaborate(None)?;
         }
+        self.check_reset_and_clocks().map_err(|e| anyhow!(e))?;
         let targets: Vec<usize> = if which.is_empty() {
             (0..self.props.len())
                 .filter(|&i| self.props[i].enabled && self.props[i].kind != Kind::Assume)
@@ -565,8 +581,16 @@ impl Session {
             }
         };
         let engines = self.engines();
-        let lowered = self.lower_with_slang(&files, &targets);
-        self.frontend = if lowered.is_some() { "slang" } else { "yosys" }.into();
+        let (lowered, rejected) = match self.lower_with_slang(&files, &targets) {
+            Ok(l) => (l, None),
+            Err(e) => (None, Some(e)),
+        };
+        self.frontend = if lowered.is_some() || rejected.is_some() {
+            "slang"
+        } else {
+            "yosys"
+        }
+        .into();
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
         // between property events.
@@ -589,6 +613,7 @@ impl Session {
                 &targets,
                 &files,
                 lowered.as_deref(),
+                rejected.as_deref(),
                 &engines,
                 tracker.as_ref(),
             );
@@ -617,6 +642,7 @@ impl Session {
         targets: &[usize],
         files: &[PathBuf],
         lowered: Option<&str>,
+        rejected: Option<&str>,
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
     ) -> usize {
@@ -638,8 +664,9 @@ impl Session {
                 continue;
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
-            let built = match lowered {
-                Some(btor) => {
+            let built = match (lowered, rejected) {
+                (_, Some(e)) => Err(anyhow!("{e}")),
+                (Some(btor), None) => {
                     let keep = format!("informal_p{i}");
                     let (model, section) = informal_slang::split_trace(btor);
                     let mut r = std::fs::write(&out, only_bad(model, &keep));
@@ -650,7 +677,7 @@ impl Session {
                     }
                     r.map_err(anyhow::Error::from)
                 }
-                None => {
+                (None, None) => {
                     let _ = std::fs::remove_file(trace_model(&out));
                     self.run_yosys(files, &[format!("INFORMAL_P{i}")], &out)
                 }
@@ -687,12 +714,19 @@ impl Session {
         targets.len()
     }
 
-    /// One Btor2 model with every target's assertion (by slang), or `None`
-    /// to use the Yosys path: slang not linked, `INFORMAL_FRONTEND=yosys`, or a
-    /// construct the lowering does not handle yet.
-    fn lower_with_slang(&self, files: &[PathBuf], targets: &[usize]) -> Option<String> {
+    /// One Btor2 model with every target's assertion (by slang), or
+    /// `Ok(None)` to use the Yosys path: slang not linked,
+    /// `INFORMAL_FRONTEND=yosys`, or a construct the lowering does not handle
+    /// yet. `Err` rejects the design: a compile error (an unknown name in a
+    /// property or the reset, say) or a construct no front end here models.
+    /// Falling back to Yosys there would turn a typo into a free signal.
+    fn lower_with_slang(
+        &self,
+        files: &[PathBuf],
+        targets: &[usize],
+    ) -> Result<Option<String>, String> {
         if std::env::var("INFORMAL_FRONTEND").is_ok_and(|v| v == "yosys") {
-            return None;
+            return Ok(None);
         }
         let mut defines = self.design.defines.clone();
         defines.extend(targets.iter().map(|i| (format!("INFORMAL_P{i}"), None)));
@@ -707,15 +741,20 @@ impl Session {
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
         };
-        let l = informal_slang::lower(&req)?;
+        let Some(l) = informal_slang::lower(&req) else {
+            return Ok(None);
+        };
         if l.ok {
-            return Some(l.btor2);
+            return Ok(Some(l.btor2));
         }
-        eprintln!(
-            "informal: slang lowering fell back to Yosys: {}",
+        if !l.fallback {
+            return Err(format!("slang: {}", l.errors.join("; ")));
+        }
+        self.log(&format!(
+            "slang lowering fell back to Yosys: {}",
             l.errors.join("; ")
-        );
-        None
+        ));
+        Ok(None)
     }
 
     /// Run the portfolio on one property's model. With a tracker, engine

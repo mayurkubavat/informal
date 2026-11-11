@@ -74,6 +74,17 @@ struct Unsupported : std::runtime_error {
     throw Unsupported(what);
 }
 
+// A construct the lowering recognises but cannot model faithfully, and that
+// the Yosys path would get wrong too: the design is rejected, with no
+// fallback (a guess here would be a wrong verdict, not just a missing one).
+struct Rejected : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+[[noreturn]] void rejected(const std::string& what) {
+    throw Rejected(what);
+}
+
 // ---------------------------------------------------------------- Btor2
 
 struct Btor {
@@ -272,7 +283,15 @@ struct Lowerer {
     std::map<std::pair<int, int>, int> pastRegs;
     std::vector<std::pair<int, int>> pendingNext; // state, next value
     int pastCount = 0;
+    int oobCount = 0;
     bool traceOutputs = false;
+    // The clocking event of each clocked block (its first edge event).
+    struct ClockUse {
+        const Symbol* sym;
+        EdgeKind edge;
+        const ProceduralBlockSymbol* block;
+    };
+    std::vector<ClockUse> clockUses;
 
     // ---- classification
 
@@ -304,6 +323,64 @@ struct Lowerer {
         if (body.kind == StatementKind::Timed)
             return body.as<TimedStatement>().stmt;
         return body;
+    }
+
+    // Record the clocking event of a clocked block: the first edge event
+    // (`@(posedge clk or negedge rst_n)` is clocked by clk; the other events
+    // are asynchronous resets, which act synchronously in this model).
+    void noteClock(const ProceduralBlockSymbol& p) {
+        auto& body = p.getBody();
+        if (body.kind != StatementKind::Timed)
+            return;
+        auto& t = body.as<TimedStatement>().timing;
+        const SignalEventControl* first = nullptr;
+        if (t.kind == TimingControlKind::SignalEvent)
+            first = &t.as<SignalEventControl>();
+        else if (t.kind == TimingControlKind::EventList) {
+            for (auto ev : t.as<EventListControl>().events)
+                if (ev->kind == TimingControlKind::SignalEvent &&
+                    ev->as<SignalEventControl>().edge != EdgeKind::None) {
+                    first = &ev->as<SignalEventControl>();
+                    break;
+                }
+        }
+        if (!first)
+            return;
+        if (first->edge == EdgeKind::BothEdges)
+            rejected("a block clocked on both edges (" + pathOf(p) + ")");
+        clockUses.push_back({first->expr.getSymbolReference(), first->edge, &p});
+    }
+
+    // Every register steps on each model step, which is only right when
+    // all clocked blocks share one clock and one edge.
+    void checkOneClock() {
+        if (clockUses.empty())
+            return;
+        auto& c0 = clockUses[0];
+        for (auto& c : clockUses) {
+            if (c.edge != c0.edge)
+                rejected("blocks clocked on different edges (" + pathOf(*c0.block) + ", " +
+                         pathOf(*c.block) + "); every register steps on each model step");
+            if (!c.sym || !c0.sym)
+                rejected("a clock that is not a plain signal (" + pathOf(*c.block) + ")");
+        }
+        bool distinct = false;
+        for (auto& c : clockUses)
+            distinct |= c.sym != c0.sym;
+        if (!distinct)
+            return;
+        // Different symbols can still be one net (a clock port of a child
+        // instance): compare their lowered values.
+        auto val = [&](const Symbol* s) -> int {
+            if (!s->isValue())
+                rejected("a clock that is not a signal (" + std::string(s->name) + ")");
+            return value(s->as<ValueSymbol>());
+        };
+        int v0 = val(c0.sym);
+        for (auto& c : clockUses)
+            if (c.sym != c0.sym && val(c.sym) != v0)
+                rejected("more than one clock (" + pathOf(*c0.block) + ", " + pathOf(*c.block) +
+                         "); every register steps on each model step");
     }
 
     static const ValueSymbol* rootSymbol(const Expression& e) {
@@ -409,13 +486,14 @@ struct Lowerer {
                 std::vector<const ValueSymbol*> assigned;
                 assignedIn(p.getBody(), assigned);
                 if (isClocked(p)) {
+                    noteClock(p);
                     ffBlocks.push_back(&p);
                     for (auto s : assigned)
                         ffDriver[s] = &p;
                 }
                 else {
                     if (p.procedureKind == ProceduralBlockKind::AlwaysLatch)
-                        notes.push_back("always_latch lowered as combinational logic");
+                        unsupported("always_latch");
                     combBlocks.push_back(&p);
                     for (auto s : assigned)
                         combDriver[s] = &p;
@@ -835,9 +913,12 @@ struct Lowerer {
                 r = b.concat(b.slice(old, ow - 1, off + vw), r);
             return r;
         }
-        int sh = b.resize(dynOff, ow, false);
-        int mask = b.bin("sll", b.resize(b.ones(vw), ow, false), sh);
-        int val = b.bin("sll", b.resize(v, ow, false), sh);
+        // Shift at the wider of the two widths, so an offset past the top
+        // shifts everything out: a write out of range changes nothing.
+        uint32_t ww = std::max(ow, b.width(dynOff));
+        int sh = b.resize(dynOff, ww, false);
+        int mask = b.slice(b.bin("sll", b.resize(b.ones(vw), ww, false), sh), ow - 1, 0);
+        int val = b.slice(b.bin("sll", b.resize(v, ww, false), sh), ow - 1, 0);
         return b.bin("or", b.bin("and", old, b.un("not", mask)), val);
     }
 
@@ -1009,8 +1090,14 @@ struct Lowerer {
                         unsupported("constant select out of range");
                     return b.slice(v, off + w - 1, off);
                 }
-                int sh = b.bin("srl", v, b.resize(dyn, b.width(v), false));
-                return b.slice(sh, w - 1, 0);
+                // An index out of range reads X: a free value here.
+                uint32_t vw = b.width(v), ww = std::max(vw, b.width(dyn));
+                if (w > vw)
+                    unsupported("select wider than its base");
+                int d = b.resize(dyn, ww, false);
+                int sh = b.slice(b.bin("srl", b.resize(v, ww, false), d), w - 1, 0);
+                int inRange = b.cmp("ulte", d, b.num(ww, vw - w));
+                return b.ite(inRange, sh, b.input(w, "informal_oob_" + std::to_string(oobCount++)));
             }
             case ExpressionKind::Call:
                 return call(e.as<CallExpression>(), env);
@@ -1062,7 +1149,7 @@ struct Lowerer {
             return b.cmp("ulte", cnt, b.num(cw, 1));
         }
         if (name == "$isunknown")
-            return b.zero(1);
+            rejected("$isunknown (X and Z are not modelled: values are two-state)");
         unsupported("system function " + std::string(name));
     }
 
@@ -1092,6 +1179,29 @@ struct Lowerer {
         return b.ite(high, b.ones(aw), b.slice(s, aw - 1, 0));
     }
 
+    // `l ==? r`: X, Z and ? bits of a constant right operand match anything.
+    int wildcardEq(const BinaryExpression& be, int l, int r) {
+        uint32_t w = std::max(b.width(l), b.width(r));
+        l = b.resize(l, w, be.left().type->isSigned());
+        EvalContext ctx(*astCtx);
+        auto cv = be.right().eval(ctx);
+        if (!cv || !cv.isInteger())
+            unsupported("wildcard equality with a non-constant right operand");
+        auto v = cv.integer();
+        if (v.getBitWidth() < w)
+            v = v.extend(w, be.right().type->isSigned());
+        std::string care(w, '1'), val(w, '0');
+        for (uint32_t i = 0; i < w; i++) {
+            auto bit = v[(int32_t)i];
+            if (bit.isUnknown())
+                care[w - 1 - i] = '0';
+            else if (bit.value == 1)
+                val[w - 1 - i] = '1';
+        }
+        (void)r;
+        return b.cmp("eq", b.bin("and", l, b.konst(care)), b.konst(val));
+    }
+
     int binary(const BinaryExpression& be, const Env* env) {
         int l = expr(be.left(), env);
         int r = expr(be.right(), env);
@@ -1112,11 +1222,11 @@ struct Lowerer {
             case BinaryOperator::BinaryXor: same(); return b.bin("xor", l, r);
             case BinaryOperator::BinaryXnor: same(); return b.bin("xnor", l, r);
             case BinaryOperator::Equality:
-            case BinaryOperator::CaseEquality:
-            case BinaryOperator::WildcardEquality: same(); return b.cmp("eq", l, r);
+            case BinaryOperator::CaseEquality: same(); return b.cmp("eq", l, r);
+            case BinaryOperator::WildcardEquality: return wildcardEq(be, l, r);
             case BinaryOperator::Inequality:
-            case BinaryOperator::CaseInequality:
-            case BinaryOperator::WildcardInequality: same(); return b.cmp("neq", l, r);
+            case BinaryOperator::CaseInequality: same(); return b.cmp("neq", l, r);
+            case BinaryOperator::WildcardInequality: return b.lnot(wildcardEq(be, l, r));
             case BinaryOperator::GreaterThanEqual: same(); return b.cmp(sgn ? "sgte" : "ugte", l, r);
             case BinaryOperator::GreaterThan: same(); return b.cmp(sgn ? "sgt" : "ugt", l, r);
             case BinaryOperator::LessThanEqual: same(); return b.cmp(sgn ? "slte" : "ulte", l, r);
@@ -1148,6 +1258,7 @@ struct Lowerer {
 
     std::string run(const RootSymbol& root) {
         collect(root);
+        checkOneClock();
         for (auto p : ffBlocks)
             lowerFF(*p);
         for (auto p : combBlocks)
@@ -1197,8 +1308,9 @@ struct Lowerer {
             try {
                 n = value(*s);
             }
-            catch (const Unsupported&) {
-                // Left half-lowered; nothing after this reads that state.
+            catch (const std::runtime_error&) {
+                // Unsupported or rejected, and not read by any assertion:
+                // left half-lowered; nothing after this reads that state.
                 inProgress.clear();
                 combBusy.clear();
                 continue;
@@ -1259,6 +1371,8 @@ char* informal_slang_lower(const char* args) {
     std::vector<std::string> errors;
     std::string btor;
     std::vector<std::string> notes;
+    // True when every error is a construct the Yosys path may handle.
+    bool fallback = false;
     try {
         Driver driver;
         driver.addStandardArgs();
@@ -1297,12 +1411,18 @@ char* informal_slang_lower(const char* args) {
     }
     catch (const Unsupported& e) {
         errors.push_back(std::string("not supported yet: ") + e.what());
+        fallback = errors.size() == 1;
+    }
+    catch (const Rejected& e) {
+        errors.push_back(std::string("not modelled: ") + e.what());
     }
     catch (const std::exception& e) {
         errors.push_back(std::string("slang: ") + e.what());
     }
     out += "\"ok\":";
     out += errors.empty() ? "true" : "false";
+    out += ",\"fallback\":";
+    out += fallback ? "true" : "false";
     out += ",\"errors\":[";
     for (size_t i = 0; i < errors.size(); i++) {
         if (i)
