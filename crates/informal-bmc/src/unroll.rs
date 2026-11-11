@@ -146,8 +146,14 @@ impl<'g> Unroll<'g> {
         self.sat.reserve(1);
         let x = self.fresh();
         let mut c = vec![-x];
-        c.extend(bads);
+        c.extend(&bads);
         self.sat.add_clause(&c);
+        // Both directions: callers assert -x for "no bad output in frame
+        // k" (BMC after UNSAT, the k-induction step), which a one-sided
+        // definition would not enforce.
+        for b in bads {
+            self.sat.add_clause(&[x, -b]);
+        }
         x
     }
 

@@ -1043,6 +1043,24 @@ mod tests {
         s
     }
 
+    /// H1 (feedback report): asserting "no bad output" on a model with
+    /// several bad outputs must rule out each of them.
+    #[test]
+    fn no_bad_rules_out_every_bad_output() {
+        let mut g = Aig::new();
+        let (a, b) = (g.input(), g.input());
+        g.bads.push(a);
+        g.bads.push(b);
+        let mut u = Unroll::new(&g, informal_sat::best(), false);
+        u.add_frame();
+        let x = u.bad(0);
+        u.sat.add_clause(&[-x]);
+        for l in [a, b] {
+            let y = u.lit(0, l);
+            assert_eq!(u.sat.solve(&[y]), Answer::Unsat);
+        }
+    }
+
     #[test]
     fn bmc_finds_shortest_counterexample() {
         let bmc = Bmc {

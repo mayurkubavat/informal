@@ -182,6 +182,9 @@ pub struct Ic3<'g> {
     bad: TLit,
     /// latch variable -> template literal of its next-state function
     next_of: std::collections::HashMap<u32, TLit>,
+    /// Initial value by AIG variable: Some(constant) for latches with a
+    /// constant init, None otherwise (and for non-latches).
+    init_of: Vec<Option<bool>>,
     make_sat: Box<dyn Fn() -> Box<dyn Sat>>,
     /// DFS marks for domain computation (epoch-stamped).
     mark: Vec<u32>,
@@ -246,6 +249,17 @@ impl<'g> Ic3<'g> {
             lift,
             bad,
             next_of: g.latches.iter().map(|l| (var(l.lit), t(l.next))).collect(),
+            init_of: {
+                let mut v = vec![None; g.nodes.len()];
+                for l in &g.latches {
+                    v[var(l.lit) as usize] = match l.init {
+                        Init::Zero => Some(false),
+                        Init::One => Some(true),
+                        _ => None,
+                    };
+                }
+                v
+            },
             make_sat,
             mark: vec![0; nvars + 2],
             epoch: 0,
@@ -278,6 +292,9 @@ impl<'g> Ic3<'g> {
             let mut c = vec![-ic3.bad];
             c.extend(g.bads.iter().map(|&b| t(b)));
             ic3.lift.sat.add_clause(&c);
+            for &b in &g.bads {
+                ic3.lift.sat.add_clause(&[ic3.bad, -t(b)]);
+            }
         }
         ic3.push_frame(); // F_0
         for l in &g.latches {
@@ -302,6 +319,11 @@ impl<'g> Ic3<'g> {
             let mut c = vec![-self.bad];
             c.extend(self.g.bads.iter().map(|&b| t(b)));
             s.sat.add_clause(&c);
+            // And back, so that -bad means no bad output (H1 in the
+            // feedback report: the one-sided OR only cost completeness).
+            for &b in &self.g.bads {
+                s.sat.add_clause(&[self.bad, -t(b)]);
+            }
         }
         s
     }
@@ -360,13 +382,11 @@ impl<'g> Ic3<'g> {
     }
 
     fn intersects_init(&self, cube: &[Lit]) -> bool {
-        cube.iter().all(|&l| {
-            let latch = self.g.latches.iter().find(|x| x.lit == (l & !1)).unwrap();
-            match latch.init {
-                Init::Zero => is_neg(l),
-                Init::One => !is_neg(l),
-                _ => true,
-            }
+        // O(cube) with the init table; it was a scan of every latch per
+        // literal (H4 in the feedback report).
+        cube.iter().all(|&l| match self.init_of[var(l) as usize] {
+            Some(v) => v != is_neg(l),
+            None => true,
         })
     }
 
