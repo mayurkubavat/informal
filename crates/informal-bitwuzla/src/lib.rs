@@ -34,7 +34,7 @@ mod ffi {
             i0: u64,
             i1: u64,
         ) -> c_int;
-        pub fn informal_bw_assert(p: *mut c_void, t: c_int);
+        pub fn informal_bw_assert(p: *mut c_void, t: c_int) -> c_int;
         pub fn informal_bw_check(p: *mut c_void, n: c_int, assume: *const c_int) -> c_int;
     }
 }
@@ -74,22 +74,22 @@ impl Bz {
         }
         Ok(r)
     }
-    fn bv_sort(&self, w: u32) -> i32 {
-        unsafe { ffi::informal_bw_bv_sort(self.p, w as u64) }
+    fn bv_sort(&self, w: u32) -> anyhow::Result<i32> {
+        self.check(unsafe { ffi::informal_bw_bv_sort(self.p, w as u64) })
     }
-    fn array_sort(&self, i: i32, e: i32) -> i32 {
-        unsafe { ffi::informal_bw_array_sort(self.p, i, e) }
+    fn array_sort(&self, i: i32, e: i32) -> anyhow::Result<i32> {
+        self.check(unsafe { ffi::informal_bw_array_sort(self.p, i, e) })
     }
-    fn konst(&self, sort: i32, name: &str) -> T {
+    fn konst(&self, sort: i32, name: &str) -> anyhow::Result<T> {
         let n = CString::new(name.replace('\0', "")).unwrap();
-        unsafe { ffi::informal_bw_const(self.p, sort, n.as_ptr()) }
+        self.check(unsafe { ffi::informal_bw_const(self.p, sort, n.as_ptr()) })
     }
     fn value(&self, sort: i32, bits: &str) -> anyhow::Result<T> {
         let b = CString::new(bits).unwrap();
         self.check(unsafe { ffi::informal_bw_value(self.p, sort, b.as_ptr()) })
     }
-    fn const_array(&self, sort: i32, v: T) -> T {
-        unsafe { ffi::informal_bw_const_array(self.p, sort, v) }
+    fn const_array(&self, sort: i32, v: T) -> anyhow::Result<T> {
+        self.check(unsafe { ffi::informal_bw_const_array(self.p, sort, v) })
     }
     fn op(&self, op: &str, args: &[T], i0: u64, i1: u64) -> anyhow::Result<T> {
         let o = CString::new(op).unwrap();
@@ -104,8 +104,9 @@ impl Bz {
             )
         })
     }
-    fn assert(&self, t: T) {
-        unsafe { ffi::informal_bw_assert(self.p, t) }
+    fn assert(&self, t: T) -> anyhow::Result<()> {
+        self.check(unsafe { ffi::informal_bw_assert(self.p, t) })
+            .map(|_| ())
     }
     fn solve(&self, assume: &[T]) -> anyhow::Result<i32> {
         self.check(unsafe { ffi::informal_bw_check(self.p, assume.len() as i32, assume.as_ptr()) })
@@ -263,8 +264,8 @@ fn unroll(
     for e in m.entries() {
         if let informal_ir::Entry::Sort { id, sort, .. } = e {
             let s = match *sort {
-                Sort::BitVec(w) => bz.bv_sort(w),
-                Sort::Array { index, element } => bz.array_sort(sorts[&index], sorts[&element]),
+                Sort::BitVec(w) => bz.bv_sort(w)?,
+                Sort::Array { index, element } => bz.array_sort(sorts[&index], sorts[&element])?,
             };
             sorts.insert(*id, s);
         }
@@ -307,7 +308,7 @@ fn unroll(
             let t = match l.op {
                 Op::State => {
                     if k == 0 {
-                        bz.konst(sort.unwrap(), l.symbol.as_deref().unwrap_or(""))
+                        bz.konst(sort.unwrap(), l.symbol.as_deref().unwrap_or(""))?
                     } else {
                         match next.get(&l.id) {
                             Some(&n) => {
@@ -318,11 +319,11 @@ fn unroll(
                                     p
                                 }
                             }
-                            None => bz.konst(sort.unwrap(), ""),
+                            None => bz.konst(sort.unwrap(), "")?,
                         }
                     }
                 }
-                Op::Input => bz.konst(sort.unwrap(), l.symbol.as_deref().unwrap_or("")),
+                Op::Input => bz.konst(sort.unwrap(), l.symbol.as_deref().unwrap_or(""))?,
                 Op::Zero | Op::One | Op::Ones | Op::Const | Op::Constd | Op::Consth => {
                     bz.value(sort.unwrap(), &const_bits(l, width.unwrap())?)?
                 }
@@ -364,14 +365,14 @@ fn unroll(
                         .and_then(|l| l.sort)
                         .is_some_and(|vs| m.width(vs).is_some())
                 {
-                    val = bz.const_array(sorts[&ss], val);
+                    val = bz.const_array(sorts[&ss], val)?;
                 }
                 let eq = bz.op("eq", &[st, val], 0, 0)?;
-                bz.assert(eq);
+                bz.assert(eq)?;
             }
         }
         for l in m.with_op(Op::Constraint) {
-            bz.assert(get(&f, l.args[0])?);
+            bz.assert(get(&f, l.args[0])?)?;
         }
         let bads: Vec<T> = m
             .with_op(Op::Bad)
@@ -389,7 +390,7 @@ fn unroll(
             }
             20 => {
                 let nb = bz.op("not", &[any], 0, 0)?;
-                bz.assert(nb);
+                bz.assert(nb)?;
             }
             _ => {
                 return Ok(Verdict::Unknown {

@@ -189,6 +189,18 @@ fn scopes_available() -> bool {
 struct Staged {
     path: String,
     _file: std::fs::File,
+    /// A real temporary file to remove when the run ends (not Linux).
+    #[cfg(not(target_os = "linux"))]
+    unlink: bool,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if self.unlink {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// Simplify the model and write it as binary AIGER to an anonymous
@@ -228,16 +240,17 @@ fn stage_bytes(bytes: &[u8]) -> Option<Staged> {
 
 #[cfg(not(target_os = "linux"))]
 fn stage_bytes(bytes: &[u8]) -> Option<Staged> {
-    let path = std::env::temp_dir().join(format!(
-        "informal-model-{}-{:p}.aig",
-        std::process::id(),
-        bytes
-    ));
+    // A process-wide counter, not a pointer: two staged models in a row
+    // may reuse an address. The file is removed when `Staged` drops.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("informal-model-{}-{n}.aig", std::process::id()));
     std::fs::write(&path, bytes).ok()?;
     let file = std::fs::File::open(&path).ok()?;
     Some(Staged {
         path: path.to_string_lossy().into_owned(),
         _file: file,
+        unlink: true,
     })
 }
 

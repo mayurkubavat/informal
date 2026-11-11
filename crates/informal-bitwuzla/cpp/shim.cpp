@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -44,7 +45,34 @@ struct Ctx {
             return t;
         return tm.mk_term(Kind::EQUAL, {t, one()});
     }
+    // Checked handle lookups: a bad handle from the Rust side throws
+    // (caught at the C boundary) instead of reading out of bounds.
+    const Term& term(int i) const {
+        if (i < 0 || (size_t)i >= terms.size())
+            throw std::out_of_range("bad term handle " + std::to_string(i));
+        return terms[i];
+    }
+    const Sort& sort(int i) const {
+        if (i < 0 || (size_t)i >= sorts.size())
+            throw std::out_of_range("bad sort handle " + std::to_string(i));
+        return sorts[i];
+    }
 };
+
+// Run `f` at the C boundary: a C++ exception becomes -1 with the message
+// in the context's error (no exception may cross into Rust).
+template <class F>
+int guarded(Ctx* c, F f) {
+    try {
+        return f();
+    } catch (const std::exception& e) {
+        c->error = e.what();
+        return -1;
+    } catch (...) {
+        c->error = "unknown C++ exception";
+        return -1;
+    }
+}
 
 } // namespace
 
@@ -71,35 +99,34 @@ const char* informal_bw_error(void* p) {
 
 int informal_bw_bv_sort(void* p, uint64_t w) {
     auto* c = static_cast<Ctx*>(p);
-    c->sorts.push_back(c->tm.mk_bv_sort(w));
-    return (int)c->sorts.size() - 1;
+    return guarded(c, [&] {
+        c->sorts.push_back(c->tm.mk_bv_sort(w));
+        return (int)c->sorts.size() - 1;
+    });
 }
 
 int informal_bw_array_sort(void* p, int idx, int elem) {
     auto* c = static_cast<Ctx*>(p);
-    c->sorts.push_back(c->tm.mk_array_sort(c->sorts[idx], c->sorts[elem]));
-    return (int)c->sorts.size() - 1;
+    return guarded(c, [&] {
+        c->sorts.push_back(c->tm.mk_array_sort(c->sort(idx), c->sort(elem)));
+        return (int)c->sorts.size() - 1;
+    });
 }
 
 int informal_bw_const(void* p, int sort, const char* name) {
     auto* c = static_cast<Ctx*>(p);
-    return c->add(c->tm.mk_const(c->sorts[sort], name ? name : ""));
+    return guarded(c, [&] { return c->add(c->tm.mk_const(c->sort(sort), name ? name : "")); });
 }
 
 // Bit string, most significant bit first.
 int informal_bw_value(void* p, int sort, const char* bits) {
     auto* c = static_cast<Ctx*>(p);
-    try {
-        return c->add(c->tm.mk_bv_value(c->sorts[sort], bits, 2));
-    } catch (const std::exception& e) {
-        c->error = e.what();
-        return -1;
-    }
+    return guarded(c, [&] { return c->add(c->tm.mk_bv_value(c->sort(sort), bits, 2)); });
 }
 
 int informal_bw_const_array(void* p, int sort, int value) {
     auto* c = static_cast<Ctx*>(p);
-    return c->add(c->tm.mk_const_array(c->sorts[sort], c->terms[value]));
+    return guarded(c, [&] { return c->add(c->tm.mk_const_array(c->sort(sort), c->term(value))); });
 }
 
 // A Btor2 operator applied to terms; `i0`, `i1` are its numeric parameters
@@ -108,8 +135,13 @@ int informal_bw_const_array(void* p, int sort, int value) {
 int informal_bw_op(void* p, const char* op, int n, const int* args, uint64_t i0, uint64_t i1) {
     auto* c = static_cast<Ctx*>(p);
     std::vector<Term> a;
-    for (int i = 0; i < n; i++)
-        a.push_back(c->terms[args[i]]);
+    try {
+        for (int i = 0; i < n; i++)
+            a.push_back(c->term(args[i]));
+    } catch (const std::exception& e) {
+        c->error = std::string(op) + ": " + e.what();
+        return -1;
+    }
     std::string o(op);
     auto& tm = c->tm;
     auto bin = [&](Kind k) { return tm.mk_term(k, {a[0], a[1]}); };
@@ -180,27 +212,27 @@ int informal_bw_op(void* p, const char* op, int n, const int* args, uint64_t i0,
     }
 }
 
-// Assert that a bv1 term is 1.
-void informal_bw_assert(void* p, int t) {
+// Assert that a bv1 term is 1; 0, or -1 on error.
+int informal_bw_assert(void* p, int t) {
     auto* c = static_cast<Ctx*>(p);
-    c->bz->assert_formula(c->to_bool(c->terms[t]));
+    return guarded(c, [&] {
+        c->bz->assert_formula(c->to_bool(c->term(t)));
+        return 0;
+    });
 }
 
 // 10 SAT, 20 UNSAT, 0 unknown; assumptions are bv1 terms assumed 1.
 int informal_bw_check(void* p, int n, const int* assume) {
     auto* c = static_cast<Ctx*>(p);
-    std::vector<Term> a;
-    for (int i = 0; i < n; i++)
-        a.push_back(c->to_bool(c->terms[assume[i]]));
-    try {
+    return guarded(c, [&] {
+        std::vector<Term> a;
+        for (int i = 0; i < n; i++)
+            a.push_back(c->to_bool(c->term(assume[i])));
         auto r = c->bz->check_sat(a);
         if (r == Result::SAT) return 10;
         if (r == Result::UNSAT) return 20;
         return 0;
-    } catch (const std::exception& e) {
-        c->error = e.what();
-        return -1;
-    }
+    });
 }
 
 } // extern "C"

@@ -49,7 +49,8 @@ pub trait Sat {
 pub fn best() -> Box<dyn Sat> {
     match Cadical::new() {
         Ok(c) => Box::new(c),
-        Err(_) => Box::new(Dpll::default()),
+        // Mini is our own CDCL; Dpll is only a reference for tests.
+        Err(_) => Box::new(Mini::default()),
     }
 }
 

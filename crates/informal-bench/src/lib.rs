@@ -83,7 +83,7 @@ pub struct RunRecord {
     pub model: String,
     pub model_sha256: String,
     pub format: ModelFormat,
-    /// Structural features (Btor2 models only in phase 0).
+    /// Structural features (Btor2: from the model; AIGER: its header).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<Features>,
     /// `single` for one engine alone, `portfolio` for the parallel portfolio.
@@ -148,9 +148,38 @@ pub fn describe(path: &Path) -> anyhow::Result<(String, Option<Features>)> {
             .ok()
             .and_then(|t| informal_ir::parse(t).ok())
             .map(|m| Features::of(&m)),
+        Some(ModelFormat::Aiger) => aiger_features(&bytes),
         _ => None,
     };
     Ok((sha, features))
+}
+
+/// Features of an AIGER file from its header line (`aag`/`aig M I L O A
+/// [B C J F]`): every state is one bit, and outputs count as bad when the
+/// file has no bad section (AIGER 1.0).
+fn aiger_features(bytes: &[u8]) -> Option<Features> {
+    let end = bytes.iter().position(|&b| b == b'\n')?;
+    let head = std::str::from_utf8(&bytes[..end]).ok()?;
+    let mut it = head.split_whitespace();
+    if !matches!(it.next()?, "aag" | "aig") {
+        return None;
+    }
+    let n: Vec<usize> = it.map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    let at = |i: usize| n.get(i).copied().unwrap_or(0);
+    let (inputs, latches, outputs, ands) = (at(1), at(2), at(3), at(4));
+    let bad = if at(5) > 0 { at(5) } else { outputs };
+    Some(Features {
+        nodes: inputs + latches + ands,
+        inputs,
+        states: latches,
+        state_bits: latches as u64,
+        bad,
+        constraints: at(6),
+        justice: at(7),
+        fair: at(8),
+        max_width: 1,
+        ..Default::default()
+    })
 }
 
 /// Run the benchmark and append one record per engine run to `db`.
@@ -254,7 +283,8 @@ fn run_model(
             let v = portfolio::verdict(&o);
             rec.wall_ms = o.wall_ms;
             fill_verdict(&mut rec, &v);
-            if let Some(w) = &o.winner {
+            // An engine conflict's reason stays in the detail.
+            if let (Some(w), true) = (&o.winner, o.conflicts.is_empty()) {
                 rec.detail = Some(format!("won by {}", w.engine));
             }
             records.push(rec);
@@ -455,5 +485,18 @@ mod tests {
             .iter()
             .all(|r| r.engine == "portfolio" && r.depth == Some(7)));
         assert_eq!(recs[0].detail.as_deref(), Some("won by bmc"));
+    }
+
+    #[test]
+    fn aiger_header_features() {
+        let f = aiger_features(b"aig 10 3 4 0 3 1 2\n...").unwrap();
+        assert_eq!(
+            (f.inputs, f.states, f.bad, f.constraints, f.nodes),
+            (3, 4, 1, 2, 10)
+        );
+        // AIGER 1.0: outputs are the bad states.
+        let f = aiger_features(b"aag 5 1 1 2 3\n").unwrap();
+        assert_eq!(f.bad, 2);
+        assert!(aiger_features(b"btor 1 2\n").is_none());
     }
 }

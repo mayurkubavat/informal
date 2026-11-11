@@ -58,9 +58,16 @@ one() {
     --timeout "$timeout" --jobs 1 --db "$d/runs.jsonl" >"$d/out.log" 2>&1 \
     || echo "  memout/error  $m"
   # Report the real model path, not the temp link.
-  if [ -f "$d/runs.jsonl" ]; then
+  if [ -s "$d/runs.jsonl" ]; then
     sed "s#\"model\":\"[^\"]*\"#\"model\":\"$m\"#" "$d/runs.jsonl" > "$d/fixed.jsonl"
     flock "$db" cat "$d/fixed.jsonl" >> "$db"
+  else
+    # Killed before writing anything (cgroup OOM kill, signal): still one
+    # row, so the model counts as attempted and a resume skips it.
+    printf '{"model":"%s","mode":"%s","engine":"%s","verdict":"unknown","detail":"killed","wall_ms":0,"timeout_ms":%d}\n' \
+      "$m" "$([ -n "$each" ] && echo single || echo portfolio)" \
+      "$([ -n "$each" ] && echo "$engines" || echo portfolio)" "$((timeout * 1000))" \
+      | flock "$db" tee -a "$db" >/dev/null
   fi
   grep "ms  " "$d/out.log" || true
   rm -rf "$d"

@@ -185,7 +185,14 @@ impl Blaster<'_> {
             }
             Op::Slice => {
                 let (hi, lo) = (num(0)?, num(1)?);
-                a1()[lo..=hi].to_vec()
+                let x = a1();
+                if lo > hi || hi >= x.len() {
+                    bail!(
+                        "slice [{hi}:{lo}] out of range for a {}-bit operand",
+                        x.len()
+                    );
+                }
+                x[lo..=hi].to_vec()
             }
             Op::Not => g.not_w(a1()),
             Op::Inc => {
@@ -361,5 +368,21 @@ mod tests {
         assert_eq!(val(&decimal_bits("-1", 8).unwrap()), 255);
         assert_eq!(val(&decimal_bits("300", 8).unwrap()), 300 % 256);
         assert_eq!(val(&hex_bits("ff", 12).unwrap()), 255);
+    }
+
+    #[test]
+    fn rejects_bad_slices_and_huge_references() {
+        // slice [2:5] (lo > hi) and [9:0] (past the width) are errors,
+        // not panics.
+        for line in ["4 slice 3 2 2 5", "4 slice 3 2 9 0"] {
+            let text = format!("1 sort bitvec 8\n2 input 1\n3 sort bitvec 4\n{line}\n");
+            let m = informal_ir::parse(&text);
+            if let Ok(m) = m {
+                assert!(from_btor2(&m).is_err(), "{line}");
+            }
+        }
+        // A reference past u32 must not wrap onto node 1.
+        let big = format!("1 sort bitvec 1\n2 input 1\n3 not 1 {}\n", (1u64 << 32) + 2);
+        assert!(informal_ir::parse(&big).is_err());
     }
 }

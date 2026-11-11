@@ -162,8 +162,9 @@ fn node_ref(model: &Model, tok: &str, lno: usize) -> Result<i64, ParseError> {
         line: lno,
         msg: format!("bad node reference '{tok}'"),
     })?;
-    let id = r.unsigned_abs() as u32;
-    if r == 0 || model.line(id).is_none() {
+    // A reference past u32 would wrap onto some earlier node.
+    let id = u32::try_from(r.unsigned_abs()).unwrap_or(0);
+    if r == 0 || id == 0 || model.line(id).is_none() {
         return err(lno, format!("{r} does not refer to an earlier node"));
     }
     Ok(r)
