@@ -53,6 +53,9 @@ pub struct Config {
     /// move the inductive subset to the invariant every frame assumes
     /// (hypothesis H2 in docs/ic3-research.md).
     pub houdini_every: usize,
+    /// H2b: instead, run Houdini when the lemmas in the frames have
+    /// doubled since its last run (and number at least 100).
+    pub houdini_grow: bool,
 }
 
 impl Default for Config {
@@ -75,6 +78,7 @@ impl Default for Config {
                 .ok()
                 .and_then(|x| x.parse().ok())
                 .unwrap_or(0),
+            houdini_grow: std::env::var("INFORMAL_IC3_HOUDINI").is_ok_and(|x| x == "grow"),
         }
     }
 }
@@ -173,6 +177,8 @@ pub struct Ic3<'g> {
     /// Proved invariants given up front ([`Ic3::assume_invariant`]): in
     /// every frame >= 1 and part of the final invariant.
     inf: Vec<Cube>,
+    /// Lemmas in the frames right after the last Houdini run (H2b).
+    pool_after_houdini: usize,
 
     /// Lemmas by the highest frame they are known to hold in.
     frames: Vec<Vec<Cube>>,
@@ -243,6 +249,7 @@ impl<'g> Ic3<'g> {
             single: std::env::var_os("INFORMAL_IC3_PER_FRAME").is_none(),
             acts: Vec::new(),
             inf: Vec::new(),
+            pool_after_houdini: 0,
 
             frames: Vec::new(),
             proof_level: None,
@@ -1148,8 +1155,15 @@ impl<'g> Ic3<'g> {
             if self.propagate(ctx) {
                 return Verdict::Safe;
             }
-            if self.cfg.houdini_every > 0 && self.top().is_multiple_of(self.cfg.houdini_every) {
+            let pool: usize = self.frames[1..].iter().map(Vec::len).sum();
+            let due = if self.cfg.houdini_grow {
+                pool >= 100 && pool >= 2 * self.pool_after_houdini
+            } else {
+                self.cfg.houdini_every > 0 && self.top().is_multiple_of(self.cfg.houdini_every)
+            };
+            if due {
                 self.houdini_to_inf(ctx);
+                self.pool_after_houdini = self.frames[1..].iter().map(Vec::len).sum();
             }
             if ctx.should_stop() {
                 return Verdict::Unknown {

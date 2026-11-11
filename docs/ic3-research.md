@@ -134,6 +134,41 @@ load, solved both again (JALR 161 s, p514 199 s), with its big moves late
 the lemma pool is large, so a better trigger would look at pool size, not
 failure rate. That's untested.
 
+### H2b. Trigger Houdini on lemma-pool growth (prediction, 2026-11-11)
+
+*Claim.* Houdini pays off once the lemma pool is large (H3's follow-up),
+so it should run when the lemmas in the frames have doubled since its last
+run (and number at least 100), not every 4 frames.
+
+*Prediction.* Solves JALR and cv32e40x-p514 within 300 s, like N=4.
+Single-IC3 sample60 at 30 s at least 21 (the N=4 count), with fewer
+Houdini runs on models that solve early.
+
+*Result: a tie on the hard models, slightly worse on the sample; not
+adopted.* Quiet machine, informal-ic3 (`INFORMAL_IC3_HOUDINI=grow` against
+`=4`):
+
+| Set | N=4 | grow |
+|-----|-----|------|
+| sample60 at 30 s | 21 solved | 20 solved |
+| gap set (23) at 300 s, 4 at a time | 4 solved | 4 solved |
+
+Both give 0 wrong. On the gap set they solve different models: N=4 gets
+JALR (110 s) and grow does not; grow gets ILA_Piccolo_BGEU (271 s) and N=4
+does not; both get ILA_Piccolo_BEQ, cv32e40x-p514 and veer-p28, N=4 faster
+on the last two. The prediction missed on JALR (solved alone in 214 s,
+unsolved with 4 models running at once) and on the sample (20, not 21).
+N=4 stays the default; `grow` stays as an option.
+
+The union is 5 of 23, so the two schedules are complementary. An untested
+follow-up: give `grow` to a second `informal-ic3-mt` worker. That needs
+repeated runs, since ic3-mt results vary by 3 between runs of the same
+code.
+
+Also new since H2's first measurement: with the solver hot-loop fixes
+(dab2f70) N=4 now solves 4 of the gap set, up from 3
+(ILA_Piccolo_BEQ, 293 s).
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
