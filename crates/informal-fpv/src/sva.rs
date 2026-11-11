@@ -260,6 +260,65 @@ fn sequence(s: &str, start: u32) -> Result<(Vec<Term>, u32), String> {
     Ok((terms, at))
 }
 
+/// How many cycles back `expr` reads through sampled-value functions:
+/// `$past(e, k)` reads k (default 1) cycles before what `e` reads, and
+/// `$rose`, `$fell`, `$stable` and `$changed` one. 0 without any.
+pub fn lookback(expr: &str) -> u32 {
+    const CALLS: [&str; 5] = ["$past", "$rose", "$fell", "$stable", "$changed"];
+    let b = expr.as_bytes();
+    let mut deepest = 0;
+    let mut i = 0;
+    while let Some(at) = expr[i..].find('$').map(|j| i + j) {
+        i = at + 1;
+        let Some(call) = CALLS.iter().find(|c| expr[at..].starts_with(**c)) else {
+            continue;
+        };
+        let mut open = at + call.len();
+        if b.get(open)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        {
+            continue; // a longer name, e.g. $past_gclk
+        }
+        while b.get(open).is_some_and(u8::is_ascii_whitespace) {
+            open += 1;
+        }
+        if b.get(open) != Some(&b'(') {
+            continue;
+        }
+        // The arguments, split at top-level commas.
+        let (mut depth, mut start, mut args) = (0u32, open + 1, Vec::new());
+        let mut end = expr.len();
+        for (j, c) in expr[open..].char_indices().map(|(j, c)| (open + j, c)) {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = j;
+                        break;
+                    }
+                }
+                ',' if depth == 1 => {
+                    args.push(&expr[start..j]);
+                    start = j + 1;
+                }
+                _ => {}
+            }
+        }
+        args.push(&expr[start..end.max(start)]);
+        let k = if *call == "$past" {
+            args.get(1)
+                .and_then(|a| a.trim().parse::<u32>().ok())
+                .unwrap_or(1)
+        } else {
+            1
+        };
+        // The scan goes on inside the arguments, so add theirs here.
+        deepest = deepest.max(k + lookback(args[0]));
+    }
+    deepest
+}
+
 /// `$past(e, k)`, or `e` itself for k = 0.
 pub fn past(expr: &str, k: u32) -> String {
     if k == 0 {
@@ -272,6 +331,24 @@ pub fn past(expr: &str, k: u32) -> String {
 }
 
 impl Lowered {
+    /// The first cycle at which everything the check reads is real: each
+    /// term looks back to its own cycle, and from there through any `$past`,
+    /// `$rose`, `$fell`, `$stable` or `$changed` inside it. Before that the
+    /// history registers hold no sampled value yet (as in JasperGold, the
+    /// check waits for them rather than reading an arbitrary one).
+    pub fn history(&self) -> u32 {
+        let terms = self.antecedent.iter().chain(&self.consequent);
+        let deepest = terms
+            .map(|t| self.span - t.offset + lookback(&t.expr))
+            .max()
+            .unwrap_or(0);
+        let disable = self
+            .disable
+            .as_deref()
+            .map_or(0, |d| self.span + lookback(d));
+        deepest.max(disable)
+    }
+
     fn conj(&self, terms: &[Term]) -> String {
         if terms.is_empty() {
             return "1'b1".into();
@@ -307,6 +384,20 @@ impl Lowered {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_counts_sampled_value_functions() {
+        assert_eq!(lookback("a && b"), 0);
+        assert_eq!(lookback("$rose(req)"), 1);
+        assert_eq!(lookback("x == $past(y, 3) || $stable(z)"), 3);
+        assert_eq!(lookback("$past($rose(a), 2)"), 3);
+        assert_eq!(lookback("$past(f(a, b))"), 1);
+        assert_eq!(parse("req |-> gnt").unwrap().history(), 0);
+        assert_eq!(parse("$rose(req) |-> gnt").unwrap().history(), 1);
+        // The antecedent is two cycles back at the check, and reads one more.
+        assert_eq!(parse("$rose(req) |-> ##2 gnt").unwrap().history(), 3);
+        assert_eq!(parse("req |=> $past(d, 2) == q").unwrap().history(), 2);
+    }
 
     #[test]
     fn plain_boolean() {

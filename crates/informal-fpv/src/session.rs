@@ -404,7 +404,9 @@ impl Session {
             }
             let l = sva::parse(&p.expr).map_err(|e| anyhow!("{}: {e}", p.name))?;
             let (pclk, pedge) = self.clock_for(&l)?;
-            let mut guard = format!("informal_cyc >= 16'd{}", first + l.span);
+            // After the reset cycle, and once the history it reads is real.
+            let warm = (first + l.span).max(l.history());
+            let mut guard = format!("informal_cyc >= 16'd{warm}");
             if let Some(d) = l.not_disabled() {
                 guard += &format!(" && {d}");
             }

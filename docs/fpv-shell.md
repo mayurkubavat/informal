@@ -127,6 +127,11 @@ still builds and falls back to a regex guess of the top module.
   (`u_wp.p`); with Yosys, only signals in the top module. No `bind` yet.
 - One clock and one edge; every register steps on each model step. A
   design with blocks on two clocks or both edges is an error.
+- `$past`, `$rose`, `$fell`, `$stable` and `$changed` have no history in
+  the first cycle(s). As in JasperGold, a property that uses them is first
+  checked once that history is real: with a reset the reset cycle counts,
+  so checks start right after it; without one they start a cycle (or the
+  `$past` depth) later.
 - Values are two-state: X and Z read as 0, `$isunknown` is an error, an
   out-of-range read is a free value.
 - `initial` blocks: constant assignments to whole registers give their
