@@ -112,6 +112,9 @@ pub type Cube = Vec<Lit>;
 struct Solver {
     sat: Box<dyn Sat>,
     next: i32,
+    /// An activation variable the solver handed back for reuse
+    /// ([`Sat::retire`]).
+    spare_act: Option<i32>,
 }
 
 impl Solver {
@@ -124,6 +127,25 @@ impl Solver {
         Solver {
             sat,
             next: nvars as i32 + 1,
+            spare_act: None,
+        }
+    }
+
+    /// Add `clause` for one query; returns the literal to assume.
+    fn temp_clause(&mut self, clause: &[i32]) -> i32 {
+        let act = match self.spare_act.take() {
+            Some(a) => a,
+            None => self.fresh(),
+        };
+        self.sat.add_temp_clause(clause, act);
+        act
+    }
+
+    /// End the query of [`Solver::temp_clause`] (after reading its
+    /// answer, core or model).
+    fn retire(&mut self, act: i32) {
+        if self.sat.retire(act) {
+            self.spare_act = Some(act);
         }
     }
 
@@ -597,11 +619,9 @@ impl<'g> Ic3<'g> {
         let in_cone = |x: TLit| need[x.unsigned_abs() as usize];
         let all = latches.clone();
         let latches: Cube = latches.into_iter().filter(|&l| in_cone(t(l))).collect();
-        let act = self.lift.fresh();
-        let mut clause = vec![-act];
-        clause.extend(target.iter().map(|&x| -x));
+        let mut clause: Vec<i32> = target.iter().map(|&x| -x).collect();
         clause.extend(g.constraints.iter().map(|&c| -t(c)));
-        self.lift.sat.add_clause(&clause);
+        let act = self.lift.temp_clause(&clause);
         let mut assume = vec![act];
         assume.extend(inputs.iter().copied().filter(|&x| in_cone(x)));
         assume.extend(latches.iter().map(|&l| t(l)));
@@ -620,7 +640,7 @@ impl<'g> Ic3<'g> {
             self.stats_lift_fallbacks += 1;
             all
         };
-        self.lift.sat.add_clause(&[-act]);
+        self.lift.retire(act);
         cube
     }
 
@@ -757,10 +777,8 @@ impl<'g> Ic3<'g> {
         let mut assume = self.frame_assumptions(i - 1);
         let k = if self.single { 0 } else { i - 1 };
         let s = &mut self.solvers[k];
-        let act = s.fresh();
-        let mut clause = vec![-act];
-        clause.extend(cube.iter().map(|&l| -t(l)));
-        s.sat.add_clause(&clause);
+        let clause: Vec<i32> = cube.iter().map(|&l| -t(l)).collect();
+        let act = s.temp_clause(&clause);
         assume.push(act);
         assume.extend(&primed);
         let t0 = std::time::Instant::now();
@@ -777,7 +795,7 @@ impl<'g> Ic3<'g> {
             Answer::Sat if want_pred => Err(Some(self.model(i - 1))),
             _ => Err(None),
         };
-        self.sol(i - 1).sat.add_clause(&[-act]);
+        self.sol(i - 1).retire(act);
         match out {
             Ok(core) => Ok(self.keep_out_of_init(core, cube)),
             Err(Some((latches, inputs))) => Err(Some(self.lift(latches, &inputs, &primed))),

@@ -43,6 +43,23 @@ pub trait Sat {
     /// Announce `n` more variables before using them (CaDiCaL >= 2.2
     /// wants this for incremental use).
     fn reserve(&mut self, _n: i32) {}
+    /// Add `lits` as a clause that only holds while `act` is assumed
+    /// (`lits | -act`), for one query. `act` must occur nowhere else.
+    /// At most one such clause is outstanding at a time; end it with
+    /// [`Sat::retire`] after reading the answer.
+    fn add_temp_clause(&mut self, lits: &[Lit], act: Lit) {
+        let mut c = lits.to_vec();
+        c.push(-act);
+        self.add_clause(&c);
+    }
+    /// Drop the temporary clause of `act`. True when the solver removed
+    /// every trace of it and `act` may be used again for the next
+    /// temporary clause; false when `act` is now fixed false (the caller
+    /// takes a fresh variable next time).
+    fn retire(&mut self, act: Lit) -> bool {
+        self.add_clause(&[-act]);
+        false
+    }
 }
 
 /// The best solver available in this build.
@@ -374,6 +391,106 @@ mod tests {
     #[test]
     fn mini() {
         exercise(&mut Mini::default());
+    }
+
+    fn temp_clauses(s: &mut dyn Sat, reusable: bool) {
+        s.add_clause(&[1, 2]);
+        // For one query: !a. Then b must hold.
+        let mut act = 10;
+        s.reserve(10);
+        s.add_temp_clause(&[-1], act);
+        assert_eq!(s.solve(&[act, -2]), Answer::Unsat);
+        assert!(s.failed(-2));
+        assert_eq!(s.solve(&[act]), Answer::Sat);
+        assert!(s.value(2) && !s.value(1));
+        assert_eq!(s.retire(act), reusable);
+        if !reusable {
+            act = 11;
+            s.reserve(1);
+        }
+        // Gone: a alone is fine again.
+        assert_eq!(s.solve(&[-2]), Answer::Sat);
+        assert!(s.value(1));
+        // A temporary clause that is false at level 0.
+        s.add_clause(&[1]);
+        s.add_temp_clause(&[-1], act);
+        assert_eq!(s.solve(&[act]), Answer::Unsat);
+        assert!(s.failed(act));
+        assert_eq!(s.retire(act), reusable);
+        assert_eq!(s.solve(&[]), Answer::Sat);
+    }
+
+    #[test]
+    fn temporary_clauses() {
+        temp_clauses(&mut Mini::default(), true);
+        temp_clauses(&mut Dpll::default(), false);
+        if let Ok(mut c) = Cadical::new() {
+            temp_clauses(&mut c, false);
+        }
+    }
+
+    /// Random queries with a temporary clause each, the activation
+    /// variable reused throughout: Mini agrees with a fresh DPLL that has
+    /// the clause permanently, before and after each retire.
+    #[test]
+    fn mini_temp_clauses_match_dpll() {
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        let mut rnd = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for round in 0..400 {
+            let nv = 5 + rnd(10) as i32;
+            let act = nv + 1;
+            let mut lit = |rnd: &mut dyn FnMut(u64) -> u64| {
+                let v = 1 + rnd(nv as u64) as Lit;
+                if rnd(2) == 0 {
+                    v
+                } else {
+                    -v
+                }
+            };
+            let mut base: Vec<Vec<Lit>> = Vec::new();
+            let mut m = Mini::default();
+            m.reserve(act);
+            for _ in 0..(nv as usize * 2) {
+                let c: Vec<Lit> = (0..1 + rnd(3)).map(|_| lit(&mut rnd)).collect();
+                m.add_clause(&c);
+                base.push(c);
+            }
+            for q in 0..40 {
+                let temp: Vec<Lit> = (0..1 + rnd(3)).map(|_| lit(&mut rnd)).collect();
+                let assume: Vec<Lit> = (0..rnd(4)).map(|_| lit(&mut rnd)).collect();
+                let want = |cls: &[Vec<Lit>], extra: Option<&Vec<Lit>>, a: &[Lit]| {
+                    let mut d = Dpll::default();
+                    for c in cls.iter().chain(extra) {
+                        d.add_clause(c);
+                    }
+                    d.solve(a)
+                };
+                m.add_temp_clause(&temp, act);
+                let mut a = assume.clone();
+                a.push(act);
+                assert_eq!(
+                    m.solve(&a),
+                    want(&base, Some(&temp), &assume),
+                    "round {round} query {q} with the clause"
+                );
+                assert!(m.retire(act));
+                assert_eq!(
+                    m.solve(&assume),
+                    want(&base, None, &assume),
+                    "round {round} query {q} after retire"
+                );
+                if rnd(5) == 0 {
+                    let c: Vec<Lit> = (0..1 + rnd(3)).map(|_| lit(&mut rnd)).collect();
+                    m.add_clause(&c);
+                    base.push(c);
+                }
+            }
+        }
     }
 
     /// Random small CNFs: Mini agrees with DPLL, its models satisfy the

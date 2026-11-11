@@ -73,6 +73,14 @@ pub struct Mini {
     model_val: Vec<bool>,
     model_stamp: Vec<u32>,
     model_id: u32,
+    /// The outstanding temporary clause ([`Sat::add_temp_clause`]): the
+    /// clause count when it was added (it and every clause learned from it
+    /// sit at or after this index), its activation literal, and whether
+    /// it was already false at level 0 (then it is not stored: a solve
+    /// that assumes the activation literal is UNSAT at once).
+    temp: Option<(usize, Lit, bool)>,
+    /// Clauses marked deleted since the last compaction.
+    garbage: usize,
     /// Decisions in this solver, flushed to [`DECISIONS`] once per solve
     /// (a shared atomic per decision cost a cache line bounce per
     /// decision across the IC3 workers: H7 in the feedback report).
@@ -126,6 +134,8 @@ impl Default for Mini {
             model_stamp: Vec::new(),
             model_id: 0,
             decisions: 0,
+            temp: None,
+            garbage: 0,
             conflict: Vec::new(),
             terminate: None,
             units_since_simplify: 0,
@@ -535,6 +545,7 @@ impl Mini {
             self.attach(ci as u32);
         }
         self.units_since_simplify = 0;
+        self.garbage = 0;
     }
 
     fn luby(i: u64) -> u64 {
@@ -679,7 +690,15 @@ impl Sat for Mini {
             self.ensure(var(a));
         }
         self.cancel_until(0);
-        if self.units_since_simplify > 64 {
+        if let Some((_, act, true)) = self.temp {
+            if assumptions.contains(&act) {
+                self.conflict.push(-act);
+                return Answer::Unsat;
+            }
+        }
+        // Compaction renumbers clauses: not while a temporary clause's
+        // index range is in use.
+        if self.units_since_simplify > 64 && self.temp.is_none() {
             self.simplify();
         }
         let t0 = std::time::Instant::now();
@@ -720,7 +739,14 @@ impl Sat for Mini {
                 self.model_val.resize(n, false);
                 self.model_stamp.resize(n, 0);
             }
-            for &l in &self.trail {
+            // Only what this solve assigned: level-0 values stay in
+            // `assign` and are read from there. IC3 retires one activation
+            // variable per query as a level-0 unit, so the level-0 trail
+            // grows with every query (143k entries after 325k queries on
+            // x-epic a16-p128) and copying it per SAT answer cost as much
+            // as the search itself.
+            let from = self.trail_lim.first().copied().unwrap_or(self.trail.len());
+            for &l in &self.trail[from..] {
                 let v = var(l);
                 self.model_stamp[v] = self.model_id;
                 self.model_val[v] = l > 0;
@@ -732,8 +758,100 @@ impl Sat for Mini {
 
     fn value(&self, lit: Lit) -> bool {
         let v = var(lit);
-        let val = self.model_stamp.get(v) == Some(&self.model_id) && self.model_val[v];
+        let val = if self.model_stamp.get(v) == Some(&self.model_id) {
+            self.model_val[v]
+        } else {
+            // Fixed at level 0, or unassigned (reads as false).
+            self.assign.get(v) == Some(&Val::True)
+        };
         val == (lit > 0)
+    }
+
+    fn add_temp_clause(&mut self, lits: &[Lit], act: Lit) {
+        if !self.ok {
+            return;
+        }
+        self.cancel_until(0);
+        self.ensure(var(act));
+        for &l in lits {
+            self.ensure(var(l));
+        }
+        debug_assert!(self.temp.is_none(), "one temporary clause at a time");
+        debug_assert!(self.assign[var(act)] == Val::Undef);
+        let mark = self.clauses.len();
+        self.temp = Some((mark, act, false));
+        let mut c: Vec<Lit> = Vec::with_capacity(lits.len() + 1);
+        for &l in lits {
+            match self.lit_value(l) {
+                Val::True => return, // holds anyway
+                Val::False => continue,
+                Val::Undef => {
+                    if c.contains(&-l) {
+                        return;
+                    }
+                    if !c.contains(&l) {
+                        c.push(l);
+                    }
+                }
+            }
+        }
+        if c.is_empty() {
+            // False at level 0: assuming `act` is a conflict. Not stored,
+            // so that `act` is not fixed and can be reused.
+            self.temp = Some((mark, act, true));
+            return;
+        }
+        c.push(-act);
+        self.clauses.push(Clause {
+            lits: c,
+            learnt: false,
+            activity: 0.0,
+            deleted: false,
+        });
+        self.attach(mark as u32);
+    }
+
+    /// Removes the temporary clause and every clause learned from it
+    /// (each contains `-act`: `act` is only ever an assumption), and
+    /// frees `act` if a learned unit fixed it. Nothing else can mention
+    /// `act`, so the solver is as if the query never happened, minus the
+    /// lemmas that hold without it. Before this, every IC3 query left a
+    /// dead variable, a level-0 unit and dead clauses behind, and cleaning
+    /// up was O(variables) every 64 queries: quadratic over a run.
+    fn retire(&mut self, act: Lit) -> bool {
+        self.cancel_until(0);
+        let Some((mark, a, _)) = self.temp.take() else {
+            return true;
+        };
+        debug_assert_eq!(a, act);
+        for ci in mark..self.clauses.len() {
+            let c = &mut self.clauses[ci];
+            if !c.deleted && c.lits.contains(&-act) {
+                c.deleted = true;
+                if c.learnt {
+                    self.learnts -= 1;
+                }
+                self.garbage += 1;
+            }
+        }
+        let v = var(act);
+        if self.assign[v] != Val::Undef {
+            // A learned unit `-act`: it satisfied only clauses that are
+            // gone now and propagated nothing.
+            if let Some(pos) = self.trail.iter().rposition(|&l| var(l) == v) {
+                self.trail.remove(pos);
+                if self.qhead > pos {
+                    self.qhead -= 1;
+                }
+            }
+            self.assign[v] = Val::Undef;
+            self.reason[v] = None;
+            self.heap.insert(v, &self.activity);
+        }
+        if self.garbage > 4096 && 2 * self.garbage > self.clauses.len() {
+            self.simplify();
+        }
+        true
     }
 
     fn solve_domain(&mut self, assumptions: &[Lit], domain: &[Lit]) -> Answer {
