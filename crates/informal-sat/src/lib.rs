@@ -444,7 +444,7 @@ mod tests {
         for round in 0..400 {
             let nv = 5 + rnd(10) as i32;
             let act = nv + 1;
-            let mut lit = |rnd: &mut dyn FnMut(u64) -> u64| {
+            let lit = |rnd: &mut dyn FnMut(u64) -> u64| {
                 let v = 1 + rnd(nv as u64) as Lit;
                 if rnd(2) == 0 {
                     v
