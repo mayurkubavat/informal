@@ -260,20 +260,38 @@ fn list_words(s: &str) -> Vec<String> {
     out
 }
 
+/// A registered command, with a flag that is set while it runs: a command
+/// that reaches itself again (through `eval` or `source`) must not get a
+/// second `&mut` to its closure.
+struct Slot {
+    busy: std::cell::Cell<bool>,
+    cmd: std::cell::UnsafeCell<Command>,
+}
+
 unsafe extern "C" fn trampoline(
     data: *mut c_void,
     interp: *mut ffi::Tcl_Interp,
     objc: c_int,
     objv: *const *mut ffi::Tcl_Obj,
 ) -> c_int {
-    let cmd = &mut *(data as *mut Command);
-    let prev = CURRENT.with(|c| c.replace(interp));
+    let slot = &*(data as *const Slot);
     let args: Vec<String> = (0..objc as usize)
         .map(|i| obj_string(*objv.add(i)))
         .collect();
+    if slot.busy.replace(true) {
+        ffi::Tcl_SetObjResult(
+            interp,
+            new_obj(&format!("{}: called from inside itself", args[0])),
+        );
+        return ffi::TCL_ERROR;
+    }
+    // SAFETY: `busy` was clear, so this is the only reference to the closure.
+    let cmd = &mut *slot.cmd.get();
+    let prev = CURRENT.with(|c| c.replace(interp));
     // A panic must not unwind into C.
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd(&args)))
         .unwrap_or_else(|_| Err(format!("internal error in command {}", args[0])));
+    slot.busy.set(false);
     CURRENT.with(|c| c.set(prev));
     match out {
         Ok(Value::Str(s)) => {
@@ -296,7 +314,7 @@ unsafe extern "C" fn trampoline(
 }
 
 unsafe extern "C" fn drop_command(data: *mut c_void) {
-    drop(Box::from_raw(data as *mut Command));
+    drop(Box::from_raw(data as *mut Slot));
 }
 
 impl Interp {
@@ -320,7 +338,10 @@ impl Interp {
 
     /// Define (or replace) a command.
     pub fn register(&self, name: &str, cmd: Command) {
-        let data = Box::into_raw(Box::new(cmd)) as *mut c_void;
+        let data = Box::into_raw(Box::new(Slot {
+            busy: std::cell::Cell::new(false),
+            cmd: std::cell::UnsafeCell::new(cmd),
+        })) as *mut c_void;
         let name = cstr(name);
         unsafe {
             ffi::Tcl_CreateObjCommand(
@@ -444,6 +465,32 @@ mod tests {
             .unwrap();
         assert_eq!(out, "2");
         assert_eq!(seen.borrow()[0], ["assert", "-name", "x", "a |-> b"]);
+    }
+
+    /// A command that evaluates Tcl which calls the same command gets an
+    /// error from the inner call (not a second `&mut` to its closure).
+    #[test]
+    fn a_command_that_reaches_itself_is_an_error() {
+        let i = Interp::new();
+        i.register(
+            "again",
+            Box::new(|_| {
+                let interp = CURRENT.with(|c| c.get());
+                let script = "again";
+                let code = unsafe {
+                    ffi::Tcl_EvalEx(
+                        interp,
+                        script.as_ptr() as *const c_char,
+                        script.len() as c_int,
+                        0,
+                    )
+                };
+                Ok(Value::Str(format!("inner {}", code == ffi::TCL_ERROR)))
+            }),
+        );
+        assert_eq!(i.eval("again").unwrap(), "inner true");
+        // And it is callable again afterwards.
+        assert_eq!(i.eval("again").unwrap(), "inner true");
     }
 
     #[test]

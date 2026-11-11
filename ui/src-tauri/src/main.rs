@@ -146,6 +146,16 @@ async fn shell_flavor(w: State<'_, Worker>, flavor: String) -> Result<Reply, Str
     Ok(call(&w, Request::Flavor(f)).await)
 }
 
+/// The shell's flavor (`jg` or `vcf`): a script given at start sets it
+/// before the window exists, so the UI asks.
+#[tauri::command]
+fn current_flavor() -> &'static str {
+    match FLAVOR.lock().map(|g| *g).unwrap_or(Flavor::Jg) {
+        Flavor::Jg => "jg",
+        Flavor::Vcf => "vcf",
+    }
+}
+
 /// Console Tab completion: the active flavor's command names, then
 /// property names, starting with `prefix` (informal_fpv::compat::complete).
 /// Answered here from the last reply, so it works while a prove runs.
@@ -593,6 +603,7 @@ fn main() {
             shell_eval,
             shell_source,
             shell_flavor,
+            current_flavor,
             shell_stop,
             shell_complete,
             read_text,

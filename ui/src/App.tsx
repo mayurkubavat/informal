@@ -287,6 +287,8 @@ export default function App() {
 
   useEffect(() => {
     run(() => backend.snapshot());
+    // A script given on the command line may have started the shell in VC Formal flavor.
+    backend.flavor().then(setFlavor, () => {});
   }, [run]);
   // Surfer on PATH enables the external-viewer hand-off.
   const [surfer, setSurfer] = useState(false);

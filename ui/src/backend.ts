@@ -177,6 +177,8 @@ async function invokeOr<T>(cmd: string, args: Record<string, unknown>, mocked: (
 export const backend = {
   inTauri,
   snapshot: () => call("snapshot"),
+  // The flavor the shell started in (a startup script picks it).
+  flavor: () => invokeOr<Flavor>("current_flavor", {}, () => "jg"),
   evalTcl: (script: string) => call("shell_eval", { script }),
   source: (path: string) => call("shell_source", { path }),
   setFlavor: (flavor: Flavor) => call("shell_flavor", { flavor }),
