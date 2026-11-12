@@ -400,7 +400,9 @@ impl<'g> Ic3<'g> {
         if self.single {
             let mut c = clause.to_vec();
             c.push(-self.acts[level]);
-            self.solvers[0].sat.add_clause(&c);
+            // One watch-list group per level: a query on F_i skips the
+            // lemmas of lower levels (their guards are not assumed).
+            self.solvers[0].sat.add_clause_grouped(&c, level as u32);
         } else {
             self.solvers[level].sat.add_clause(clause);
         }
@@ -777,6 +779,11 @@ impl<'g> Ic3<'g> {
         let mut assume = self.frame_assumptions(i - 1);
         let k = if self.single { 0 } else { i - 1 };
         let s = &mut self.solvers[k];
+        if self.single {
+            // F_0 is init alone (group 0); F_j is the lemmas from j up.
+            s.sat
+                .set_active_groups_from(if i == 1 { 0 } else { (i - 1) as u32 });
+        }
         let clause: Vec<i32> = cube.iter().map(|&l| -t(l)).collect();
         let act = s.temp_clause(&clause);
         assume.push(act);
@@ -1118,6 +1125,9 @@ impl<'g> Ic3<'g> {
         // Depth 0: a bad initial state.
         let mut a0 = self.frame_assumptions(0);
         a0.push(self.bad);
+        if self.single {
+            self.solvers[0].sat.set_active_groups_from(0);
+        }
         match self.sol(0).sat.solve(&a0) {
             Answer::Sat => return Verdict::Unsafe { depth: Some(0) },
             Answer::Unknown => {
@@ -1142,6 +1152,9 @@ impl<'g> Ic3<'g> {
                 let dom = self.domain(&[bad], k);
                 let mut ak = self.frame_assumptions(k);
                 ak.push(bad);
+                if self.single {
+                    self.solvers[0].sat.set_active_groups_from(k as u32);
+                }
                 match self.sol(k).sat.solve_domain(&ak, &dom) {
                     Answer::Unknown => {
                         return Verdict::Unknown {

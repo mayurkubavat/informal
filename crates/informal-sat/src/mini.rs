@@ -38,6 +38,8 @@ enum Val {
 }
 
 struct Clause {
+    /// Watch-list group ([`Sat::add_clause_grouped`]); `BASE` for none.
+    group: u32,
     lits: Vec<Lit>,
     learnt: bool,
     activity: f32,
@@ -50,7 +52,21 @@ struct Watch {
     blocker: Lit,
 }
 
+/// Learned clauses kept before the first reduction of a solve.
+const MAX_LEARNTS: f64 = 2000.0;
+
+/// The group of clauses that are always scanned.
+const BASE: u32 = u32::MAX;
+
 pub struct Mini {
+    /// Watch lists of grouped clauses, by group then literal code. Above
+    /// level 0 in a restricted solve only groups from `active_from` up
+    /// are scanned; the caller guarantees the others cannot matter
+    /// (IC3: lemmas of lower frames, whose activation literal is not
+    /// assumed). With every frame's lemmas in one list, each assignment
+    /// of a popular latch walked the watchers of all frames' lemmas.
+    gw: Vec<Vec<Vec<Watch>>>,
+    active_from: usize,
     clauses: Vec<Clause>,
     watches: Vec<Vec<Watch>>, // by literal code: clauses watching ¬lit... see `watch`
     assign: Vec<Val>,         // by variable
@@ -116,6 +132,8 @@ impl Default for Mini {
     fn default() -> Self {
         Mini {
             clauses: Vec::new(),
+            gw: Vec::new(),
+            active_from: 0,
             watches: vec![Vec::new(); 2],
             assign: vec![Val::Undef],
             level: vec![0],
@@ -144,7 +162,7 @@ impl Default for Mini {
             dom: Vec::new(),
             dom_head: 0,
             learnts: 0,
-            max_learnts: 2000.0,
+            max_learnts: MAX_LEARNTS,
             conflicts: 0,
         }
     }
@@ -162,6 +180,10 @@ impl Mini {
             self.seen.push(0);
             self.watches.push(Vec::new());
             self.watches.push(Vec::new());
+            for t in self.gw.iter_mut() {
+                t.push(Vec::new());
+                t.push(Vec::new());
+            }
             self.heap.insert(n, &self.activity);
         }
     }
@@ -201,17 +223,27 @@ impl Mini {
 
     fn attach(&mut self, ci: u32) {
         let c = &self.clauses[ci as usize];
-        let (a, b) = (c.lits[0], c.lits[1]);
+        let (a, b, g) = (c.lits[0], c.lits[1], c.group);
         // Watch lists are indexed by the literal whose falsification wakes
         // the clause.
-        self.watches[code(-a)].push(Watch {
+        self.wl(g, code(-a)).push(Watch {
             clause: ci,
             blocker: b,
         });
-        self.watches[code(-b)].push(Watch {
+        self.wl(g, code(-b)).push(Watch {
             clause: ci,
             blocker: a,
         });
+    }
+
+    /// The watch list of `group` for a literal code.
+    #[inline]
+    fn wl(&mut self, group: u32, code: usize) -> &mut Vec<Watch> {
+        if group == BASE {
+            &mut self.watches[code]
+        } else {
+            &mut self.gw[group as usize][code]
+        }
     }
 
     /// Unit propagation; the conflicting clause on failure.
@@ -223,90 +255,107 @@ impl Mini {
     /// transition relation (about twice its domain on ILA_Piccolo).
     fn propagate(&mut self) -> Option<u32> {
         let dom = self.restricted && self.decision_level() > 0;
+        // Level 0 and unrestricted solves see every group, so watches
+        // stay valid for whatever is active next.
+        let first_group = if dom { self.active_from } else { 0 };
         let outside = |s: &Self, l: Lit| -> bool {
             dom && !s.in_domain.get(var(l)).copied().unwrap_or(false)
         };
         while self.qhead < self.trail.len() {
             let p = self.trail[self.qhead];
             self.qhead += 1;
-            let mut ws = std::mem::take(&mut self.watches[code(p)]);
-            let mut i = 0;
-            let mut j = 0;
-            let mut confl = None;
-            while i < ws.len() {
-                let w = ws[i];
-                i += 1;
-                if self.lit_value(w.blocker) == Val::True || outside(self, w.blocker) {
-                    ws[j] = w;
-                    j += 1;
-                    continue;
-                }
-                let ci = w.clause as usize;
-                if self.clauses[ci].deleted {
-                    continue;
-                }
-                let false_lit = -p;
-                {
-                    let lits = &mut self.clauses[ci].lits;
-                    if lits[0] == false_lit {
-                        lits.swap(0, 1);
+            // The base list, then the groups in use.
+            let mut slot = BASE;
+            loop {
+                let mut ws = std::mem::take(self.wl(slot, code(p)));
+                let mut i = 0;
+                let mut j = 0;
+                let mut confl = None;
+                while i < ws.len() {
+                    let w = ws[i];
+                    i += 1;
+                    if self.lit_value(w.blocker) == Val::True || outside(self, w.blocker) {
+                        ws[j] = w;
+                        j += 1;
+                        continue;
                     }
-                }
-                let first = self.clauses[ci].lits[0];
-                if first != w.blocker
-                    && (self.lit_value(first) == Val::True
-                        || (self.lit_value(first) == Val::Undef && outside(self, first)))
-                {
+                    let ci = w.clause as usize;
+                    if self.clauses[ci].deleted {
+                        continue;
+                    }
+                    let false_lit = -p;
+                    {
+                        let lits = &mut self.clauses[ci].lits;
+                        if lits[0] == false_lit {
+                            lits.swap(0, 1);
+                        }
+                    }
+                    let first = self.clauses[ci].lits[0];
+                    if first != w.blocker
+                        && (self.lit_value(first) == Val::True
+                            || (self.lit_value(first) == Val::Undef && outside(self, first)))
+                    {
+                        ws[j] = Watch {
+                            clause: w.clause,
+                            blocker: first,
+                        };
+                        j += 1;
+                        continue;
+                    }
+                    // Look for a new watch.
+                    let len = self.clauses[ci].lits.len();
+                    let mut found = false;
+                    for k in 2..len {
+                        let l = self.clauses[ci].lits[k];
+                        if self.lit_value(l) != Val::False {
+                            self.clauses[ci].lits.swap(1, k);
+                            let g = self.clauses[ci].group;
+                            self.wl(g, code(-l)).push(Watch {
+                                clause: w.clause,
+                                blocker: first,
+                            });
+                            found = true;
+                            break;
+                        }
+                    }
+                    if found {
+                        continue;
+                    }
                     ws[j] = Watch {
                         clause: w.clause,
                         blocker: first,
                     };
                     j += 1;
-                    continue;
-                }
-                // Look for a new watch.
-                let len = self.clauses[ci].lits.len();
-                let mut found = false;
-                for k in 2..len {
-                    let l = self.clauses[ci].lits[k];
-                    if self.lit_value(l) != Val::False {
-                        self.clauses[ci].lits.swap(1, k);
-                        self.watches[code(-l)].push(Watch {
-                            clause: w.clause,
-                            blocker: first,
-                        });
-                        found = true;
-                        break;
-                    }
-                }
-                if found {
-                    continue;
-                }
-                ws[j] = Watch {
-                    clause: w.clause,
-                    blocker: first,
-                };
-                j += 1;
-                match self.lit_value(first) {
-                    Val::False => {
-                        confl = Some(w.clause);
-                        while i < ws.len() {
-                            ws[j] = ws[i];
-                            i += 1;
-                            j += 1;
+                    match self.lit_value(first) {
+                        Val::False => {
+                            confl = Some(w.clause);
+                            while i < ws.len() {
+                                ws[j] = ws[i];
+                                i += 1;
+                                j += 1;
+                            }
                         }
+                        _ => self.enqueue(first, Some(w.clause)),
                     }
-                    _ => self.enqueue(first, Some(w.clause)),
                 }
-            }
-            ws.truncate(j);
-            // New watches may have been pushed to this list meanwhile.
-            let added = std::mem::take(&mut self.watches[code(p)]);
-            ws.extend(added);
-            self.watches[code(p)] = ws;
-            if confl.is_some() {
-                self.qhead = self.trail.len();
-                return confl;
+                ws.truncate(j);
+                // New watches may have been pushed to this list meanwhile.
+                let added = std::mem::take(self.wl(slot, code(p)));
+                ws.extend(added);
+                *self.wl(slot, code(p)) = ws;
+                if confl.is_some() {
+                    self.qhead = self.trail.len();
+                    return confl;
+                }
+                let next = if slot == BASE {
+                    first_group
+                } else {
+                    slot as usize + 1
+                };
+                if next >= self.gw.len() {
+                    break;
+                }
+                slot = next as u32;
             }
         }
         None
@@ -538,7 +587,7 @@ impl Mini {
             *r = None; // level-0 reasons are never needed
         }
         self.clauses.retain(|c| !c.deleted);
-        for w in self.watches.iter_mut() {
+        for w in self.watches.iter_mut().chain(self.gw.iter_mut().flatten()) {
             w.clear();
         }
         for ci in 0..self.clauses.len() {
@@ -580,6 +629,7 @@ impl Mini {
                 } else {
                     let ci = self.clauses.len() as u32;
                     self.clauses.push(Clause {
+                        group: BASE,
                         lits: learnt.clone(),
                         learnt: true,
                         activity: 0.0,
@@ -637,8 +687,21 @@ impl Mini {
 
 impl Sat for Mini {
     fn add_clause(&mut self, lits: &[Lit]) {
+        self.add_clause_grouped(lits, BASE);
+    }
+
+    fn set_active_groups_from(&mut self, group: u32) {
+        self.active_from = group as usize;
+    }
+
+    fn add_clause_grouped(&mut self, lits: &[Lit], group: u32) {
         if !self.ok {
             return;
+        }
+        if group != BASE && self.gw.len() <= group as usize {
+            let n = self.watches.len();
+            self.gw
+                .resize_with(group as usize + 1, || vec![Vec::new(); n]);
         }
         self.cancel_until(0);
         let mut c: Vec<Lit> = Vec::with_capacity(lits.len());
@@ -671,6 +734,7 @@ impl Sat for Mini {
             _ => {
                 let ci = self.clauses.len() as u32;
                 self.clauses.push(Clause {
+                    group,
                     lits: c,
                     learnt: false,
                     activity: 0.0,
@@ -701,6 +765,11 @@ impl Sat for Mini {
         if self.units_since_simplify > 64 && self.temp.is_none() {
             self.simplify();
         }
+        // The limit grows by 10% per reduction within one solve only.
+        // Carried across solves it never stopped growing: after a
+        // million IC3 queries the solver held 38,000 learned clauses of
+        // 14 literals, twice the lemmas' watchers (x-epic a16-p128).
+        self.max_learnts = MAX_LEARNTS;
         let t0 = std::time::Instant::now();
         let d0 = self.decisions;
         let mut restart = 0;
@@ -803,6 +872,7 @@ impl Sat for Mini {
         }
         c.push(-act);
         self.clauses.push(Clause {
+            group: BASE,
             lits: c,
             learnt: false,
             activity: 0.0,

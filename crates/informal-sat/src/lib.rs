@@ -43,6 +43,18 @@ pub trait Sat {
     /// Announce `n` more variables before using them (CaDiCaL >= 2.2
     /// wants this for incremental use).
     fn reserve(&mut self, _n: i32) {}
+    /// Add a clause to watch-list group `group` (small numbers). It is a
+    /// clause like any other; the group only lets
+    /// [`Sat::set_active_groups_from`] skip it. Solvers without groups
+    /// just add it.
+    fn add_clause_grouped(&mut self, lits: &[Lit], _group: u32) {
+        self.add_clause(lits);
+    }
+    /// For the next [`Sat::solve_domain`] calls: clauses of groups below
+    /// `group` may be ignored. The caller guarantees that they are
+    /// satisfiable whatever the domain is assigned (for instance, each
+    /// carries an activation literal that is not assumed).
+    fn set_active_groups_from(&mut self, _group: u32) {}
     /// Add `lits` as a clause that only holds while `act` is assumed
     /// (`lits | -act`), for one query. `act` must occur nowhere else.
     /// At most one such clause is outstanding at a time; end it with
