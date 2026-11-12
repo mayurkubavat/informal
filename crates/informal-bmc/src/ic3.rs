@@ -61,8 +61,14 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            max_ctgs: 3,
-            max_ctg_depth: 1,
+            max_ctgs: std::env::var("INFORMAL_IC3_CTGS")
+                .ok()
+                .and_then(|x| x.parse().ok())
+                .unwrap_or(3),
+            max_ctg_depth: std::env::var("INFORMAL_IC3_CTG_DEPTH")
+                .ok()
+                .and_then(|x| x.parse().ok())
+                .unwrap_or(1),
             reverse_drop: false,
             // Off: on the HWMCC'24 sample CTP lost more models than it
             // won (frames converge later); one informal-ic3-mt worker uses it.
@@ -226,6 +232,9 @@ pub struct Ic3<'g> {
     /// and obligation event (diagnostics for generalization research).
     trace: Option<std::io::BufWriter<std::fs::File>>,
     trace_src: &'static str,
+    /// CTG lemmas added during literal drops that succeeded / failed.
+    pub stats_ctg_ok: usize,
+    pub stats_ctg_fail: usize,
     pub stats_lemmas: usize,
     pub stats_imported: usize,
     pub stats_ctps: usize,
@@ -300,6 +309,8 @@ impl<'g> Ic3<'g> {
                 .and_then(|p| std::fs::File::create(p).ok())
                 .map(std::io::BufWriter::new),
             trace_src: "po",
+            stats_ctg_ok: 0,
+            stats_ctg_fail: 0,
             stats_lemmas: 0,
             stats_imported: 0,
             stats_ctps: 0,
@@ -897,13 +908,14 @@ impl<'g> Ic3<'g> {
         ctx: &RunContext,
     ) -> Option<Cube> {
         let mut ctgs = 0;
-        loop {
+        let mut added = 0;
+        let r = loop {
             if cube.is_empty() || self.intersects_init(&cube) || ctx.should_stop() {
-                return None;
+                break None;
             }
             match self.relative_inductive(&cube, i, true) {
-                Ok(core) => return (!self.intersects_init(&core)).then_some(core),
-                Err(None) => return None,
+                Ok(core) => break (!self.intersects_init(&core)).then_some(core),
+                Err(None) => break None,
                 Err(Some(ctg)) => {
                     if depth < self.cfg.max_ctg_depth
                         && ctgs < self.cfg.max_ctgs
@@ -912,6 +924,7 @@ impl<'g> Ic3<'g> {
                     {
                         if let Ok(core) = self.relative_inductive(&ctg, i - 1, false) {
                             ctgs += 1;
+                            added += 1;
                             let g = self.generalize(core, i - 1, depth + 1, ctx);
                             let mut lvl = i - 1;
                             while lvl < self.top()
@@ -933,12 +946,18 @@ impl<'g> Ic3<'g> {
                         .filter(|l| ctg.binary_search(l).is_ok())
                         .collect();
                     if joined.len() == cube.len() {
-                        return None;
+                        break None;
                     }
                     cube = joined;
                 }
             }
+        };
+        if r.is_some() {
+            self.stats_ctg_ok += added;
+        } else {
+            self.stats_ctg_fail += added;
         }
+        r
     }
 
     /// Block a bad cube found at the top frame; `Err(depth)` on a real

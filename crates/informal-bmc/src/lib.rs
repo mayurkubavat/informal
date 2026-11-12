@@ -855,6 +855,11 @@ impl Engine for Ic3Engine {
                 ic3.stats_lift_time.as_secs_f64(),
                 ic3.stats_lift_fallbacks
             );
+            eprintln!("frames: {:?}", ic3.frame_sizes());
+            eprintln!(
+                "ctg lemmas: {} in drops that succeeded, {} in drops that failed",
+                ic3.stats_ctg_ok, ic3.stats_ctg_fail
+            );
             let mic = ic3.stats_mic.max(1) as f64;
             eprintln!(
                 "mic: {} calls ({} parent hits), cube {:.1} -> lemma {:.1} literals, drops ok {} fail {} ({:.1}%)",

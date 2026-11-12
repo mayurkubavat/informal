@@ -229,6 +229,39 @@ about 17, with 34,000-67,000 lemmas where rIC3 needs about 17,000. We
 make about twice the lemmas per frame, 84% of them from CTGs. That is
 the next question (lemma quality), not solver speed.
 
+### H7. Is the CTG step where a16's extra lemmas come from? (2026-11-11)
+
+*Claim.* On a16-p128, 84% of lemmas come from counterexamples to
+generalisation (CTGs), and 76% of those are made during literal drops
+that end up failing (new counters, `ctg lemmas:` in INFORMAL_IC3_STATS).
+So the CTG step looked like the place to save lemmas or queries.
+
+*Prediction.* Fewer or cheaper CTG lemmas reach a deeper frame in 120 s.
+
+*Result: rejected, in every direction.* informal-ic3, a16-p128, 120 s
+(default: frame 8, 14,700 lemmas, lemma length 7.3):
+
+| Variant | Frame | Lemmas | Note |
+|---------|-------|--------|------|
+| no CTGs (`INFORMAL_IC3_CTGS=0`) | 7 | 10,400 | lemmas 9.3 literals long |
+| 1 CTG per drop | 7 | 14,300 | |
+| 6 CTGs per drop | 8 | 19,000 | |
+| CTG depth 2 (`INFORMAL_IC3_CTG_DEPTH=2`) | 7 | 14,800 | |
+| CTG lemmas keep their core, no drops | 7 | 28,700 | twice the lemmas |
+| CTG lemmas get 3 drops at most | 8 | 21,700 | |
+
+Weaker CTG lemmas cost more than they save, and more CTG effort buys
+nothing. The default stays. A cache of failed-drop witnesses (H5's
+cousin) was reasoned out, not built: a witness only fixes the cube's own
+latches in the successor, so it cannot transfer to cubes over other
+latches, and sibling drops of one cube never share a witness.
+
+Where a16 stands against rIC3, factor by factor: lemmas per level 1.3-2x
+theirs, queries per lemma 48 against 32, time per query 110 us against
+62 us. No single cause; together about 5x. After the H6 fixes, 55% of
+the time is unit propagation for SAT answers (88% of queries are SAT, 250
+decisions each).
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
