@@ -200,6 +200,35 @@ veer-p28 39 s, cv32e40x-p033 254 s, p584 298 s). None of these were solved
 by our portfolio in the 197-model run on eef6f82. The changes since then
 are H1/H4, the solver hot-loop fixes and UNSAFE certification.
 
+### H6. Solver costs that grow with the number of queries (2026-11-11)
+
+Found while tracing x-epic a16-p128 (rIC3: 37 s, 17 frames, about 17,000
+lemmas, 545k solves at 62 us; ours unsolved). All three are in how IC3
+uses `Mini`, not in generalisation.
+
+| Cost | Evidence | Fix |
+|------|----------|-----|
+| Each query left a dead activation variable, a level-0 unit and dead clauses | 443k variables and a 143k-entry level-0 trail after 438k queries; clean-up and model copy were 25% of the time | `Sat::add_temp_clause` / `retire` (ecb0b7a): the clause and what was learned from it are removed, the variable is reused |
+| Learned-clause limit grew 10% per reduction, carried across solves | 38,000 learned clauses of 14 literals, twice the lemmas' watchers | limit restarts at 2000 per solve (5c48582) |
+| A query on F_i walked the watchers of every frame's lemmas | per-frame solvers were 1.7x faster per query | watch-list groups per level (5c48582) |
+
+Results (single IC3, 300 s, six hard models, 3 at a time), solved: none
+of the last two 1, limit only 1, groups only 4, both 3. Per query: JALR
+4.1 -> 1.2 ms with groups; a16-p128 130 -> 83 us with the limit.
+a16-p128 queries in 120 s: 325k before all three, about 970k after.
+
+End to end the three are close to neutral on the broad sets (sample60
+21/23 unchanged, genset 24 -> 23, gap set ic3-mt 6 = 6), with different
+models won and lost: single IC3 is deterministic but its path is very
+sensitive to which models the solver returns. The temp-clause change
+alone lost 3 of the 4 gap models single IC3 solved before it; groups
+brought them back.
+
+The a16 family (6 models) is still unsolved at 300 s: frames 10-14 of
+about 17, with 34,000-67,000 lemmas where rIC3 needs about 17,000. We
+make about twice the lemmas per frame, 84% of them from CTGs. That is
+the next question (lemma quality), not solver speed.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
