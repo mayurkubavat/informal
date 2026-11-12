@@ -59,13 +59,16 @@ const MAX_LEARNTS: f64 = 2000.0;
 const BASE: u32 = u32::MAX;
 
 pub struct Mini {
-    /// Watch lists of grouped clauses, by group then literal code. Above
-    /// level 0 in a restricted solve only groups from `active_from` up
-    /// are scanned; the caller guarantees the others cannot matter
-    /// (IC3: lemmas of lower frames, whose activation literal is not
-    /// assumed). With every frame's lemmas in one list, each assignment
-    /// of a popular latch walked the watchers of all frames' lemmas.
-    gw: Vec<Vec<Vec<Watch>>>,
+    /// Watch lists of grouped clauses: by literal code, the (group, list)
+    /// pairs that exist for it, sorted by group. Above level 0 in a
+    /// restricted solve only groups from `active_from` up are scanned;
+    /// the caller guarantees the others cannot matter (IC3: lemmas of
+    /// lower frames, whose activation literal is not assumed). With every
+    /// frame's lemmas in one list, each assignment of a popular latch
+    /// walked the watchers of all frames' lemmas. Sparse per literal: a
+    /// table per group cost one cache miss per group for every propagated
+    /// literal, a sixth of the run time on cv32e40x.
+    gw: Vec<Vec<(u32, Vec<Watch>)>>,
     active_from: usize,
     clauses: Vec<Clause>,
     watches: Vec<Vec<Watch>>, // by literal code: clauses watching ¬lit... see `watch`
@@ -132,7 +135,7 @@ impl Default for Mini {
     fn default() -> Self {
         Mini {
             clauses: Vec::new(),
-            gw: Vec::new(),
+            gw: vec![Vec::new(); 2],
             active_from: 0,
             watches: vec![Vec::new(); 2],
             assign: vec![Val::Undef],
@@ -180,10 +183,8 @@ impl Mini {
             self.seen.push(0);
             self.watches.push(Vec::new());
             self.watches.push(Vec::new());
-            for t in self.gw.iter_mut() {
-                t.push(Vec::new());
-                t.push(Vec::new());
-            }
+            self.gw.push(Vec::new());
+            self.gw.push(Vec::new());
             self.heap.insert(n, &self.activity);
         }
     }
@@ -240,10 +241,17 @@ impl Mini {
     #[inline]
     fn wl(&mut self, group: u32, code: usize) -> &mut Vec<Watch> {
         if group == BASE {
-            &mut self.watches[code]
-        } else {
-            &mut self.gw[group as usize][code]
+            return &mut self.watches[code];
         }
+        let lists = &mut self.gw[code];
+        let i = match lists.binary_search_by_key(&group, |e| e.0) {
+            Ok(i) => i,
+            Err(i) => {
+                lists.insert(i, (group, Vec::new()));
+                i
+            }
+        };
+        &mut lists[i].1
     }
 
     /// Unit propagation; the conflicting clause on failure.
@@ -347,15 +355,18 @@ impl Mini {
                     self.qhead = self.trail.len();
                     return confl;
                 }
-                let next = if slot == BASE {
-                    first_group
+                // The next group that has a list for this literal.
+                let from = if slot == BASE {
+                    first_group as u32
                 } else {
-                    slot as usize + 1
+                    slot + 1
                 };
-                if next >= self.gw.len() {
-                    break;
+                let lists = &self.gw[code(p)];
+                let at = lists.partition_point(|e| e.0 < from);
+                match lists.get(at) {
+                    Some(e) => slot = e.0,
+                    None => break,
                 }
-                slot = next as u32;
             }
         }
         None
@@ -587,8 +598,11 @@ impl Mini {
             *r = None; // level-0 reasons are never needed
         }
         self.clauses.retain(|c| !c.deleted);
-        for w in self.watches.iter_mut().chain(self.gw.iter_mut().flatten()) {
+        for w in self.watches.iter_mut() {
             w.clear();
+        }
+        for lists in self.gw.iter_mut() {
+            lists.clear();
         }
         for ci in 0..self.clauses.len() {
             self.attach(ci as u32);
@@ -697,11 +711,6 @@ impl Sat for Mini {
     fn add_clause_grouped(&mut self, lits: &[Lit], group: u32) {
         if !self.ok {
             return;
-        }
-        if group != BASE && self.gw.len() <= group as usize {
-            let n = self.watches.len();
-            self.gw
-                .resize_with(group as usize + 1, || vec![Vec::new(); n]);
         }
         self.cancel_until(0);
         let mut c: Vec<Lit> = Vec::with_capacity(lits.len());
@@ -870,7 +879,9 @@ impl Sat for Mini {
             self.temp = Some((mark, act, true));
             return;
         }
-        c.push(-act);
+        // Activation literal first (see `Sat::add_temp_clause`); the
+        // second watch is then the first cube literal, as before.
+        c.insert(0, -act);
         self.clauses.push(Clause {
             group: BASE,
             lits: c,

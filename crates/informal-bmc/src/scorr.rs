@@ -198,6 +198,91 @@ fn candidates(g: &Aig) -> Vec<Vec<Member>> {
     classes
 }
 
+/// One step of `g` from 64 states at once (`state`: a word per latch)
+/// with random inputs: the next-state word of every latch, and the mask of
+/// runs whose state and inputs meet the constraints.
+fn step_words(g: &Aig, state: &[u64], rnd: &mut impl FnMut() -> u64) -> (Vec<u64>, u64) {
+    let mut vals = vec![0u64; g.nodes.len()];
+    let w = |vals: &[u64], l: Lit| -> u64 {
+        let x = vals[var(l) as usize];
+        if is_neg(l) {
+            !x
+        } else {
+            x
+        }
+    };
+    let mut li = 0;
+    for v in 0..g.nodes.len() {
+        vals[v] = match g.nodes[v] {
+            Node::Const => 0,
+            Node::Input => rnd(),
+            Node::Latch => {
+                li += 1;
+                state[li - 1]
+            }
+            Node::And(a, b) => w(&vals, a) & w(&vals, b),
+        };
+    }
+    let mut live = !0u64;
+    for &c in &g.constraints {
+        live &= w(&vals, c);
+    }
+    (g.latches.iter().map(|l| w(&vals, l.next)).collect(), live)
+}
+
+/// Refutation without SAT: 64 random states in which every candidate
+/// equality holds (each class gets one random word, its members follow
+/// by phase; other latches are random), one step with random inputs, and
+/// the classes split by the next-state values on the runs that meet the
+/// constraints. Each such run is exactly a counterexample the induction
+/// query could return. Repeats until `quiet` rounds in a row split
+/// nothing. On the cv32e40x models the SAT loop alone peeled about one
+/// member per query, at up to 160 ms a query, and never finished.
+fn random_refine(
+    g: &Aig,
+    mut classes: Vec<Vec<Member>>,
+    row: &HashMap<Lit, usize>,
+    seed: u64,
+    quiet: usize,
+    ctx: &RunContext,
+) -> Vec<Vec<Member>> {
+    let mut rng = seed | 1;
+    let mut rnd = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
+    };
+    let count = |cs: &[Vec<Member>]| cs.iter().map(Vec::len).sum::<usize>();
+    let mut idle = 0;
+    let mut state = vec![0u64; g.latches.len()];
+    while idle < quiet && !classes.is_empty() && !ctx.should_stop() {
+        for x in state.iter_mut() {
+            *x = rnd();
+        }
+        for c in &classes {
+            let r = if c[0].lit == FALSE { 0 } else { rnd() };
+            for m in c {
+                if let Some(&i) = row.get(&m.lit) {
+                    state[i] = if m.phase { !r } else { r };
+                }
+            }
+        }
+        let (next, live) = step_words(g, &state, &mut rnd);
+        let before = (classes.len(), count(&classes));
+        classes = split(classes, |m| match row.get(&m.lit) {
+            None => 0,
+            Some(&i) => (if m.phase { !next[i] } else { next[i] }) & live,
+        });
+        if (classes.len(), count(&classes)) == before {
+            idle += 1;
+        } else {
+            idle = 0;
+        }
+    }
+    classes
+}
+
 /// Refine classes until their equalities are inductive together. `None`
 /// when time runs out.
 fn refine(
@@ -217,7 +302,28 @@ fn refine(
     u.add_frame_with(false);
     let t0 = std::time::Instant::now();
     let mut enc: HashMap<(Lit, Lit, bool), (i32, i32)> = HashMap::new();
+    let random = std::env::var_os("INFORMAL_SCORR_NO_RANDOM").is_none();
     loop {
+        if random {
+            let before = classes.iter().map(|c| c.len() - 1).sum::<usize>();
+            classes = random_refine(
+                g,
+                classes,
+                &row,
+                0x2545_f491 ^ stats.refinements as u64,
+                16,
+                ctx,
+            );
+            if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+                let after = classes.iter().map(|c| c.len() - 1).sum::<usize>();
+                if after != before {
+                    eprintln!(
+                        "scorr: random steps cut {before} members to {after} ({:.2} s)",
+                        t0.elapsed().as_secs_f64()
+                    );
+                }
+            }
+        }
         if ctx.should_stop() {
             if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
                 eprintln!(

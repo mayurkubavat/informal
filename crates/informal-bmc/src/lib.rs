@@ -403,7 +403,13 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, Stri
         let now = Instant::now();
         let left = ctx.deadline.saturating_duration_since(now);
         let mut c = ctx.clone();
-        c.deadline = now + (left / 20).min(std::time::Duration::from_secs(10));
+        // INFORMAL_SCORR_TL=<seconds> overrides the budget (experiments).
+        let budget = std::env::var("INFORMAL_SCORR_TL")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .map(std::time::Duration::from_secs_f64)
+            .unwrap_or_else(|| (left / 20).min(std::time::Duration::from_secs(10)));
+        c.deadline = now + budget;
         match scorr::latch_correspondence(&g, solver(&c), &c) {
             Some((h, st, hmap, himap)) => {
                 if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
@@ -856,6 +862,11 @@ impl Engine for Ic3Engine {
                 ic3.stats_lift_fallbacks
             );
             eprintln!("frames: {:?}", ic3.frame_sizes());
+            eprintln!(
+                "promotions: {} of {} tried",
+                ic3.stats_promoted, ic3.stats_promote_tried
+            );
+
             eprintln!(
                 "ctg lemmas: {} in drops that succeeded, {} in drops that failed",
                 ic3.stats_ctg_ok, ic3.stats_ctg_fail

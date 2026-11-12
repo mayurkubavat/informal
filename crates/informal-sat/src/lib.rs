@@ -60,8 +60,12 @@ pub trait Sat {
     /// At most one such clause is outstanding at a time; end it with
     /// [`Sat::retire`] after reading the answer.
     fn add_temp_clause(&mut self, lits: &[Lit], act: Lit) {
-        let mut c = lits.to_vec();
+        // The activation literal first, as IC3 always built this clause:
+        // the order decides which models CaDiCaL returns, and IC3's path
+        // (not its verdict) depends on them.
+        let mut c = Vec::with_capacity(lits.len() + 1);
         c.push(-act);
+        c.extend_from_slice(lits);
         self.add_clause(&c);
     }
     /// Drop the temporary clause of `act`. True when the solver removed

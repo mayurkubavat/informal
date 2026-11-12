@@ -262,6 +262,93 @@ theirs, queries per lemma 48 against 32, time per query 110 us against
 the time is unit propagation for SAT answers (88% of queries are SAT, 250
 decisions each).
 
+### H11. Feed the standing invariant continuously (prediction, 2026-11-12)
+
+*Evidence.* cv32e40x-p658: rIC3 ends with 3,204 of its roughly 5,000
+lemmas in its invariant frame and MIC input cubes of 5.7 literals. Ours,
+with Houdini every 4 frames (H2), holds about 300 lemmas in the invariant
+at frame 20 and its MIC input cubes are 12.7 literals. A stronger
+invariant is in every frame, so every core is smaller and every MIC
+cheaper.
+
+*Claim.* The invariant should grow every frame, not every 4, and lemma
+by lemma: after each propagation, a lemma that is inductive relative to
+the invariant and itself joins it (one query per lemma; failures are
+retried after the invariant has grown by an eighth).
+`INFORMAL_IC3_PUSH_INF`.
+
+*Prediction.* On cv32e40x-p658 and p299 at 300 s: the invariant holds at
+least 1,000 lemmas at the end, MIC input cubes fall below 10 literals,
+and at least one of the two is solved (neither is today).
+
+*Result: rejected.* informal-ic3, 300 s: the sweep moved 163 lemmas on
+p658 (2,939 queries) and 37 on p299 (2,545 queries); neither model was
+solved, and MIC input cubes got longer, not shorter (17.8 and 13.1). Our
+lemmas are not inductive one at a time relative to the invariant: they
+only hold in groups (H2, H3), which is what Houdini is for. The code was
+removed again.
+
+Also rejected the same day (H10): asking again with an unsat core alone
+to shrink it. On p658 it removed 262 literals over about 13,000 cores;
+the cores are already stable.
+
+What did help the CPU family the same day:
+
+- **scorr could not finish.** Its refinement loop asked SAT for one
+  counterexample at a time and peeled about one candidate per query
+  (cv32e40x-p658: 3,080 candidates, 2,159 left after 90 s), so on these
+  models no latch was ever merged. Now, before each SAT query, it
+  refutes candidates without SAT: 64 random states in which every
+  candidate equality holds, one step with random inputs, classes split
+  on the result. p658: 3,080 candidates down to 176 in 0.02 s, finished
+  in 0.8 s with 150 latches merged (rIC3: 148).
+- **Group watch lists were dense.** One table per frame meant one cache
+  miss per frame for every propagated literal (28% of propagate's time
+  on p658). Sparse per-literal lists: 1.69 -> 0.70 ms per SAT answer.
+
+p658 and p299 are still unsolved at 300 s. rIC3 proves p658 in 25 s with
+66k solver calls at 240 us; we now do 313k at about 0.6 ms and are at
+frame 25 of 26 with 13,000 lemmas against its 5,000. Lemma lengths are
+bimodal (most 1-7 literals, a second group at 11-16), so the next
+question is what the long ones are.
+
+### H12. Promote an old lemma before deriving it again (prediction, 2026-11-12)
+
+*Evidence.* In the traces, a lemma with exactly the same literals as an
+earlier one is added again: 32% of all lemmas on cv32e40x-p658 (up to 8
+times each), 21% on p299, 7% on JALR, 2% on a16. Most come from
+obligations. The earlier copy sits at a lower level because its push
+failed when it was tried (once per frame); by the time the obligation
+comes back, the lemma holds one level up, and IC3 pays a full MIC (15 or
+more SAT answers for a 15-literal cube) to arrive at the same clause.
+
+*Claim.* Before generalising for an obligation at level i, look for
+lemmas below level i whose literals all occur in the obligation's cube,
+highest level first, and ask whether one is inductive at level i (one
+query, usually UNSAT and cheap). If so, promote it and skip the MIC.
+`Config::promote` (`INFORMAL_IC3_PROMOTE=0` turns it off).
+
+*Prediction.* On p658 and p299 at 300 s: exact repeats fall below 5% of
+lemmas, queries per lemma fall by at least a quarter, and p658 (which
+reaches frame 25 of 26 today) is solved.
+
+*Result so far: mixed, off by default.* informal-ic3, 300 s, neither
+model solved (prediction missed):
+
+| Model | Without | With `INFORMAL_IC3_PROMOTE=1` |
+|-------|---------|-------------------------------|
+| p299 | frame 19, 15,800 lemmas | frame 42, 8,200 lemmas |
+| p658 | frame 25, 13,100 lemmas | frame 19, 5,700 lemmas, MIC cubes 25 literals |
+
+Promotions succeeded on 8-9% of tries (852 of 11,058; 761 of 8,666), so
+most tries are a wasted query. Exact repeats that did not come from a
+promotion fell from 32% to 14% (p658) and from 21% to 16% (p299), not
+below 5%: CTG lemmas repeat too, and the cube test only finds lemmas that
+are subsets of the obligation's cube. p299 gets more than twice as deep
+on half the lemmas; p658 goes the other way, into 755 lemmas of 20 or
+more literals over datapath registers. Needs the hard set before any
+decision.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against

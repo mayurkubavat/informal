@@ -52,6 +52,9 @@ pub struct Config {
     /// Every this many frames (0: never), run Houdini on all lemmas and
     /// move the inductive subset to the invariant every frame assumes
     /// (hypothesis H2 in docs/ic3-research.md).
+    /// H12: for an obligation at level i, first try to promote a lemma
+    /// from a lower level that covers the obligation's cube.
+    pub promote: bool,
     pub houdini_every: usize,
     /// H2b: instead, run Houdini when the lemmas in the frames have
     /// doubled since its last run (and number at least 100).
@@ -80,6 +83,7 @@ impl Default for Config {
             // Off by default: on 75 models it traded 3 models for 2 and
             // was slower; two informal-ic3-mt workers use it for diversity.
             parent_lemma: std::env::var_os("INFORMAL_IC3_PARENT").is_some(),
+            promote: std::env::var("INFORMAL_IC3_PROMOTE").is_ok_and(|x| x != "0"),
             houdini_every: std::env::var("INFORMAL_IC3_HOUDINI")
                 .ok()
                 .and_then(|x| x.parse().ok())
@@ -205,6 +209,7 @@ pub struct Ic3<'g> {
     /// Proved invariants given up front ([`Ic3::assume_invariant`]): in
     /// every frame >= 1 and part of the final invariant.
     inf: Vec<Cube>,
+
     /// Lemmas in the frames right after the last Houdini run (H2b).
     pool_after_houdini: usize,
 
@@ -233,6 +238,9 @@ pub struct Ic3<'g> {
     trace: Option<std::io::BufWriter<std::fs::File>>,
     trace_src: &'static str,
     /// CTG lemmas added during literal drops that succeeded / failed.
+    /// H12: promotions tried and done.
+    pub stats_promote_tried: usize,
+    pub stats_promoted: usize,
     pub stats_ctg_ok: usize,
     pub stats_ctg_fail: usize,
     pub stats_lemmas: usize,
@@ -309,6 +317,8 @@ impl<'g> Ic3<'g> {
                 .and_then(|p| std::fs::File::create(p).ok())
                 .map(std::io::BufWriter::new),
             trace_src: "po",
+            stats_promote_tried: 0,
+            stats_promoted: 0,
             stats_ctg_ok: 0,
             stats_ctg_fail: 0,
             stats_lemmas: 0,
@@ -821,6 +831,42 @@ impl<'g> Ic3<'g> {
         }
     }
 
+    /// H12: a lemma below `level` whose literals all occur in `cube` and
+    /// that is inductive at `level` now is moved up (as far as it holds).
+    /// At most 3 candidates, highest level first. True when one moved.
+    fn promote_for(&mut self, cube: &[Lit], level: usize) -> bool {
+        let mut cands: Vec<(usize, Cube)> = Vec::new();
+        'levels: for j in (1..level).rev() {
+            for l in &self.frames[j] {
+                if l.len() <= cube.len() && l.iter().all(|x| cube.binary_search(x).is_ok()) {
+                    cands.push((j, l.clone()));
+                    if cands.len() == 3 {
+                        break 'levels;
+                    }
+                }
+            }
+        }
+        for (j, l) in cands {
+            self.stats_promote_tried += 1;
+            if self.relative_inductive(&l, level, false).is_err() {
+                continue;
+            }
+            let mut lvl = level;
+            while lvl < self.top() && self.relative_inductive(&l, lvl + 1, false).is_ok() {
+                lvl += 1;
+            }
+            if let Some(pos) = self.frames[j].iter().position(|x| *x == l) {
+                self.frames[j].swap_remove(pos);
+            }
+            self.stats_promoted += 1;
+            self.trace_src = "promote";
+            self.add_lemma(l, lvl);
+            self.trace_src = "po";
+            return true;
+        }
+        false
+    }
+
     /// Add back a literal of `orig` if `core` intersects init.
     fn keep_out_of_init(&self, mut core: Cube, orig: &[Lit]) -> Cube {
         if core.is_empty() || self.intersects_init(&core) {
@@ -992,6 +1038,12 @@ impl<'g> Ic3<'g> {
                         ..ob
                     });
                 }
+                continue;
+            }
+            if self.cfg.promote && self.promote_for(&ob.cube, ob.level) {
+                // The promoted lemma blocks the cube at this level (or
+                // higher): the obligation is taken up again one level up.
+                q.push(ob);
                 continue;
             }
             match self.relative_inductive(&ob.cube, ob.level, true) {
@@ -1205,6 +1257,7 @@ impl<'g> Ic3<'g> {
             if self.propagate(ctx) {
                 return Verdict::Safe;
             }
+
             let pool: usize = self.frames[1..].iter().map(Vec::len).sum();
             let due = if self.cfg.houdini_grow {
                 pool >= 100 && pool >= 2 * self.pool_after_houdini
