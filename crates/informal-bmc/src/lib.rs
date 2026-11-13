@@ -210,6 +210,20 @@ fn mine_into(g: &Aig, ic3: &mut ic3::Ic3, ctx: &RunContext, name: &str) {
     ic3.assume_invariant(inv);
 }
 
+/// INFORMAL_IC3_SEED: seed for the first phases in IC3's own solver
+/// (0 or unset: the fixed default path). IC3's path, not its verdict,
+/// depends on which models the solver returns, so one run says little
+/// about a change; scripts/ic3_seeds.py scores a build over several seeds.
+fn ic3_seed() -> u64 {
+    static SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SEED.get_or_init(|| {
+        std::env::var("INFORMAL_IC3_SEED")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(0)
+    })
+}
+
 /// `v`, IC3's verdict, with a SAFE kept only when its invariant passes the
 /// independent check on the model as loaded ([`certify`]); otherwise it
 /// becomes unknown, loudly. `INFORMAL_NO_CERT` skips the check (for
@@ -809,7 +823,7 @@ impl Engine for Ic3Engine {
             if !mini {
                 return solver(&c);
             }
-            let mut s = informal_sat::Mini::default();
+            let mut s = informal_sat::Mini::with_seed(ic3_seed());
             let (cancel, deadline) = (c.cancel.clone(), c.deadline);
             s.set_terminate(Box::new(move || {
                 cancel.is_cancelled()
@@ -1075,7 +1089,7 @@ impl Engine for Ic3Mt {
                             if !mini {
                                 return solver(&c);
                             }
-                            let mut s = informal_sat::Mini::default();
+                            let mut s = informal_sat::Mini::with_seed(ic3_seed());
                             let (cancel, deadline) = (c.cancel.clone(), c.deadline);
                             s.set_terminate(Box::new(move || {
                                 cancel.is_cancelled()

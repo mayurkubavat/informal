@@ -11,6 +11,7 @@
 /bench/bin/
 /bench/.work/
 /bench/runs*.jsonl
+/bench/seeds/
 *.log
 
 # Research notes and reports stay local (not for the repo)

@@ -100,6 +100,10 @@ pub struct Mini {
     temp: Option<(usize, Lit, bool)>,
     /// Clauses marked deleted since the last compaction.
     garbage: usize,
+    /// 0: every variable starts with phase false. Otherwise each new
+    /// variable's first phase is a hash of this and its index, so that a
+    /// run can be repeated on a different but reproducible path.
+    seed: u64,
     /// Decisions in this solver, flushed to [`DECISIONS`] once per solve
     /// (a shared atomic per decision cost a cache line bounce per
     /// decision across the IC3 workers: H7 in the feedback report).
@@ -131,6 +135,24 @@ pub static SAT_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 pub static MAX_VARS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static ALL_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// SplitMix64 of `seed + i`.
+fn mix(seed: u64, i: u64) -> u64 {
+    let mut z = seed.wrapping_add(i.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+impl Mini {
+    /// The solver with a seed for the initial phases (see `seed`).
+    pub fn with_seed(seed: u64) -> Self {
+        Mini {
+            seed,
+            ..Default::default()
+        }
+    }
+}
+
 impl Default for Mini {
     fn default() -> Self {
         Mini {
@@ -157,6 +179,7 @@ impl Default for Mini {
             decisions: 0,
             temp: None,
             garbage: 0,
+            seed: 0,
             conflict: Vec::new(),
             terminate: None,
             units_since_simplify: 0,
@@ -178,7 +201,8 @@ impl Mini {
             self.assign.push(Val::Undef);
             self.level.push(0);
             self.reason.push(None);
-            self.phase.push(false);
+            self.phase
+                .push(self.seed != 0 && mix(self.seed, n as u64) & 1 == 1);
             self.activity.push(0.0);
             self.seen.push(0);
             self.watches.push(Vec::new());
