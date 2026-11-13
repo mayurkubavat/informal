@@ -349,6 +349,42 @@ on half the lemmas; p658 goes the other way, into 755 lemmas of 20 or
 more literals over datapath registers. Needs the hard set before any
 decision.
 
+### H13. Lemma groups that differ in one literal: derived predicates (prediction, 2026-11-12)
+
+*Evidence.* In the lemma sets of our traces, many lemmas are equal except
+for one literal (blocked cubes A+m1, A+m2, ..., A+mk):
+
+| Model | Distinct lemmas | Such groups | Largest groups |
+|-------|-----------------|-------------|----------------|
+| x-epic a16-p128 | 29,007 | 6,927 (merging saves up to 9,481 lemmas) | 29, 14, 14 |
+| cv32e40x-p658 | 2,433 | 792 | 36, 35, 32, 32, 32 |
+| cv32e40x-p299 | 5,795 | 3,125 | 60, 53, 51, 48 |
+
+A group of k says "A, and at least one of m1..mk, is unreachable": one
+fact about a word (a 32-bit register differing from a value, on the CPU
+models) that IC3 states as k clauses, each paid for with its own
+obligation and MIC, and each pushed on its own. Pairs with two flipped
+polarities (XOR-like) are rare on the CPU models (7 and 55) and common
+on a16 (700). [PdrER](https://arxiv.org/abs/2505.18998) reports gains
+from AND/XOR extension variables on HWMCC'24; the design below is ours,
+from these counts.
+
+*Claim.* A derived predicate x = m1 OR ... OR mk over latch literals,
+usable as one literal in cubes, lets one lemma (block A+x) do the work
+of the group. Stage A: detect groups of 4 or more at each propagation,
+define x, and replace the group by one lemma (fewer clauses, one push
+instead of k). Stage B: at the end of MIC, try replacing a literal that
+belongs to some x by x itself; if the wider cube is still blocked, later
+members of the group never need their own obligation. Certificates,
+Houdini and lemma sharing see the expanded clauses, so the trusted base
+does not change.
+
+*Prediction.* Stage A alone: 20% fewer lemmas held at the same frame on
+p658, p299 and a16-p128, and no loss on the seeded hard set. Stage B: at
+least 2 more of the 29 hard-set models solved on average over 3 seeds.
+
+*Result:* pending.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
