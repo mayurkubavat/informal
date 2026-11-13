@@ -877,6 +877,10 @@ impl Engine for Ic3Engine {
             );
             eprintln!("frames: {:?}", ic3.frame_sizes());
             eprintln!(
+                "derived predicates: {} defined, {} lemmas merged into them, {} of {} lemmas widened",
+                ic3.stats_aux, ic3.stats_aux_merged, ic3.stats_widened, ic3.stats_widen_tried
+            );
+            eprintln!(
                 "promotions: {} of {} tried",
                 ic3.stats_promoted, ic3.stats_promote_tried
             );

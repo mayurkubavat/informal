@@ -55,6 +55,9 @@ pub struct Config {
     /// H12: for an obligation at level i, first try to promote a lemma
     /// from a lower level that covers the obligation's cube.
     pub promote: bool,
+    /// H13: derived predicates for lemma groups that differ in one
+    /// literal (single-solver layout only).
+    pub derive: bool,
     pub houdini_every: usize,
     /// H2b: instead, run Houdini when the lemmas in the frames have
     /// doubled since its last run (and number at least 100).
@@ -84,6 +87,7 @@ impl Default for Config {
             // was slower; two informal-ic3-mt workers use it for diversity.
             parent_lemma: std::env::var_os("INFORMAL_IC3_PARENT").is_some(),
             promote: std::env::var("INFORMAL_IC3_PROMOTE").is_ok_and(|x| x != "0"),
+            derive: std::env::var("INFORMAL_IC3_DERIVE").is_ok_and(|x| x != "0"),
             houdini_every: std::env::var("INFORMAL_IC3_HOUDINI")
                 .ok()
                 .and_then(|x| x.parse().ok())
@@ -209,6 +213,24 @@ pub struct Ic3<'g> {
     /// Proved invariants given up front ([`Ic3::assume_invariant`]): in
     /// every frame >= 1 and part of the final invariant.
     inf: Vec<Cube>,
+    /// H13: derived predicates. Predicate k is the OR of `aux[k]` (latch
+    /// literals, sorted); as a cube literal it is the positive literal of
+    /// AIG variable `g.nodes.len() + k`, which sorts after every latch.
+    /// Its solver variables (now and next) lie in a block reserved at
+    /// construction (`aux_cap` each); `next_of` maps it like a latch.
+    aux: Vec<Vec<Lit>>,
+    aux_index: std::collections::HashMap<Vec<Lit>, usize>,
+    aux_cap: usize,
+    /// By AIG variable: the predicates a latch is a member of. A query's
+    /// decision domain takes in every predicate with a member in it (and
+    /// with it the other members): the solver skips clauses that have an
+    /// unassigned literal outside the domain, which is only right for
+    /// variables that are free there, and a predicate is not.
+    aux_of: Vec<Vec<u32>>,
+    pub stats_aux: usize,
+    pub stats_aux_merged: usize,
+    pub stats_widen_tried: usize,
+    pub stats_widened: usize,
 
     /// Lemmas in the frames right after the last Houdini run (H2b).
     pool_after_houdini: usize,
@@ -260,6 +282,13 @@ pub struct Ic3<'g> {
     pub stats_lift_time: std::time::Duration,
 }
 
+/// The shared part of a lemma group, and per member its index in the
+/// frame and the literal it adds.
+type LemmaGroup = (Vec<Lit>, Vec<(usize, Lit)>);
+
+/// Derived predicates one IC3 may define (H13).
+const AUX_MAX: usize = 4096;
+
 fn t(l: Lit) -> TLit {
     cnf::tlit(l)
 }
@@ -271,7 +300,10 @@ impl<'g> Ic3<'g> {
             return None;
         }
         let tpl = cnf::template(g);
-        let nvars = g.nodes.len() + 1;
+        // H13 reserves solver variables for derived predicates (none when
+        // the feature is off, so variable numbering stays as it was).
+        let aux_cap = if Config::default().derive { AUX_MAX } else { 0 };
+        let nvars = g.nodes.len() + 1 + 2 * aux_cap;
         let lift = Solver::new(&tpl, nvars, make_sat());
         // One literal for "some bad output": an extra variable when needed.
         let bad = if g.bads.len() == 1 {
@@ -288,6 +320,18 @@ impl<'g> Ic3<'g> {
             single: std::env::var_os("INFORMAL_IC3_PER_FRAME").is_none(),
             acts: Vec::new(),
             inf: Vec::new(),
+            aux: Vec::new(),
+            aux_index: std::collections::HashMap::new(),
+            aux_cap,
+            aux_of: if aux_cap > 0 {
+                vec![Vec::new(); g.nodes.len()]
+            } else {
+                Vec::new()
+            },
+            stats_aux: 0,
+            stats_aux_merged: 0,
+            stats_widen_tried: 0,
+            stats_widened: 0,
             pool_after_houdini: 0,
 
             frames: Vec::new(),
@@ -296,7 +340,7 @@ impl<'g> Ic3<'g> {
             bad,
             next_of: g.latches.iter().map(|l| (var(l.lit), t(l.next))).collect(),
             init_of: {
-                let mut v = vec![None; g.nodes.len()];
+                let mut v = vec![None; g.nodes.len() + aux_cap];
                 for l in &g.latches {
                     v[var(l.lit) as usize] = match l.init {
                         Init::Zero => Some(false),
@@ -311,7 +355,7 @@ impl<'g> Ic3<'g> {
             epoch: 0,
             cfg: Config::default(),
             share: None,
-            act: vec![0.0; g.nodes.len()],
+            act: vec![0.0; g.nodes.len() + aux_cap],
             act_inc: 1.0,
             trace: std::env::var_os("INFORMAL_IC3_TRACE")
                 .and_then(|p| std::fs::File::create(p).ok())
@@ -453,7 +497,162 @@ impl<'g> Ic3<'g> {
 
     fn publish(&self, cube: &Cube, level: usize) {
         if let Some(sh) = &self.share {
-            sh.pool.publish(cube, level, sh.id);
+            // Other IC3s do not know this one's derived predicates.
+            for c in self.expand(cube) {
+                sh.pool.publish(&c, level, sh.id);
+            }
+        }
+    }
+
+    /// True for the cube literal of a derived predicate.
+    fn is_aux(&self, l: Lit) -> bool {
+        var(l) as usize >= self.g.nodes.len()
+    }
+
+    /// Does `lemma` (a blocked cube, possibly with derived predicates)
+    /// exclude every state of `cube` (latch literals only)?
+    fn covers(&self, lemma: &[Lit], cube: &[Lit]) -> bool {
+        lemma.iter().all(|&l| {
+            if self.is_aux(l) {
+                let k = var(l) as usize - self.g.nodes.len();
+                self.aux[k].iter().any(|m| cube.binary_search(m).is_ok())
+            } else {
+                cube.binary_search(&l).is_ok()
+            }
+        })
+    }
+
+    /// `cube` over latch literals only: one cube per member of its
+    /// derived predicate (lemmas hold at most one). Together they block
+    /// exactly the same states.
+    fn expand(&self, cube: &Cube) -> Vec<Cube> {
+        let Some(pos) = cube.iter().position(|&l| self.is_aux(l)) else {
+            return vec![cube.clone()];
+        };
+        let k = var(cube[pos]) as usize - self.g.nodes.len();
+        let rest: Vec<Lit> = cube.iter().copied().filter(|&l| !self.is_aux(l)).collect();
+        self.aux[k]
+            .iter()
+            .filter(|&&m| rest.binary_search(&neg(m)).is_err())
+            .map(|&m| {
+                let mut c = rest.clone();
+                if let Err(i) = c.binary_search(&m) {
+                    c.insert(i, m);
+                }
+                c
+            })
+            .collect()
+    }
+
+    /// The cube literal of the predicate "some literal of `members`
+    /// holds", defining it in the solvers the first time. `None` when
+    /// the reserved block is full.
+    fn define_aux(&mut self, members: Vec<Lit>) -> Option<Lit> {
+        let n = self.g.nodes.len();
+        if let Some(&k) = self.aux_index.get(&members) {
+            return Some(2 * (n + k) as Lit);
+        }
+        if self.aux.len() >= self.aux_cap {
+            return None;
+        }
+        let k = self.aux.len();
+        let lit = 2 * (n + k) as Lit;
+        let x = t(lit);
+        let xp = (n + 1 + self.aux_cap + k) as TLit;
+        let now: Vec<TLit> = members.iter().map(|&m| t(m)).collect();
+        let next: Vec<TLit> = self.primed(&members);
+        for s in [&mut self.solvers[0], &mut self.lift] {
+            for (v, ms) in [(x, &now), (xp, &next)] {
+                let mut or = vec![-v];
+                or.extend(ms.iter());
+                s.sat.add_clause(&or);
+                for &m in ms.iter() {
+                    s.sat.add_clause(&[v, -m]);
+                }
+            }
+        }
+        self.next_of.insert(var(lit), xp);
+        // Initially: true if some member is, false if none can be.
+        let inits: Vec<Option<bool>> = members
+            .iter()
+            .map(|&m| self.init_of[var(m) as usize].map(|v| v != is_neg(m)))
+            .collect();
+        self.init_of[n + k] = if inits.contains(&Some(true)) {
+            Some(true)
+        } else if inits.iter().all(|i| *i == Some(false)) {
+            Some(false)
+        } else {
+            None
+        };
+        for &m in &members {
+            self.aux_of[var(m) as usize].push(k as u32);
+        }
+        self.aux_index.insert(members.clone(), k);
+        self.aux.push(members);
+        self.stats_aux += 1;
+        Some(lit)
+    }
+
+    /// H13, stage A: in each frame, lemmas that are equal except for one
+    /// literal (4 or more of them) become one lemma over a derived
+    /// predicate. The new clause says exactly what the group said, so
+    /// nothing changes logically; the group is then pushed as one.
+    fn derive_groups(&mut self) {
+        for lvl in 1..=self.top() {
+            let lemmas = &self.frames[lvl];
+            let mut groups: std::collections::HashMap<Vec<Lit>, Vec<(usize, Lit)>> =
+                std::collections::HashMap::new();
+            for (i, c) in lemmas.iter().enumerate() {
+                if c.len() < 2 || c.iter().any(|&l| self.is_aux(l)) {
+                    continue;
+                }
+                for k in 0..c.len() {
+                    let mut rest = c.clone();
+                    let m = rest.remove(k);
+                    groups.entry(rest).or_default().push((i, m));
+                }
+            }
+            let mut big: Vec<LemmaGroup> =
+                groups.into_iter().filter(|(_, v)| v.len() >= 4).collect();
+            if big.is_empty() {
+                continue;
+            }
+            // Largest first; ties by the shared part, for a fixed order.
+            big.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+            let mut used = vec![false; lemmas.len()];
+            let mut merged: Vec<Cube> = Vec::new();
+            for (rest, members) in big {
+                let free: Vec<(usize, Lit)> =
+                    members.into_iter().filter(|&(i, _)| !used[i]).collect();
+                if free.len() < 4 {
+                    continue;
+                }
+                let mut ms: Vec<Lit> = free.iter().map(|&(_, m)| m).collect();
+                ms.sort_unstable();
+                ms.dedup();
+                let Some(x) = self.define_aux(ms) else { break };
+                for &(i, _) in &free {
+                    used[i] = true;
+                }
+                self.stats_aux_merged += free.len();
+                let mut cube = rest;
+                cube.push(x); // sorts after every latch literal
+                merged.push(cube);
+            }
+            if merged.is_empty() {
+                continue;
+            }
+            let old = std::mem::take(&mut self.frames[lvl]);
+            self.frames[lvl] = old
+                .into_iter()
+                .zip(used)
+                .filter_map(|(c, u)| (!u).then_some(c))
+                .collect();
+            for cube in merged {
+                let clause: Vec<i32> = cube.iter().map(|&l| -t(l)).collect();
+                self.add_frame_clause(lvl, &clause);
+                self.frames[lvl].push(cube);
+            }
         }
     }
 
@@ -591,6 +790,27 @@ impl<'g> Ic3<'g> {
             let v = x.unsigned_abs() as usize;
             if v - 1 < n {
                 roots.push(v as u32 - 1);
+            } else if v > n + self.aux_cap && v - n - 1 - self.aux_cap < self.aux.len() {
+                // The next-state copy of a derived predicate (an OR): one
+                // member that holds justifies it true, all of them false.
+                let nexts: Vec<Lit> = self.aux[v - n - 1 - self.aux_cap]
+                    .iter()
+                    .map(|&m| {
+                        let nx = self.next_of[&var(m)];
+                        let l = 2 * (nx.unsigned_abs() - 1) + u32::from(nx < 0);
+                        if is_neg(m) {
+                            neg(l)
+                        } else {
+                            l
+                        }
+                    })
+                    .collect();
+                if x > 0 {
+                    let pick = nexts.iter().find(|&&l| lv(&val, l)).or(nexts.first());
+                    roots.extend(pick.map(|&l| var(l)));
+                } else {
+                    roots.extend(nexts.iter().map(|&l| var(l)));
+                }
             } else {
                 roots.extend(g.bads.iter().filter(|&&b| lv(&val, b)).map(|&b| var(b)));
             }
@@ -705,11 +925,26 @@ impl<'g> Ic3<'g> {
                 }
                 mark[tv] = ep;
                 out.push(tv as TLit);
-                if tv >= 1 && tv - 1 < self.g.nodes.len() {
+                let n = self.g.nodes.len();
+                if tv >= 1 && tv - 1 < n {
                     if let informal_aig::Node::And(a, b) = self.g.nodes[tv - 1] {
                         stack.push(var(a) + 1);
                         stack.push(var(b) + 1);
                     }
+                    if let Some(ks) = self.aux_of.get(tv - 1) {
+                        stack.extend(ks.iter().map(|&k| n as u32 + 1 + k));
+                    }
+                } else if tv > n && tv - n - 1 < self.aux.len() {
+                    // A derived predicate: its members.
+                    stack.extend(self.aux[tv - n - 1].iter().map(|&m| var(m) + 1));
+                } else if tv > n + self.aux_cap && tv - n - 1 - self.aux_cap < self.aux.len() {
+                    // Its next-state copy: the members' next-state functions.
+                    let k = tv - n - 1 - self.aux_cap;
+                    stack.extend(
+                        self.aux[k]
+                            .iter()
+                            .map(|&m| self.next_of[&var(m)].unsigned_abs()),
+                    );
                 }
             }
         };
@@ -838,7 +1073,10 @@ impl<'g> Ic3<'g> {
         let mut cands: Vec<(usize, Cube)> = Vec::new();
         'levels: for j in (1..level).rev() {
             for l in &self.frames[j] {
-                if l.len() <= cube.len() && l.iter().all(|x| cube.binary_search(x).is_ok()) {
+                if l.len() <= cube.len()
+                    && !l.iter().any(|&x| self.is_aux(x))
+                    && self.covers(l, cube)
+                {
                     cands.push((j, l.clone()));
                     if cands.len() == 3 {
                         break 'levels;
@@ -942,6 +1180,55 @@ impl<'g> Ic3<'g> {
         }
         if depth == 0 {
             self.stats_mic_len += cube.len();
+            if self.aux_cap > 0 && self.cfg.derive && !self.aux.is_empty() {
+                cube = self.widen_with_predicate(cube, i);
+            }
+        }
+        cube
+    }
+
+    /// H13, stage B: replace one literal of a finished lemma by a derived
+    /// predicate it is a member of, if the wider cube is still blocked at
+    /// level `i` (and still misses the initial states). The one lemma then
+    /// covers every member, so the others never need an obligation of
+    /// their own. Largest predicates first, at most 2 queries.
+    fn widen_with_predicate(&mut self, cube: Cube, i: usize) -> Cube {
+        if cube.iter().any(|&l| self.is_aux(l)) {
+            return cube;
+        }
+        let n = self.g.nodes.len();
+        let mut cands: Vec<(usize, usize, usize)> = Vec::new(); // (size, k, position)
+        for (pos, &l) in cube.iter().enumerate() {
+            for &k in self.aux_of.get(var(l) as usize).into_iter().flatten() {
+                let ms = &self.aux[k as usize];
+                // The literal itself must be a member (same polarity), and
+                // no other cube literal may contradict or repeat one.
+                if ms.binary_search(&l).is_ok()
+                    && !cube.iter().any(|&o| {
+                        o != l
+                            && (ms.binary_search(&o).is_ok() || ms.binary_search(&neg(o)).is_ok())
+                    })
+                {
+                    cands.push((ms.len(), k as usize, pos));
+                }
+            }
+        }
+        cands.sort_by(|a, b| b.cmp(a));
+        for &(_, k, pos) in cands.iter().take(2) {
+            let mut wide = cube.clone();
+            wide.remove(pos);
+            wide.push(2 * (n + k) as Lit);
+            self.stats_widen_tried += 1;
+            if self.intersects_init(&wide) {
+                continue;
+            }
+            if let Ok(core) = self.relative_inductive(&wide, i, false) {
+                // Only a core that kept the predicate is a gain.
+                if core.iter().any(|&l| self.is_aux(l)) {
+                    self.stats_widened += 1;
+                    return core;
+                }
+            }
         }
         cube
     }
@@ -1083,7 +1370,7 @@ impl<'g> Ic3<'g> {
         self.frames[level..]
             .iter()
             .flatten()
-            .any(|lemma| lemma.iter().all(|l| cube.binary_search(l).is_ok()))
+            .any(|lemma| self.covers(lemma, cube))
     }
 
     /// Push lemmas forward; true when two frames become equal (proof).
@@ -1097,15 +1384,25 @@ impl<'g> Ic3<'g> {
                 "{{\"e\":\"F\",\"q\":{q},\"sizes\":{sizes:?}}}"
             ));
         }
+        if self.single && self.aux_cap > 0 && self.cfg.derive {
+            self.derive_groups();
+        }
         for i in 1..self.top() {
-            let lemmas = std::mem::take(&mut self.frames[i]);
+            let mut lemmas: std::collections::VecDeque<Cube> =
+                std::mem::take(&mut self.frames[i]).into();
             let mut stay = Vec::new();
-            for c in lemmas {
+            while let Some(c) = lemmas.pop_front() {
                 if ctx.should_stop() {
                     stay.push(c);
                     continue;
                 }
                 let pushed = self.push_lemma(&c, i, ctx);
+                if !pushed && c.iter().any(|&l| self.is_aux(l)) {
+                    // A group moves only as a whole; when it cannot, its
+                    // members (still clauses of this frame) try alone.
+                    lemmas.extend(self.expand(&c));
+                    continue;
+                }
                 if self.trace.is_some() {
                     self.tr(format_args!(
                         "{{\"e\":\"P\",\"from\":{i},\"ok\":{pushed},\"lits\":{c:?}}}"
@@ -1149,11 +1446,7 @@ impl<'g> Ic3<'g> {
                         // lemma stuck below level i (H3)?
                         let low = (1..i)
                             .rev()
-                            .find(|&j| {
-                                self.frames[j]
-                                    .iter()
-                                    .any(|l| l.iter().all(|x| p.binary_search(x).is_ok()))
-                            })
+                            .find(|&j| self.frames[j].iter().any(|l| self.covers(l, &p)))
                             .unwrap_or(0);
                         let n = p.len();
                         self.tr(format_args!(
@@ -1280,7 +1573,11 @@ impl<'g> Ic3<'g> {
     /// states but is only known to hold up to its frame: run them through
     /// [`crate::invariant::houdini`] before treating them as invariants.
     pub fn lemmas(&self) -> Vec<Cube> {
-        self.frames.iter().flatten().cloned().collect()
+        self.frames
+            .iter()
+            .flatten()
+            .flat_map(|c| self.expand(c))
+            .collect()
     }
 
     /// After [`Ic3::check`] said safe: the inductive invariant, as the cubes
@@ -1292,7 +1589,7 @@ impl<'g> Ic3<'g> {
                 .iter()
                 .flatten()
                 .chain(&self.inf)
-                .cloned()
+                .flat_map(|c| self.expand(c))
                 .collect(),
         )
     }
@@ -1322,7 +1619,7 @@ impl<'g> Ic3<'g> {
             .iter()
             .flatten()
             .chain(&self.inf)
-            .cloned()
+            .flat_map(|c| self.expand(c))
             .collect();
         let mut h = ctx.clone();
         let rest = ctx.deadline.saturating_duration_since(t0);
@@ -1333,10 +1630,16 @@ impl<'g> Ic3<'g> {
         };
         let keep: std::collections::HashSet<Cube> = inv.iter().cloned().collect();
         let mut moved = 0;
-        for f in self.frames.iter_mut().skip(1) {
+        for lvl in 1..self.frames.len() {
+            let f = std::mem::take(&mut self.frames[lvl]);
             let before = f.len();
-            f.retain(|c| !keep.contains(c));
-            moved += before - f.len();
+            // A group goes when every member is in the invariant.
+            let kept: Vec<Cube> = f
+                .into_iter()
+                .filter(|c| !self.expand(c).iter().all(|e| keep.contains(e)))
+                .collect();
+            moved += before - kept.len();
+            self.frames[lvl] = kept;
         }
         if self.trace.is_some() {
             let (n, q) = (inv.len(), self.stats_queries);
