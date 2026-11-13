@@ -32,3 +32,12 @@ Papers and specs the design depends on. Store PDFs here, named
 ## Books
 - Clarke, Henzinger, Veith, Bloem (eds.). Handbook of Model Checking. Springer 2018.
 - Seligman, Schubert, Kumar. Formal Verification: An Essential Toolkit for Modern VLSI Design. 2nd ed., 2023.
+
+## Recent work (see docs/literature-2026-11.md for what we take from each)
+- Luka, Vizel. Property Directed Reachability with Extended Resolution. arXiv 2505.18998 (2025).
+- A-IC3: Learning-Guided Adaptive Inductive Generalization for Hardware Model Checking. arXiv 2604.21688 (2026).
+- Su, Yang, Ci. Predicting Lemmas in Generalization of IC3. arXiv 2411.12749 (2024).
+- LeGend: A Data-Driven Framework for Lemma Generation in Hardware Model Checking. arXiv 2602.24010 (2026).
+- AutoPDR: Circuit-Aware Solver Configuration Prediction for Hardware Model Checking. arXiv 2603.25048 (2026).
+- Certificate-Aware Property-Directed Reachability. arXiv 2605.16472 (2026).
+- Preiner, Froleyks, Biere. Hardware Model Checking Competition 2025 (slides). https://hwmcc.github.io/2025/
