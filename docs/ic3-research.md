@@ -383,6 +383,48 @@ does not change.
 p658, p299 and a16-p128, and no loss on the seeded hard set. Stage B: at
 least 2 more of the 29 hard-set models solved on average over 3 seeds.
 
+*Result: no gain on average; off by default.* Built in e7b634b
+(`INFORMAL_IC3_DERIVE=1`). Seeded hard set (29 models, 300 s, 3 seeds, 3
+models at a time, quiet machine; `scripts/ic3_seeds.py`):
+
+| Engine | Baseline (2c0fe27) | With predicates |
+|--------|--------------------|-----------------|
+| informal-ic3, solved per seed | 6, 6, 6 | 4, 9, 5 |
+| informal-ic3, solved on some seed | 10 | 12 |
+| informal-ic3-mt, solved per seed | 6, 7, 6 | 6, 6, 6 |
+| informal-ic3-mt, solved on some seed | 8 | 8 |
+
+Both predictions missed: the mean did not move. Clear moves (by 2 seeds
+or more): single IC3 gained cv32e40x-p658 (0/3 -> 2/3, 29 s on one seed;
+never solved by us before) and lost p299 (3/3 -> 1/3); ic3-mt lost p299
+and p363. Stage A merges thousands of lemmas (p299: about 2,000 held at
+frame 19 against 15,800 made without), and stage B widens 12-17% of
+lemmas on the CPU models, but queries get slower (the predicates pull
+their members into every query's domain) and the path changes. 0 wrong;
+every certificate passed with predicates expanded. A correction to the
+commit message of e7b634b: the baseline single IC3 already solves p299 on
+all 3 seeds since the scorr fix; it was not a first.
+
+### H14. The runs are heavy-tailed: diversity beats any one setting (2026-11-13)
+
+*Evidence, from the same four seeded runs.* A model is often solved in
+30 s on one seed and not in 300 s on another (JALR with predicates: 13 s,
+72 s, unsolved; p363 in ic3-mt: 14 s, 23 s, unsolved). Per run, each
+configuration solves about 6 of the 29. Solved on at least one seed:
+single IC3 10, ic3-mt 8, the two together 11, all four configurations
+13. The three full portfolio runs of the week (199, 196, 195, 0 wrong)
+have a union of 202, and their differences are mostly ic3-mt wins that
+come and go (rocket_2067: 16 s in one run, unsolved in the next).
+
+*Claim.* On these models the choice of path matters more than any
+single heuristic we tested this week. ic3-mt's four workers differ in
+generalisation settings but start from the same seed and share lemmas.
+Giving the workers different seeds, and one of them predicates, should
+move ic3-mt from about 6 toward the union.
+
+*Prediction.* ic3-mt with per-worker seeds and predicates in one worker:
+mean of at least 8 on the seeded hard set (6.3 today), 0 wrong.
+
 *Result:* pending.
 
 - **H4. The obligation queue revisits the same region.** 2,657
