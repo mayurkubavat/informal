@@ -445,7 +445,7 @@ together again.
 
 ### H15. Reuse a proven invariant across sibling properties (prediction, 2026-11-14)
 
-From `research/innovations-2026-11-14.md` (idea 1). Checked here: all 86
+From the project's idea list. Checked here: all 86
 cv32e40x models have the same AIGER header and two of them differ in 6
 bytes; veer (4), veer_axi (9) and x-epic a16 are families of the same
 kind. Each file is one property of one design.
@@ -506,7 +506,7 @@ on which siblings were solved before.
 
 ### H16. Restarts that keep the inductive core (prediction, 2026-11-14)
 
-From `research/innovations-2026-11-14.md` (idea 2), built on H14's data:
+From the project's idea list, built on H14's data:
 single IC3 solves about 6 of the 29 hard models per seed but 10 on some
 seed, and solve times on one model range from 13 s to more than 300 s.
 
