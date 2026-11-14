@@ -43,6 +43,26 @@ pub fn lift(
     lift_reps(orig, map, prepared, lemmas).map(|(c, _)| c)
 }
 
+/// Clauses for equalities between literals of the loaded model's latches
+/// (`x == y`, where `y` may be a constant): what latch correspondence
+/// proved and merged. They are part of the invariant: the merged model's
+/// lemmas only hold with them, and a merged latch that then fell out of
+/// the cone appears nowhere else.
+pub fn equalities(eqs: &[(Lit, Lit)]) -> Vec<Clause> {
+    let mut out = Vec::new();
+    for &(x, y) in eqs {
+        if y == TRUE {
+            out.push(vec![x]);
+        } else if y == FALSE {
+            out.push(vec![x ^ 1]);
+        } else {
+            out.push(vec![x ^ 1, y]);
+            out.push(vec![x, y ^ 1]);
+        }
+    }
+    out
+}
+
 /// [`lift`] for a clock-folded model: `ok` is the prepared model's
 /// literal for the fold's `ok` latch (if it survived simplification as a
 /// latch), which becomes [`OK`] in the result.

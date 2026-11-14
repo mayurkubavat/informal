@@ -28,6 +28,11 @@ const SIM_ROUNDS: usize = 8;
 pub struct Stats {
     pub merged: usize,
     pub refinements: usize,
+    /// The proved equalities, over the input model's literals: a merged
+    /// latch and what it equals (its representative, possibly negated,
+    /// or a constant). A certificate needs all of them, also the ones
+    /// whose latches fall out of the cone once they are merged.
+    pub equalities: Vec<(Lit, Lit)>,
 }
 
 /// One member of a class: AIG literal of the latch (or [`FALSE`] for the
@@ -418,6 +423,7 @@ pub fn latch_correspondence(
     let mut stats = Stats {
         merged: 0,
         refinements: 0,
+        equalities: Vec::new(),
     };
     let classes = candidates(g);
     let dbg = std::env::var_os("INFORMAL_IC3_STATS").is_some();
@@ -437,6 +443,9 @@ pub fn latch_correspondence(
     for c in &classes {
         for m in &c[1..] {
             subst.insert(var(m.lit), (c[0].lit, m.phase));
+            stats
+                .equalities
+                .push((m.lit, c[0].lit ^ Lit::from(m.phase)));
         }
     }
     stats.merged = subst.len();

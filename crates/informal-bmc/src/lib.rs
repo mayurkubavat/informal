@@ -44,6 +44,8 @@ struct Loaded {
     input_map: InputMap,
     design_hash: u64,
     folded: Option<Folded>,
+    /// The loaded model's latch literals, by latch index.
+    latch_lits: Vec<informal_aig::Lit>,
 }
 
 /// The simplified model and the maps from the loaded model to it, or the
@@ -85,6 +87,7 @@ fn prepare(req: &CheckRequest, fold: bool) -> Result<Loaded, String> {
                     phase: info.phase,
                     ok,
                 }),
+                latch_lits: g.latches.iter().map(|l| l.lit).collect(),
             });
         }
     }
@@ -95,6 +98,7 @@ fn prepare(req: &CheckRequest, fold: bool) -> Result<Loaded, String> {
         input_map: imap,
         design_hash,
         folded: None,
+        latch_lits: g.latches.iter().map(|l| l.lit).collect(),
     })
 }
 
@@ -114,6 +118,9 @@ pub struct Prepared {
     /// Set when the model was clock-folded: certificates then check two
     /// steps of the loaded model per step of this one.
     pub folded: Option<Folded>,
+    /// What latch correspondence merged, as equalities between literals
+    /// of the loaded model's latches (see [`certify::equalities`]).
+    pub merged: Vec<(informal_aig::Lit, informal_aig::Lit)>,
 }
 
 impl std::ops::Deref for Prepared {
@@ -348,10 +355,12 @@ fn certified(
             // A folded model's invariant is a 2-step one on the loaded
             // model, on the clock's initial phase (not stored: the store
             // holds invariants of every reachable state).
-            let inv = certify::lift_folded(&orig, &p.latch_map, p, &lemmas, f.ok)?;
+            let mut inv = certify::lift_folded(&orig, &p.latch_map, p, &lemmas, f.ok)?;
+            inv.extend(certify::equalities(&p.merged));
             return certify::check_folded(&orig, &inv, &|| solver(ctx));
         }
-        let inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
+        let mut inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
+        inv.extend(certify::equalities(&p.merged));
         certify::check(&orig, &inv, &|| solver(ctx))?;
         if store::dir().is_some() {
             store_invariant(&orig, p.design_hash, &inv);
@@ -597,7 +606,8 @@ fn kind_certified(
     let r = (|| {
         let k = k.ok_or("missing: k-induction said safe without a depth")?;
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
-        let (inv, reps) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;
+        let (mut inv, reps) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;
+        inv.extend(certify::equalities(&p.merged));
         // Depth k here is the number of good frames before the bad one.
         certify::check_kind(&orig, &inv, &reps, k.max(1), &|| solver(ctx), &|| {
             ctx.should_stop()
@@ -642,7 +652,9 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
         input_map: imap,
         design_hash,
         mut folded,
+        latch_lits,
     } = prepare(req, fold)?;
+    let mut merged = Vec::new();
     let (g, map, imap) = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
         (g, map, imap)
     } else {
@@ -668,6 +680,31 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
                         now.elapsed().as_secs_f64()
                     );
                 }
+                // The equalities in terms of the loaded model: one loaded
+                // literal for each latch of the model scorr ran on.
+                let mut back: std::collections::HashMap<u32, informal_aig::Lit> =
+                    std::collections::HashMap::new();
+                for (&x, m) in latch_lits.iter().zip(&map) {
+                    if let Some(l) = *m {
+                        if l != informal_aig::TRUE && l != informal_aig::FALSE {
+                            back.entry(informal_aig::var(l)).or_insert(x ^ (l & 1));
+                        }
+                    }
+                }
+                let to_loaded = |l: informal_aig::Lit| {
+                    if l == informal_aig::TRUE || l == informal_aig::FALSE {
+                        Some(l)
+                    } else {
+                        back.get(&informal_aig::var(l)).map(|&x| x ^ (l & 1))
+                    }
+                };
+                for &(x, y) in &st.equalities {
+                    if let (Some(x), Some(y)) = (to_loaded(x), to_loaded(y)) {
+                        if x != informal_aig::TRUE && x != informal_aig::FALSE {
+                            merged.push((x, y));
+                        }
+                    }
+                }
                 let m = pre::compose(&map, &g, &hmap);
                 let im = pre::compose_inputs(&imap, &g, &himap);
                 if let Some(f) = folded.as_mut() {
@@ -686,6 +723,7 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
         input_map: imap,
         design_hash,
         folded,
+        merged,
     })
 }
 
@@ -1739,6 +1777,31 @@ mod tests {
         assert_eq!(check(&kind, &twin(7)), Verdict::Safe);
         assert_eq!(check(&ic3, &twin(4)), Verdict::Unsafe { depth: Some(4) });
         assert_eq!(check(&kind, &twin(4)), Verdict::Unsafe { depth: Some(4) });
+    }
+
+    /// Two copies of a counter, bad only when they differ. After scorr
+    /// merges them the property is constant and no latch is left in its
+    /// cone, so the invariant the engines hand over is empty: the
+    /// certificate must carry the merges themselves, or a correct SAFE is
+    /// withdrawn.
+    #[test]
+    fn merged_latches_are_part_of_the_certificate() {
+        let twin = "1 sort bitvec 3\n2 sort bitvec 1\n3 zero 1\n4 state 1 a\n5 init 1 4 3\n\
+                    6 one 1\n7 add 1 4 6\n11 next 1 4 7\n\
+                    12 state 1 b\n13 init 1 12 3\n14 add 1 12 6\n17 next 1 12 14\n\
+                    18 neq 2 4 12\n22 bad 18\n";
+        let engines: [&dyn Engine; 5] = [
+            &Ic3Engine { mini: true },
+            &Ic3Engine { mini: false },
+            &Ic3Mt::default(),
+            &KInduction {
+                max_depth: Some(20),
+            },
+            &KindIc3 { ic3_share: 0.5 },
+        ];
+        for e in engines {
+            assert_eq!(check(e, twin), Verdict::Safe, "{}", e.name());
+        }
     }
 
     #[test]
