@@ -15,8 +15,9 @@
 /bench/store*/
 *.log
 
-# Research notes and reports stay local (not for the repo)
+# Research notes, reports and review notes stay local (not for the repo)
 /research/
+/docs/review/
 
 # Tool droppings
 abc.history

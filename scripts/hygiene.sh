@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bad=0
-paths=$(git ls-files | grep -E '(^|/)(\.claude/|CLAUDE(\.local)?\.md$|\.mcp\.json$|\.env(\..*)?$|.*\.(pem|key|p12|pfx)$|id_(rsa|ed25519))' || true)
+paths=$(git ls-files | grep -E '^(research|docs/review)/|(^|/)(\.claude/|CLAUDE(\.local)?\.md$|\.mcp\.json$|\.env(\..*)?$|.*\.(pem|key|p12|pfx)$|id_(rsa|ed25519))' || true)
 [ -n "$paths" ] && { echo "hygiene: tracked files that must not be in git:"; echo "$paths"; bad=1; }
 text=$(git grep -nIE 'claude\.ai/|noreply@anthropic\.com|Co-Authored-By:' -- . ':!scripts/hygiene.sh' ':!scripts/hooks/' || true)
 [ -n "$text" ] && { echo "hygiene: assistant links or trailers in tracked files:"; echo "$text"; bad=1; }
