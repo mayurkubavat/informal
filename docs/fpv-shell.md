@@ -90,6 +90,7 @@ passes on a different setup without saying so.
 | `clear -all` | (new session) | Forget design and properties |
 | `analyze -sv12 [-f F] [+define+X] [+incdir+D] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources; VHDL is an error for now |
 | `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with svlang; top guessed when omitted |
+| `elaborate ... -bbox_m {M ...} -bbox_i {path ...}` | `set_blackbox -designs {M ...} -cells {path ...}` | Black boxes: ports kept, contents not modelled, outputs free (see below) |
 | `stopat sig ...`, `stopat -clear [sig ...]`, `stopat -list` | `snip_driver sig ...` | Cut points: each signal is cut from its drivers and is free on every step (see below) |
 | `clock clk` | `create_clock clk -period N` | Primary clock (posedge). `-both_edges`, `-factor` are errors |
 | `reset -expression {!rst_n}` | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
@@ -129,6 +130,23 @@ The signals that drive the cut one, and signals it merely copied, are not
 affected. Later reads of a variable inside the same procedural block that
 assigned it see the block's own value, not the cut. svlang applies the cut
 (`LowerConfig::cut_points`); the slang cross-check lowering rejects it.
+
+## Black boxes
+
+`elaborate -top T -bbox_m {ram fifo}` (VC Formal: `set_blackbox -designs
+{ram fifo}` before `read_file` / `elaborate`) makes every instance of the
+named modules a black box: its ports stay, nothing inside it is part of
+the model (no registers, memories, child instances or assertions), and its
+outputs are free on every step. `-bbox_i u_core.u_mem` (`set_blackbox
+-cells`) does the same for one instance by path.
+
+It is the same over-approximation as a cut point, taken at a module
+boundary, and it also saves the work of lowering the module: a proof
+holds for the design, a counterexample may use output values the boxed
+logic cannot produce. The prove log lists the boxes in force. A module
+name with no instance in this design is ignored with a note (flow scripts
+list boxes for every configuration); an instance path that does not exist
+is an error. Signals inside a box cannot be named in properties.
 
 ## Checking a script before running it
 
@@ -186,6 +204,8 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   out-of-range read is a free value.
 - `initial` blocks: constant assignments to whole registers give their
   starting values; anything else in them is ignored with a note.
-- `-bbox_m` is recorded but not applied (the full design is proved).
+- Black boxes need the boxed module's source to elaborate (a module with
+  no source at all is still an error); `-bbox_mul` and `-bbox_a` (box
+  wide multipliers and arrays automatically) are ignored with a note.
 - Tasks (`task -create`) are not modelled; everything runs in one task, so
   `assume -task T` is an error (it would constrain every property).

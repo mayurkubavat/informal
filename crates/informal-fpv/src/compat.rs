@@ -683,9 +683,10 @@ const JG: &[(&str, Body)] = &[
                 ("-top", 1),
                 ("-parameter", 2),
                 ("-bbox_m", 1),
-                ("-bbox_mul", 1),
+                ("-bbox_i", 1),
             ],
             &[
+                ("-bbox_mul", 1),
                 ("-create_related_covers", 1),
                 ("-disable_auto_bbox", 0),
                 ("-no_preconditions", 0),
@@ -700,13 +701,19 @@ const JG: &[(&str, Body)] = &[
         for p in a.all("-parameter") {
             s.design.params.push((p[0].clone(), p[1].clone()));
         }
-        for m in a.all("-bbox_m") {
-            note(&format!(
-                "elaborate: -bbox_m {} recorded but black-boxing is not applied yet",
-                m[0]
-            ));
-            s.design.bbox.push(m[0].clone());
-        }
+        // The black boxes of this elaboration (each option takes a name or
+        // a list, and may repeat).
+        let list = |o: &str| -> Vec<String> {
+            a.all(o)
+                .flat_map(|v| {
+                    v[0].split_whitespace()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        s.design.bbox = list("-bbox_m");
+        s.design.bbox_instances = list("-bbox_i");
         s.elaborate(a.val("-top").map(String::from))
             .map_err(|e| format!("{e:#}"))?;
         Ok(s.design.top.clone().unwrap_or_default().into())
@@ -948,6 +955,29 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
 }
 
 const VCF: &[(&str, Body)] = &[
+    // Before `elaborate` / `read_file`: the black boxes of the design.
+    ("set_blackbox", |s, a| {
+        let a = Args::parse(a, &[("-designs", 1), ("-cells", 1), ("-clear", 0)], &[])?;
+        if a.flag("-clear") {
+            s.design.bbox.clear();
+            s.design.bbox_instances.clear();
+        }
+        let list = |o: &str| -> Vec<String> {
+            a.all(o)
+                .flat_map(|v| {
+                    v[0].split_whitespace()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        s.design.bbox.extend(list("-designs"));
+        s.design.bbox_instances.extend(list("-cells"));
+        if s.elaborated {
+            note("set_blackbox: takes effect at the next elaborate / read_file");
+        }
+        Ok(().into())
+    }),
     ("set_fml_appmode", |_, a| {
         match a.get(1).map(String::as_str) {
             Some("FPV") | Some("fpv") => Ok(().into()),
@@ -1262,7 +1292,7 @@ mod tests {
             &script,
             "# comment\n\
              analyze -sv12 $env(INFORMAL_NO_SUCH_VAR)/top.sv\n\
-             elaborate -top top -bbox_m ram\n\
+             elaborate -top top -bbox_mul 64\n\
              clock clk\n\
              foreach p {a b} {\n\
                  assert -name p_$p -frob {req |=> gnt}\n\

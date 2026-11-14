@@ -191,6 +191,12 @@ pub struct Request {
     /// from its drivers and is a free value on every step. The svlang
     /// front end applies them; the slang lowering rejects a non-empty list.
     pub cut_points: Vec<String>,
+    /// [`lower`] only: black boxes, by module name and by instance path
+    /// from the top module (`top.u_core.u_mem`). A boxed instance keeps its
+    /// ports; nothing inside it is lowered and its outputs are free. svlang
+    /// only, like [`Self::cut_points`].
+    pub black_box_modules: Vec<String>,
+    pub black_box_instances: Vec<String>,
 }
 
 /// The comment line that starts [`lower`]'s trace section: `output` lines
@@ -287,10 +293,15 @@ fn call(
 pub fn lower(req: &Request) -> Option<Lowered> {
     #[cfg(informal_slang)]
     {
-        if !req.cut_points.is_empty() {
+        if !(req.cut_points.is_empty()
+            && req.black_box_modules.is_empty()
+            && req.black_box_instances.is_empty())
+        {
             return Some(Lowered {
                 ok: false,
-                errors: vec!["not modelled: cut points (stopat) with the slang lowering".into()],
+                errors: vec![
+                    "not modelled: cut points and black boxes with the slang lowering".into(),
+                ],
                 ..Default::default()
             });
         }

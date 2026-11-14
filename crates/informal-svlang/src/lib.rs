@@ -63,6 +63,8 @@ pub fn lower(req: &Request) -> Lowered {
         top: req.top.clone(),
         blast_memories_up_to: Some(BLAST_WORDS),
         cut_points: req.cut_points.clone(),
+        black_box_modules: req.black_box_modules.clone(),
+        black_box_instances: req.black_box_instances.clone(),
         ..LowerConfig::default()
     };
     let nl = match comp.lower_netlist(&config) {

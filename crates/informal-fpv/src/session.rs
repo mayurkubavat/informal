@@ -157,8 +157,12 @@ pub struct Design {
     pub incdirs: Vec<PathBuf>,
     pub top: Option<String>,
     pub params: Vec<(String, String)>,
-    /// Modules to black-box (accepted for compatibility; not applied yet).
+    /// Black boxes by module name (`elaborate -bbox_m`): instances of these
+    /// keep their ports, nothing inside them is modelled, and their outputs
+    /// are free on every step.
     pub bbox: Vec<String>,
+    /// Black boxes by instance path from the top module (`-bbox_i`).
+    pub bbox_instances: Vec<String>,
     /// Cut points (`stopat`), as paths from the top module (`u_core.sig`):
     /// each is cut from its drivers and free on every step.
     pub stopats: Vec<String>,
@@ -367,7 +371,7 @@ impl Session {
             top: self.design.top.clone(),
             params: self.design.params.clone(),
             trace_outputs: false,
-            cut_points: Vec::new(),
+            ..Default::default()
         };
         self.design.hierarchy.clear();
         let compiled = match frontend() {
@@ -398,7 +402,44 @@ impl Session {
         } else {
             std::fs::write(&tree, serde_json::to_string_pretty(&self.design.hierarchy)?)?;
         }
+        self.check_black_boxes()?;
         self.elaborated = true;
+        Ok(())
+    }
+
+    /// Match the requested black boxes against the elaborated design. A
+    /// module with no instance here is dropped with a note (flow scripts
+    /// list boxes for every configuration); an instance path that does not
+    /// exist, or the top module, is an error.
+    fn check_black_boxes(&mut self) -> anyhow::Result<()> {
+        let (Some(d), Some(top)) = (&self.slang, self.design.top.clone()) else {
+            return Ok(());
+        };
+        if self.design.bbox.contains(&top) {
+            bail!("the top module {top} cannot be a black box");
+        }
+        let (used, unused): (Vec<String>, Vec<String>) = std::mem::take(&mut self.design.bbox)
+            .into_iter()
+            .partition(|m| d.instances.iter().any(|i| &i.module == m));
+        self.design.bbox = used;
+        let mut paths = Vec::new();
+        for p in std::mem::take(&mut self.design.bbox_instances) {
+            let rel = p
+                .strip_prefix(top.as_str())
+                .and_then(|r| r.strip_prefix('.'))
+                .unwrap_or(&p)
+                .to_string();
+            if !d.instances.iter().any(|i| i.path == format!("{top}.{rel}")) {
+                bail!("black box `{p}` is not an instance of {top}");
+            }
+            paths.push(rel);
+        }
+        self.design.bbox_instances = paths;
+        for m in unused {
+            self.log(&format!(
+                "black box {m}: the design has no instance of that module (ignored)"
+            ));
+        }
         Ok(())
     }
 
@@ -733,7 +774,26 @@ impl Session {
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
             cut_points: self.cut_points(),
+            black_box_modules: self.design.bbox.clone(),
+            black_box_instances: self
+                .design
+                .bbox_instances
+                .iter()
+                .map(|i| format!("{}.{i}", self.design.top.as_deref().unwrap_or("")))
+                .collect(),
         };
+        if !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {
+            self.log(&format!(
+                "black boxes in this model (outputs free, contents not modelled): {}. A proof holds for the design; a counterexample may use output values the boxed logic cannot produce",
+                self.design
+                    .bbox
+                    .iter()
+                    .chain(&self.design.bbox_instances)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         if !req.cut_points.is_empty() {
             self.log(&format!(
                 "{} cut point(s) (stopat) are free in this model: {}. A proof holds for the design; a counterexample may use values the design cannot produce there",
