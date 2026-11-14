@@ -52,11 +52,9 @@ fn show(d: &NetlistDiag) -> String {
 /// Compile the concurrent properties written in the RTL into checks, and
 /// list them: each with its full hierarchical name, and why not when it
 /// uses an operator svlang does not compile yet.
-fn rtl_properties(
-    nl: &mut Netlist,
-    skip_cycles: u32,
-    clock_skips: &[(String, bool, u32)],
-) -> Vec<RtlProperty> {
+/// How properties are compiled: the cycles in reset whose attempts are left
+/// out, for every clock and for one clock and edge.
+fn property_options(skip_cycles: u32, clock_skips: &[(String, bool, u32)]) -> PropertyOptions {
     let mut opts = PropertyOptions::default();
     opts.skip_cycles = skip_cycles;
     opts.skip_by_clock = clock_skips
@@ -67,12 +65,97 @@ fn rtl_properties(
             ticks: *ticks,
         })
         .collect();
+    opts
+}
+
+/// Bind the properties given by command in the top module's scope and
+/// compile them into checks named as asked. Each comes back under its name,
+/// with why not when it does not bind or uses an operator svlang does not
+/// compile yet.
+fn command_properties(
+    comp: &svlang::Compilation,
+    nl: &mut Netlist,
+    properties: &[(String, String)],
+    opts: &PropertyOptions,
+) -> Vec<RtlProperty> {
+    if properties.is_empty() {
+        return Vec::new();
+    }
+    let elab = comp.elaborate();
+    let top = nl.top.clone();
+    let mut arenas = Vec::new();
+    let mut bound = Vec::new();
+    for (_, text) in properties {
+        let mut arena = svlang::ExprArena::new();
+        bound.push(
+            comp.bind_property_in_scope(&elab.design, &top, text, &mut arena)
+                .map_err(|ds| {
+                    ds.iter()
+                        .map(|d| d.message.clone())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                }),
+        );
+        arenas.push(arena);
+    }
+    let external: Vec<svlang::netlist::ExternalProperty<'_>> = properties
+        .iter()
+        .zip(arenas.iter().zip(&bound))
+        .filter_map(|((name, _), (arena, property))| {
+            Some(svlang::netlist::ExternalProperty {
+                arena,
+                property: property.as_ref().ok()?,
+                name: name.clone(),
+            })
+        })
+        .collect();
+    let mut compiled = nl
+        .compile_external_properties(&elab.design, &external, opts)
+        .into_iter();
+    properties
+        .iter()
+        .zip(&bound)
+        .map(|((name, _), b)| {
+            let (kind, made, error) = match b {
+                Err(e) => ("assert", None, Some(e.clone())),
+                Ok(p) => (
+                    match p.kind {
+                        PropKind::Assert => "assert",
+                        PropKind::Assume | PropKind::Restrict => "assume",
+                        PropKind::Cover => "cover",
+                    },
+                    compiled.next(),
+                    None,
+                ),
+            };
+            let liveness = matches!(made, Some(Ok(svlang::netlist::Compiled::Liveness(_))));
+            let unsupported = made.and_then(Result::err);
+            RtlProperty {
+                name: name.clone(),
+                kind: kind.into(),
+                unsupported,
+                error,
+                liveness,
+                file: None,
+                line: None,
+            }
+        })
+        .collect()
+}
+
+fn rtl_properties(
+    nl: &mut Netlist,
+    skip_cycles: u32,
+    clock_skips: &[(String, bool, u32)],
+) -> Vec<RtlProperty> {
+    let opts = property_options(skip_cycles, clock_skips);
     let outcomes = nl.compile_properties(&opts);
     nl.properties
         .iter()
         .zip(&nl.property_names)
         .zip(outcomes)
         .map(|((p, name), outcome)| RtlProperty {
+            liveness: matches!(outcome, PropertyOutcome::Liveness { .. }),
             name: name.clone(),
             kind: match p.kind {
                 PropKind::Assert => "assert",
@@ -81,9 +164,10 @@ fn rtl_properties(
             }
             .into(),
             unsupported: match outcome {
-                PropertyOutcome::Compiled { .. } => None,
+                PropertyOutcome::Compiled { .. } | PropertyOutcome::Liveness { .. } => None,
                 PropertyOutcome::Unsupported(why) => Some(why),
             },
+            error: None,
             file: nl
                 .files
                 .get(p.loc.file as usize)
@@ -132,17 +216,24 @@ pub fn lower(req: &Request) -> Lowered {
         }
         LowerOutcome::Error(ds) => return fail(ds.iter().map(show).collect()),
     };
-    let properties = rtl_properties(&mut nl, req.skip_cycles, &req.clock_skips);
+    let mut properties = rtl_properties(&mut nl, req.skip_cycles, &req.clock_skips);
+    properties.extend(command_properties(
+        &comp,
+        &mut nl,
+        &req.properties,
+        &property_options(req.skip_cycles, &req.clock_skips),
+    ));
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
         .iter()
         .filter(|p| p.kind == "assume")
-        .filter_map(|p| {
-            let why = p.unsupported.as_ref()?;
-            Some(format!(
+        .filter_map(|p| match (&p.unsupported, &p.error) {
+            (Some(why), _) => Some(format!(
                 "not supported yet: assumption {} uses {why}",
                 p.name
-            ))
+            )),
+            (None, Some(e)) => Some(format!("assumption {}: {e}", p.name)),
+            (None, None) => None,
         })
         .collect();
     if !lost.is_empty() {
@@ -173,6 +264,9 @@ pub fn lower(req: &Request) -> Lowered {
                 .filter(|n| !n.contains("compile_properties"))
                 .collect();
             for p in &properties {
+                if let Some(e) = &p.error {
+                    notes.push(format!("{} {} is not checked: {e}", p.kind, p.name));
+                }
                 if let Some(why) = &p.unsupported {
                     notes.push(format!(
                         "{} {} is not checked: {why} is not supported yet",

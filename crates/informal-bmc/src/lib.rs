@@ -1878,13 +1878,15 @@ mod tests {
             check(&kind, &read("counter.btor2")),
             Verdict::Unsafe { depth: Some(7) }
         );
-        // Arrays and liveness are reported, not guessed.
+        // Arrays are reported, not guessed.
         assert!(
             matches!(check(&kind, &read("memory.btor2")), Verdict::Unknown { reason } if reason.contains("arrays"))
         );
+        // Liveness is checked as safety (informal_aig::l2s): with req high
+        // for ever grant is high for ever, a loop the justice line asks for.
         assert!(matches!(
             check(&kind, &read("liveness.btor2")),
-            Verdict::Unknown { .. }
+            Verdict::Unsafe { .. }
         ));
     }
 }

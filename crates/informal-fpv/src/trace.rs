@@ -138,7 +138,7 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         let leaf = parts.pop().unwrap_or_default();
         // FPV helpers: the harness's own, and svlang's tick counters for
         // properties written in the RTL.
-        if leaf.starts_with("informal_") || leaf.starts_with("_sva_tick") {
+        if leaf.starts_with("informal_") || leaf.starts_with("_sva_") {
             parts = vec!["informal".into()];
         } else if parts.is_empty() {
             parts.push(top.clone());
@@ -187,7 +187,28 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         name: prop.to_string(),
         bits: (0..frames.len()).map(|f| vec![Some(bad(f))]).collect(),
     });
-    Ok(write_vcd(&vars, frames.len(), prop, half_cycle))
+    let mut vcd = write_vcd(&vars, frames.len(), prop, half_cycle);
+    // A liveness counterexample: the frame the loop starts in. The last
+    // frame has that frame's state again, and the trace goes round from
+    // there for ever.
+    let pick = g.inputs.iter().find(|&&i| {
+        g.names
+            .get(&var(i))
+            .is_some_and(|n| n == informal_aig::l2s::SAVE)
+    });
+    if let Some(&pick) = pick {
+        if let Some(start) = informal_aig::l2s::lasso(
+            &(0..frames.len())
+                .map(|f| frames[f][var(pick) as usize])
+                .collect::<Vec<_>>(),
+        ) {
+            vcd = format!(
+                "$comment liveness: frame {} has the state of frame {start} again; the frames from {start} on repeat for ever $end\n{vcd}",
+                frames.len() - 1
+            );
+        }
+    }
+    Ok(vcd)
 }
 
 /// `q[3]` -> ("q", 3); `en` -> ("en", 0).

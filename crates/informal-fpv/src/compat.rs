@@ -1372,8 +1372,16 @@ mod tests {
     #[test]
     fn rejects_what_it_cannot_honour() {
         let sh = shell(Flavor::Jg);
-        let e = sh.eval("assert -name r {a |-> ##[1:3] b}").unwrap_err();
-        assert!(e.message.contains("##["), "{}", e.message);
+        let e = sh.eval("assert -name r {a |-> b [->2]}").unwrap_err();
+        assert!(e.message.contains("[->"), "{}", e.message);
+        // A bounded range is taken: the front end compiles it at prove.
+        sh.eval("assert -name r {a |-> ##[1:3] b}").unwrap();
+        assert!(sh
+            .session
+            .borrow()
+            .props
+            .iter()
+            .any(|p| p.name == "r" && p.bound));
         let e = sh.eval("prove -all -frobnicate").unwrap_err();
         assert!(e.message.contains("unsupported option -frobnicate"));
         // Engine-tuning options are accepted.

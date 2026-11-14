@@ -110,6 +110,10 @@ pub struct Property {
     /// hierarchical name, `expr` is empty, and `source` is where it stands
     /// in the design.
     pub rtl: bool,
+    /// Given by command with a bounded sequence operator (`##[1:3]`,
+    /// `throughout`, ...): the front end binds `expr` in the top module and
+    /// compiles it, where the others go through the fixed-delay harness.
+    pub bound: bool,
     /// The last prove's per-engine record: each portfolio engine's outcome
     /// (won/lost/timeout/killed/error), time and depth reached. Empty
     /// before a prove, or when no engine ran (elaboration, errors).
@@ -267,8 +271,14 @@ impl Session {
         name: Option<String>,
         expr: &str,
     ) -> Result<String, String> {
-        sva::parse(expr)?; // reject what the lowering can't handle up front
-        self.check_names(expr)?;
+        // Reject what neither lowering can handle up front. A property
+        // with bounded sequence operators goes to the front end's compiler.
+        let bound = sva::needs_compiler(expr);
+        // (The front end reports a name it cannot bind on the property.)
+        if !bound {
+            sva::parse(expr)?;
+            self.check_names(expr)?;
+        }
         let name = name.unwrap_or_else(|| {
             let n = self.props.iter().filter(|p| p.kind == kind).count();
             format!("{}_{}", kind.label(), n)
@@ -285,6 +295,7 @@ impl Session {
             trace: None,
             source: None,
             rtl: false,
+            bound,
             engines: Vec::new(),
         });
         Ok(name)
@@ -449,6 +460,7 @@ impl Session {
                     line: f.line.unwrap_or(0),
                 }),
                 rtl: true,
+                bound: false,
                 engines: Vec::new(),
             });
         }
@@ -565,7 +577,7 @@ impl Session {
                 let l = self
                     .props
                     .iter()
-                    .filter(|p| !p.rtl)
+                    .filter(|p| !p.rtl && !p.bound)
                     .find_map(|p| sva::parse(&p.expr).ok().and_then(|l| l.clock))
                     .ok_or_else(|| {
                         anyhow!("no clock: declare one with `clock` / `create_clock`")
@@ -575,9 +587,22 @@ impl Session {
         };
         let first = self.reset_cycles(half_cycle);
         let mut v = String::from("\n// ---- informal formal harness (generated) ----\n");
+        // The cycle counter stops at the last value any guard below asks
+        // about. (Stopping late would only cost: a liveness counterexample
+        // is a loop of states, and the counter is part of the state.)
+        let last = self
+            .props
+            .iter()
+            .filter(|p| p.enabled && !p.rtl && !p.bound)
+            .filter_map(|p| sva::parse(&p.expr).ok())
+            .map(|l| (first + l.span).max(l.history()))
+            .chain([first, 1])
+            .max()
+            .unwrap_or(1)
+            .min(0xffff);
         v += "reg [15:0] informal_cyc = 16'd0;\n";
         v += &format!(
-            "always @({edge} {clk}) if (informal_cyc != 16'hffff) informal_cyc <= informal_cyc + 16'd1;\n"
+            "always @({edge} {clk}) if (informal_cyc != 16'd{last}) informal_cyc <= informal_cyc + 16'd1;\n"
         );
         match &self.reset {
             // Several clocks: held until each has had a whole period.
@@ -601,7 +626,8 @@ impl Session {
         }
         for (i, p) in self.props.iter().enumerate() {
             // A property written in the RTL is already in the design.
-            if !p.enabled || p.rtl {
+            // One the front end compiles is handed to it as text.
+            if !p.enabled || p.rtl || p.bound {
                 continue;
             }
             let l = sva::parse(&p.expr).map_err(|e| anyhow!("{}: {e}", p.name))?;
@@ -826,17 +852,22 @@ impl Session {
                 t.running(slot);
             }
             // Properties added before elaboration are checked now.
-            let rtl = self.props[i].rtl;
-            if let Err(e) = self.check_names(&self.props[i].expr).and_then(|()| {
+            let rtl = self.props[i].rtl || self.props[i].bound;
+            let names = match self.props[i].bound {
+                true => Ok(()),
+                false => self.check_names(&self.props[i].expr),
+            };
+            if let Err(e) = names.and_then(|()| {
                 // One written in the RTL must be in this model, compiled.
                 let (Ok((_, found)), true) = (lowered, rtl) else {
                     return Ok(());
                 };
                 match found.iter().find(|f| f.name == self.props[i].name) {
                     None => Err("not in the model (inside a black box)".to_string()),
-                    Some(f) => match &f.unsupported {
-                        Some(why) => Err(format!("not supported yet: {why}")),
-                        None => Ok(()),
+                    Some(f) => match (&f.unsupported, &f.error) {
+                        (Some(why), _) => Err(format!("not supported yet: {why}")),
+                        (None, Some(e)) => Err(e.clone()),
+                        (None, None) => Ok(()),
                     },
                 }
             }) {
@@ -856,16 +887,16 @@ impl Session {
                         true => self.props[i].name.clone(),
                         false => format!("informal_p{i}"),
                     };
-                    if rtl && !has_bad(btor, &keep) {
+                    if rtl && !has_target(btor, &keep) {
                         // Without its line the model would hold trivially.
                         Err(anyhow!("no check named {keep} in the model"))
                     } else {
                         let (model, section) = informal_slang::split_trace(btor);
-                        let mut r = std::fs::write(&out, only_bad(model, &keep));
+                        let mut r = std::fs::write(&out, only_target(model, &keep));
                         // The same model plus `output` lines naming the
                         // combinational nets, for the VCD (trace_model).
                         if r.is_ok() && !section.is_empty() {
-                            r = std::fs::write(trace_model(&out), only_bad(btor, &keep));
+                            r = std::fs::write(trace_model(&out), only_target(btor, &keep));
                         }
                         r.map_err(anyhow::Error::from)
                     }
@@ -901,6 +932,32 @@ impl Session {
             }
         }
         targets.len()
+    }
+
+    /// The enabled properties the front end compiles from text, each as the
+    /// name of its check and a whole directive on its clock: its own
+    /// clocking event, or the first declared clock.
+    fn bound_properties(&self) -> Result<Vec<(String, String)>, String> {
+        let mut out = Vec::new();
+        for p in self.props.iter().filter(|p| p.bound && p.enabled) {
+            let expr = p.expr.trim();
+            let clocked = if expr.starts_with('@') {
+                expr.to_string()
+            } else {
+                let c = self.clocks.first().ok_or_else(|| {
+                    format!(
+                        "{}: no clock: declare one with `clock` / `create_clock`",
+                        p.name
+                    )
+                })?;
+                format!("@({} {}) {expr}", c.edge, c.signal)
+            };
+            out.push((
+                p.name.clone(),
+                format!("{} property ({clocked})", p.kind.label()),
+            ));
+        }
+        Ok(out)
     }
 
     /// One Btor2 model with every target's assertion, and the properties
@@ -940,6 +997,7 @@ impl Session {
             // start in the reset cycle are not checked.
             skip_cycles: self.reset_cycles(half_cycle),
             clock_skips: self.clock_skips(half_cycle),
+            properties: self.bound_properties()?,
             clocks: self
                 .clocks
                 .iter()
@@ -993,13 +1051,28 @@ impl Session {
         tracker: Option<(&Tracker, usize)>,
     ) -> (Status, Option<String>, Vec<EngineRun>) {
         let kind = self.props[i].kind;
-        let bads = std::fs::read_to_string(model)
-            .map(|t| {
-                t.lines()
-                    .filter(|l| l.split_whitespace().nth(1) == Some("bad"))
-                    .count()
-            })
-            .unwrap_or(0);
+        let text = std::fs::read_to_string(model).unwrap_or_default();
+        let has = |op: &str| {
+            text.lines()
+                .filter(|l| l.split_whitespace().nth(1) == Some(op))
+                .count()
+        };
+        let liveness = has("justice") > 0;
+        let bads = has("bad") + has("justice");
+        // A liveness property is a `justice` line, which informal's own
+        // engines read as a safety property (liveness to safety, when the
+        // model is loaded). An external engine reads the file itself.
+        let own: Vec<Arc<dyn Engine>>;
+        let engines = if liveness {
+            own = engines
+                .iter()
+                .filter(|e| e.name().starts_with("informal-") && !e.name().contains("wbmc"))
+                .cloned()
+                .collect();
+            &own[..]
+        } else {
+            engines
+        };
         if bads == 0 {
             // The front end folded the check to a constant true.
             let status = match kind {
@@ -1255,19 +1328,39 @@ fn trace_model(model: &Path) -> PathBuf {
     model.with_extension("trace.btor2")
 }
 
-/// True when the model has a `bad` line named `name`.
-fn has_bad(btor: &str, name: &str) -> bool {
-    btor.lines().any(|l| {
-        let w: Vec<&str> = l.split_whitespace().collect();
-        w.get(1) == Some(&"bad") && w.get(3) == Some(&name)
-    })
+/// The name of the property a model line is the target of: a `bad` line
+/// (`<id> bad <node> <name>`) or a `justice` line (`<id> justice <n>
+/// <nodes> <name>`, a liveness property). `None` for any other line, and
+/// `Some("")` for a target with no name.
+fn target_of(line: &str) -> Option<(&str, &str)> {
+    let w: Vec<&str> = line.split_whitespace().collect();
+    match w.get(1).copied() {
+        Some("bad") => Some(("bad", w.get(3).copied().unwrap_or(""))),
+        Some("justice") => {
+            let n: usize = w.get(2)?.parse().ok()?;
+            Some(("justice", w.get(3 + n).copied().unwrap_or("")))
+        }
+        _ => None,
+    }
 }
 
-fn only_bad(btor: &str, keep: &str) -> String {
+/// True when the model has a target (see [`target_of`]) named `name`.
+fn has_target(btor: &str, name: &str) -> bool {
     btor.lines()
-        .filter(|l| {
-            let w: Vec<&str> = l.split_whitespace().collect();
-            w.get(1) != Some(&"bad") || w.get(3) == Some(&keep)
+        .any(|l| target_of(l).is_some_and(|(_, n)| n == name))
+}
+
+/// The model with `keep` as its only target. Fairness lines only matter to
+/// a liveness target, so they go with the others when `keep` is a `bad`
+/// (an external engine may not read them).
+fn only_target(btor: &str, keep: &str) -> String {
+    let liveness = btor
+        .lines()
+        .any(|l| target_of(l) == Some(("justice", keep)));
+    btor.lines()
+        .filter(|l| match target_of(l) {
+            Some((_, name)) => name == keep,
+            None => liveness || l.split_whitespace().nth(1) != Some("fair"),
         })
         .flat_map(|l| [l, "\n"])
         .collect()

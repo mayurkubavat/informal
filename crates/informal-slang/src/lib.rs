@@ -218,6 +218,12 @@ pub struct Request {
     /// RTL on one clock and edge (clock input, rising edge?, cycles), where
     /// several clocks see different numbers of edges during reset.
     pub clock_skips: Vec<(String, bool, u32)>,
+    /// [`lower`] only, svlang only: properties given by command that the
+    /// front end binds in the top module's scope and compiles: the name of
+    /// the check, and the whole directive (`assert property (@(posedge clk)
+    /// req |-> ##[1:3] gnt)`). Each comes back in [`Lowered::properties`]
+    /// under its name.
+    pub properties: Vec<(String, String)>,
 }
 
 /// A concurrent property written in the RTL (`assert property`, `assume
@@ -233,6 +239,14 @@ pub struct RtlProperty {
     /// Why it is not in the model, when it uses an operator the front end
     /// does not compile yet.
     pub unsupported: Option<String>,
+    /// Why it is not in the model, when it does not bind in the design (a
+    /// property given by command that names an unknown signal, say).
+    #[serde(default)]
+    pub error: Option<String>,
+    /// A liveness property (`req |-> s_eventually gnt`): its target in the
+    /// model is a `justice` line, not a `bad`.
+    #[serde(default)]
+    pub liveness: bool,
     pub file: Option<String>,
     pub line: Option<u32>,
 }

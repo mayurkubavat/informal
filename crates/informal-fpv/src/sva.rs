@@ -10,9 +10,10 @@
 //! use `$past`, `$rose`, `$fell`, `$stable`, `$changed`). A property whose
 //! sequences span T cycles is checked at the cycle its last term lands on,
 //! by looking back with `$past(b, k)`. Ranges (`##[a:b]`), repetition,
-//! `throughout`, `until`, `s_eventually` and local variables are reported
-//! as unsupported; the full SVA compiler on the slang front end replaces
-//! this module later in phase 1.
+//! `throughout`, `until`, `s_eventually` and local variables are outside
+//! this subset. A property that only adds bounded sequence operators goes
+//! to svlang's property compiler instead ([`needs_compiler`]), which will
+//! replace this module once every command property goes through it.
 
 /// One boolean term of a sequence, `offset` cycles after the sequence start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +55,9 @@ const UNSUPPORTED: &[&str] = &[
     "first_match",
     "s_eventually",
     "eventually",
+    "s_until_with",
     "s_until",
+    "until_with",
     "until",
     "s_nexttime",
     "nexttime",
@@ -68,6 +71,33 @@ const UNSUPPORTED: &[&str] = &[
     "#=#",
     "not ",
 ];
+
+/// The operators of [`UNSUPPORTED`] that svlang's property compiler takes
+/// when their ranges are bounded.
+const COMPILED: &[&str] = &[
+    "##[",
+    "[*",
+    "throughout",
+    "within",
+    "intersect",
+    "first_match",
+    "until_with",
+    "until",
+    "s_eventually",
+];
+
+/// True for a property this module cannot lower but svlang's compiler may:
+/// every operator outside the fixed-delay subset that it uses is one of
+/// the bounded sequence operators. The session then hands the property to
+/// the front end, which binds it in the design and says exactly what it
+/// cannot compile.
+pub fn needs_compiler(src: &str) -> bool {
+    let used: Vec<&&str> = UNSUPPORTED
+        .iter()
+        .filter(|w| contains_word(src, w))
+        .collect();
+    !used.is_empty() && used.iter().all(|w| COMPILED.contains(w))
+}
 
 pub fn parse(src: &str) -> Result<Lowered, String> {
     let mut s = src.trim();

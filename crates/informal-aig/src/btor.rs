@@ -1,6 +1,7 @@
 //! Bit-blasting Btor2 into an AIG: states become latches (one per bit),
-//! inputs become inputs, `bad` and `constraint` lines carry over. Arrays
-//! and liveness (`fair`, `justice`) are not supported at bit level.
+//! inputs become inputs, `bad` and `constraint` lines carry over. Liveness
+//! (`justice` with `fair`) becomes a `bad` by liveness to safety
+//! ([`crate::l2s`]). Arrays are not supported at bit level.
 
 use crate::words::Word;
 use crate::{neg, Aig, Init, Lit, FALSE, TRUE};
@@ -10,9 +11,6 @@ use std::collections::HashMap;
 
 /// Bit-blast a Btor2 model.
 pub fn from_btor2(m: &Model) -> Result<Aig> {
-    if m.with_op(Op::Fair).next().is_some() || m.with_op(Op::Justice).next().is_some() {
-        bail!("liveness (fair / justice) is not supported at bit level yet");
-    }
     let bb = Blaster { m };
     let mut g = Aig::new();
     let mut f: HashMap<u32, Word> = HashMap::new();
@@ -91,7 +89,19 @@ pub fn from_btor2(m: &Model) -> Result<Aig> {
                 }
                 continue;
             }
-            Op::Fair | Op::Justice => continue,
+            Op::Fair => {
+                let c = bb.get(&f, &g, l.args[0])?[0];
+                g.fairness.push(c);
+                continue;
+            }
+            Op::Justice => {
+                let mut conditions = Vec::with_capacity(l.args.len());
+                for a in &l.args {
+                    conditions.push(bb.get(&f, &g, *a)?[0]);
+                }
+                g.justice.push(conditions);
+                continue;
+            }
             _ => bb.encode(&mut g, &f, l)?,
         };
         f.insert(l.id, w);
@@ -110,6 +120,8 @@ pub fn from_btor2(m: &Model) -> Result<Aig> {
         let i = g.input();
         g.set_next(b, i);
     }
+    // Every engine, pass and certificate gets an ordinary safety model.
+    crate::l2s::to_safety(&mut g);
     Ok(g)
 }
 

@@ -59,24 +59,39 @@ tracks lines for code read by `source`, including `foreach` and proc bodies
 written in that file. A property made by `eval` of a built string has no
 line info; then the first line of the sourced script (`info script`) naming
 the property as a whole word is used. Properties typed at the console get
-`null`. SVA written in the RTL is not read by the shell yet, so no RTL
-locations are produced today; the field is ready for them. The app's source
-view opens `source.file` at `source.line` (F3, Show source, the Details
-Source row) and only falls back to searching the top design file when it is
-absent.
+`null`. A property written in the RTL carries the place it stands in the
+design. The app's source view opens `source.file` at `source.line` (F3,
+Show source, the Details Source row) and only falls back to searching the
+top design file when it is absent.
 
 ## SVA subset
 
-Supported: `@(posedge clk)` / `@(negedge clk)`, `disable iff (expr)`,
-sequences of boolean terms joined by fixed delays (`a ##1 b ##2 c`, a
-leading `##N`), `|->` and `|=>`, and any boolean SystemVerilog expression
-inside a term, including `$past(x[, n])`, `$rose`, `$fell`, `$stable`,
-`$changed`.
+Supported in properties given by command: `@(posedge clk)` / `@(negedge
+clk)`, `disable iff (expr)`, sequences of boolean terms joined by fixed
+delays (`a ##1 b ##2 c`, a leading `##N`), `|->` and `|=>`, and any
+boolean SystemVerilog expression inside a term, including `$past(x[, n])`,
+`$rose`, `$fell`, `$stable`, `$changed`.
 
-Rejected with an error naming the construct: `##[m:n]` ranges, `[*n]`,
-`[->n]`, `[=n]`, `throughout`, `within`, `intersect`, `first_match`,
-`until`, `s_eventually` and other liveness operators, `not`, `strong` /
-`weak`. These come with the slang-based SVA compiler later in phase 1.
+Also supported, through svlang's property compiler: `##[M:N]` ranges,
+`[*N]` and `[*M:N]`, `throughout`, `within`, `intersect`, `first_match`,
+`b until c` / `b until_with c` between booleans, and `s_eventually b`
+(each alone or after `|->` or `|=>`).
+
+`s_eventually` is a liveness property: no finite trace violates it. Its
+model line is a Btor2 `justice`, which informal's own engines check as a
+safety property (liveness to safety, `informal_aig::l2s`: a shadow copy of
+the state and a free choice of the step where a loop starts). `proven`
+means no loop of states leaves the awaited condition out for ever; `cex`
+is such a loop, and the trace's first comment says which frames repeat.
+An `assume` of `s_eventually` is a fairness constraint for these
+properties. External engines are not run on them. A property that uses one of these is bound in the top
+module by the front end at `prove`, so a name it does not know, or a
+range that ends at `$`, is an error on that property then, not at the
+command.
+
+Rejected at the command with an error naming the construct: `[->n]`,
+`[=n]`, `s_until`, `eventually` with a range and other liveness operators, `not`,
+`strong` / `weak`.
 
 ## Command map
 
@@ -199,8 +214,10 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   bounded ones: booleans, `##N`, `##[M:N]`, `[*N]`, `[*M:N]`, sequence
   `and`, `or`, `intersect`, `within`, `throughout` and `first_match`,
   under `|->` and `|=>`, with `disable iff`, `default clocking` and the
-  sampled-value functions. An assertion or cover that uses another
-  operator (`##[1:$]`, `[->N]`, `until`, `s_eventually`, ...) gets the
+  sampled-value functions, `b until c` / `b until_with c` between
+  booleans, and `s_eventually b` (liveness, see the SVA subset above). An
+  assertion or cover that uses another operator (`##[1:$]`, `[->N]`,
+  `s_until`, ...) gets the
   status error naming the operator; an assumption that does
   is an error for the whole design. A concurrent assertion under an `if`
   or `case` in a clocked block is checked only when the flow reaches it

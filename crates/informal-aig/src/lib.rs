@@ -12,6 +12,7 @@
 
 pub mod aiger;
 pub mod btor;
+pub mod l2s;
 pub mod preprocess;
 pub mod reduce;
 pub mod split;
@@ -87,6 +88,15 @@ pub struct Aig {
     /// replay can show combinational nets; engines and preprocessing
     /// ignore them.
     pub outputs: Vec<(String, Vec<Lit>)>,
+    /// Justice properties (Btor2 `justice`): an infinite trace on which
+    /// every condition of one is true infinitely often is a counterexample.
+    /// Loading a model turns them into bads ([`l2s::to_safety`]), so the
+    /// engines see none; they are here for that pass and for checking a
+    /// lasso on the model as it was.
+    pub justice: Vec<Vec<Lit>>,
+    /// Fairness conditions (Btor2 `fair`): only traces on which each is
+    /// true infinitely often count for a justice property.
+    pub fairness: Vec<Lit>,
     strash: HashMap<(Lit, Lit), Lit, Fixed>,
 }
 
