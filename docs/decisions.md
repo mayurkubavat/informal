@@ -278,7 +278,8 @@ the single-developer setup of that time.
   ranges, repetition ranges, `until` and liveness are not compiled yet (an
   assertion or cover is then an error on that property, an assumption on
   the design); both edges of one clock are modelled with two steps per
-  cycle; latches and several clocks are rejected;
+  cycle; latches are transparent within a step (loops through open
+  latches are rejected); several clocks are rejected;
   `$anyconst` / `$anyseq` as functions are unsupported (the attributes
   work); lowering speed on large designs is not measured yet.
 

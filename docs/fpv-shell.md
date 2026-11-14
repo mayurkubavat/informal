@@ -211,8 +211,15 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   register changes only at its own edge, the reset is held for the whole
   first cycle, and the other inputs may change on either edge. Depths
   are then in half cycles, and the trace shows the clock toggling. A
-  design with two clocks, a latch, or both edges of a clock that is not
-  a top-level input is an error.
+  design with two clocks, or both edges of a clock that is not a
+  top-level input, is an error.
+- A latch (`always_latch`, or an `always @*` that does not assign on
+  every path) is transparent within a model step: open, it shows its
+  data; closed, what it held at the end of the step before. A latch
+  whose value depends on itself within a step, through its own data or
+  through another latch (a two-phase pair), is an error. A latch opened
+  by the clock's level needs the clock as data, which the one-edge model
+  leaves free.
 - `$past`, `$rose`, `$fell`, `$stable` and `$changed` have no history in
   the first cycle(s). As in JasperGold, a property that uses them is first
   checked once that history is real: with a reset the reset cycle counts,

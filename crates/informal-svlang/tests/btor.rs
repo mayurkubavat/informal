@@ -70,7 +70,7 @@ fn anyconst_is_held_and_x_is_free() {
 }
 
 #[test]
-fn two_clocks_and_latches_are_rejected() {
+fn two_clocks_and_latch_loops_are_rejected() {
     let l = lower(
         "two",
         "module two(input logic a, b, d, output logic p, q);\n\
@@ -83,13 +83,28 @@ fn two_clocks_and_latches_are_rejected() {
         "{:?}",
         l.errors
     );
+    assert!(!l.fallback);
+    // A latch is written (transparent within a step); one that reads its
+    // own output while open is not.
     let l = lower(
         "lat",
         "module lat(input logic en, d, output logic q);\n\
            always_latch if (en) q <= d;\n\
          endmodule\n",
     );
-    assert!(!l.ok && l.errors[0].contains("latch"), "{:?}", l.errors);
+    assert!(l.ok, "{:?}", l.errors);
+    informal_ir::parse(&l.btor2).unwrap();
+    let l = lower(
+        "osc",
+        "module osc(input logic en, output logic q);\n\
+           always_latch if (en) q <= ~q;\n\
+         endmodule\n",
+    );
+    assert!(
+        !l.ok && l.errors[0].contains("depends on itself"),
+        "{:?}",
+        l.errors
+    );
     assert!(!l.fallback);
 }
 
