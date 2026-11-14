@@ -200,8 +200,10 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   `default clocking` and the sampled-value functions. An assertion or
   cover that uses another operator (`##[m:n]`, `until`, `s_eventually`,
   ...) gets the status error naming the operator; an assumption that does
-  is an error for the whole design. A concurrent assertion inside an `if`
-  of a clocked block is not supported yet.
+  is an error for the whole design. A concurrent assertion under an `if`
+  or `case` in a clocked block is checked only when the flow reaches it
+  (`if (en) assert property (p)` is `en |-> p`); one inside a loop or a
+  task is not supported yet.
 - One clock and one edge; every register steps on each model step. A
   design with blocks on two clocks or both edges is an error.
 - `$past`, `$rose`, `$fell`, `$stable` and `$changed` have no history in
