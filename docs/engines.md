@@ -118,3 +118,25 @@ Until phase 2 adds certificate checking (Certifaiger for invariants,
 BtorSim for witnesses), a verdict is only as trustworthy as the engine.
 The portfolio already reports engines that contradict each other as
 `unknown (engine conflict)` rather than picking one.
+
+## Shrinking a disagreement
+
+`informal reduce` shrinks an AIGER model while two engines keep giving
+the same conflicting verdicts on it (`--disagree A,B`), or while a shell
+command keeps exiting 0 (`--test CMD`, with `{}` standing for the
+candidate's path). It never runs informal's own preprocessing, since the
+bug may be there: it only turns latches and AND gates into free inputs,
+inputs and latches into constants, keeps one bad state and drops
+constraints, in halving chunks (`crates/informal-aig/src/reduce.rs`).
+
+Example, from the ABC note above: ABC `pdr` without `fold` against
+`informal-ic3` on `2019/wolf/2019C/zipversa_composecrc_prf-p12` (safe;
+ABC alone says "asserted in frame 0"). 236 tests and 20 s shrank 236
+inputs, 315 latches and 2,764 ANDs to 2 inputs, no latches, no gates: a
+constant-false bad and one constraint, which is the whole bug (ABC reads
+the constraint output as a property).
+
+```sh
+informal reduce model.aig --disagree informal-ic3,ric3-ic3 --timeout 10 -o small.aag
+informal reduce model.aig --test './still-bad.sh {}' -o small.aag
+```

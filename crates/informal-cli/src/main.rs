@@ -6,6 +6,7 @@
 //!   informal simp  <model>                          bit-level model before / after preprocessing
 //!   informal lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (slang)
 //!   informal shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
+//!   informal reduce <model.aig> (--disagree A,B | --test CMD) [-o small.aag]
 //!   informal bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
 
 use anyhow::{bail, Context};
@@ -82,6 +83,30 @@ enum Cmd {
         /// Evaluate this Tcl before the script (repeatable).
         #[arg(short = 'c', long = "command")]
         commands: Vec<String>,
+    },
+    /// Shrink an AIGER model while two engines keep disagreeing on it, or
+    /// while a test command keeps exiting 0 (delta debugging).
+    Reduce {
+        model: PathBuf,
+        /// Two engine names; the model is kept interesting while they give
+        /// the same two conflicting definitive verdicts as on the original.
+        #[arg(long, value_delimiter = ',', num_args = 1)]
+        disagree: Vec<String>,
+        /// A shell command run on each candidate; `{}` is replaced by the
+        /// candidate's path (else the path is appended). Exit 0 = keep.
+        #[arg(long)]
+        test: Option<String>,
+        #[arg(long, default_value = "config/engines.toml")]
+        engines: PathBuf,
+        /// Seconds per engine run (with --disagree).
+        #[arg(long, default_value_t = 10)]
+        timeout: u64,
+        /// Where the reduced model is written (ASCII AIGER).
+        #[arg(short, long, default_value = "reduced.aag")]
+        out: PathBuf,
+        /// Scratch directory for candidates.
+        #[arg(long, default_value = "informal_work/reduce")]
+        workdir: PathBuf,
     },
     /// Run engines over every model in a directory and log to the run database.
     Bench {
@@ -217,6 +242,23 @@ fn main() -> anyhow::Result<()> {
                 print!("{}", informal_aig::aiger::write_ascii(&s));
             }
         }
+        Cmd::Reduce {
+            model,
+            disagree,
+            test,
+            engines,
+            timeout,
+            out,
+            workdir,
+        } => reduce(
+            &model,
+            &disagree,
+            test.as_deref(),
+            &engines,
+            timeout,
+            &out,
+            &workdir,
+        )?,
         Cmd::Lower { files, top, define } => {
             let req = informal_slang::Request {
                 files,
@@ -376,4 +418,111 @@ fn repl(shell: &informal_fpv::Shell) -> anyhow::Result<()> {
         }
         buf.clear();
     }
+}
+
+/// `informal reduce`: see [`informal_aig::reduce`].
+fn reduce(
+    model: &Path,
+    disagree: &[String],
+    test: Option<&str>,
+    engines: &Path,
+    timeout: u64,
+    out: &Path,
+    workdir: &Path,
+) -> anyhow::Result<()> {
+    use informal_aig::reduce;
+    if !matches!(
+        model.extension().and_then(|e| e.to_str()),
+        Some("aig" | "aag")
+    ) {
+        // A bit-blasted Btor2 model may carry non-constant initial values,
+        // which AIGER cannot hold: the candidates would mean something else.
+        bail!("reduce takes AIGER models (.aig, .aag)");
+    }
+    let g = informal_aig::load(model)?;
+    std::fs::create_dir_all(workdir)?;
+    let cand = workdir.join("candidate.aig");
+    let write = |h: &informal_aig::Aig| std::fs::write(&cand, informal_aig::aiger::write_binary(h));
+
+    let mut check: Box<dyn FnMut(&informal_aig::Aig) -> bool> = match (test, disagree.len()) {
+        (Some(cmd), 0) => {
+            let cmd = if cmd.contains("{}") {
+                cmd.replace("{}", &cand.display().to_string())
+            } else {
+                format!("{cmd} {}", cand.display())
+            };
+            Box::new(move |h| {
+                write(h).is_ok()
+                    && std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .is_ok_and(|s| s.success())
+            })
+        }
+        (None, 2) => {
+            let pair = load_engines(engines, disagree)?;
+            let pair: Vec<_> = disagree
+                .iter()
+                .map(|n| pair.iter().find(|e| e.name() == n).cloned())
+                .collect::<Option<_>>()
+                .with_context(|| format!("engines {disagree:?} not both found"))?;
+            let req = CheckRequest {
+                model: cand.clone(),
+                format: ModelFormat::Aiger,
+                timeout: Duration::from_secs(timeout),
+            };
+            let run = move |h: &informal_aig::Aig| -> Option<(Verdict, Verdict)> {
+                write(h).ok()?;
+                let mut v = Vec::new();
+                for e in &pair {
+                    let ctx = informal_engine::RunContext::new(req.timeout);
+                    let r = e.check(&req, &ctx).ok()?;
+                    if !r.verdict.is_definitive() {
+                        return None;
+                    }
+                    v.push(r.verdict);
+                }
+                let b = v.pop()?;
+                Some((v.pop()?, b))
+            };
+            let kind = |v: &Verdict| matches!(v, Verdict::Safe);
+            let (a0, b0) = run(&g)
+                .context("the engines do not both give a definitive verdict on the original")?;
+            if kind(&a0) == kind(&b0) {
+                bail!(
+                    "{} and {} agree on the original ({})",
+                    disagree[0],
+                    disagree[1],
+                    a0.label()
+                );
+            }
+            eprintln!(
+                "original: {} says {}, {} says {}",
+                disagree[0],
+                a0.label(),
+                disagree[1],
+                b0.label()
+            );
+            Box::new(move |h| {
+                run(h).is_some_and(|(a, b)| kind(&a) == kind(&a0) && kind(&b) == kind(&b0))
+            })
+        }
+        _ => bail!("give either --disagree A,B or --test CMD"),
+    };
+    if test.is_some() && !check(&g) {
+        bail!("the test command does not succeed on the original model");
+    }
+    let (i, l, a) = reduce::size(&g);
+    eprintln!("original: {i} inputs, {l} latches, {a} ANDs");
+    let (h, tests) = reduce::reduce(&g, &mut check, |m| eprintln!("  {m}"));
+    let (i, l, a) = reduce::size(&h);
+    std::fs::write(out, informal_aig::aiger::write_ascii(&h))?;
+    eprintln!(
+        "reduced:  {i} inputs, {l} latches, {a} ANDs after {tests} tests -> {}",
+        out.display()
+    );
+    Ok(())
 }
