@@ -91,6 +91,26 @@ docs/          design notes (engines, FPV shell, UI, third-party tools)
 refs/          reference library: papers and specs (see refs/README.md)
 ```
 
+### Local data (git-ignored)
+
+Each clone keeps its own working data in these places. `.gitignore` keeps
+them out, and `scripts/check.sh` (via `scripts/hygiene.sh`) fails if
+anything under `research/` or `docs/review/` is ever tracked.
+
+```
+bench/hwmcc24/       HWMCC'24 benchmark models (multi-GB)
+bench/bin/           frozen engine binaries used by long runs
+bench/.work/         per-run scratch
+bench/runs*.jsonl    run databases; bench/*.log are run logs
+bench/seeds/, bench/store*/   seed sets and result stores
+research/            research notes and reports
+research/review/     review notes and feedback reports
+informal_work/       FPV shell session output (btor2, vcd, logs)
+refs/*.pdf           papers (copyrighted; the index in refs/ is tracked)
+```
+
+Model lists such as `bench/*.txt` and `bench/sample60.csv` are tracked.
+
 ## Phase 0 gate
 
 Wrapped engines must reproduce their published HWMCC solve counts when run
