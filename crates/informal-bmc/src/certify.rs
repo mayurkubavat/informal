@@ -25,6 +25,11 @@ use std::collections::HashMap;
 /// A clause over AIG literals of the loaded model's latches.
 pub type Clause = Vec<Lit>;
 
+/// In an invariant of a clock-folded model ([`check_folded`]): the literal
+/// "the constraints held in the half-step before this state" (the fold's
+/// `ok` latch, which the loaded model does not have). `OK ^ 1` negates it.
+pub const OK: Lit = u32::MAX - 1;
+
 /// The invariant over the loaded model `orig`: IC3's `lemmas` (cubes over
 /// `prepared`'s latch literals, each blocked: the clause is the cube's
 /// negation), plus what preprocessing assumed: latches it found constant
@@ -38,6 +43,20 @@ pub fn lift(
     lift_reps(orig, map, prepared, lemmas).map(|(c, _)| c)
 }
 
+/// [`lift`] for a clock-folded model: `ok` is the prepared model's
+/// literal for the fold's `ok` latch (if it survived simplification as a
+/// latch), which becomes [`OK`] in the result.
+pub fn lift_folded(
+    orig: &Aig,
+    map: &LatchMap,
+    prepared: &Aig,
+    lemmas: &[Vec<Lit>],
+    ok: Option<Lit>,
+) -> Result<Vec<Clause>, String> {
+    let extra = ok.filter(|&l| l != TRUE && l != FALSE).map(|l| (l, OK));
+    lift_extra(orig, map, prepared, lemmas, extra).map(|(c, _)| c)
+}
+
 /// [`lift`], also returning, for each of `prepared`'s latches that some
 /// loaded latch maps to, one loaded literal equal to it: two states differ
 /// as `prepared` sees them exactly when they differ on these.
@@ -46,6 +65,17 @@ pub fn lift_reps(
     map: &LatchMap,
     prepared: &Aig,
     lemmas: &[Vec<Lit>],
+) -> Result<(Vec<Clause>, Vec<Lit>), String> {
+    lift_extra(orig, map, prepared, lemmas, None)
+}
+
+/// [`lift_reps`] with one more prepared literal and what it stands for.
+fn lift_extra(
+    orig: &Aig,
+    map: &LatchMap,
+    prepared: &Aig,
+    lemmas: &[Vec<Lit>],
+    extra: Option<(Lit, Lit)>,
 ) -> Result<(Vec<Clause>, Vec<Lit>), String> {
     if map.len() != orig.latches.len() {
         return Err(format!(
@@ -58,6 +88,9 @@ pub fn lift_reps(
         prepared.latches.iter().map(|l| var(l.lit)).collect();
     // Prepared latch variable -> the loaded model's literal equal to it.
     let mut rep: HashMap<u32, Lit> = HashMap::new();
+    if let Some((p, o)) = extra {
+        rep.insert(var(p), o ^ (p & 1));
+    }
     let mut inv = Vec::new();
     for (l, m) in orig.latches.iter().zip(map) {
         let Some(m) = *m else { continue };
@@ -95,7 +128,7 @@ pub fn lift_reps(
         }
         inv.push(c);
     }
-    let mut reps: Vec<Lit> = rep.into_values().collect();
+    let mut reps: Vec<Lit> = rep.into_values().filter(|&l| l | 1 != OK | 1).collect();
     reps.sort_unstable();
     Ok((inv, reps))
 }
@@ -111,6 +144,19 @@ impl Frame {
         } else {
             x
         }
+    }
+}
+
+/// The SAT literal of `l` in `f`, with `ok` standing for [`OK`].
+fn lit_ok(f: &Frame, l: Lit, ok: i32) -> i32 {
+    if l | 1 == OK | 1 {
+        if l == OK {
+            ok
+        } else {
+            -ok
+        }
+    } else {
+        f.lit(l)
     }
 }
 
@@ -168,19 +214,27 @@ impl Enc {
         f
     }
     fn assert_inv(&mut self, f: &Frame, inv: &[Clause]) {
+        self.assert_inv_ok(f, inv, 1)
+    }
+    /// [`Self::assert_inv`] with the value of [`OK`] in this frame.
+    fn assert_inv_ok(&mut self, f: &Frame, inv: &[Clause], ok: i32) {
         for c in inv {
-            let c: Vec<i32> = c.iter().map(|&l| f.lit(l)).collect();
+            let c: Vec<i32> = c.iter().map(|&l| lit_ok(f, l, ok)).collect();
             self.sat.add_clause(&c);
         }
     }
     /// Some clause of `inv` is false in `f`; returns the selector to assume.
     fn violate_inv(&mut self, f: &Frame, inv: &[Clause]) -> i32 {
+        self.violate_inv_ok(f, inv, 1)
+    }
+    /// [`Self::violate_inv`] with the value of [`OK`] in this frame.
+    fn violate_inv_ok(&mut self, f: &Frame, inv: &[Clause], ok: i32) -> i32 {
         let any = self.fresh();
         let mut or = vec![-any];
         for c in inv {
             let s = self.fresh();
             for &l in c {
-                self.sat.add_clause(&[-s, -f.lit(l)]);
+                self.sat.add_clause(&[-s, -lit_ok(f, l, ok)]);
             }
             or.push(s);
         }
@@ -219,7 +273,7 @@ fn cone(g: &Aig, inv: &[Clause]) -> Vec<bool> {
         .bads
         .iter()
         .chain(&g.constraints)
-        .chain(inv.iter().flatten())
+        .chain(inv.iter().flatten().filter(|&&l| l | 1 != OK | 1))
         .map(|&l| var(l))
         .collect();
     while let Some(v) = stack.pop() {
@@ -417,6 +471,65 @@ pub fn check_kind(
         }
         e.sat.add_clause(&or);
     }
+}
+
+/// Check the invariant of a clock-folded model (`preprocess::fold_clock`)
+/// on `g` as loaded. `inv` is over `g`'s latches and [`OK`]; it must
+/// contain the clock's phase as a unit clause (the fold's latch map gives
+/// it). One step of the folded model is two of `g`, so the invariant is
+/// checked as a 2-step one, on the states of the clock's initial phase:
+///
+/// - **Init:** every initial state satisfies it (with OK true).
+/// - **Consecution:** from a state that satisfies it (OK true) and the
+///   constraints, two constraint-meeting steps on, it holds again in a
+///   state that meets the constraints (OK true again).
+/// - **Safety:** such a state is not bad, and neither is its successor
+///   when the successor meets the constraints.
+///
+/// Then every state on a path that keeps the constraints is good: even
+/// steps by induction over pairs of steps, odd steps by the second half
+/// of safety.
+pub fn check_folded(
+    g: &Aig,
+    inv: &[Clause],
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+) -> Result<(), String> {
+    let cone = cone(g, inv);
+    // Init.
+    let mut e = Enc::new(new_sat());
+    let f0 = e.frame(g, &cone, None);
+    e.init(g, &cone, &f0);
+    e.constraints(g, &f0);
+    let s = e.violate_inv_ok(&f0, inv, 1);
+    e.unsat(&[s], "init")?;
+
+    // Consecution over two steps.
+    let mut e = Enc::new(new_sat());
+    let f0 = e.frame(g, &cone, None);
+    e.assert_inv_ok(&f0, inv, 1);
+    e.constraints(g, &f0);
+    let f1 = e.step(g, &cone, &f0);
+    e.constraints(g, &f1);
+    let f2 = e.step(g, &cone, &f1);
+    // As in the 1-step check, the invariant only has to hold in states
+    // that meet the constraints, and both steps into it must have met
+    // them (so OK is true there). Houdini's lemmas are proved in exactly
+    // this sense: its two frames both carry the constraints.
+    e.constraints(g, &f2);
+    let s = e.violate_inv_ok(&f2, inv, 1);
+    e.unsat(&[s], "consecution")?;
+
+    // Safety now, and one step on.
+    let mut e = Enc::new(new_sat());
+    let f0 = e.frame(g, &cone, None);
+    e.assert_inv_ok(&f0, inv, 1);
+    e.constraints(g, &f0);
+    let bad0 = e.any_bad(g, &f0);
+    e.unsat(&[bad0], "safety")?;
+    let f1 = e.step(g, &cone, &f0);
+    e.constraints(g, &f1);
+    let bad1 = e.any_bad(g, &f1);
+    e.unsat(&[bad1], "safety in the second half-step")
 }
 
 /// Check an UNSAFE verdict at `depth` on `g` as loaded: find a trace
@@ -670,5 +783,45 @@ mod tests {
         assert!(check_unsafe(&s, 3, &sat, &never)
             .unwrap_err()
             .starts_with("unsafe fails"));
+    }
+
+    /// clk toggles from 0; a holds the clock's last value.
+    fn clocked(bad_on_high_phase: bool) -> Aig {
+        let mut g = Aig::new();
+        let clk = g.latch(Init::Zero);
+        let a = g.latch(Init::Zero);
+        g.set_next(clk, neg(clk));
+        g.set_next(a, clk);
+        let bad = if bad_on_high_phase {
+            g.and(a, clk) // never: a is 0 whenever clk is 1
+        } else {
+            g.and(a, neg(clk)) // at step 2
+        };
+        g.bads.push(bad);
+        g
+    }
+
+    #[test]
+    fn folded_invariants_are_checked_over_two_steps() {
+        let g = clocked(true);
+        let clk = g.latches[0].lit;
+        // "The clock is low" holds on the even phase only: fine as a
+        // 2-step invariant, not as a 1-step one.
+        let inv = vec![vec![neg(clk)]];
+        assert_eq!(check_folded(&g, &inv, &sat), Ok(()));
+        assert_eq!(check(&g, &inv, &sat), Err("consecution fails".into()));
+        // The same invariant does not make the other property safe.
+        let bad = clocked(false);
+        assert_eq!(check_folded(&bad, &inv, &sat), Err("safety fails".into()));
+        // Without the phase, the second half-step is not covered.
+        assert_eq!(check_folded(&g, &[], &sat), Err("safety fails".into()));
+        // OK stands for "the last half-step met the constraints": with no
+        // constraints it is true, so a clause of OK alone holds and a
+        // clause of its negation alone does not.
+        assert_eq!(check_folded(&g, &[vec![neg(clk)], vec![OK]], &sat), Ok(()));
+        assert_eq!(
+            check_folded(&g, &[vec![neg(clk)], vec![OK ^ 1]], &sat),
+            Err("init fails".into())
+        );
     }
 }

@@ -523,6 +523,33 @@ all three seeds today is lost.
 
 *Result:* pending.
 
+### H17. Fold the free-running clock (prediction, 2026-11-14)
+
+*Evidence (static checks on the benchmark files).* Every cv32e40x, veer
+and veer_axi model has a latch in the property's cone that starts at 0
+and toggles every step (`next = NOT self`): a clock modelled as a latch.
+That is 99 models and 56 of the ones we do not solve. In the invariant
+our runs stored for cv32e40x, 15% of the clauses carry the clock literal
+and 25% a latch derived from it. Every design cycle costs IC3 two
+frames.
+
+*Claim.* With an unconditional toggle the reachable states split into
+two phases that alternate, so the model can be checked two steps at a
+time on the initial phase (`preprocess::fold_clock`): next-state
+functions applied twice, bad in either half-step, the clock a constant.
+`INFORMAL_FOLD=1`, in the IC3 engines. The certificate stays on the
+model as loaded: a folded invariant is checked as a 2-step invariant
+there (`certify::check_folded`), and a counterexample is searched at
+twice the folded depth or one more.
+
+*Prediction (written before the first run).* On cv32e40x-p658 and p299
+the folded model has at least 20% fewer latches after scorr, IC3 closes
+at about half the frame number, and makes at least 40% fewer lemmas.
+Seeded hard set, single IC3, no store: a mean of at least 9 (6.0
+today).
+
+*Result:* pending.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against

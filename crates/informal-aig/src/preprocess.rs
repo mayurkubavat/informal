@@ -281,6 +281,144 @@ pub fn simplify_maps(g: &Aig) -> (Aig, Stats, LatchMap, InputMap) {
     (out, stats, lmap, imap)
 }
 
+/// What [`fold_clock`] did, for certificates on the model as loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fold {
+    /// Index (in the loaded model's latches) of the clock latch.
+    pub clock: usize,
+    /// The clock's value in the states the folded model keeps (its init).
+    pub phase: bool,
+    /// The folded model's "constraints held in the last half-step" latch,
+    /// when the model has constraints.
+    pub ok: Option<Lit>,
+}
+
+/// Fold a free-running clock (H17 in docs/ic3-research.md). A latch with
+/// a constant init and `next = NOT self` splits the reachable states
+/// into two phases that alternate, so the model can be checked two steps
+/// at a time on the initial phase alone. The result has the same latches
+/// minus the clock (now a constant), two copies of the inputs, and one
+/// step of it is two steps of `g`:
+///
+/// - next: the next-state functions applied twice;
+/// - bad: bad in the first half-step, or bad in the second with the
+///   second half-step's constraints holding;
+/// - constraints: the first half-step's, plus a new latch `ok` (init 1)
+///   that remembers whether the second half-step's constraints held, so a
+///   path that broke them is cut off one step later and no real
+///   counterexample is lost.
+///
+/// `None` when there is no such latch (or an init is not a constant).
+/// The maps send the loaded model's latches and inputs to the folded
+/// model's (inputs: the first half-step's copy).
+pub fn fold_clock(g: &Aig) -> Option<(Aig, Fold, LatchMap, InputMap)> {
+    if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
+        return None;
+    }
+    let clock = g
+        .latches
+        .iter()
+        .position(|l| l.next == (l.lit ^ 1) && matches!(l.init, Init::Zero | Init::One))?;
+    let phase = g.latches[clock].init == Init::One;
+    let konst = |b: bool| if b { TRUE } else { FALSE };
+    let latch_of: std::collections::HashMap<u32, usize> = g
+        .latches
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (var(l.lit), i))
+        .collect();
+    let m = |map: &[Lit], l: Lit| map[var(l) as usize] ^ (l & 1);
+
+    let mut out = Aig::new();
+    // First half-step: the state is the folded model's own.
+    let mut m1 = vec![FALSE; g.nodes.len()];
+    let mut new_latch: Vec<Option<Lit>> = vec![None; g.latches.len()];
+    for (v, n) in g.nodes.iter().enumerate() {
+        m1[v] = match *n {
+            Node::Const => FALSE,
+            Node::Input => {
+                let l = out.input();
+                if let Some(name) = g.names.get(&(v as u32)) {
+                    out.names.insert(var(l), name.clone());
+                }
+                l
+            }
+            Node::Latch => {
+                let i = latch_of[&(v as u32)];
+                if i == clock {
+                    konst(phase)
+                } else {
+                    let l = out.latch(g.latches[i].init);
+                    if let Some(name) = g.names.get(&(v as u32)) {
+                        out.names.insert(var(l), name.clone());
+                    }
+                    new_latch[i] = Some(l);
+                    l
+                }
+            }
+            Node::And(a, b) => {
+                let (x, y) = (m(&m1, a), m(&m1, b));
+                out.and(x, y)
+            }
+        };
+    }
+    // Second half-step: the state is the first one's next state.
+    let mid: Vec<Lit> = g.latches.iter().map(|l| m(&m1, l.next)).collect();
+    let mut m2 = vec![FALSE; g.nodes.len()];
+    for (v, n) in g.nodes.iter().enumerate() {
+        m2[v] = match *n {
+            Node::Const => FALSE,
+            Node::Input => out.input(),
+            Node::Latch => mid[latch_of[&(v as u32)]],
+            Node::And(a, b) => {
+                let (x, y) = (m(&m2, a), m(&m2, b));
+                out.and(x, y)
+            }
+        };
+    }
+    for (i, l) in g.latches.iter().enumerate() {
+        if let Some(nl) = new_latch[i] {
+            out.set_next(nl, m(&m2, l.next));
+        }
+    }
+    let c2: Vec<Lit> = g.constraints.iter().map(|&c| m(&m2, c)).collect();
+    let c2_all = out.and_all(&c2);
+    out.constraints = g
+        .constraints
+        .iter()
+        .map(|&c| m(&m1, c))
+        .filter(|&c| c != TRUE)
+        .collect();
+    let ok = if g.constraints.is_empty() {
+        None
+    } else {
+        let ok = out.latch(Init::One);
+        out.set_next(ok, c2_all);
+        out.constraints.push(ok);
+        Some(ok)
+    };
+    out.bads = g
+        .bads
+        .iter()
+        .map(|&b| {
+            let (b1, b2) = (m(&m1, b), m(&m2, b));
+            let late = out.and(b2, c2_all);
+            out.or(b1, late)
+        })
+        .collect();
+    let lmap = (0..g.latches.len())
+        .map(|i| {
+            if i == clock {
+                Some(konst(phase))
+            } else {
+                new_latch[i]
+            }
+        })
+        .collect();
+    let imap = g.inputs.iter().map(|&i| Some(m(&m1, i))).collect();
+    Some((out, Fold { clock, phase, ok }, lmap, imap))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +446,109 @@ mod tests {
         assert_eq!(s.inputs.len(), 0, "{}", s.summary());
         assert_eq!(s.num_ands(), 0, "bad is just the toggle latch");
         assert_eq!(s.bads[0], s.latches[0].lit);
+    }
+
+    /// Random small models with a toggle latch: 2k steps of the model and
+    /// k steps of its fold agree on every latch at even steps and on
+    /// "a bad state was hit while every constraint so far held".
+    #[test]
+    fn folded_clock_matches_two_steps() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for round in 0..300 {
+            let mut g = Aig::new();
+            let ins: Vec<Lit> = (0..3).map(|_| g.input()).collect();
+            let clk = g.latch(if rnd(2) == 0 { Init::Zero } else { Init::One });
+            let lats: Vec<Lit> = (0..4)
+                .map(|_| g.latch(if rnd(2) == 0 { Init::Zero } else { Init::One }))
+                .collect();
+            let mut pool: Vec<Lit> = ins.iter().chain(&lats).copied().chain([clk]).collect();
+            for _ in 0..12 {
+                let a = pool[rnd(pool.len() as u64) as usize] ^ rnd(2) as Lit;
+                let b = pool[rnd(pool.len() as u64) as usize] ^ rnd(2) as Lit;
+                let x = g.and(a, b);
+                pool.push(x);
+            }
+            let pick = |rnd: &mut dyn FnMut(u64) -> u64| {
+                pool[rnd(pool.len() as u64) as usize] ^ rnd(2) as Lit
+            };
+            g.set_next(clk, neg(clk));
+            for &l in &lats {
+                let n = pick(&mut rnd);
+                g.set_next(l, n);
+            }
+            let bad = pick(&mut rnd);
+            g.bads.push(bad);
+            if round % 2 == 0 {
+                let (a, b) = (pick(&mut rnd), pick(&mut rnd));
+                let c = g.or(a, b);
+                g.constraints.push(c);
+            }
+            let (f, fold, lmap, _) = fold_clock(&g).expect("has a toggle latch");
+            assert_eq!(fold.clock, 0);
+
+            // Run both with the same random inputs.
+            let steps = 6;
+            let inputs: Vec<Vec<bool>> = (0..2 * steps)
+                .map(|_| (0..3).map(|_| rnd(2) == 1).collect())
+                .collect();
+            let init = |l: &crate::Latch| l.init == Init::One;
+            let mut st: Vec<bool> = g.latches.iter().map(init).collect();
+            let mut alive = true;
+            let mut hit = vec![false; steps];
+            let mut even_states = Vec::new();
+            for t in 0..2 * steps {
+                if t % 2 == 0 {
+                    even_states.push(st.clone());
+                }
+                let v = g.eval(|l| match g.inputs.iter().position(|&i| i == l) {
+                    Some(i) => inputs[t][i],
+                    None => st[g.latches.iter().position(|x| x.lit == l).unwrap()],
+                });
+                alive &= g.constraints.iter().all(|&c| crate::lit_val(&v, c));
+                if alive && crate::lit_val(&v, bad) {
+                    hit[t / 2] = true;
+                }
+                st = g
+                    .latches
+                    .iter()
+                    .map(|l| crate::lit_val(&v, l.next))
+                    .collect();
+            }
+            let mut fst: Vec<bool> = f.latches.iter().map(init).collect();
+            let mut falive = true;
+            for j in 0..steps {
+                // Latches agree at even steps.
+                for (i, m) in lmap.iter().enumerate() {
+                    let want = even_states[j][i];
+                    let got = match m.unwrap() {
+                        TRUE => true,
+                        FALSE => false,
+                        l => fst[f.latches.iter().position(|x| x.lit == l).unwrap()],
+                    };
+                    if falive {
+                        assert_eq!(got, want, "round {round} step {j} latch {i}");
+                    }
+                }
+                let v = f.eval(|l| match f.inputs.iter().position(|&i| i == l) {
+                    Some(i) if i < 3 => inputs[2 * j][i],
+                    Some(i) => inputs[2 * j + 1][i - 3],
+                    None => fst[f.latches.iter().position(|x| x.lit == l).unwrap()],
+                });
+                falive &= f.constraints.iter().all(|&c| crate::lit_val(&v, c));
+                let fhit = falive && crate::lit_val(&v, f.bads[0]);
+                assert_eq!(fhit, hit[j], "round {round} step {j} bad");
+                fst = f
+                    .latches
+                    .iter()
+                    .map(|l| crate::lit_val(&v, l.next))
+                    .collect();
+            }
+        }
     }
 }

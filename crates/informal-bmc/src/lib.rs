@@ -27,17 +27,75 @@ use unroll::Unroll;
 
 pub use informal_aig::load as load_aig;
 
-/// The simplified model and the map from the loaded model's latches to it,
-/// or the reason this engine cannot take it.
-fn prepare(req: &CheckRequest) -> Result<(Aig, LatchMap, InputMap, u64), String> {
+/// How a prepared model was clock-folded (see `preprocess::fold_clock`):
+/// the clock's latch index and phase in the loaded model, and the
+/// prepared model's literal for the fold's `ok` latch.
+#[derive(Debug, Clone, Copy)]
+pub struct Folded {
+    pub clock: usize,
+    pub phase: bool,
+    pub ok: Option<informal_aig::Lit>,
+}
+
+/// The parts of a prepared model before scorr and the CNF template.
+struct Loaded {
+    aig: Aig,
+    latch_map: LatchMap,
+    input_map: InputMap,
+    design_hash: u64,
+    folded: Option<Folded>,
+}
+
+/// The simplified model and the maps from the loaded model to it, or the
+/// reason this engine cannot take it. With `fold`, a free-running clock
+/// is folded first (H17): one step is then two of the loaded model.
+fn prepare(req: &CheckRequest, fold: bool) -> Result<Loaded, String> {
+    use informal_aig::preprocess as pre;
     let g = load_aig(&req.model).map_err(|e| format!("{e:#}"))?;
     if g.bads.is_empty() {
         return Err("model has no bad-state property".into());
     }
     // Only needed (and only computed) when the invariant store is on.
-    let hash = store::dir().map_or(0, |_| store::design_hash(&g));
-    let (s, _, map, imap) = informal_aig::preprocess::simplify_maps(&g);
-    Ok((s, map, imap, hash))
+    let design_hash = store::dir().map_or(0, |_| store::design_hash(&g));
+    if fold {
+        if let Some((f, info, fl, fi)) = pre::fold_clock(&g) {
+            let (s, _, map, imap) = pre::simplify_maps(&f);
+            if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+                eprintln!(
+                    "fold: clock latch {} (phase {}), {} -> {} ands; {} latches after simplification",
+                    info.clock,
+                    u8::from(info.phase),
+                    g.num_ands(),
+                    f.num_ands(),
+                    s.latches.len()
+                );
+            }
+            // The ok latch through the same map as the other latches.
+            let ok = info.ok.and_then(|l| {
+                let i = f.latches.iter().position(|x| x.lit == l)?;
+                map[i]
+            });
+            return Ok(Loaded {
+                latch_map: pre::compose(&fl, &f, &map),
+                input_map: pre::compose_inputs(&fi, &f, &imap),
+                aig: s,
+                design_hash,
+                folded: Some(Folded {
+                    clock: info.clock,
+                    phase: info.phase,
+                    ok,
+                }),
+            });
+        }
+    }
+    let (s, _, map, imap) = pre::simplify_maps(&g);
+    Ok(Loaded {
+        aig: s,
+        latch_map: map,
+        input_map: imap,
+        design_hash,
+        folded: None,
+    })
 }
 
 /// The model as the engines see it: simplified, latch-merged, and its CNF
@@ -53,6 +111,9 @@ pub struct Prepared {
     pub input_map: InputMap,
     /// [`store::design_hash`] of the loaded model (0 when the store is off).
     pub design_hash: u64,
+    /// Set when the model was clock-folded: certificates then check two
+    /// steps of the loaded model per step of this one.
+    pub folded: Option<Folded>,
 }
 
 impl std::ops::Deref for Prepared {
@@ -75,8 +136,15 @@ struct Slot {
     ready: std::sync::Condvar,
 }
 
-/// Model file, its length and mtime, and whether scorr is on.
-type SlotKey = (std::path::PathBuf, u64, Option<std::time::SystemTime>, bool);
+/// Model file, its length and mtime, whether scorr is on, and whether the
+/// clock is folded.
+type SlotKey = (
+    std::path::PathBuf,
+    u64,
+    Option<std::time::SystemTime>,
+    bool,
+    bool,
+);
 
 static SLOTS: std::sync::Mutex<Vec<(SlotKey, Arc<Slot>)>> = std::sync::Mutex::new(Vec::new());
 
@@ -92,6 +160,23 @@ static SLOTS: std::sync::Mutex<Vec<(SlotKey, Arc<Slot>)>> = std::sync::Mutex::ne
 /// worker and k-induction unrolling built its own template (37 s and
 /// 1.5 GB each on sosylab Problem07, about 15 copies per portfolio).
 fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Arc<Prepared>, String> {
+    prepare_ctx_fold(req, ctx, false)
+}
+
+/// INFORMAL_FOLD=1: the IC3 engines fold a free-running clock (H17).
+fn fold_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("INFORMAL_FOLD").is_ok_and(|x| x != "0"))
+}
+
+/// [`prepare_ctx`], with the clock folded when `fold` is set and the
+/// model has one. A folded model is a different model (other engines'
+/// certificates do not apply to it), so it has its own slot.
+fn prepare_ctx_fold(
+    req: &CheckRequest,
+    ctx: &RunContext,
+    fold: bool,
+) -> Result<Arc<Prepared>, String> {
     let stop = || {
         if ctx.should_stop() {
             Err(ctx.stop_reason().to_string())
@@ -106,6 +191,7 @@ fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Arc<Prepared>, St
         meta.as_ref().map_or(0, |m| m.len()),
         meta.and_then(|m| m.modified().ok()),
         std::env::var_os("INFORMAL_NO_SCORR").is_none(),
+        fold,
     );
     let slot = {
         let mut slots = SLOTS.lock().unwrap_or_else(|p| p.into_inner());
@@ -154,7 +240,7 @@ fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Arc<Prepared>, St
             SlotState::Empty => {
                 *st = SlotState::Building;
                 drop(st);
-                let built = build_prepared(req, ctx);
+                let built = build_prepared(req, ctx, fold);
                 let mut s = slot.state.lock().unwrap_or_else(|p| p.into_inner());
                 let out = match built {
                     Ok(p) => {
@@ -258,6 +344,13 @@ fn certified(
             .invariant()
             .ok_or("missing: IC3 said safe without an invariant")?;
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
+        if let Some(f) = &p.folded {
+            // A folded model's invariant is a 2-step one on the loaded
+            // model, on the clock's initial phase (not stored: the store
+            // holds invariants of every reachable state).
+            let inv = certify::lift_folded(&orig, &p.latch_map, p, &lemmas, f.ok)?;
+            return certify::check_folded(&orig, &inv, &|| solver(ctx));
+        }
         let inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
         certify::check(&orig, &inv, &|| solver(ctx))?;
         if store::dir().is_some() {
@@ -367,6 +460,19 @@ fn unsafe_certified(
     ctx: &RunContext,
     trace: Option<(&Prepared, PreparedTrace)>,
 ) -> Verdict {
+    unsafe_certified_at(req, v, ctx, trace, false)
+}
+
+/// [`unsafe_certified`]; with `folded`, the depth is in steps of a
+/// clock-folded model, so the bad state is at twice that depth or one
+/// more in the loaded model. The reported depth is the loaded model's.
+fn unsafe_certified_at(
+    req: &CheckRequest,
+    v: Verdict,
+    ctx: &RunContext,
+    trace: Option<(&Prepared, PreparedTrace)>,
+    folded: bool,
+) -> Verdict {
     let Verdict::Unsafe { depth } = v else {
         return v;
     };
@@ -374,9 +480,21 @@ fn unsafe_certified(
         return v;
     }
     let t = Instant::now();
+    let mut real = depth;
     let r = (|| {
         let d = depth.ok_or("missing: UNSAFE without a depth")? as usize;
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
+        if folded {
+            let mut last = Err("unsafe fails: no depth tried".to_string());
+            for d2 in [2 * d, 2 * d + 1] {
+                last = certify::check_unsafe(&orig, d2, &|| solver(ctx), &|| ctx.should_stop());
+                if last.is_ok() {
+                    real = Some(d2 as u32);
+                    break;
+                }
+            }
+            return last;
+        }
         // The engine's own trace, carried back to the loaded model, is
         // checked by simulation alone; without one (IC3), or if it does
         // not replay, a fresh search at the same depth decides.
@@ -393,7 +511,7 @@ fn unsafe_certified(
         certify::check_unsafe(&orig, d, &|| solver(ctx), &|| ctx.should_stop())
     })();
     match report_certificate(req, r, t, ctx) {
-        Verdict::Safe => Verdict::Unsafe { depth },
+        Verdict::Safe => Verdict::Unsafe { depth: real },
         other => other,
     }
 }
@@ -516,8 +634,15 @@ fn report_certificate(
     }
 }
 
-fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, String> {
-    let (g, map, imap, design_hash) = prepare(req)?;
+fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Prepared, String> {
+    use informal_aig::preprocess as pre;
+    let Loaded {
+        aig: g,
+        latch_map: map,
+        input_map: imap,
+        design_hash,
+        mut folded,
+    } = prepare(req, fold)?;
     let (g, map, imap) = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
         (g, map, imap)
     } else {
@@ -543,8 +668,11 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, Stri
                         now.elapsed().as_secs_f64()
                     );
                 }
-                let m = informal_aig::preprocess::compose(&map, &g, &hmap);
-                let im = informal_aig::preprocess::compose_inputs(&imap, &g, &himap);
+                let m = pre::compose(&map, &g, &hmap);
+                let im = pre::compose_inputs(&imap, &g, &himap);
+                if let Some(f) = folded.as_mut() {
+                    f.ok = pre::compose(&[f.ok], &g, &hmap)[0];
+                }
                 (h, m, im)
             }
             None => (g, map, imap),
@@ -557,6 +685,7 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, Stri
         latch_map: map,
         input_map: imap,
         design_hash,
+        folded,
     })
 }
 
@@ -921,7 +1050,7 @@ impl Engine for Ic3Engine {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare_ctx(req, ctx) {
+        let g = match prepare_ctx_fold(req, ctx, fold_on()) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -1080,7 +1209,11 @@ impl Engine for Ic3Engine {
                 informal_sat::mini::MAX_VARS.load(Relaxed)
             );
         }
-        Ok(result(self.name(), unsafe_certified(req, v, ctx, None), t0))
+        Ok(result(
+            self.name(),
+            unsafe_certified_at(req, v, ctx, None, g.folded.is_some()),
+            t0,
+        ))
     }
 }
 
@@ -1228,7 +1361,7 @@ impl Engine for Ic3Mt {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare_ctx(req, ctx) {
+        let g = match prepare_ctx_fold(req, ctx, fold_on()) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -1311,7 +1444,11 @@ impl Engine for Ic3Mt {
             .find(|v| !matches!(v, Verdict::Unknown { .. }))
             .cloned()
             .unwrap_or_else(|| unknown(ctx.stop_reason()));
-        Ok(result(self.name(), unsafe_certified(req, v, ctx, None), t0))
+        Ok(result(
+            self.name(),
+            unsafe_certified_at(req, v, ctx, None, g.folded.is_some()),
+            t0,
+        ))
     }
 }
 
@@ -1589,7 +1726,7 @@ mod tests {
             timeout: Duration::from_secs(10),
         };
         let ctx = RunContext::new(req.timeout);
-        let g = prepare(&req).unwrap().0;
+        let g = prepare(&req, false).unwrap().aig;
         assert_eq!(g.latches.len(), 6);
         let (h, st, _, _) = scorr::latch_correspondence(&g, solver(&ctx), &ctx).unwrap();
         assert_eq!(st.merged, 3);
@@ -1624,13 +1761,16 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("c.btor2");
         std::fs::write(&path, counter(7, true)).unwrap();
-        let g = prepare(&CheckRequest {
-            model: path,
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(10),
-        })
+        let g = prepare(
+            &CheckRequest {
+                model: path,
+                format: ModelFormat::Btor2,
+                timeout: Duration::from_secs(10),
+            },
+            false,
+        )
         .unwrap()
-        .0;
+        .aig;
         let ctx = RunContext::new(Duration::from_secs(10));
         // Latch bits b0..b2 as AIG literals, lowest bit first.
         let bits: Vec<_> = g.latches.iter().map(|l| l.lit).collect();
