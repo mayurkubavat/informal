@@ -152,6 +152,18 @@ given, like any other. When time runs out the output says how many terms
 were proved, and the per-term lines say which ones are still open.
 `--write-only` just writes the term models and lists them.
 
+First measurements (2026-11-14, 4 jobs at nice 19 beside other runs,
+300 s, `--slice 10`), against predictions written before the runs: all
+missed. ILA_Piccolo_JALR: 54 of 76 terms proved, 50 of them in the first
+round at about a second each, the other 22 open after 40 s each
+(predicted: all 76; `informal-ic3-mt` proves the whole property in 54 s
+on some seeds). ILA_Piccolo_ADDI_problem: 1 of 35. ILA_Piccolo_BLTU_problem:
+0 of 3. ILA_Flute_AND_problem (2 jobs, `--slice 20`): 0 of 35. So the
+terms are not uniformly easier: most are trivial, and the hard ones are
+about as hard as the whole property, even with the easy ones' invariants
+in the store. What the command gives today is the per-term status, not
+new solves.
+
 Limits today: AIGER models (or Btor2 without non-constant resets); the
 last tenth of the budget is kept for the original; the final import goes
 through Houdini's usual budget (a tenth of the time left, 30 s at most).
