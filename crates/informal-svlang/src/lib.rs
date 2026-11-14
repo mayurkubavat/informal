@@ -141,6 +141,8 @@ pub fn lower(req: &Request) -> Lowered {
     options.trace_marker = informal_slang::TRACE_MARKER.into();
     options.name_prefix = "informal".into();
     options.covers = req.cover_targets;
+    // A design on both edges of its clock gets two model steps per cycle.
+    options.both_edges = true;
     match btor2::write(&nl, &options) {
         Ok(m) => {
             // The per-property notes below say more than the writer's count.
@@ -164,6 +166,7 @@ pub fn lower(req: &Request) -> Lowered {
                 notes,
                 btor2: m.btor2,
                 properties,
+                half_cycle: m.steps_per_cycle == 2,
             }
         }
         Err(e) => fail(vec![e.to_string()]),

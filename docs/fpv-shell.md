@@ -204,8 +204,15 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   or `case` in a clocked block is checked only when the flow reaches it
   (`if (en) assert property (p)` is `en |-> p`); one inside a loop or a
   task is not supported yet.
-- One clock and one edge; every register steps on each model step. A
-  design with blocks on two clocks or both edges is an error.
+- One clock. A design that uses one edge of it takes one model step per
+  clock cycle. A design that uses both edges (`posedge` and `negedge`
+  blocks, or a property on the other edge) takes two: the clock, which
+  must be a top-level input, starts low and toggles on every step, each
+  register changes only at its own edge, the reset is held for the whole
+  first cycle, and the other inputs may change on either edge. Depths
+  are then in half cycles, and the trace shows the clock toggling. A
+  design with two clocks, a latch, or both edges of a clock that is not
+  a top-level input is an error.
 - `$past`, `$rose`, `$fell`, `$stable` and `$changed` have no history in
   the first cycle(s). As in JasperGold, a property that uses them is first
   checked once that history is real: with a reset the reset cycle counts,

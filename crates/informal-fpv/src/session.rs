@@ -494,8 +494,11 @@ impl Session {
         Ok((c.signal.clone(), c.edge))
     }
 
-    /// The generated checker text injected into the top module.
-    fn harness(&self) -> anyhow::Result<String> {
+    /// The generated checker text injected into the top module. With
+    /// `half_cycle` (a design on both clock edges, where one model step is
+    /// half a cycle) the reset is held until the first falling edge has
+    /// passed, so that registers on either edge see it.
+    fn harness(&self, half_cycle: bool) -> anyhow::Result<String> {
         let (clk, edge) = match self.clocks.first() {
             Some(c) => (c.signal.clone(), c.edge),
             None => {
@@ -517,10 +520,19 @@ impl Session {
         v += &format!(
             "always @({edge} {clk}) if (informal_cyc != 16'hffff) informal_cyc <= informal_cyc + 16'd1;\n"
         );
-        if let Some(r) = &self.reset {
-            v += &format!(
-                "always @* if (informal_cyc == 16'd0) assume ({r}); else assume (!({r}));\n"
-            );
+        match &self.reset {
+            Some(r) if half_cycle => {
+                v += "reg informal_half = 1'b0;\n";
+                v += &format!("always @(negedge {clk}) informal_half <= 1'b1;\n");
+                v +=
+                    &format!("always @* if (!informal_half) assume ({r}); else assume (!({r}));\n");
+            }
+            Some(r) => {
+                v += &format!(
+                    "always @* if (informal_cyc == 16'd0) assume ({r}); else assume (!({r}));\n"
+                );
+            }
+            None => {}
         }
         for (i, p) in self.props.iter().enumerate() {
             // A property written in the RTL is already in the design.
@@ -563,13 +575,13 @@ impl Session {
 
     /// Copy the file holding the top module with the harness inserted
     /// before its `endmodule`; other files are used as they are.
-    fn injected_files(&self) -> anyhow::Result<Vec<PathBuf>> {
+    fn injected_files(&self, half_cycle: bool) -> anyhow::Result<Vec<PathBuf>> {
         let top = self
             .design
             .top
             .as_deref()
             .ok_or_else(|| anyhow!("no top module"))?;
-        let harness = self.harness()?;
+        let harness = self.harness(half_cycle)?;
         let re = regex::Regex::new(&format!(r"(?m)\bmodule\s+{}\b", regex::escape(top)))?;
         let end = regex::Regex::new(r"\bendmodule\b")?;
         let mut out = Vec::new();
@@ -665,7 +677,7 @@ impl Session {
                     .map(|&i| (self.props[i].name.clone(), self.props[i].kind.label())),
             )
         });
-        let files = match self.injected_files() {
+        let files = match self.injected_files(false) {
             Ok(f) => f,
             Err(e) => {
                 if let Some(t) = &tracker {
@@ -676,7 +688,16 @@ impl Session {
         };
         let engines = self.engines();
         let fe = frontend();
-        let lowered = self.lower(fe, &files, &targets);
+        let mut lowered = self.lower(fe, &files, &targets, true);
+        // A design on both clock edges: build the model again with the
+        // harness that holds reset for the whole first clock cycle.
+        if matches!(&lowered, Ok((_, _, true))) && self.reset.is_some() {
+            lowered = self
+                .injected_files(true)
+                .map_err(|e| format!("{e:#}"))
+                .and_then(|files| self.lower(fe, &files, &targets, false));
+        }
+        let lowered = lowered.map(|(btor, rtl, _)| (btor, rtl));
         self.frontend = fe.into();
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
@@ -827,7 +848,8 @@ impl Session {
         fe: &'static str,
         files: &[PathBuf],
         targets: &[usize],
-    ) -> Result<(String, Vec<informal_slang::RtlProperty>), String> {
+        notes: bool,
+    ) -> Result<(String, Vec<informal_slang::RtlProperty>, bool), String> {
         let mut defines = self.design.defines.clone();
         defines.extend(targets.iter().map(|i| (format!("INFORMAL_P{i}"), None)));
         let req = informal_slang::Request {
@@ -853,7 +875,7 @@ impl Session {
             skip_cycles: u32::from(self.reset.is_some()),
             cover_targets: true,
         };
-        if !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {
+        if notes && !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {
             self.log(&format!(
                 "black boxes in this model (outputs free, contents not modelled): {}. A proof holds for the design; a counterexample may use output values the boxed logic cannot produce",
                 self.design
@@ -865,7 +887,7 @@ impl Session {
                     .join(", ")
             ));
         }
-        if !req.cut_points.is_empty() {
+        if notes && !req.cut_points.is_empty() {
             self.log(&format!(
                 "{} cut point(s) (stopat) are free in this model: {}. A proof holds for the design; a counterexample may use values the design cannot produce there",
                 self.design.stopats.len(),
@@ -877,11 +899,11 @@ impl Session {
         } else {
             informal_svlang::lower(&req)
         };
-        for n in &l.notes {
+        for n in l.notes.iter().filter(|_| notes) {
             self.log(&format!("{fe}: {n}"));
         }
         if l.ok {
-            Ok((l.btor2, l.properties))
+            Ok((l.btor2, l.properties, l.half_cycle))
         } else {
             Err(format!("{fe}: {}", l.errors.join("; ")))
         }

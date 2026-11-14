@@ -298,6 +298,10 @@ pub struct Lowered {
     /// The concurrent properties written in the RTL (svlang only).
     #[serde(default)]
     pub properties: Vec<RtlProperty>,
+    /// The design uses both edges of its clock, so one model step is half
+    /// a clock cycle and the clock starts low (svlang only).
+    #[serde(default)]
+    pub half_cycle: bool,
 }
 
 #[cfg(informal_slang)]

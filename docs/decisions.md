@@ -277,7 +277,8 @@ the single-developer setup of that time.
   when they have a fixed length (booleans, `##N`, `[*N]`, `|->`, `|=>`);
   ranges, repetition ranges, `until` and liveness are not compiled yet (an
   assertion or cover is then an error on that property, an assumption on
-  the design); latches and several clocks or edges are rejected;
+  the design); both edges of one clock are modelled with two steps per
+  cycle; latches and several clocks are rejected;
   `$anyconst` / `$anyseq` as functions are unsupported (the attributes
   work); lowering speed on large designs is not measured yet.
 

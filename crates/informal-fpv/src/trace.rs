@@ -81,6 +81,14 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
     }
 
     // Named inputs and latches, grouped into words by `name[i]`.
+    // A design on both clock edges: one frame is half a clock cycle, and
+    // the model's clock phase register gives the clock's level in it.
+    let half_cycle = g.latches.iter().any(|l| {
+        g.names
+            .get(&var(l.lit))
+            .is_some_and(|n| split_index(n).0 == HALF_CYCLE)
+    });
+    let clock_leaf = clock.rsplit('.').next().unwrap_or(clock);
     let mut words: BTreeMap<String, Vec<(usize, u32)>> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
     let named = g
@@ -91,6 +99,14 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
     for v in named {
         let Some(n) = g.names.get(&v) else { continue };
         let (base, idx) = split_index(n);
+        // The clock input itself: the clock lane shows it.
+        if half_cycle
+            && base
+                .split_once('.')
+                .is_some_and(|(_, leaf)| leaf == clock_leaf)
+        {
+            continue;
+        }
         if !words.contains_key(base) {
             order.push(base.to_string());
         }
@@ -102,7 +118,7 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         .unwrap_or_else(|| "top".into());
     let mut vars = vec![Var {
         scope: vec![top.clone()],
-        name: clock.rsplit('.').next().unwrap_or(clock).to_string(),
+        name: clock_leaf.to_string(),
         bits: Vec::new(), // the clock is written separately
     }];
     for base in &order {
@@ -110,7 +126,9 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         let width = bits_of.iter().map(|&(i, _)| i + 1).max().unwrap_or(1);
         let mut parts: Vec<String> = base.split('.').map(str::to_string).collect();
         let leaf = parts.pop().unwrap_or_default();
-        if leaf.starts_with("informal_") {
+        // FPV helpers: the harness's own, and svlang's tick counters for
+        // properties written in the RTL.
+        if leaf.starts_with("informal_") || leaf.starts_with("_sva_tick") {
             parts = vec!["informal".into()];
         } else if parts.is_empty() {
             parts.push(top.clone());
@@ -159,7 +177,7 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         name: prop.to_string(),
         bits: (0..frames.len()).map(|f| vec![Some(bad(f))]).collect(),
     });
-    Ok(write_vcd(&vars, frames.len(), prop))
+    Ok(write_vcd(&vars, frames.len(), prop, half_cycle))
 }
 
 /// `q[3]` -> ("q", 3); `en` -> ("en", 0).
@@ -271,11 +289,18 @@ fn bits_text(b: &[Option<bool>]) -> String {
         .collect()
 }
 
+/// The name of the clock phase register in the model of a design on both
+/// clock edges (`informal-svlang` names it through `svlang::btor2`).
+pub const HALF_CYCLE: &str = "informal_clock_phase";
+
 /// One cycle is 10 time units: values change at 10f with the clock rising,
-/// the clock falls at 10f + 5. `vars[0]` is the clock.
-fn write_vcd(vars: &[Var], frames: usize, prop: &str) -> String {
+/// the clock falls at 10f + 5. `vars[0]` is the clock. With `half_cycle`
+/// one frame is half a cycle: the clock is low in even frames and high in
+/// odd ones, and changes at 10f with the values.
+fn write_vcd(vars: &[Var], frames: usize, prop: &str, half_cycle: bool) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "$comment informal trace of {prop}: {frames} cycles $end");
+    let unit = if half_cycle { "half cycles" } else { "cycles" };
+    let _ = writeln!(s, "$comment informal trace of {prop}: {frames} {unit} $end");
     s += "$timescale 1ns $end\n";
     // Scopes in first-seen order; variables grouped under them.
     let mut scopes: Vec<&[String]> = Vec::new();
@@ -317,7 +342,7 @@ fn write_vcd(vars: &[Var], frames: usize, prop: &str) -> String {
         if f == 0 {
             s += "$dumpvars\n";
         }
-        let _ = writeln!(s, "1{}", ident(0));
+        let _ = writeln!(s, "{}{}", if half_cycle { f % 2 } else { 1 }, ident(0));
         for (i, v) in vars.iter().enumerate().skip(1) {
             let b = &v.bits[f];
             let text = bits_text(b);
@@ -334,7 +359,9 @@ fn write_vcd(vars: &[Var], frames: usize, prop: &str) -> String {
         if f == 0 {
             s += "$end\n";
         }
-        let _ = writeln!(s, "#{}\n0{}", 10 * f + 5, ident(0));
+        if !half_cycle {
+            let _ = writeln!(s, "#{}\n0{}", 10 * f + 5, ident(0));
+        }
     }
     let _ = writeln!(s, "#{}", 10 * frames);
     s
