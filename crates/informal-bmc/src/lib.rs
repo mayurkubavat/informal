@@ -1211,7 +1211,7 @@ impl Engine for Ic3Engine {
             );
             let mic = ic3.stats_mic.max(1) as f64;
             eprintln!(
-                "mic: {} calls ({} parent hits), cube {:.1} -> lemma {:.1} literals, drops ok {} fail {} ({:.1}%)",
+                "mic: {} calls ({} parent hits), cube {:.1} -> lemma {:.1} literals, drops ok {} fail {} ({:.1}%), {} failed after 20 failures in a row, {} skipped",
                 ic3.stats_mic,
                 ic3.stats_parent_hits,
                 ic3.stats_mic_in_len as f64 / mic,
@@ -1219,7 +1219,9 @@ impl Engine for Ic3Engine {
                 ic3.stats_drop_ok,
                 ic3.stats_drop_fail,
                 100.0 * ic3.stats_drop_ok as f64
-                    / (ic3.stats_drop_ok + ic3.stats_drop_fail).max(1) as f64
+                    / (ic3.stats_drop_ok + ic3.stats_drop_fail).max(1) as f64,
+                ic3.stats_drop_fail_streak,
+                ic3.stats_drop_skipped
             );
             use std::sync::atomic::Ordering::Relaxed;
             let n = informal_sat::mini::SOLVES.load(Relaxed).max(1);

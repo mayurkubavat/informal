@@ -586,6 +586,46 @@ wrong somewhere and the mode stays off.
 
 *Result:* pending. The default stays `checked`.
 
+### H19. Literals have memory: skip drops that keep failing (prediction, 2026-11-14)
+
+From the project's idea list. MIC tries to drop every literal of a
+cube, and most tries fail (H5); each failure costs a SAT query and up
+to three CTG attempts.
+
+*Claim.* A few literals guard most lemmas, so their drops fail every
+time, and a per-literal record of recent outcomes can say which tries
+to skip. A skipped drop can only leave a lemma less general, never
+wrong.
+
+*Prediction (before measuring).* In 120 s of single IC3 on
+cv32e40x-p658, p299 and x-epic a16-p128, at least 40% of the failed
+drops fall on a literal whose 20 drops before had all failed. Below
+15% the idea is dropped. With the skip on
+(`INFORMAL_IC3_DROPSKIP=20`: skip a literal after 20 failures in a
+row, try it again every 16th time): queries per lemma down by a
+quarter, lemma length up by less than 0.3 literals, no loss on the
+seeded hard set.
+
+*Measured (one run each, so indicative only).*
+
+| model | failed drops | after 20 failures in a row | share |
+|---|---|---|---|
+| p658 | 48,586 | 29,012 | 60% |
+| p299 | 72,509 | 25,923 | 36% |
+| a16-p128 | 126,734 | 13,469 | 11% |
+| p658, clock folded (H17) | 2,786 | 427 | 15% |
+| p299, clock folded | 2,927 | 294 | 10% |
+
+The prediction holds on one model of three. Folding the clock removes
+most of the effect, as expected: the clock literals were the guards.
+With the skip on, p299 was proved in 20 s (not solved in 120 s
+without), a16 was unchanged, and p658 got worse: lemmas 11.0 literals
+instead of 9.7, three times as many of them, and four frames fewer.
+The length prediction (under 0.3 literals) is a miss on p658 and a16
+(+0.3). Single runs of a chaotic engine decide nothing either way.
+
+*Result:* pending the seeded hard set run. Off by default.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against

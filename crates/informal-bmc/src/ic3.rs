@@ -64,6 +64,9 @@ pub struct Config {
     /// Try dropping the literals that occur least in recent lemmas first
     /// (IC3ref / rIC3 ordering) instead of by variable index.
     pub activity_order: bool,
+    /// H19: MIC skips a literal whose last `drop_skip` drops all failed,
+    /// trying it again every 16th time (0: every drop is tried).
+    pub drop_skip: u32,
     /// Parent-lemma MIC (Xia et al., CAV'23): start from the lemma of
     /// level i-1 that covers the cube, keep its literals for last.
     pub parent_lemma: bool,
@@ -103,6 +106,10 @@ impl Default for Config {
             // Off by default: on the 75-model set it lost more models than
             // it won; parent-lemma alone does better (INFORMAL_IC3_ACTIVITY on).
             activity_order: std::env::var_os("INFORMAL_IC3_ACTIVITY").is_some(),
+            drop_skip: std::env::var("INFORMAL_IC3_DROPSKIP")
+                .ok()
+                .and_then(|x| x.parse().ok())
+                .unwrap_or(0),
             // Off by default: on 75 models it traded 3 models for 2 and
             // was slower; two informal-ic3-mt workers use it for diversity.
             parent_lemma: std::env::var_os("INFORMAL_IC3_PARENT").is_some(),
@@ -324,6 +331,11 @@ pub struct Ic3<'g> {
     pub stats_mic_in_len: usize,
     pub stats_drop_ok: usize,
     pub stats_drop_fail: usize,
+    /// Failed drops of a literal whose 20 drops before had failed too.
+    pub stats_drop_fail_streak: usize,
+    pub stats_drop_skipped: usize,
+    /// Per literal: (failed drops in a row, skips since the last try).
+    drop_hist: Vec<(u32, u32)>,
     pub stats_queries: usize,
     pub stats_query_time: std::time::Duration,
     pub stats_lift_time: std::time::Duration,
@@ -441,6 +453,9 @@ impl<'g> Ic3<'g> {
             stats_mic_in_len: 0,
             stats_drop_ok: 0,
             stats_drop_fail: 0,
+            stats_drop_fail_streak: 0,
+            stats_drop_skipped: 0,
+            drop_hist: Vec::new(),
             stats_queries: 0,
             stats_query_time: Default::default(),
             stats_lift_time: Default::default(),
@@ -1334,13 +1349,25 @@ impl<'g> Ic3<'g> {
             let Ok(pos) = cube.binary_search(&l) else {
                 continue; // already gone with an earlier core
             };
+            if self.drop_hist.len() <= l as usize {
+                self.drop_hist.resize(l as usize + 1, (0, 0));
+            }
+            let (streak, skips) = self.drop_hist[l as usize];
+            if self.cfg.drop_skip > 0 && streak >= self.cfg.drop_skip && skips < 15 {
+                self.drop_hist[l as usize].1 += 1;
+                self.stats_drop_skipped += 1;
+                continue;
+            }
             let mut cand = cube.clone();
             cand.remove(pos);
             if let Some(core) = self.ctg_down(cand, i, depth, ctx) {
                 cube = core;
                 self.stats_drop_ok += 1;
+                self.drop_hist[l as usize] = (0, 0);
             } else {
                 self.stats_drop_fail += 1;
+                self.stats_drop_fail_streak += (streak >= 20) as usize;
+                self.drop_hist[l as usize] = (streak.saturating_add(1), 0);
             }
         }
         if depth == 0 {
