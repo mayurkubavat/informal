@@ -89,6 +89,7 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
             .is_some_and(|n| split_index(n).0 == HALF_CYCLE)
     });
     let clock_leaf = clock.rsplit('.').next().unwrap_or(clock);
+    let mut clock_input = None;
     let mut words: BTreeMap<String, Vec<(usize, u32)>> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
     let named = g
@@ -105,6 +106,7 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
                 .split_once('.')
                 .is_some_and(|(_, leaf)| leaf == clock_leaf)
         {
+            clock_input = Some(v);
             continue;
         }
         if !words.contains_key(base) {
@@ -119,7 +121,15 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
     let mut vars = vec![Var {
         scope: vec![top.clone()],
         name: clock_leaf.to_string(),
-        bits: Vec::new(), // the clock is written separately
+        // One step per clock cycle: the clock is drawn, rising with each
+        // frame. Otherwise the model drives the clock input, and the lane
+        // shows its level in each frame.
+        bits: match clock_input {
+            Some(v) => (0..frames.len())
+                .map(|f| vec![Some(frames[f][v as usize])])
+                .collect(),
+            None => Vec::new(),
+        },
     }];
     for base in &order {
         let bits_of = &words[base];
@@ -295,11 +305,13 @@ pub const HALF_CYCLE: &str = "informal_clock_phase";
 
 /// One cycle is 10 time units: values change at 10f with the clock rising,
 /// the clock falls at 10f + 5. `vars[0]` is the clock. With `half_cycle`
-/// one frame is half a cycle: the clock is low in even frames and high in
-/// odd ones, and changes at 10f with the values.
+/// (a design on both clock edges or several clocks) one frame is one model
+/// step of a clock the model drives: the clock lane shows the clock input's
+/// level in each frame (low in even frames and high in odd ones when the
+/// model does not name it), and changes at 10f with the values.
 fn write_vcd(vars: &[Var], frames: usize, prop: &str, half_cycle: bool) -> String {
     let mut s = String::new();
-    let unit = if half_cycle { "half cycles" } else { "cycles" };
+    let unit = if half_cycle { "model steps" } else { "cycles" };
     let _ = writeln!(s, "$comment informal trace of {prop}: {frames} {unit} $end");
     s += "$timescale 1ns $end\n";
     // Scopes in first-seen order; variables grouped under them.
@@ -342,7 +354,16 @@ fn write_vcd(vars: &[Var], frames: usize, prop: &str, half_cycle: bool) -> Strin
         if f == 0 {
             s += "$dumpvars\n";
         }
-        let _ = writeln!(s, "{}{}", if half_cycle { f % 2 } else { 1 }, ident(0));
+        let level = match vars[0]
+            .bits
+            .get(f)
+            .and_then(|b| b.first().copied().flatten())
+        {
+            Some(l) => u8::from(l),
+            None if half_cycle => (f % 2) as u8,
+            None => 1,
+        };
+        let _ = writeln!(s, "{level}{}", ident(0));
         for (i, v) in vars.iter().enumerate().skip(1) {
             let b = &v.bits[f];
             let text = bits_text(b);

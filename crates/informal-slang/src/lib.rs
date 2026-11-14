@@ -209,6 +209,15 @@ pub struct Request {
     /// line that is reached when the cover is hit. The session does, and
     /// tells covers from assertions by [`Lowered::properties`].
     pub cover_targets: bool,
+    /// [`lower`] only, svlang only: the declared clocks of a design with
+    /// more than one, each a top-level input of the top module: its name,
+    /// the model steps it stays at one level, and the steps its wave is
+    /// moved later. A design on one edge of one clock ignores them.
+    pub clocks: Vec<(String, u32, u32)>,
+    /// [`lower`] only, svlang only: `skip_cycles` for the properties in the
+    /// RTL on one clock and edge (clock input, rising edge?, cycles), where
+    /// several clocks see different numbers of edges during reset.
+    pub clock_skips: Vec<(String, bool, u32)>,
 }
 
 /// A concurrent property written in the RTL (`assert property`, `assume
@@ -298,8 +307,9 @@ pub struct Lowered {
     /// The concurrent properties written in the RTL (svlang only).
     #[serde(default)]
     pub properties: Vec<RtlProperty>,
-    /// The design uses both edges of its clock, so one model step is half
-    /// a clock cycle and the clock starts low (svlang only).
+    /// The design uses both edges of its clock or several clocks, so the
+    /// model drives the clocks and one model step is half a cycle of the
+    /// fastest one (svlang only).
     #[serde(default)]
     pub half_cycle: bool,
 }

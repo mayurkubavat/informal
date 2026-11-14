@@ -735,17 +735,29 @@ const JG: &[(&str, Body)] = &[
             return Ok(().into());
         }
         if a.flag("-both_edges") {
-            return Err("clock: -both_edges is not supported yet".into());
+            note("clock: -both_edges is not needed; a design that uses both edges is modelled with two steps per cycle");
         }
-        if a.flag("-factor") || a.flag("-phase") {
-            return Err(
-                "clock: -factor / -phase (multi-clock ratios) are not supported yet".into(),
-            );
-        }
+        let number = |o: &str, least: u32| -> Result<Option<u32>, String> {
+            match a.val(o) {
+                None => Ok(None),
+                Some(v) => match v.parse::<u32>() {
+                    Ok(n) if n >= least && n <= 4096 => Ok(Some(n)),
+                    _ => Err(format!(
+                        "clock: {o} takes a whole number from {least} to 4096, not `{v}`"
+                    )),
+                },
+            }
+        };
+        let factor = number("-factor", 1)?.unwrap_or(1);
+        let phase = number("-phase", 0)?.unwrap_or(0);
         for sig in &a.pos {
+            // Declaring a clock again replaces its ratio.
+            s.clocks.retain(|c| &c.signal != sig);
             s.clocks.push(Clock {
                 signal: sig.clone(),
                 edge: "posedge",
+                factor,
+                phase,
             });
         }
         if let Err(e) = s.check_reset_and_clocks() {
@@ -753,7 +765,7 @@ const JG: &[(&str, Body)] = &[
             return Err(e);
         }
         if s.clocks.len() > 1 {
-            note("clock: more than one clock; every register steps on each model step");
+            note("clock: several clocks; when the design uses more than one, the model drives them with one step per half period of a -factor 1 clock");
         }
         Ok(().into())
     }),
@@ -1052,6 +1064,8 @@ const VCF: &[(&str, Body)] = &[
         s.clocks.push(Clock {
             signal: sig.clone(),
             edge: "posedge",
+            factor: 1,
+            phase: 0,
         });
         Ok(().into())
     }),

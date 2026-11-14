@@ -52,9 +52,21 @@ fn show(d: &NetlistDiag) -> String {
 /// Compile the concurrent properties written in the RTL into checks, and
 /// list them: each with its full hierarchical name, and why not when it
 /// uses an operator svlang does not compile yet.
-fn rtl_properties(nl: &mut Netlist, skip_cycles: u32) -> Vec<RtlProperty> {
+fn rtl_properties(
+    nl: &mut Netlist,
+    skip_cycles: u32,
+    clock_skips: &[(String, bool, u32)],
+) -> Vec<RtlProperty> {
     let mut opts = PropertyOptions::default();
     opts.skip_cycles = skip_cycles;
+    opts.skip_by_clock = clock_skips
+        .iter()
+        .map(|(input, posedge, ticks)| svlang::netlist::ClockSkip {
+            input: input.clone(),
+            posedge: *posedge,
+            ticks: *ticks,
+        })
+        .collect();
     let outcomes = nl.compile_properties(&opts);
     nl.properties
         .iter()
@@ -120,7 +132,7 @@ pub fn lower(req: &Request) -> Lowered {
         }
         LowerOutcome::Error(ds) => return fail(ds.iter().map(show).collect()),
     };
-    let properties = rtl_properties(&mut nl, req.skip_cycles);
+    let properties = rtl_properties(&mut nl, req.skip_cycles, &req.clock_skips);
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
         .iter()
@@ -143,6 +155,15 @@ pub fn lower(req: &Request) -> Lowered {
     options.covers = req.cover_targets;
     // A design on both edges of its clock gets two model steps per cycle.
     options.both_edges = true;
+    options.clocks = req
+        .clocks
+        .iter()
+        .map(|(input, half_period, phase)| btor2::Clock {
+            input: input.clone(),
+            half_period: *half_period,
+            phase: *phase,
+        })
+        .collect();
     match btor2::write(&nl, &options) {
         Ok(m) => {
             // The per-property notes below say more than the writer's count.
@@ -166,7 +187,7 @@ pub fn lower(req: &Request) -> Lowered {
                 notes,
                 btor2: m.btor2,
                 properties,
-                half_cycle: m.steps_per_cycle == 2,
+                half_cycle: m.steps_per_cycle > 1,
             }
         }
         Err(e) => fail(vec![e.to_string()]),
@@ -218,7 +239,7 @@ pub fn compile(req: &Request) -> Design {
                 ..LowerConfig::default()
             };
             match comp.lower_netlist(&config) {
-                LowerOutcome::Lowered(mut nl) => rtl_properties(&mut nl, 0),
+                LowerOutcome::Lowered(mut nl) => rtl_properties(&mut nl, 0, &[]),
                 _ => Vec::new(),
             }
         }

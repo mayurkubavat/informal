@@ -153,6 +153,13 @@ impl SourceLoc {
 pub struct Clock {
     pub signal: String,
     pub edge: &'static str,
+    /// The clock's period, in periods of the fastest clock (`clock
+    /// -factor`, 1 by default). Used when the design has several clocks.
+    pub factor: u32,
+    /// Model steps (half periods of the fastest clock) the clock's wave is
+    /// moved later (`clock -phase`, 0 by default: every clock starts low
+    /// and rises together for the first time).
+    pub phase: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -494,6 +501,58 @@ impl Session {
         Ok((c.signal.clone(), c.edge))
     }
 
+    /// Cycles of the first clock the reset is held for. One, except in a
+    /// model that drives several clocks (`half_cycle`): there the reset
+    /// stays until every declared clock has had a whole period, so that
+    /// registers on any clock and edge see it. Zero without a reset.
+    fn reset_cycles(&self, half_cycle: bool) -> u32 {
+        if self.reset.is_none() {
+            return 0;
+        }
+        let distinct = self
+            .clocks
+            .iter()
+            .any(|c| c.signal != self.clocks[0].signal);
+        if !(half_cycle && distinct) {
+            return 1;
+        }
+        // In model steps: clock c first completes a period at phase + 2 *
+        // factor, and the first clock's n-th rising edge ends step
+        // phase0 + factor0 - 1 + (n - 1) * period0.
+        let whole = |c: &Clock| c.phase + 2 * c.factor;
+        let window = self.clocks.iter().map(whole).max().unwrap_or(0);
+        let c0 = &self.clocks[0];
+        let rest = window.saturating_sub(c0.phase + c0.factor);
+        rest.div_ceil(2 * c0.factor) + 1
+    }
+
+    /// For a model that drives several clocks: how many rising and falling
+    /// edges of each declared clock end a model step while the reset is
+    /// held, so that a property in the RTL on that clock and edge skips
+    /// exactly the attempts that start in reset. Empty otherwise.
+    fn clock_skips(&self, half_cycle: bool) -> Vec<(String, bool, u32)> {
+        let cycles = self.reset_cycles(half_cycle);
+        if cycles < 2 {
+            return Vec::new();
+        }
+        // The first step without reset: after the first clock's last
+        // rising edge in reset (see reset_cycles).
+        let c0 = &self.clocks[0];
+        let release = c0.phase + c0.factor + (cycles - 1) * 2 * c0.factor;
+        let mut out = Vec::new();
+        for c in &self.clocks {
+            let period = 2 * c.factor;
+            let shift = (period - c.phase % period) % period;
+            for (posedge, last) in [(true, c.factor - 1), (false, period - 1)] {
+                let edges = (0..release)
+                    .filter(|t| (t + shift) % period == last)
+                    .count();
+                out.push((c.signal.clone(), posedge, edges as u32));
+            }
+        }
+        out
+    }
+
     /// The generated checker text injected into the top module. With
     /// `half_cycle` (a design on both clock edges, where one model step is
     /// half a cycle) the reset is held until the first falling edge has
@@ -514,13 +573,19 @@ impl Session {
                 (l.signal, l.edge)
             }
         };
-        let first = u32::from(self.reset.is_some());
+        let first = self.reset_cycles(half_cycle);
         let mut v = String::from("\n// ---- informal formal harness (generated) ----\n");
         v += "reg [15:0] informal_cyc = 16'd0;\n";
         v += &format!(
             "always @({edge} {clk}) if (informal_cyc != 16'hffff) informal_cyc <= informal_cyc + 16'd1;\n"
         );
         match &self.reset {
+            // Several clocks: held until each has had a whole period.
+            Some(r) if half_cycle && first > 1 => {
+                v += &format!(
+                    "always @* if (informal_cyc < 16'd{first}) assume ({r}); else assume (!({r}));\n"
+                );
+            }
             Some(r) if half_cycle => {
                 v += "reg informal_half = 1'b0;\n";
                 v += &format!("always @(negedge {clk}) informal_half <= 1'b1;\n");
@@ -688,14 +753,14 @@ impl Session {
         };
         let engines = self.engines();
         let fe = frontend();
-        let mut lowered = self.lower(fe, &files, &targets, true);
+        let mut lowered = self.lower(fe, &files, &targets, true, false);
         // A design on both clock edges: build the model again with the
         // harness that holds reset for the whole first clock cycle.
         if matches!(&lowered, Ok((_, _, true))) && self.reset.is_some() {
             lowered = self
                 .injected_files(true)
                 .map_err(|e| format!("{e:#}"))
-                .and_then(|files| self.lower(fe, &files, &targets, false));
+                .and_then(|files| self.lower(fe, &files, &targets, false, true));
         }
         let lowered = lowered.map(|(btor, rtl, _)| (btor, rtl));
         self.frontend = fe.into();
@@ -849,6 +914,7 @@ impl Session {
         files: &[PathBuf],
         targets: &[usize],
         notes: bool,
+        half_cycle: bool,
     ) -> Result<(String, Vec<informal_slang::RtlProperty>, bool), String> {
         let mut defines = self.design.defines.clone();
         defines.extend(targets.iter().map(|i| (format!("INFORMAL_P{i}"), None)));
@@ -872,7 +938,13 @@ impl Session {
                 .collect(),
             // As the harness does for its own properties: attempts that
             // start in the reset cycle are not checked.
-            skip_cycles: u32::from(self.reset.is_some()),
+            skip_cycles: self.reset_cycles(half_cycle),
+            clock_skips: self.clock_skips(half_cycle),
+            clocks: self
+                .clocks
+                .iter()
+                .map(|c| (c.signal.clone(), c.factor, c.phase))
+                .collect(),
             cover_targets: true,
         };
         if notes && !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {

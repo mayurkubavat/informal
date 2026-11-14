@@ -274,12 +274,15 @@ the single-developer setup of that time.
   through svlang in `cargo test`; the FIFO also through slang when built in.
   Gaps found in svlang are fixed in svlang, with a test there.
 - **Open issues:** concurrent properties written in the RTL are checked
-  when they have a fixed length (booleans, `##N`, `[*N]`, `|->`, `|=>`);
-  ranges, repetition ranges, `until` and liveness are not compiled yet (an
+  when they are bounded (booleans, `##N`, `##[M:N]`, `[*M:N]`, sequence
+  operators, `|->`, `|=>`); unbounded ranges, goto repetition, `until`
+  and liveness are not compiled yet (an
   assertion or cover is then an error on that property, an assumption on
   the design); both edges of one clock are modelled with two steps per
   cycle; latches are transparent within a step (loops through open
-  latches are rejected); several clocks are rejected;
+  latches are rejected); several declared top-level clocks are driven by
+  the model (`clock -factor -phase`), divided and gated clocks are
+  rejected;
   `$anyconst` / `$anyseq` as functions are unsupported (the attributes
   work); lowering speed on large designs is not measured yet.
 

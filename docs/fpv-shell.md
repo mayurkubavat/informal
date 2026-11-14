@@ -92,7 +92,7 @@ passes on a different setup without saying so.
 | `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with svlang; top guessed when omitted |
 | `elaborate ... -bbox_m {M ...} -bbox_i {path ...}` | `set_blackbox -designs {M ...} -cells {path ...}` | Black boxes: ports kept, contents not modelled, outputs free (see below) |
 | `stopat sig ...`, `stopat -clear [sig ...]`, `stopat -list` | `snip_driver sig ...` | Cut points: each signal is cut from its drivers and is free on every step (see below) |
-| `clock clk` | `create_clock clk -period N` | Primary clock (posedge). `-both_edges`, `-factor` are errors |
+| `clock clk [-factor N] [-phase P]` | `create_clock clk -period N` | A clock (posedge); the first one declared is the primary clock. `-factor` and `-phase` relate several clocks (see Known gaps); `-both_edges` is accepted and not needed |
 | `reset -expression {!rst_n}` | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
 | — | `sim_run -stable`, `sim_save_reset` | Accepted (reset is applied by the model) |
 | `assert / assume / cover -name N {expr}` | `fvassert / fvassume / fvcover N -expr {expr}` | Add a property |
@@ -156,7 +156,7 @@ informal would do with it:
 
 ```
 fpv.tcl:85: unknown command: get_version: not an informal command
-fpv.tcl:135: error: clock: -both_edges is not supported yet
+fpv.tcl:135: error: analyze: VHDL is not supported yet
 fpv.tcl:238: ignored: task -create ...: tasks are not modelled yet; properties stay in one task
 fpv.tcl:45: tcl error: environment variable DUT_TOP is not set
 9 command(s) honoured, 5 rejected, 2 unknown, 4 ignored option(s) or command(s), 1 Tcl error(s)
@@ -196,23 +196,33 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   and listed under their full hierarchical names (`top.u_fifo.a_full`,
   `top._assert_1` without a label); `prove -all` checks them with the
   rest, and an assumption constrains every proof. svlang compiles the
-  fixed-length ones: booleans, `##N`, `[*N]`, `|->`, `|=>`, `disable iff`,
-  `default clocking` and the sampled-value functions. An assertion or
-  cover that uses another operator (`##[m:n]`, `until`, `s_eventually`,
-  ...) gets the status error naming the operator; an assumption that does
+  bounded ones: booleans, `##N`, `##[M:N]`, `[*N]`, `[*M:N]`, sequence
+  `and`, `or`, `intersect`, `within`, `throughout` and `first_match`,
+  under `|->` and `|=>`, with `disable iff`, `default clocking` and the
+  sampled-value functions. An assertion or cover that uses another
+  operator (`##[1:$]`, `[->N]`, `until`, `s_eventually`, ...) gets the
+  status error naming the operator; an assumption that does
   is an error for the whole design. A concurrent assertion under an `if`
   or `case` in a clocked block is checked only when the flow reaches it
   (`if (en) assert property (p)` is `en |-> p`); one inside a loop or a
   task is not supported yet.
-- One clock. A design that uses one edge of it takes one model step per
-  clock cycle. A design that uses both edges (`posedge` and `negedge`
-  blocks, or a property on the other edge) takes two: the clock, which
-  must be a top-level input, starts low and toggles on every step, each
-  register changes only at its own edge, the reset is held for the whole
-  first cycle, and the other inputs may change on either edge. Depths
-  are then in half cycles, and the trace shows the clock toggling. A
-  design with two clocks, or both edges of a clock that is not a
-  top-level input, is an error.
+- Clocks. A design that uses one edge of one clock takes one model step
+  per clock cycle. A design that uses both edges (`posedge` and `negedge`
+  blocks, or a property on the other edge), or more than one clock, is
+  modelled with the clocks driven by the model: one model step is half a
+  period of the fastest clock, every clock starts low, each register
+  changes only at its own clock edge, and the other inputs may change on
+  every step. Depths are then in model steps, and the trace shows the
+  clocks toggling.
+- Several clocks are declared with `clock`: `clock clk` and `clock clk2
+  -factor 2` make `clk2` twice as slow as `clk`, and `-phase N` moves a
+  clock's wave N model steps later (0 by default, so all clocks rise
+  together for the first time). Every clock the design uses must be
+  declared and be a top-level input; a clock computed in the design
+  (divided or gated) is an error, as is both edges of such a clock. The
+  reset is held until every declared clock has had a whole period.
+  Properties given by command are on the first declared clock unless
+  they name their own (`@(posedge clk2) ...`).
 - A latch (`always_latch`, or an `always @*` that does not assign on
   every path) is transparent within a model step: open, it shows its
   data; closed, what it held at the end of the step before. A latch
