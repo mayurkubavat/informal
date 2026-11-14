@@ -14,7 +14,8 @@ branch named `informal` in that checkout and list it in the table at the end.
 
 | Tool | Commit | Upstream | Used for | Found through |
 | --- | --- | --- | --- | --- |
-| slang | `d02b7cd` (2026-11-02, master) | github.com/MikePopoloski/slang | SystemVerilog front end (crate `informal-slang`) | `INFORMAL_SLANG_DIR`, needs `build/lib/libsvlang.a` |
+| svlang | pinned in the root `Cargo.toml` (`rev`) | github.com/mayurkubavat/svlang | SystemVerilog front end (crate `informal-svlang`, D14) | Cargo git dependency |
+| slang | `d02b7cd` (2026-11-02, master) | github.com/MikePopoloski/slang | Optional cross-check lowering (`INFORMAL_FRONTEND=slang`, crate `informal-slang`) | `INFORMAL_SLANG_DIR`, needs `build/lib/libsvlang.a` |
 | Bitwuzla | `9d391d1` (2026-10-30, main) | github.com/bitwuzla/bitwuzla | Word-level BMC `informal-wbmc`; its bundled CaDiCaL is also informal's SAT solver | `INFORMAL_BITWUZLA_DIR`, needs `install/` |
 | CaDiCaL (bundled) | `rel-3.0.1` with Bitwuzla's patches | via Bitwuzla's meson subproject | SAT for all in-house bit-level engines | linked from Bitwuzla's static library |
 | CaDiCaL (standalone) | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
@@ -23,9 +24,7 @@ branch named `informal` in that checkout and list it in the table at the end.
 
 System packages (Ubuntu 26.04): `tcl8.6-dev` 8.6.17 (crate `informal-tcl`),
 meson (Bitwuzla build), and for the desktop app webkit2gtk-4.1, gtk3,
-libsoup3 and librsvg2 dev packages. Yosys 0.69 in `/tools/yosys/current`
-is the fallback RTL front end (`INFORMAL_FRONTEND=yosys`); its `yosys-abc` is
-not used.
+libsoup3 and librsvg2 dev packages. Yosys is no longer used (D14).
 
 Not installed: Pono and BtorMC (their `engines.toml` entries are
 unchecked), Surfer (the app's trace hand-off hides itself without it).

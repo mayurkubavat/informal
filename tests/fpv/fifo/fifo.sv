@@ -1,5 +1,5 @@
 // A 4-entry FIFO built from a pointer submodule, used to cross-check the
-// slang and Yosys front ends: hierarchy, parameters, case, part selects,
+// SystemVerilog front ends: hierarchy, parameters, case, part selects,
 // packed arrays and a status encoder.
 module ptr #(parameter int W = 2) (
     input  logic         clk,

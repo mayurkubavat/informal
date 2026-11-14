@@ -338,7 +338,7 @@ export default function App() {
   const fileName = srcPath?.split("/").pop();
   const topText = (topFile && texts[topFile]) || "";
   const ports = useMemo(() => parsePorts(topText), [topText]);
-  // slang's scope tree; without it (Yosys front end) the top file's ports.
+  // The front end's scope tree; without one, the top file's ports.
   const hierarchy = session?.design.hierarchy;
   const scopes = useMemo(() => designScopes(hierarchy, session?.design.top ?? null, ports), [hierarchy, session?.design.top, ports]);
   const currentTrace = traceOf(current);

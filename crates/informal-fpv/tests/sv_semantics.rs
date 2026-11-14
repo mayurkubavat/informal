@@ -1,7 +1,7 @@
 //! SystemVerilog known answers (tests/sv, see its README): every design
-//! goes through the shell flow (slang lowering, injected harness, the
+//! goes through the shell flow (svlang lowering, injected harness, the
 //! in-house engines) and must give the answer IEEE 1800 gives. Skipped
-//! without slang or CaDiCaL.
+//! without CaDiCaL.
 
 use informal_fpv::{compat, Flavor, Session, Shell};
 use std::path::{Path, PathBuf};
@@ -72,11 +72,6 @@ fn run(c: &Case) -> Result<(), String> {
     if let Some(want) = &c.error {
         return Err(format!("no error, want `{want}`"));
     }
-    // The Yosys fallback is not what this suite is about.
-    let frontend = sh.session.borrow().frontend.clone();
-    if frontend == "yosys" {
-        return Err(format!("lowered by {frontend}, not by a SystemVerilog front end"));
-    }
     let got = compat::summary(&sh.session.borrow());
     for (name, want) in &c.expect {
         let status = got.iter().find(|(n, _)| n == name).map(|(_, s)| *s);
@@ -97,8 +92,8 @@ fn run(c: &Case) -> Result<(), String> {
 
 #[test]
 fn sv_known_answers() {
-    if !informal_slang::available() || informal_bmc::engines().is_empty() {
-        eprintln!("skipping: needs slang and CaDiCaL");
+    if informal_bmc::engines().is_empty() {
+        eprintln!("skipping: needs CaDiCaL");
         return;
     }
     let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("tests/sv"))

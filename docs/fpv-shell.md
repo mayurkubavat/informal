@@ -13,35 +13,31 @@ informal shell --flavor jg                               # interactive prompt
 informal shell --flavor jg -c 'analyze -sv a.sv' -c 'elaborate -top a'
 ```
 
-Needs Yosys (`yosys` on `PATH`, `INFORMAL_YOSYS`, or `/tools/yosys/current/bin/yosys`)
-and the engines in `config/engines.toml`. Generated files go to the work
+Needs the engines in `config/engines.toml`; the SystemVerilog front end
+(svlang) is built in. Generated files go to the work
 directory (`informal_work/` by default).
 
 ## How a prove runs
 
 1. `analyze` / `read_file` collect files, `+define+`, `+incdir+` and `-f`
    filelists (paths resolve the way VCS does; `$VAR` expands).
-2. `elaborate` runs slang over the design (when informal is built with it):
-   SystemVerilog errors come back with file, line and column, the top
-   module comes from slang, and from then on every property is checked
-   against the names the top module declares, so a typo is an error rather
-   than an implicit net that makes the check vacuous. The `reset`
-   expression and `clock` names are checked the same way. It then runs
-   Yosys once only when Yosys is the front end (no slang, or
-   `INFORMAL_FRONTEND=yosys`).
-3. The models are built by slang's AST lowering (`crates/informal-slang/cpp/lower.cpp`)
-   when informal has slang, else by Yosys. `INFORMAL_FRONTEND=yosys` forces Yosys,
-   and a design using something the lowering does not handle yet (memories,
-   loops, functions, interfaces, latches) falls back to Yosys with a note.
-   Nothing else falls back: a SystemVerilog error in the harness, and a
-   construct neither front end models (`$isunknown`, blocks on different
-   clocks or edges, the same bits assigned in two always blocks), make
-   the property an error. A wrong guess there would be a wrong verdict.
-   `tests/sv` holds small designs with known answers for this. Both give
-   the same verdicts on `tests/fpv`; counterexample depths from the slang
-   path are one cycle shorter, since Yosys registers clocked assertions.
-   `informal lower design.sv -D NAME` prints the slang Btor2 for a design whose
-   labelled immediate assertions become bad states.
+2. `elaborate` runs svlang over the design (decision D14): SystemVerilog
+   errors come back with file, line and column, the top module comes from
+   it, and from then on every property is checked against the names the top
+   module declares, so a typo is an error rather than an implicit net that
+   makes the check vacuous. The `reset` expression and `clock` names are
+   checked the same way.
+3. The models are built by svlang: it lowers the design (with the property
+   harness injected) to a word-level netlist, and `crates/informal-svlang`
+   writes it as Btor2. Nothing falls back: a SystemVerilog error in the
+   harness, a construct svlang does not handle yet, and a construct it does
+   not model (`$isunknown`, latches, blocks on different clocks or edges,
+   the same bits assigned in two always blocks) make the property an error,
+   naming the construct. A wrong guess there would be a wrong verdict.
+   `tests/sv` holds small designs with known answers for this.
+   `INFORMAL_FRONTEND=slang` uses the older slang lowering instead, as a
+   cross-check. `informal lower design.sv -D NAME` prints the Btor2 for a
+   design whose labelled immediate assertions become bad states.
 4. Each property is lowered by the SVA subset compiler (`informal-fpv/src/sva.rs`)
    into an immediate assertion over `$past`, and the checker block is
    inserted before the top module's `endmodule`, so properties see every
@@ -93,7 +89,7 @@ passes on a different setup without saying so.
 | --- | --- | --- |
 | `clear -all` | (new session) | Forget design and properties |
 | `analyze -sv12 [-f F] [+define+X] [+incdir+D] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources; VHDL is an error for now |
-| `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with slang (and Yosys); top guessed when omitted |
+| `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with svlang; top guessed when omitted |
 | `clock clk` | `create_clock clk -period N` | Primary clock (posedge). `-both_edges`, `-factor` are errors |
 | `reset -expression {!rst_n}` | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
 | — | `sim_run -stable`, `sim_save_reset` | Accepted (reset is applied by the model) |
@@ -145,18 +141,19 @@ when anything but `ignored` was found.
 these findings over all of them; `docs/vendor-script-tally.md` holds the
 last result, the ranked list of what the shell should learn next.
 
-## Building with slang
+## Building with slang (optional cross-check)
 
 slang is found in `INFORMAL_SLANG_DIR` or `~/Silicon/DV/tools/slang` (a
 checkout built with `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build`). The C++
 shim in `crates/informal-slang/cpp` is compiled against it. Without slang, informal
-still builds and falls back to a regex guess of the top module.
+builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
 
 ## Known gaps
 
-- With the slang front end, properties can name signals in sub-instances
-  (`u_wp.p`); with Yosys, only signals in the top module. No `bind` yet.
+- Properties can name signals in sub-instances (`u_wp.p`). No `bind` yet.
+- Concurrent assertions written in the RTL are not checked (give them with
+  `assert` / `cover`); an `assume property` in the RTL is an error.
 - One clock and one edge; every register steps on each model step. A
   design with blocks on two clocks or both edges is an error.
 - `$past`, `$rose`, `$fell`, `$stable` and `$changed` have no history in

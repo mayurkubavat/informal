@@ -5,6 +5,5 @@
 //= a_eq proven
 //= a_neq proven
 module wildcard_eq(input logic clk, input logic [3:0] addr);
-  // (Yosys, which still elaborates the plain design, treats an empty module as a black box.)
   wire unused = clk;
 endmodule

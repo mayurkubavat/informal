@@ -14,7 +14,7 @@ in `research/` on the Mac copy only; it is not in this repository.
 
 Phase 0 (wrapped engines reproduce published HWMCC'24 results) is done.
 Phase 1 has the in-house bit-level engines (BMC, k-induction, IC3), the
-slang front end, the JasperGold / VC Formal Tcl shell and the desktop app.
+svlang front end, the JasperGold / VC Formal Tcl shell and the desktop app.
 On the 319 HWMCC'24 bit-level models (300 s per run), the in-house
 engines have solved 204 across runs with no wrong verdicts, level with
 rIC3's portfolio.
@@ -28,7 +28,8 @@ rIC3's portfolio.
 | `informal-sat` | SAT interface: CaDiCaL through its C API, plus a small DPLL solver for tests. |
 | `informal-aig` | Bit-level model: AIG with structural hashing, AIGER reader and writer, Btor2 bit-blaster, preprocessing. |
 | `informal-bmc` | In-house engines on the AIG: BMC (also stepped), k-induction, IC3 / PDR (single and multi-threaded with lemma sharing), and IC3 lemmas feeding k-induction. Engine list in `docs/engines.md`. |
-| `informal-slang` | SystemVerilog front end on slang (C++ shim through FFI): diagnostics, top module, design hierarchy, name checks, and lowering to Btor2 (`informal lower`). |
+| `informal-svlang` | SystemVerilog front end on svlang (pure Rust): diagnostics, top module, design hierarchy, and the word-level netlist written as Btor2 (`informal lower`). |
+| `informal-slang` | Optional cross-check front end on slang (C++ shim through FFI), `INFORMAL_FRONTEND=slang`; also holds the shared request and design types. |
 | `informal-bitwuzla` | Word-level engines on Bitwuzla (C++ shim through FFI): BMC over Btor2 with arrays. |
 | `informal-tcl` | Embedded Tcl 8.6 (the C library through FFI) for informal scripts. |
 | `informal-fpv` | FPV sessions: design setup, SVA subset compiler, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
@@ -44,8 +45,8 @@ Needs a recent stable Rust toolchain (`rustup`; 1.87 or newer) and the
 Tcl 8.6 development library (`tcl8.6-dev` on Ubuntu, `tcl-tk@8` from
 Homebrew on macOS). Optional libraries are picked up when built under
 `~/Silicon/DV/tools` (CaDiCaL, Bitwuzla, slang; see
-`docs/third-party.md`); without them the matching engines or front end are
-left out. Yosys is the fallback RTL front end for `informal shell`.
+`docs/third-party.md`); without them the matching engines are left out.
+The SystemVerilog front end is svlang, a pure-Rust Cargo dependency.
 
 ```sh
 cargo build --release

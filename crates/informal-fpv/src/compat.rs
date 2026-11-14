@@ -396,7 +396,7 @@ fn apply_compile_words(
     words: &[String],
     base: Option<&Path>,
 ) -> Result<(), String> {
-    // Absolute paths, since Yosys runs in the work directory.
+    // Absolute paths, so that files resolve the same from the work directory.
     let resolve = |w: &str| -> PathBuf {
         let p = PathBuf::from(expand_env(w));
         let p = match base {

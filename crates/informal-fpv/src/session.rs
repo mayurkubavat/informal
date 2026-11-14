@@ -2,15 +2,16 @@
 //! JasperGold and VC Formal scripts build up command by command, and the
 //! prove step that turns them into engine runs.
 //!
-//! When informal is built with slang, elaboration first runs slang over the
-//! design: SystemVerilog errors come back with file and line, the top
-//! module is taken from slang, and property expressions are checked
-//! against the names the top module declares. Model building goes through Yosys for now (`read_verilog -sv -formal`,
-//! then Btor2): it is the interim front end until slang lands. Properties
-//! are lowered by [`crate::sva`] and injected as immediate assertions at
-//! the end of the top module, so they see every signal in its scope. Each
-//! assertion or cover gets its own Btor2 model with all assumptions, and
-//! runs through the engine portfolio on its own.
+//! Elaboration runs svlang (the pure-Rust SystemVerilog front end, crate
+//! `informal-svlang`) over the design: SystemVerilog errors come back with
+//! file and line, the top module is taken from it, and property expressions
+//! are checked against the names the top module declares. Properties are
+//! lowered by [`crate::sva`] and injected as immediate assertions at the end
+//! of the top module, so they see every signal in its scope; svlang then
+//! lowers the whole design to one Btor2 model (decision D14). Each assertion
+//! or cover gets its own copy with only its `bad` line and all assumptions,
+//! and runs through the engine portfolio on its own. `INFORMAL_FRONTEND=slang`
+//! uses the older slang lowering instead, as a cross-check.
 
 use crate::progress::{ProveSink, Tracker};
 use crate::sva;
@@ -19,7 +20,6 @@ use informal_engine::portfolio::EngineRun;
 use informal_engine::{portfolio, CheckRequest, Engine, ModelFormat, Progress, Verdict};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -185,8 +185,7 @@ pub struct Session {
     pub slang: Option<informal_slang::Design>,
     /// Instance tree from slang, for the UI.
     pub hierarchy: Vec<informal_slang::Instance>,
-    pub yosys: PathBuf,
-    /// Front end that built the last prove's models (`svlang`, `slang` or `yosys`).
+    /// Front end that built the last prove's models (`svlang` or `slang`).
     pub frontend: String,
     /// Set from another thread (the app's Stop) to end a running prove:
     /// checked between properties and forwarded to the engine portfolio,
@@ -209,7 +208,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(engines: Vec<Arc<dyn Engine>>, workdir: PathBuf) -> Self {
-        // Absolute, since Yosys runs inside it and writes paths under it.
+        // Absolute, so that paths written into it stay valid.
         let workdir = std::path::absolute(&workdir).unwrap_or(workdir);
         Session {
             design: Design::default(),
@@ -223,7 +222,6 @@ impl Session {
             engines,
             slang: None,
             hierarchy: Vec::new(),
-            yosys: find_yosys(),
             frontend: String::new(),
             stop: Arc::default(),
             dry_run: false,
@@ -273,8 +271,8 @@ impl Session {
     }
 
     /// With slang's view of the design, reject names the top module does
-    /// not declare (typos would otherwise surface as Yosys errors, or as
-    /// implicit nets that make a property vacuous).
+    /// not declare (typos would otherwise become implicit nets that make a
+    /// property vacuous).
     fn check_names(&self, expr: &str) -> Result<(), String> {
         if let (Some(d), Some(top)) = (&self.slang, &self.design.top) {
             let unknown = d.unknown_names(top, expr);
@@ -361,15 +359,6 @@ impl Session {
             let _ = std::fs::remove_file(&tree);
         } else {
             std::fs::write(&tree, serde_json::to_string_pretty(&self.design.hierarchy)?)?;
-        }
-        // slang has already reported any errors; Yosys is only run here
-        // when it is the front end (it runs at prove if a property needs it).
-        if self.slang.is_none() || frontend() == "yosys" {
-            self.run_yosys(
-                &self.design.files.clone(),
-                &[],
-                &self.workdir.join("design.btor2"),
-            )?;
         }
         self.elaborated = true;
         Ok(())
@@ -491,55 +480,6 @@ impl Session {
         Ok(out)
     }
 
-    fn run_yosys(&self, files: &[PathBuf], defines: &[String], out: &Path) -> anyhow::Result<()> {
-        let top = self.design.top.as_deref().unwrap_or_default();
-        let mut read = String::from("read_verilog -sv -formal");
-        for (k, v) in &self.design.defines {
-            read += &match v {
-                Some(v) => format!(" -D{k}={v}"),
-                None => format!(" -D{k}"),
-            };
-        }
-        for d in defines {
-            read += &format!(" -D{d}");
-        }
-        for i in &self.design.incdirs {
-            read += &format!(" -I{}", i.display());
-        }
-        for f in files {
-            read += &format!(" {}", f.display());
-        }
-        let mut script = vec![read];
-        for (k, v) in &self.design.params {
-            script.push(format!("chparam -set {k} {v} {top}"));
-        }
-        script.push(format!("prep -top {top}"));
-        script.extend(
-            [
-                "flatten",
-                "async2sync",
-                "dffunmap",
-                "setundef -undriven -anyseq",
-                "opt_clean",
-            ]
-            .map(String::from),
-        );
-        script.push(format!("write_btor {}", out.display()));
-        let o = Command::new(&self.yosys)
-            .arg("-q")
-            .arg("-p")
-            .arg(script.join("; "))
-            .current_dir(&self.workdir)
-            .output()
-            .with_context(|| format!("running {}", self.yosys.display()))?;
-        if !o.status.success() {
-            let err = String::from_utf8_lossy(&o.stderr);
-            let msg = String::from_utf8_lossy(&o.stdout);
-            bail!("yosys failed:\n{}{}", msg.trim(), err.trim());
-        }
-        Ok(())
-    }
-
     fn engines(&self) -> Vec<Arc<dyn Engine>> {
         let picked: Vec<_> = self
             .engines
@@ -575,7 +515,7 @@ impl Session {
     /// Stop (`self.stop`) ends the run: the running property's portfolio is
     /// cancelled, and it and every property not reached yet become
     /// undetermined with reason "stopped". Elaboration and model building
-    /// (slang, Yosys) are not interrupted; a Stop during them takes effect
+    /// (svlang) are not interrupted; a Stop during them takes effect
     /// at the first engine run.
     pub fn prove(&mut self, which: &[usize]) -> anyhow::Result<Vec<usize>> {
         if self.dry_run {
@@ -615,16 +555,8 @@ impl Session {
         };
         let engines = self.engines();
         let fe = frontend();
-        let (lowered, rejected) = match self.lower_with_slang(fe, &files, &targets) {
-            Ok(l) => (l, None),
-            Err(e) => (None, Some(e)),
-        };
-        self.frontend = if lowered.is_some() || rejected.is_some() {
-            fe
-        } else {
-            "yosys"
-        }
-        .into();
+        let lowered = self.lower(fe, &files, &targets);
+        self.frontend = fe.into();
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
         // between property events.
@@ -645,9 +577,7 @@ impl Session {
             }
             let r = self.prove_targets(
                 &targets,
-                &files,
-                lowered.as_deref(),
-                rejected.as_deref(),
+                lowered.as_deref().map_err(String::as_str),
                 &engines,
                 tracker.as_ref(),
             );
@@ -674,9 +604,7 @@ impl Session {
     fn prove_targets(
         &mut self,
         targets: &[usize],
-        files: &[PathBuf],
-        lowered: Option<&str>,
-        rejected: Option<&str>,
+        lowered: Result<&str, &str>,
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
     ) -> usize {
@@ -698,9 +626,9 @@ impl Session {
                 continue;
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
-            let built = match (lowered, rejected) {
-                (_, Some(e)) => Err(anyhow!("{e}")),
-                (Some(btor), None) => {
+            let built = match lowered {
+                Err(e) => Err(anyhow!("{e}")),
+                Ok(btor) => {
                     let keep = format!("informal_p{i}");
                     let (model, section) = informal_slang::split_trace(btor);
                     let mut r = std::fs::write(&out, only_bad(model, &keep));
@@ -710,10 +638,6 @@ impl Session {
                         r = std::fs::write(trace_model(&out), only_bad(btor, &keep));
                     }
                     r.map_err(anyhow::Error::from)
-                }
-                (None, None) => {
-                    let _ = std::fs::remove_file(trace_model(&out));
-                    self.run_yosys(files, &[format!("INFORMAL_P{i}")], &out)
                 }
             };
             self.props[i].trace = None;
@@ -748,21 +672,16 @@ impl Session {
         targets.len()
     }
 
-    /// One Btor2 model with every target's assertion (by slang), or
-    /// `Ok(None)` to use the Yosys path: slang not linked,
-    /// `INFORMAL_FRONTEND=yosys`, or a construct the lowering does not handle
-    /// yet. `Err` rejects the design: a compile error (an unknown name in a
-    /// property or the reset, say) or a construct no front end here models.
-    /// Falling back to Yosys there would turn a typo into a free signal.
-    fn lower_with_slang(
+    /// One Btor2 model with every target's assertion. `Err` rejects the
+    /// design: a compile error (an unknown name in a property or the reset,
+    /// say) or a construct the front end does not model. There is no
+    /// fallback: a guess there would turn a typo into a free signal (D13).
+    fn lower(
         &self,
         fe: &'static str,
         files: &[PathBuf],
         targets: &[usize],
-    ) -> Result<Option<String>, String> {
-        if fe == "yosys" {
-            return Ok(None);
-        }
+    ) -> Result<String, String> {
         let mut defines = self.design.defines.clone();
         defines.extend(targets.iter().map(|i| (format!("INFORMAL_P{i}"), None)));
         let req = informal_slang::Request {
@@ -776,32 +695,19 @@ impl Session {
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
         };
-        if fe == "svlang" {
-            // No fallback: whatever svlang does not model is an error (D14).
-            let l = informal_svlang::lower(&req);
-            for n in &l.notes {
-                self.log(&format!("svlang: {n}"));
-            }
-            return if l.ok {
-                Ok(Some(l.btor2))
-            } else {
-                Err(format!("svlang: {}", l.errors.join("; ")))
-            };
-        }
-        let Some(l) = informal_slang::lower(&req) else {
-            return Ok(None);
+        let l = if fe == "slang" {
+            informal_slang::lower(&req).ok_or("slang: this informal was built without slang")?
+        } else {
+            informal_svlang::lower(&req)
         };
+        for n in &l.notes {
+            self.log(&format!("{fe}: {n}"));
+        }
         if l.ok {
-            return Ok(Some(l.btor2));
+            Ok(l.btor2)
+        } else {
+            Err(format!("{fe}: {}", l.errors.join("; ")))
         }
-        if !l.fallback {
-            return Err(format!("slang: {}", l.errors.join("; ")));
-        }
-        self.log(&format!(
-            "slang lowering fell back to Yosys: {}",
-            l.errors.join("; ")
-        ));
-        Ok(None)
     }
 
     /// Run the portfolio on one property's model. With a tracker, engine
@@ -824,7 +730,7 @@ impl Session {
             })
             .unwrap_or(0);
         if bads == 0 {
-            // Yosys folded the check to a constant true.
+            // The front end folded the check to a constant true.
             let status = match kind {
                 Kind::Cover => Status::Unreachable {
                     engine: "elaboration".into(),
@@ -1088,30 +994,13 @@ fn only_bad(btor: &str, keep: &str) -> String {
         .collect()
 }
 
-/// The front end that lowers designs: `svlang` (the default), or `slang`
-/// (with the Yosys fallback) or `yosys` through `INFORMAL_FRONTEND`.
+/// The front end that elaborates and lowers designs: `svlang` (the
+/// default), or `slang` through `INFORMAL_FRONTEND=slang` (a cross-check).
 pub fn frontend() -> &'static str {
     match std::env::var("INFORMAL_FRONTEND").as_deref() {
-        Ok("yosys") => "yosys",
         Ok("slang") => "slang",
         _ => "svlang",
     }
-}
-
-fn find_yosys() -> PathBuf {
-    if let Some(p) = std::env::var_os("INFORMAL_YOSYS") {
-        return p.into();
-    }
-    let on_path = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join("yosys").is_file()))
-        .unwrap_or(false);
-    if !on_path {
-        let fallback = Path::new("/tools/yosys/current/bin/yosys");
-        if fallback.is_file() {
-            return fallback.into();
-        }
-    }
-    "yosys".into()
 }
 
 /// The single module never instantiated by another, when there is one.

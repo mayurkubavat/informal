@@ -1,6 +1,6 @@
 //! End-to-end: the counter's JasperGold and VC Formal scripts run through
-//! the compatibility layer, Yosys and the engine portfolio. Skipped when
-//! Yosys or rIC3 is not installed.
+//! the compatibility layer, svlang and the engine portfolio. Skipped when
+//! rIC3 is not installed.
 
 use informal_fpv::{compat, Flavor, Session, Shell};
 use std::path::{Path, PathBuf};
@@ -16,9 +16,8 @@ fn on_path(bin: &str) -> bool {
 }
 
 fn shell(flavor: Flavor, tag: &str) -> Option<Shell> {
-    let yosys = on_path("yosys") || Path::new("/tools/yosys/current/bin/yosys").is_file();
-    if !yosys || !on_path("ric3") {
-        eprintln!("skipping: needs yosys and ric3 on PATH");
+    if !on_path("ric3") {
+        eprintln!("skipping: needs ric3 on PATH");
         return None;
     }
     let mut engines = informal_engines_ext::load(&root().join("config/engines.toml")).unwrap();
@@ -75,15 +74,10 @@ fn jaspergold_script() {
     assert_eq!(proven, "a_max a_step a_hold a_no_wrap");
 }
 
-/// slang's scope tree reaches the snapshot as `design.hierarchy` and is
-/// written next to design.btor2. Needs slang (and Yosys for elaborate).
+/// The front end's scope tree reaches the snapshot as `design.hierarchy`
+/// and is written to the work directory.
 #[test]
 fn design_hierarchy_in_the_snapshot() {
-    let yosys = on_path("yosys") || Path::new("/tools/yosys/current/bin/yosys").is_file();
-    if !informal_slang::available() || !yosys {
-        eprintln!("skipping: needs slang and yosys");
-        return;
-    }
     let work = std::env::temp_dir().join(format!("informal-fpv-test-hier-{}", std::process::id()));
     let sh = Shell::new(Session::new(Vec::new(), work.clone()), Flavor::Jg);
     let rtl = root().join("tests/fpv/fifo/fifo.sv");
@@ -127,12 +121,8 @@ fn vc_formal_script() {
 }
 
 #[test]
-fn slang_rejects_typos_and_reports_source_errors() {
-    if !informal_slang::available() {
-        eprintln!("skipping: built without slang");
-        return;
-    }
-    let work = std::env::temp_dir().join(format!("informal-fpv-test-slang-{}", std::process::id()));
+fn front_end_rejects_typos_and_reports_source_errors() {
+    let work = std::env::temp_dir().join(format!("informal-fpv-test-names-{}", std::process::id()));
     let sh = Shell::new(Session::new(Vec::new(), work.clone()), Flavor::Jg);
     let rtl = root().join("tests/fpv/counter/counter.sv");
     sh.eval(&format!("analyze -sv {}; elaborate", rtl.display()))
@@ -158,29 +148,20 @@ fn slang_rejects_typos_and_reports_source_errors() {
     assert!(e.message.contains("bad.sv:3:"), "{}", e.message);
 }
 
-/// The FIFO through every front end: same verdict for every property.
+/// The FIFO through svlang, and through slang as a cross-check when it is
+/// built in: the known verdict for every property.
 #[test]
-fn front_ends_agree() {
-    if !informal_slang::available() {
-        eprintln!("skipping: built without slang");
-        return;
-    }
+fn fifo_known_answers() {
     let run = |fe: &str| {
         let sh = shell(Flavor::Jg, &format!("fifo-{fe}"))?;
-        if fe == "yosys" {
-            sh.eval("set ::informal_frontend_yosys 1").unwrap();
-        }
         std::env::set_var("INFORMAL_FRONTEND", fe);
         let r = sh.source(&root().join("tests/fpv/fifo/fifo.jg.tcl"));
         std::env::remove_var("INFORMAL_FRONTEND");
         r.unwrap();
-        let got = sh.session.borrow().frontend.clone();
-        assert_eq!(got, fe);
+        assert_eq!(sh.session.borrow().frontend, fe);
         Some(statuses(&sh))
     };
     let Some(v) = run("svlang") else { return };
-    let Some(s) = run("slang") else { return };
-    let Some(y) = run("yosys") else { return };
     let want = [
         ("a_count_max", "proven"),
         ("a_full_empty", "proven"),
@@ -193,15 +174,11 @@ fn front_ends_agree() {
         ("c_status3", "covered"),
         ("c_count5", "unreachable"),
     ];
-    let mut with_sub = want.to_vec();
-    with_sub.insert(7, ("a_sub_ptr", "proven"));
-    assert_eq!(v, s, "svlang and slang disagree");
-    assert_eq!(
-        s,
-        with_sub
-            .iter()
-            .map(|(n, st)| (n.to_string(), *st))
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(y, want.map(|(n, st)| (n.to_string(), st)));
+    let mut want = want.to_vec();
+    want.insert(7, ("a_sub_ptr", "proven"));
+    let want: Vec<_> = want.iter().map(|(n, st)| (n.to_string(), *st)).collect();
+    assert_eq!(v, want);
+    if informal_slang::available() {
+        assert_eq!(run("slang").unwrap(), want, "slang disagrees");
+    }
 }

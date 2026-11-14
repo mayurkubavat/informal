@@ -4,6 +4,5 @@
 //% assert -name a_known {!$isunknown(d)}
 //= a_known error
 module isunknown(input logic clk, input logic [3:0] d);
-  // (Yosys, which still elaborates the plain design, treats an empty module as a black box.)
   wire unused = clk;
 endmodule

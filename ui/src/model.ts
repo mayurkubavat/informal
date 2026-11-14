@@ -238,7 +238,7 @@ export const msText = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(
 // ---- design browser ----
 // The scope tree the Design tab shows: slang's hierarchy when the snapshot
 // has one, else the top module alone with the ports a regex scan of its
-// file finds (the Yosys front end). Widths the scan cannot evaluate are 0.
+// file finds (no SystemVerilog front end). Widths the scan cannot evaluate are 0.
 export function designScopes(hierarchy: DesignScope[] | undefined, top: string | null, ports: Port[]): DesignScope[] {
   if (hierarchy?.length) return hierarchy;
   if (!top) return [];

@@ -6,6 +6,8 @@
 //!   sampled-value history and clocked check must use the same clock signal
 //!   and edge, or the design is rejected;
 //! - an asynchronous reset acts synchronously (`next = reset ? value : next`);
+//! - `(* anyconst *)` holds one free value for the whole trace, `(* anyseq *)`
+//!   and undriven bits are free on every step;
 //! - an X or Z bit of a constant (`'x`, an out-of-range read) is any value:
 //!   a free input bit on every step, like an undriven bit;
 //! - an immediate assertion is a `bad` line named by its label, an immediate
@@ -20,9 +22,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use svlang::netlist::{
-    CheckKind, ClockSpec, MemId, NetOp, Netlist, ValueId, ValueKind,
-};
+use svlang::netlist::{CheckKind, ClockSpec, FreeKind, MemId, NetOp, Netlist, ValueId, ValueKind};
 use svlang::semantic::{BitState, CVal, SampledKind};
 
 /// Why a netlist could not be written.
@@ -84,7 +84,9 @@ fn rejected<T>(s: impl Into<String>) -> Result<T, Fail> {
 
 /// A Btor2 symbol: no spaces.
 fn symbol(s: &str) -> String {
-    s.chars().map(|c| if c.is_whitespace() { '_' } else { c }).collect()
+    s.chars()
+        .map(|c| if c.is_whitespace() { '_' } else { c })
+        .collect()
 }
 
 /// The bits of `c`, MSB first, X and Z as 0.
@@ -252,7 +254,13 @@ impl<'n> Writer<'n> {
     fn num(&mut self, w: u32, v: u64) -> u32 {
         let b: String = (0..w)
             .rev()
-            .map(|i| if i < 64 && (v >> i) & 1 == 1 { '1' } else { '0' })
+            .map(|i| {
+                if i < 64 && (v >> i) & 1 == 1 {
+                    '1'
+                } else {
+                    '0'
+                }
+            })
             .collect();
         self.konst(b)
     }
@@ -338,12 +346,26 @@ impl<'n> Writer<'n> {
             }
             ValueKind::Undriven(i) => {
                 let u = &nl.undriven[*i];
-                let name = if u.hi == u.lo && w == 1 {
-                    format!("{}_undriven", u.signal)
+                let whole = u.lo == 0
+                    && u.hi + 1 == w
+                    && nl.undriven.iter().filter(|x| x.signal == u.signal).count() == 1;
+                let base = if whole {
+                    u.signal.clone()
                 } else {
-                    format!("{}[{}:{}]_undriven", u.signal, u.hi, u.lo)
+                    format!("{}[{}:{}]", u.signal, u.hi, u.lo)
                 };
-                self.input(w, &name)
+                match u.free {
+                    // Chosen once, then held: a state with no init whose
+                    // next value is itself.
+                    FreeKind::AnyConst => {
+                        let s = self.state(w, &base);
+                        let srt = self.sort(w);
+                        self.pending.push((srt, s, s));
+                        s
+                    }
+                    FreeKind::AnySeq => self.input(w, &base),
+                    FreeKind::Undriven => self.input(w, &format!("{base}_undriven")),
+                }
             }
             ValueKind::Const(c) => self.constant(c, w),
             ValueKind::StateOut(s) => {
@@ -429,7 +451,11 @@ impl<'n> Writer<'n> {
                 let r = self.konst(bits(rhs, aw));
                 let x = self.bin("and", a[0], m);
                 let y = self.bin("and", r, m);
-                let name = if matches!(op, WildEq { .. }) { "eq" } else { "neq" };
+                let name = if matches!(op, WildEq { .. }) {
+                    "eq"
+                } else {
+                    "neq"
+                };
                 self.cmp(name, x, y)
             }
             ULt => self.cmp("ult", a[0], a[1]),
@@ -581,7 +607,11 @@ impl<'n> Writer<'n> {
             }
             SampledKind::Stable | SampledKind::Changed => {
                 let p = self.past(v, gate, 1);
-                let name = if kind == SampledKind::Stable { "eq" } else { "neq" };
+                let name = if kind == SampledKind::Stable {
+                    "eq"
+                } else {
+                    "neq"
+                };
                 self.cmp(name, v, p)
             }
         })
@@ -653,7 +683,11 @@ impl<'n> Writer<'n> {
             if let Some(r) = st.async_reset {
                 let sig = self.value(r.signal)?;
                 let sig = self.bool(sig);
-                let on = if r.active_high { sig } else { self.un("not", sig) };
+                let on = if r.active_high {
+                    sig
+                } else {
+                    self.un("not", sig)
+                };
                 let val = self.value(r.value)?;
                 n = self.ite(on, val, n);
             }
@@ -689,7 +723,10 @@ impl<'n> Writer<'n> {
                 CheckKind::Assert => {
                     let nex = self.un("not", ex);
                     let bad = self.bin("and", en, nex);
-                    let label = c.label.as_deref().map(|l| l.rsplit('.').next().unwrap_or(l));
+                    let label = c
+                        .label
+                        .as_deref()
+                        .map(|l| l.rsplit('.').next().unwrap_or(l));
                     let mut body = format!("bad {bad}");
                     if let Some(l) = label {
                         write!(body, " {}", symbol(l)).unwrap();
@@ -702,9 +739,9 @@ impl<'n> Writer<'n> {
                     let ok = self.bin("or", nen, ex);
                     self.line(format!("constraint {ok}"));
                 }
-                CheckKind::Cover => self
-                    .notes
-                    .push("an immediate cover in the RTL is not a target; use the `cover` command".into()),
+                CheckKind::Cover => self.notes.push(
+                    "an immediate cover in the RTL is not a target; use the `cover` command".into(),
+                ),
             }
         }
         // `next` lines last; history registers may still be added while

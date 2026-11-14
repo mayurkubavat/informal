@@ -1,11 +1,11 @@
-//! SystemVerilog front end on slang.
+//! SystemVerilog front end on slang, kept as a cross-check
+//! (`INFORMAL_FRONTEND=slang`); svlang (`informal-svlang`) is the front end
+//! (decision D14). This crate also defines the request and design types
+//! both front ends share.
 //!
-//! Phase 1 step one: slang checks the design and reports real
-//! SystemVerilog diagnostics with file and line, names the top modules,
-//! and lists the instance tree and every signal with its width. informal uses
-//! that to pick the top, to reject typos in property expressions before
-//! elaboration, and (in the app) to show the hierarchy. Lowering slang's
-//! AST to the model IR, which retires the Yosys path, comes next.
+//! slang checks the design and reports SystemVerilog diagnostics with file
+//! and line, names the top modules, lists the instance tree and every signal
+//! with its width, and lowers the design to Btor2 (`cpp/lower.cpp`).
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -246,8 +246,8 @@ mod ffi {
 pub struct Lowered {
     pub ok: bool,
     /// When not `ok`: true if the only error is a construct the lowering
-    /// does not handle yet (the Yosys path may), false for compile errors
-    /// and constructs no front end here models (reject the design).
+    /// does not handle yet, false for compile errors and constructs it does
+    /// not model. The session treats both as errors (no fallback, D14).
     #[serde(default)]
     pub fallback: bool,
     pub errors: Vec<String>,

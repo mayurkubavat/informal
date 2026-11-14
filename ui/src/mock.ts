@@ -24,7 +24,7 @@
 // word at a time. A question about failures is answered from the session
 // with no command; anything else gets `prove -property a_never9`. The
 // second provider, "ollama-gemma", is always offline in the browser.
-//   ?design=scan no hierarchy, as with the Yosys front end: the Design tab
+//   ?design=scan no hierarchy (no SystemVerilog front end): the Design tab
 //                falls back to scanning the top file's ports
 //
 // `source mock/prove-on-source.tcl` stands for a script that adds two

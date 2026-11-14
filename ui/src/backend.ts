@@ -75,7 +75,7 @@ export interface DesignScope {
 
 export interface SessionView {
   // `hierarchy`: slang's scope tree after elaboration; empty or absent with
-  // the Yosys front end (the Design tab then scans the top file's ports).
+  // a session elaborated without a SystemVerilog front end (the Design tab then scans the top file's ports).
   design: { files: string[]; top: string | null; defines: [string, string | null][]; hierarchy?: DesignScope[] };
   elaborated: boolean;
   clocks: { signal: string; edge: string }[];

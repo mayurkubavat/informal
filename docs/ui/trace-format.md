@@ -15,7 +15,7 @@ Status: implemented 2026-11-08: the survey (T0) and plan below, now built
 | `informal-bmc` (`informal-bmc`, `-10`, `-65`) | values exist, not exported | After SAT it runs `replay()`. That simulates the simplified AIG with the solver's input values for frames 0..=d and its free initial latch values. Everything a trace needs is in `u.sat` at that point. `result()` sets `witness: None`. |
 | `informal-kind`, `informal-ic3*`, `informal-kind-ic3`, `informal-wbmc` | no | IC3 finds a CEX as a chain of proof obligations. It doesn't keep the inputs. k-ind's base case is BMC. |
 | `informal_fpv::Session` / `Status` | no | `Cex`/`Covered` carry `engine`, `depth`, `ms`. The winner's `witness` is dropped in `check_one`. |
-| Name mapping | yes, at bit level | The slang lowering (and the Yosys fallback) writes Btor2 `input`/`state` lines with hierarchical symbols, e.g. `counter.q`, `counter.en`, `counter.rst_n`. `informal_aig::btor::from_btor2` stores them in `Aig::names` (var to `counter.q[2]`). `preprocess::simplify` and `scorr::substitute` copy names for every input or latch they keep. So the simplified AIG that BMC solves still names its inputs and latches. |
+| Name mapping | yes, at bit level | The front end (svlang; slang as a cross-check) writes Btor2 `input`/`state` lines with hierarchical symbols, e.g. `counter.q`, `counter.en`, `counter.rst_n`. `informal_aig::btor::from_btor2` stores them in `Aig::names` (var to `counter.q[2]`). `preprocess::simplify` and `scorr::substitute` copy names for every input or latch they keep. So the simplified AIG that BMC solves still names its inputs and latches. |
 
 Gaps in the names:
 

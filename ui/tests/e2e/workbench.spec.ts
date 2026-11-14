@@ -984,7 +984,7 @@ test.describe("design browser", () => {
     await expect(messages(page)).toContainText("counter.done is already in the trace");
   });
 
-  test("without a hierarchy (Yosys) it scans the top file's ports", async ({ page }) => {
+  test("without a hierarchy it scans the top file's ports", async ({ page }) => {
     await page.goto("/?fast=1&design=scan");
     await designTab(page).click();
     await expect(page.getByText("ports (scan)")).toBeVisible();

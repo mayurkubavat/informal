@@ -68,6 +68,8 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D5. Front end: slang first, Yosys as fallback
 
+*Superseded by D14 (2026-11-14): svlang is the front end, Yosys is gone.*
+
 - **Chosen:** slang elaborates and lowers its AST to Btor2; Yosys is the
   fallback for what lowering does not cover yet.
 - **Alternatives:** Yosys only; Verific; Surelog/UHDM; sv2v + Yosys.
@@ -237,6 +239,42 @@ Sources: README, `docs/`, git log, project notes.
   `scripts/check.sh`). Every lowering fix adds the design that showed it.
 - **Open issues:** UNSAFE verdicts are not replayed on the original model
   yet; four-state values; multi-clock designs; black boxes.
+- **Update 2026-11-14 (D14):** with svlang there is no fallback at all:
+  *unsupported* is an error too, naming the construct.
+
+## D14. svlang is the front end; Yosys is removed
+
+- **Chosen (2026-11-14):** svlang (github.com/mayurkubavat/svlang, pure
+  Rust, pinned by commit like the other third-party code, D4) elaborates
+  the design and lowers it to a word-level netlist; `informal-svlang`
+  writes that netlist as Btor2. Elaboration (diagnostics, top module,
+  Design browser tree, name checks) and lowering both use it. The Yosys
+  path is removed. The slang lowering stays for now as a cross-check only
+  (`INFORMAL_FRONTEND=slang`, no fallback), to be removed once svlang has
+  run on more designs.
+- **Split:** svlang owns everything up to the netlist (binding, typing,
+  procedural semantics, drivers, loops, functions, memories). InFormal owns
+  what is formal policy: one clock and edge per model step, async reset
+  acting synchronously, X/Z constant bits and undriven bits as free inputs,
+  `(* anyconst *)` as a free value held for the whole trace, `$past`
+  histories without initial values, labelled immediate asserts as `bad`
+  lines and assumes as constraints, memories up to 4096 words as registers
+  (larger ones as Btor2 arrays).
+- **Why:** one front end with real diagnostics and no C++ build; the slang
+  lowering lacked memories, loops and functions, so real designs fell back
+  to Yosys, which reads SystemVerilog loosely. svlang handles them: the npu
+  RV32I core with its RVFI checks (memories, loops, `(* anyconst *)`)
+  lowers through svlang where the slang lowering could not, and gives the
+  same verdicts and counterexample depths as the Yosys model on the correct
+  core and on three forwarding-network mutants.
+- **Gate:** `tests/sv` (20 known answers) and `tests/fpv` (counter, FIFO)
+  through svlang in `cargo test`; the FIFO also through slang when built in.
+  Gaps found in svlang are fixed in svlang, with a test there.
+- **Open issues:** concurrent assertions written in the RTL are not checked
+  (only properties given with `assert` / `cover`), and RTL `assume property`
+  is rejected; latches and several clocks or edges are rejected;
+  `$anyconst` / `$anyseq` as functions are unsupported (the attributes
+  work); lowering speed on large designs is not measured yet.
 
 ## D15. In-house engines can run as child processes (opt-in)
 

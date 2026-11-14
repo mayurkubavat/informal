@@ -140,8 +140,8 @@ the run's `CancelToken`, which `run_until` does.
 
 ### Known limitations
 
-- **Elaboration and model building cannot be interrupted.** slang lowering
-  and Yosys runs are single blocking calls. A Stop during them takes effect
+- **Elaboration and model building cannot be interrupted.** svlang
+  elaboration and lowering are single blocking calls. A Stop during them takes effect
   when the first engine starts: the portfolio is cancelled at once, and
   that property and the rest become "stopped". A Stop during
   `elaborate`, which runs before the targets are known, has the same delay.

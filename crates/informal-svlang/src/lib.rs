@@ -67,7 +67,11 @@ pub fn lower(req: &Request) -> Lowered {
     let nl = match comp.lower_netlist(&config) {
         LowerOutcome::Lowered(nl) => nl,
         LowerOutcome::Unsupported(ds) => {
-            return fail(ds.iter().map(|d| format!("not supported yet: {}", show(d))).collect())
+            return fail(
+                ds.iter()
+                    .map(|d| format!("not supported yet: {}", show(d)))
+                    .collect(),
+            )
         }
         LowerOutcome::Error(ds) => return fail(ds.iter().map(show).collect()),
     };

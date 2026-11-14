@@ -1,6 +1,6 @@
 //! Engine output reaches the session's progress sink as "engine-log" lines
 //! while a prove runs: a fake external engine prints a few lines (one on
-//! stderr) and answers. Skipped when Yosys is not installed.
+//! stderr) and answers.
 
 use informal_fpv::{EngineLine, Flavor, ProveProgress, ProveSink, Session, Shell};
 use std::path::{Path, PathBuf};
@@ -8,13 +8,6 @@ use std::sync::{Arc, Mutex};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn yosys_installed() -> bool {
-    let on_path = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join("yosys").is_file()))
-        .unwrap_or(false);
-    on_path || Path::new("/tools/yosys/current/bin/yosys").is_file()
 }
 
 #[derive(Default)]
@@ -28,10 +21,6 @@ impl ProveSink for Rec {
 
 #[test]
 fn engine_output_is_streamed_to_the_sink() {
-    if !yosys_installed() {
-        eprintln!("skipping: needs yosys");
-        return;
-    }
     let toml = r#"
 [[engine]]
 name = "fake-talk"

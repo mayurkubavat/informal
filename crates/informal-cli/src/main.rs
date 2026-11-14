@@ -327,8 +327,9 @@ fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
             let l = match informal_fpv::session::frontend() {
-                "slang" => informal_slang::lower(&req).context("this informal was built without slang")?,
-                "yosys" => bail!("`lower` uses svlang or slang (INFORMAL_FRONTEND=svlang|slang)"),
+                "slang" => {
+                    informal_slang::lower(&req).context("this informal was built without slang")?
+                }
                 _ => informal_svlang::lower(&req),
             };
             for n in &l.notes {

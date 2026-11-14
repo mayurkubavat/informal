@@ -9,3 +9,6 @@ publish.workspace = true
 [dependencies]
 informal-slang.workspace = true
 svlang.workspace = true
+
+[dev-dependencies]
+informal-ir.workspace = true

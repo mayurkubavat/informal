@@ -2,8 +2,7 @@
 //! that sleeps (`sh -c "sleep ..."`, never answering). A Stop from another
 //! thread after ~1 s must end the prove promptly, leave every property
 //! undetermined ("stopped"), and kill the engine's whole process group, so
-//! no `sleep` is left behind. Skipped when Yosys is not installed (the
-//! fallback front end; slang is used when it is built in).
+//! no `sleep` is left behind.
 
 use informal_fpv::{compat, Flavor, Session, Shell};
 use std::path::{Path, PathBuf};
@@ -12,13 +11,6 @@ use std::time::{Duration, Instant};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn yosys_installed() -> bool {
-    let on_path = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join("yosys").is_file()))
-        .unwrap_or(false);
-    on_path || Path::new("/tools/yosys/current/bin/yosys").is_file()
 }
 
 /// Pids of live processes whose command line contains `marker`.
@@ -51,10 +43,6 @@ fn procs_with(marker: &str) -> Vec<u32> {
 #[cfg(target_os = "linux")]
 #[test]
 fn stop_ends_a_prove_and_kills_the_engine() {
-    if !yosys_installed() {
-        eprintln!("skipping: needs yosys");
-        return;
-    }
     // A sleep length unique to this run marks its processes.
     let secs = format!("97.{}", std::process::id());
     let toml = format!(
