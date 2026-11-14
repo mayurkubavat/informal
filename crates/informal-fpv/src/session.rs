@@ -194,6 +194,10 @@ pub struct Session {
     /// a prove starts.
     #[serde(skip)]
     pub stop: Arc<AtomicBool>,
+    /// Script check mode (`informal shell --check`): commands are parsed and
+    /// recorded, but nothing is elaborated or proved.
+    #[serde(skip)]
+    pub dry_run: bool,
     /// Receives live progress while a prove runs (the desktop app).
     #[serde(skip)]
     pub sink: Option<Arc<dyn ProveSink>>,
@@ -222,6 +226,7 @@ impl Session {
             yosys: find_yosys(),
             frontend: String::new(),
             stop: Arc::default(),
+            dry_run: false,
             sink: None,
             trace_reruns: Arc::default(),
         }
@@ -232,8 +237,9 @@ impl Session {
     pub fn clear(&mut self) {
         let engines = std::mem::take(&mut self.engines);
         let workdir = std::mem::take(&mut self.workdir);
-        let (stop, sink) = (self.stop.clone(), self.sink.take());
+        let (stop, sink, dry_run) = (self.stop.clone(), self.sink.take(), self.dry_run);
         *self = Session::new(engines, workdir);
+        self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
     }
@@ -310,6 +316,11 @@ impl Session {
     pub fn elaborate(&mut self, top: Option<String>) -> anyhow::Result<()> {
         if let Some(t) = top {
             self.design.top = Some(t);
+        }
+        if self.dry_run {
+            // Check mode: the design is not read (its files may not exist here).
+            self.elaborated = true;
+            return Ok(());
         }
         if self.design.files.is_empty() {
             bail!("no design files: run analyze / read_file first");
@@ -563,6 +574,9 @@ impl Session {
     /// (slang, Yosys) are not interrupted; a Stop during them takes effect
     /// at the first engine run.
     pub fn prove(&mut self, which: &[usize]) -> anyhow::Result<Vec<usize>> {
+        if self.dry_run {
+            return Ok(Vec::new());
+        }
         if !self.elaborated {
             self.elaborate(None)?;
         }

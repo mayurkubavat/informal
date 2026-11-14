@@ -9,6 +9,8 @@
 //! tool writes (witness or certificate) and validate them; add AVR,
 //! SuperCAR/CAR-DT and Avy; check the Pono and BtorMC entries.
 
+pub mod isolated;
+
 use anyhow::{bail, Context};
 use informal_engine::{
     Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,

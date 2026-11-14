@@ -31,12 +31,26 @@ struct Cli {
     /// a memout (status 3).
     #[arg(long, global = true)]
     mem_gb: Option<f64>,
+    /// Run each in-house engine in a process of its own (also with the
+    /// environment variable INFORMAL_ISOLATE): an engine that runs out of
+    /// memory or crashes ends alone. Each then loads the model itself.
+    #[arg(long, global = true)]
+    isolate: bool,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
     /// Parse and validate a Btor2 model and print its features as JSON.
     Info { model: PathBuf },
+    /// Run one in-house engine on a model and print progress and the
+    /// result as JSON lines (the child side of --isolate).
+    #[command(hide = true)]
+    Engine {
+        name: String,
+        model: PathBuf,
+        #[arg(long, default_value_t = 60_000)]
+        timeout_ms: u64,
+    },
     /// Print a Btor2 model in canonical form.
     Fmt { model: PathBuf },
     /// Check one model with the engine portfolio.
@@ -83,6 +97,15 @@ enum Cmd {
         /// Evaluate this Tcl before the script (repeatable).
         #[arg(short = 'c', long = "command")]
         commands: Vec<String>,
+        /// Check the script instead of running it: nothing is elaborated
+        /// or proved; every command and option informal would reject,
+        /// ignore or does not know is listed with its line. Exit status 1
+        /// when the script would not run to its end.
+        #[arg(long)]
+        check: bool,
+        /// With --check: print the report as JSON.
+        #[arg(long, requires = "check")]
+        json: bool,
     },
     /// Shrink an AIGER model while two engines keep disagreeing on it, or
     /// while a test command keeps exiting 0 (delta debugging).
@@ -129,13 +152,25 @@ enum Cmd {
     },
 }
 
+/// The engines built into this binary; with `isolate`, each as a child
+/// process of it (informal_engines_ext::isolated).
+fn in_house(isolate: bool) -> anyhow::Result<Vec<std::sync::Arc<dyn informal_engine::Engine>>> {
+    let mut engines = informal_bmc::engines();
+    engines.extend(informal_bitwuzla::engines());
+    if !isolate {
+        return Ok(engines);
+    }
+    let exe = std::env::current_exe().context("finding this binary for --isolate")?;
+    Ok(informal_engines_ext::isolated::wrap(engines, &exe))
+}
+
 fn load_engines(
     path: &Path,
     only: &[String],
+    isolate: bool,
 ) -> anyhow::Result<Vec<std::sync::Arc<dyn informal_engine::Engine>>> {
     let mut engines = informal_engines_ext::load(path)?;
-    engines.extend(informal_bmc::engines());
-    engines.extend(informal_bitwuzla::engines());
+    engines.extend(in_house(isolate)?);
     if !only.is_empty() {
         engines.retain(|e| only.iter().any(|n| n == e.name()));
         if engines.is_empty() {
@@ -161,7 +196,26 @@ fn main() -> anyhow::Result<()> {
         ),
     };
     informal_engine::memory::set_budget(budget);
+    let isolate = cli.isolate || std::env::var_os("INFORMAL_ISOLATE").is_some();
     match cli.cmd {
+        Cmd::Engine {
+            name,
+            model,
+            timeout_ms,
+        } => {
+            let engine = in_house(false)?
+                .into_iter()
+                .find(|e| e.name() == name)
+                .with_context(|| format!("no in-house engine named {name}"))?;
+            let format = informal_engine::ModelFormat::of_path(&model)
+                .with_context(|| format!("unknown model format: {}", model.display()))?;
+            let req = informal_engine::CheckRequest {
+                model,
+                format,
+                timeout: Duration::from_millis(timeout_ms),
+            };
+            informal_engines_ext::isolated::serve(engine.as_ref(), &req)?;
+        }
         Cmd::Info { model } => {
             let m = read_btor2(&model)?;
             println!(
@@ -181,7 +235,7 @@ fn main() -> anyhow::Result<()> {
             if format == ModelFormat::Btor2 {
                 read_btor2(&model)?; // fail fast on malformed input
             }
-            let engines = load_engines(&engines, &only)?;
+            let engines = load_engines(&engines, &only, isolate)?;
             let req = CheckRequest {
                 model,
                 format,
@@ -287,6 +341,8 @@ fn main() -> anyhow::Result<()> {
             engines,
             workdir,
             commands,
+            check,
+            json,
         } => {
             let text = match &script {
                 Some(p) => std::fs::read_to_string(p)
@@ -298,9 +354,20 @@ fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("unknown flavor {f} (jg or vcf)"))?,
                 None => informal_fpv::detect_flavor(&text),
             };
+            if check {
+                let script = script.context("--check needs a script")?;
+                let session = informal_fpv::Session::new(Vec::new(), workdir);
+                let shell = informal_fpv::Shell::new(session, flavor);
+                let report = shell.check(&script);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    print!("{}", report.text());
+                }
+                std::process::exit(if report.clean() { 0 } else { 1 });
+            }
             let mut engines = informal_engines_ext::load(&engines)?;
-            engines.extend(informal_bmc::engines());
-            engines.extend(informal_bitwuzla::engines());
+            engines.extend(in_house(isolate)?);
             let session = informal_fpv::Session::new(engines, workdir);
             let shell = informal_fpv::Shell::new(session, flavor);
             for c in &commands {
@@ -329,7 +396,7 @@ fn main() -> anyhow::Result<()> {
             only,
             jobs,
         } => {
-            let engines = load_engines(&engines, &only)?;
+            let engines = load_engines(&engines, &only, isolate)?;
             let models = informal_bench::collect_models(&dir)?;
             if models.is_empty() {
                 bail!("no .btor2/.aig/.aag models under {}", dir.display());
@@ -463,7 +530,7 @@ fn reduce(
             })
         }
         (None, 2) => {
-            let pair = load_engines(engines, disagree)?;
+            let pair = load_engines(engines, disagree, false)?;
             let pair: Vec<_> = disagree
                 .iter()
                 .map(|n| pair.iter().find(|e| e.name() == n).cloned())

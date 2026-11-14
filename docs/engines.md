@@ -140,3 +140,31 @@ the constraint output as a property).
 informal reduce model.aig --disagree informal-ic3,ric3-ic3 --timeout 10 -o small.aag
 informal reduce model.aig --test './still-bad.sh {}' -o small.aag
 ```
+
+## Engines as child processes (`--isolate`)
+
+`informal --isolate check|bench|shell ...` (or `INFORMAL_ISOLATE=1`) runs
+each in-house engine as a child, `informal engine <name> <model>`, which
+prints JSON lines: `{"progress":{"bound":7,"note":""}}` while it runs, then
+`{"result":{"verdict":"unsafe","depth":3,"witness":"..."}}` (`verdict` is
+`safe`, `unsafe` or `unknown` with a `reason`). An engine that runs out of
+memory or crashes ends alone, with unknown "memory" or "engine process
+died"; the rest carry on. See decision D15 for the limits each child gets.
+
+First measurement (2026-11-14, 12 memory-heavy HWMCC'24 models, the
+six-engine in-house portfolio, 100 s, 14 GB budget, one model at a time):
+
+| | in-process | `--isolate` |
+| --- | --- | --- |
+| Solved | 4 | 4 |
+| Only this mode solved | Problem101_label01 (unsafe, 101 s) | rocket_1951 (safe, 49 s) |
+| Whole run ended by memory | Problem17 (memout at 38 s) | none |
+| Time on the 3 solved by both | 108.7 s | 121.8 s (12% more) |
+
+So isolation is not a capacity gain by itself. It trades the shared model
+and CNF template for independence: on Problem101 the children's total
+memory reached the budget and `informal-kind`, which finds the bug
+in-process, was the one stopped; on rocket_1951 the in-process run lost
+`informal-ic3-mt` to shedding and the isolated one did not. It stays
+opt-in. Its use today is robustness (a run that cannot be ended by one
+engine) and the line protocol for trying an engine written elsewhere.

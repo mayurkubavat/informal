@@ -238,6 +238,32 @@ Sources: README, `docs/`, git log, project notes.
 - **Open issues:** UNSAFE verdicts are not replayed on the original model
   yet; four-state values; multi-clock designs; black boxes.
 
+## D15. In-house engines can run as child processes (opt-in)
+
+(D14 is the svlang front end, on its branch.)
+
+- **Chosen (2026-11-14):** `--isolate` (or `INFORMAL_ISOLATE`) runs each
+  in-house engine as `informal engine <name> <model>`, a child of the same
+  binary that writes JSON lines: progress, then one result with the verdict,
+  depth and witness (`informal-engines-ext/src/isolated.rs`). Certificates
+  are checked inside the child, as in-process. `informal-ic3-mt` stays one
+  process, so its workers keep their shared lemma pool. The default stays
+  in-process.
+- **Why:** one engine's memory growth or a crash in an FFI library should
+  end that engine, not the run. In-process shedding (9d161b8) polls and
+  frees memory late; a killed process frees it at once. Each child has the
+  budget as its own limit (in-process, and a systemd scope's `MemoryMax`
+  where user scopes work), and a monitor keeps the children's total under
+  the budget by killing the one with the highest shed rank. The line
+  protocol is also the way to plug in an engine written in anything.
+- **Cost:** each child loads and prepares the model and builds its own CNF
+  template, which in-process engines share (d699008); about 20 ms more per
+  check for the processes. Measurements: `docs/engines.md`.
+- **Open issues:** not used by the desktop app yet (it has no `informal`
+  binary to spawn); lemma or invariant sharing across engines would need
+  messages on the protocol; the monitor reads resident memory per process,
+  not per cgroup.
+
 ---
 
 ## Math and algorithm ideas to explore

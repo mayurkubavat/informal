@@ -677,6 +677,7 @@ dependencies = [
  "libc",
  "regex",
  "serde",
+ "serde_json",
  "toml",
 ]
 

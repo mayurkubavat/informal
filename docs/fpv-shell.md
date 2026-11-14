@@ -113,6 +113,38 @@ Extra informal commands in every flavor: `informal::session` (the session as JSO
 and `informal::set_engines name ...` (pick engines by name). Each flavor's
 commands also stay reachable by namespace (`jg::prove`, `vcf::check_fv`).
 
+## Checking a script before running it
+
+`informal shell --check script.tcl` goes through a JasperGold or VC Formal
+script without elaborating or proving anything, and lists per line what
+informal would do with it:
+
+```
+fpv.tcl:102: unknown command: stopat: not an informal command
+fpv.tcl:135: error: clock: -both_edges is not supported yet
+fpv.tcl:238: ignored: task -create ...: tasks are not modelled yet; properties stay in one task
+fpv.tcl:45: tcl error: environment variable DUT_TOP is not set
+9 command(s) honoured, 5 rejected, 2 unknown, 4 ignored option(s) or command(s), 1 Tcl error(s)
+```
+
+- `error`: informal has the command but rejects this use; a real run stops here.
+- `unknown command`: not implemented.
+- `ignored`: accepted, with no effect.
+- `tcl error`: anything else (an unset variable, a missing file).
+
+The script is evaluated one top-level command at a time, so one error does
+not hide the rest; `source` and `include` are followed. Design files need
+not exist. An environment variable that is not set is reported once and
+given a placeholder. The check has no side effects: `exec`, `cd`, writing
+or deleting files and the script's own `puts` are not done (this guards
+against what a flow script does in passing; it is not a sandbox for a
+hostile script). `--json` prints the report for tools; the exit status is 1
+when anything but `ignored` was found.
+
+`scripts/vendor_tcl_corpus.py` fetches public vendor scripts and tallies
+these findings over all of them; `docs/vendor-script-tally.md` holds the
+last result, the ranked list of what the shell should learn next.
+
 ## Building with slang
 
 slang is found in `INFORMAL_SLANG_DIR` or `~/Silicon/DV/tools/slang` (a

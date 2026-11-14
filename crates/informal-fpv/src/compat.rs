@@ -18,6 +18,8 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+pub mod check;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flavor {
     Jg,
@@ -93,7 +95,18 @@ impl Shell {
                 &format!("::{ns}::{name}"),
                 Box::new(move |args| {
                     let mut sess = s.try_borrow_mut().map_err(|_| "session busy".to_string())?;
-                    f(&mut sess, args)
+                    let r = f(&mut sess, args);
+                    if !sess.dry_run {
+                        return r;
+                    }
+                    // Check mode: record the outcome and carry on, so one
+                    // rejected command does not hide the ones after it.
+                    let name = args[0].rsplit("::").next().unwrap_or(&args[0]);
+                    check::used(name, r.is_ok());
+                    r.or_else(|e| {
+                        check::finding(check::Kind::Error, name, &e);
+                        Ok(Value::Str(String::new()))
+                    })
                 }),
             );
         };
@@ -156,6 +169,40 @@ namespace eval ::vcf { namespace export * }
         self.interp.set_var("informal_flavor", flavor.ns());
     }
 
+    /// Check mode: run `script` without elaborating or proving, and report
+    /// per command what would be honoured, ignored or rejected. The script
+    /// is evaluated one top-level command at a time, so an error does not
+    /// stop the check; `source` / `include` are followed the same way.
+    pub fn check(&self, script: &Path) -> check::Report {
+        self.session.borrow_mut().dry_run = true;
+        check::start();
+        let reg = |name: &str, f: fn(&[String])| {
+            self.interp.register(
+                name,
+                Box::new(move |a| {
+                    f(a);
+                    Ok(Value::Str(String::new()))
+                }),
+            );
+        };
+        reg("::informal::check_at", |a| {
+            check::at(&a[1], a[2].parse().unwrap_or(0), a.get(3).map_or("", |s| s))
+        });
+        reg("::informal::check_fail", |a| check::tcl_error(&a[1]));
+        reg("::informal::check_note", |a| {
+            check::finding(check::Kind::Ignored, &a[1], &a[2])
+        });
+        self.interp.eval(CHECK_DRIVER).expect("check driver");
+        self.interp
+            .set_var("informal_check_script", &script.to_string_lossy());
+        let cmd = "::informal::check_run $::informal_check_script";
+        if let Err(e) = self.interp.eval(cmd) {
+            check::tcl_error(&e.message);
+        }
+        self.session.borrow_mut().dry_run = false;
+        check::finish()
+    }
+
     pub fn eval(&self, script: &str) -> Result<String, TclError> {
         self.interp.eval(script)
     }
@@ -165,10 +212,103 @@ namespace eval ::vcf { namespace export * }
     }
 }
 
+/// The Tcl side of check mode: read a file, evaluate each complete
+/// top-level command on its own, and report Tcl errors instead of stopping.
+const CHECK_DRIVER: &str = r##"
+proc ::informal::check_open {file} {
+    if {[llength [info commands ::informal::tcl_open]]} { return [::informal::tcl_open $file r] }
+    return [open $file r]
+}
+proc ::informal::check_run {file} {
+    # Relative to the working directory, else to the script that names it.
+    set here [file dirname [info script]]
+    if {![file exists $file] && [file exists [file join $here $file]]} {
+        set file [file join $here $file]
+    }
+    if {[catch {::informal::check_open $file} ch]} {
+        ::informal::check_fail "cannot read $file"
+        return
+    }
+    set text [read $ch]
+    close $ch
+    set saved [info script]
+    info script $file
+    set cmd ""
+    set start 1
+    set n 0
+    foreach line [split $text \n] {
+        incr n
+        if {$cmd eq ""} { set start $n }
+        append cmd $line \n
+        if {![info complete $cmd] || [string index $line end] eq "\\"} continue
+        if {[string trim $cmd] ne "" && [string index [string trimleft $cmd] 0] ne "#"} {
+            ::informal::check_at $file $start [string trim $cmd]
+            # An environment variable that is not set here is reported once
+            # and given a placeholder, so the command is still checked.
+            for {set try 0} {$try < 20} {incr try} {
+                if {![catch {uplevel #0 $cmd} msg]} break
+                if {[regexp {^can't read "(?:::)?env\((\w+)\)": no such variable} $msg -> var]} {
+                    set ::env($var) "\${$var}"
+                    ::informal::check_fail "environment variable $var is not set"
+                    continue
+                }
+                ::informal::check_fail $msg
+                break
+            }
+        }
+        set cmd ""
+    }
+    if {[string trim $cmd] ne ""} {
+        ::informal::check_at $file $start [string trim $cmd]
+        ::informal::check_fail "the command is not complete (unbalanced braces or quotes)"
+    }
+    info script $saved
+}
+rename ::source ::informal::tcl_source
+proc ::source {args} { ::informal::check_run [lindex $args end] }
+rename ::exit ::informal::tcl_exit
+proc ::exit {args} {}
+# A check has no side effects: nothing is executed, written, deleted or
+# moved. (This guards against what a flow script does in passing; it is not
+# a sandbox for a hostile script.)
+foreach c {exec socket load cd} {
+    rename ::$c {}
+    proc ::$c {args} [list ::informal::check_note $c "$c: not run in check mode"]
+}
+# The script's own messages are not part of the report.
+rename ::puts ::informal::tcl_puts
+proc ::puts {args} {
+    set a $args
+    if {[lindex $a 0] eq "-nonewline"} { set a [lrange $a 1 end] }
+    if {[llength $a] == 2 && [lindex $a 0] ni {stdout stderr}} { ::informal::tcl_puts {*}$args }
+}
+rename ::open ::informal::tcl_open
+proc ::open {name {mode r} args} {
+    if {$mode in {r RDONLY}} { return [::informal::tcl_open $name r] }
+    ::informal::check_note open "open $name $mode: nothing is written in check mode"
+    return [::informal::tcl_open /dev/null w]
+}
+rename ::file ::informal::tcl_file
+proc ::file {sub args} {
+    foreach w {delete mkdir copy rename link attributes tempfile} {
+        if {$sub ne "" && [string first $sub $w] == 0 && $sub ni {d m c r l a t}} {
+            ::informal::check_note file "file $sub: not done in check mode"
+            return ""
+        }
+    }
+    uplevel 1 [list ::informal::tcl_file $sub {*}$args]
+}
+"##;
+
 // ---------------------------------------------------------------- helpers
 
 fn note(msg: &str) {
-    eprintln!("informal: {msg}");
+    if check::active() {
+        let cmd = msg.split([':', ' ']).next().unwrap_or("");
+        check::finding(check::Kind::Ignored, cmd, msg);
+    } else {
+        eprintln!("informal: {msg}");
+    }
 }
 
 /// Command words after the name, with `-opt value` pairs pulled out.
@@ -281,6 +421,10 @@ fn apply_compile_words(
             }
         } else if w == "-f" || w == "-F" || w == "-file" {
             let f = resolve(words.get(i + 1).ok_or("-f needs a file")?);
+            if s.dry_run && !f.exists() {
+                i += 2;
+                continue;
+            }
             let text = std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
             let inner: Vec<String> = text
                 .lines()
@@ -315,7 +459,8 @@ fn apply_compile_words(
             }
         } else {
             let p = resolve(w);
-            if !p.exists() {
+            // (Check mode looks at the script, not at the design files.)
+            if !p.exists() && !s.dry_run {
                 return Err(format!("file not found: {}", p.display()));
             }
             s.design.files.push(p);
@@ -366,6 +511,9 @@ fn set_enabled(s: &mut Session, patterns: &[String], on: bool) -> Result<Value, 
 
 fn prove_and_report(s: &mut Session, which: &[usize]) -> Result<Value, String> {
     let done = s.prove(which).map_err(|e| format!("{e:#}"))?;
+    if s.dry_run {
+        return Ok(().into());
+    }
     print!("{}", s.report());
     let summary = |w: &str| {
         done.iter()
@@ -657,7 +805,9 @@ const JG: &[(&str, Body)] = &[
             &[("-task", 1), ("-file", 1), ("-force", 0)],
         )?;
         let r = s.report();
-        print!("{r}");
+        if !s.dry_run {
+            print!("{r}");
+        }
         Ok(r.into())
     }),
     ("get_design_info", |s, _| {
@@ -861,7 +1011,9 @@ const VCF: &[(&str, Body)] = &[
     ("report_fv", |s, a| {
         let _ = Args::parse(a, &[("-list", 0), ("-verbose", 0)], &[("-property", 1)])?;
         let r = s.report();
-        print!("{r}");
+        if !s.dry_run {
+            print!("{r}");
+        }
         Ok(r.into())
     }),
     ("get_props", |s, a| {
@@ -1047,6 +1199,76 @@ mod tests {
         assert!(!s.props[0].enabled && !s.props[1].enabled && s.props[2].enabled);
         assert_eq!(s.reset.as_deref(), Some("!rst_n"));
         assert_eq!(s.clocks[0].signal, "clk");
+    }
+
+    /// Check mode goes through the whole script, past every error, and
+    /// says per line what informal would do with it.
+    #[test]
+    fn check_mode_reports_every_line_without_running() {
+        let dir = std::env::temp_dir().join(format!("informal-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("run.tcl");
+        std::fs::write(
+            &script,
+            "# comment\n\
+             analyze -sv12 $env(INFORMAL_NO_SUCH_VAR)/top.sv\n\
+             elaborate -top top -bbox_m ram\n\
+             clock clk\n\
+             foreach p {a b} {\n\
+                 assert -name p_$p -frob {req |=> gnt}\n\
+                 assert -name q_$p {req |=> gnt}\n\
+             }\n\
+             check_spv -create\n\
+             prove -all -bg\n\
+             include sub.tcl\n\
+             set f [open written.txt w]; puts $f x; close $f\n\
+             exec touch executed.txt\n\
+             file delete sub.tcl\n\
+             exit\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("sub.tcl"), "stopat u.sig\ncover -name c1 {done}\n").unwrap();
+        let sh = shell(Flavor::Jg);
+        let r = sh.check(&script);
+        let got: Vec<(check::Kind, u32, &str)> = r
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.line, f.command.as_str()))
+            .collect();
+        use check::Kind::*;
+        assert_eq!(
+            got,
+            [
+                (Tcl, 2, "analyze"),
+                (Ignored, 3, "elaborate"),
+                (Error, 5, "assert"),
+                (Error, 5, "assert"),
+                (Unknown, 9, "check_spv"),
+                (Ignored, 10, "prove"),
+                (Unknown, 1, "stopat"),
+                (Ignored, 12, "open"),
+                (Ignored, 13, "exec"),
+                (Ignored, 14, "file"),
+            ],
+            "{}",
+            r.text()
+        );
+        assert!(r.findings[6].file.ends_with("sub.tcl"));
+        assert!(!r.clean());
+        // No side effects: nothing written, executed or deleted.
+        assert!(!dir.join("written.txt").exists() && !Path::new("written.txt").exists());
+        assert!(!dir.join("executed.txt").exists() && !Path::new("executed.txt").exists());
+        assert!(dir.join("sub.tcl").exists());
+        assert_eq!(
+            r.commands["assert"],
+            check::Uses {
+                honoured: 2,
+                rejected: 2
+            }
+        );
+        // Nothing ran: the properties exist, unprocessed; the shell is usable after.
+        assert_eq!(sh.eval("get_property_list").unwrap(), "q_a q_b c1");
+        assert!(!sh.session.borrow().dry_run);
     }
 
     #[test]
