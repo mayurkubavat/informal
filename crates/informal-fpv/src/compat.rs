@@ -532,6 +532,54 @@ fn prove_and_report(s: &mut Session, which: &[usize]) -> Result<Value, String> {
     .into())
 }
 
+/// `stopat sig ...` (JasperGold) / `snip_driver sig ...` (VC Formal): cut
+/// each signal from its drivers, so it is free on every step. `-clear`
+/// removes the named cut points (all without names); `-list` returns them.
+fn stopat(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[("-clear", 0), ("-list", 0), ("-task", 1)],
+        &[("-env", 0)],
+    )?;
+    // Tasks are not modelled: the cut applies to every property. That only
+    // frees more (a proof still holds), unlike an assumption.
+    if let Some(t) = a.val("-task") {
+        note(&format!(
+            "{}: -task {t}: tasks are not modelled, the cut applies to every property",
+            a.cmd
+        ));
+    }
+    let names: Vec<String> = a
+        .pos
+        .iter()
+        .flat_map(|w| w.split_whitespace().map(String::from))
+        .collect();
+    if a.flag("-list") {
+        return Ok(Value::List(s.design.stopats.clone()));
+    }
+    let names = names
+        .iter()
+        .map(|n| s.cut_point(n).map_err(|e| format!("{}: {e}", a.cmd)))
+        .collect::<Result<Vec<_>, _>>()?;
+    if a.flag("-clear") {
+        if names.is_empty() {
+            s.design.stopats.clear();
+        } else {
+            s.design.stopats.retain(|x| !names.contains(x));
+        }
+        return Ok(().into());
+    }
+    if names.is_empty() {
+        return Err(format!("{}: signal name(s) required", a.cmd));
+    }
+    for n in names {
+        if !s.design.stopats.contains(&n) {
+            s.design.stopats.push(n);
+        }
+    }
+    Ok(().into())
+}
+
 /// Property names filtered by `{key value ...}` pairs on type and status.
 fn filter_props(s: &Session, include: Option<&str>, exclude: Option<&str>) -> Vec<String> {
     let pairs = |spec: Option<&str>| -> Vec<(String, String)> {
@@ -820,6 +868,7 @@ const JG: &[(&str, Body)] = &[
         )
         .into())
     }),
+    ("stopat", stopat),
     ("task", |_, a| {
         note(&format!(
             "task {}: tasks are not modelled yet; properties stay in one task",
@@ -976,6 +1025,7 @@ const VCF: &[(&str, Body)] = &[
         });
         Ok(().into())
     }),
+    ("snip_driver", stopat),
     ("create_reset", |s, a| {
         let a = Args::parse(
             a,
@@ -1227,7 +1277,11 @@ mod tests {
              exit\n",
         )
         .unwrap();
-        std::fs::write(dir.join("sub.tcl"), "stopat u.sig\ncover -name c1 {done}\n").unwrap();
+        std::fs::write(
+            dir.join("sub.tcl"),
+            "blackbox_assistant u.sig\ncover -name c1 {done}\n",
+        )
+        .unwrap();
         let sh = shell(Flavor::Jg);
         let r = sh.check(&script);
         let got: Vec<(check::Kind, u32, &str)> = r
@@ -1245,7 +1299,7 @@ mod tests {
                 (Error, 5, "assert"),
                 (Unknown, 9, "check_spv"),
                 (Ignored, 10, "prove"),
-                (Unknown, 1, "stopat"),
+                (Unknown, 1, "blackbox_assistant"),
                 (Ignored, 12, "open"),
                 (Ignored, 13, "exec"),
                 (Ignored, 14, "file"),

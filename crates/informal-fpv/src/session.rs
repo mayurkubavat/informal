@@ -159,6 +159,9 @@ pub struct Design {
     pub params: Vec<(String, String)>,
     /// Modules to black-box (accepted for compatibility; not applied yet).
     pub bbox: Vec<String>,
+    /// Cut points (`stopat`), as paths from the top module (`u_core.sig`):
+    /// each is cut from its drivers and free on every step.
+    pub stopats: Vec<String>,
     /// slang's scope tree after elaboration: instances with their ports and
     /// named signals (the app's Design browser). Also written to
     /// `<workdir>/design.hierarchy.json`. Empty without slang (the app then
@@ -301,6 +304,40 @@ impl Session {
         Ok(())
     }
 
+    /// `stopat`: the path of a signal to cut, from the top module (a
+    /// leading `<top>.` is accepted). After elaboration the name must be a
+    /// signal of the design; before it, the check happens at prove.
+    pub fn cut_point(&self, name: &str) -> Result<String, String> {
+        let top = self.design.top.as_deref().unwrap_or("");
+        let rel = name
+            .strip_prefix(top)
+            .and_then(|r| r.strip_prefix('.'))
+            .filter(|_| !top.is_empty())
+            .unwrap_or(name);
+        if let (Some(d), false) = (&self.slang, top.is_empty()) {
+            let full = format!("{top}.{rel}");
+            // A whole signal, or a part of one (`pkt.valid`, `mem[3]`).
+            let known = d.signals.iter().filter(|s| !s.constant).any(|s| {
+                full.strip_prefix(s.path.as_str())
+                    .is_some_and(|r| r.is_empty() || r.starts_with(['.', '[']))
+            });
+            if !known {
+                return Err(format!("`{name}` is not a signal of {top}"));
+            }
+        }
+        Ok(rel.to_string())
+    }
+
+    /// The cut points as the front end wants them: full paths.
+    fn cut_points(&self) -> Vec<String> {
+        let top = self.design.top.as_deref().unwrap_or("");
+        self.design
+            .stopats
+            .iter()
+            .map(|s| format!("{top}.{s}"))
+            .collect()
+    }
+
     /// Names matching a Tcl-style glob (`*`, `?`).
     pub fn matching(&self, pattern: &str) -> Vec<usize> {
         self.props
@@ -330,6 +367,7 @@ impl Session {
             top: self.design.top.clone(),
             params: self.design.params.clone(),
             trace_outputs: false,
+            cut_points: Vec::new(),
         };
         self.design.hierarchy.clear();
         let compiled = match frontend() {
@@ -694,7 +732,15 @@ impl Session {
             // informal_slang::TRACE_MARKER: engines get the text before it
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
+            cut_points: self.cut_points(),
         };
+        if !req.cut_points.is_empty() {
+            self.log(&format!(
+                "{} cut point(s) (stopat) are free in this model: {}. A proof holds for the design; a counterexample may use values the design cannot produce there",
+                self.design.stopats.len(),
+                self.design.stopats.join(", ")
+            ));
+        }
         let l = if fe == "slang" {
             informal_slang::lower(&req).ok_or("slang: this informal was built without slang")?
         } else {

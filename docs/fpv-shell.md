@@ -90,6 +90,7 @@ passes on a different setup without saying so.
 | `clear -all` | (new session) | Forget design and properties |
 | `analyze -sv12 [-f F] [+define+X] [+incdir+D] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources; VHDL is an error for now |
 | `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with svlang; top guessed when omitted |
+| `stopat sig ...`, `stopat -clear [sig ...]`, `stopat -list` | `snip_driver sig ...` | Cut points: each signal is cut from its drivers and is free on every step (see below) |
 | `clock clk` | `create_clock clk -period N` | Primary clock (posedge). `-both_edges`, `-factor` are errors |
 | `reset -expression {!rst_n}` | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
 | — | `sim_run -stable`, `sim_save_reset` | Accepted (reset is applied by the model) |
@@ -109,6 +110,26 @@ Extra informal commands in every flavor: `informal::session` (the session as JSO
 and `informal::set_engines name ...` (pick engines by name). Each flavor's
 commands also stay reachable by namespace (`jg::prove`, `vcf::check_fv`).
 
+## Cut points (`stopat`)
+
+`stopat u_core.busy` cuts the signal from whatever drives it (an assign, a
+register, an instance output): everything that reads it sees a free value
+on every step. Names are paths from the top module; a name that is not a
+signal of the design is an error. `stopat -clear` removes them again.
+
+A cut is an over-approximation the user asks for, usually to take a deep
+counter, a memory or a whole sub-block out of the proof:
+
+- a property **proved** with cut points holds on the real design;
+- a **counterexample** may use values the design cannot produce at the cut
+  signal. The trace shows the cut signal as an input, and the prove log
+  lists the cut points in force.
+
+The signals that drive the cut one, and signals it merely copied, are not
+affected. Later reads of a variable inside the same procedural block that
+assigned it see the block's own value, not the cut. svlang applies the cut
+(`LowerConfig::cut_points`); the slang cross-check lowering rejects it.
+
 ## Checking a script before running it
 
 `informal shell --check script.tcl` goes through a JasperGold or VC Formal
@@ -116,7 +137,7 @@ script without elaborating or proving anything, and lists per line what
 informal would do with it:
 
 ```
-fpv.tcl:102: unknown command: stopat: not an informal command
+fpv.tcl:85: unknown command: get_version: not an informal command
 fpv.tcl:135: error: clock: -both_edges is not supported yet
 fpv.tcl:238: ignored: task -create ...: tasks are not modelled yet; properties stay in one task
 fpv.tcl:45: tcl error: environment variable DUT_TOP is not set

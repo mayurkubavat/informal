@@ -101,6 +101,14 @@ fn bits(c: &CVal, w: u32) -> String {
 }
 
 impl<'n> Writer<'n> {
+    /// True for a signal cut whole by a cut point.
+    fn cut(&self, name: &str) -> bool {
+        self.nl
+            .undriven
+            .iter()
+            .any(|u| u.free == FreeKind::Cut && u.signal == name)
+    }
+
     fn new(nl: &'n Netlist) -> Self {
         Writer {
             nl,
@@ -363,13 +371,20 @@ impl<'n> Writer<'n> {
                         self.pending.push((srt, s, s));
                         s
                     }
-                    FreeKind::AnySeq => self.input(w, &base),
+                    // A cut point (`stopat`): free on every step, under
+                    // the signal's own name.
+                    FreeKind::AnySeq | FreeKind::Cut => self.input(w, &base),
                     FreeKind::Undriven => self.input(w, &format!("{base}_undriven")),
                 }
             }
             ValueKind::Const(c) => self.constant(c, w),
             ValueKind::StateOut(s) => {
                 let st = &nl.states[s.0 as usize];
+                // A cut register is not a state of the model: nothing
+                // reads it (its readers got the free value).
+                if self.cut(&st.name) {
+                    return Ok(self.konst("0".repeat(w as usize)));
+                }
                 self.state(w, &st.name)
             }
             ValueKind::MemRead { mem, addr } => {
@@ -672,6 +687,9 @@ impl<'n> Writer<'n> {
         }
         // Registers.
         for st in &nl.states {
+            if self.cut(&st.name) {
+                continue;
+            }
             let s = self.value(st.out)?;
             // An initial value with X or Z bits: no init (any value).
             if let Some(init) = st.init.as_ref().filter(|c| c.known()) {

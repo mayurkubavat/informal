@@ -12,11 +12,10 @@ Sources (repository, commit, scripts kept):
 
 12 scripts, 0 would run to the end, 0 not checked
 
-## Commands informal does not have (25)
+## Commands informal does not have (24)
 
 | scripts | what |
 | ---: | --- |
-| 6 | `stopat` |
 | 5 | `check_cov` |
 | 4 | `set_proofgrid_per_engine_max_local_jobs` |
 | 2 | `custom_engine` |
@@ -57,16 +56,18 @@ Sources (repository, commit, scripts kept):
 | 1 | `report -csv` |
 | 1 | `reset -expr` |
 
-## Accepted and ignored (6)
+## Accepted and ignored (8)
 
 | scripts | what |
 | ---: | --- |
 | 6 | `task` |
+| 5 | `stopat -task` |
 | 2 | `elaborate -disable_auto_bbox` |
 | 2 | `prove -task` |
 | 1 | `check_fv -block` |
 | 1 | `report -task` |
 | 1 | `set_fml_var fml_max_mem` |
+| 1 | `stopat -env` |
 
 ## Other Tcl errors (environment, missing procs or files) (19)
 
@@ -94,4 +95,4 @@ Sources (repository, commit, scripts kept):
 
 ## Commands honoured (uses)
 
-`task` 18, `analyze` 13, `clear` 5, `get_design_info` 5, `elaborate` 4, `assert` 4, `clock_cmd` 3, `prove` 3, `report` 3, `reset` 3, `set_fml_var` 2, `get_property_list` 1, `set_prove_time_limit` 1, `set_proofgrid_mode` 1, `check_fv` 1, `create_clock` 1, `create_reset` 1, `report_fv` 1, `set_fml_appmode` 1, `sim_run` 1, `sim_save_reset` 1, `assume` 0, `fvassume` 0, `get_props` 0
+`task` 18, `analyze` 13, `stopat` 7, `clear` 5, `get_design_info` 5, `elaborate` 4, `assert` 4, `clock_cmd` 3, `prove` 3, `report` 3, `reset` 3, `set_fml_var` 2, `get_property_list` 1, `set_prove_time_limit` 1, `set_proofgrid_mode` 1, `check_fv` 1, `create_clock` 1, `create_reset` 1, `report_fv` 1, `set_fml_appmode` 1, `sim_run` 1, `sim_save_reset` 1, `assume` 0, `fvassume` 0, `get_props` 0

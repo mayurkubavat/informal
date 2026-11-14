@@ -186,6 +186,11 @@ pub struct Request {
     /// [`lower`] only: append the named-output section for traces (see
     /// [`TRACE_MARKER`]). Not a slang option; the shim strips it.
     pub trace_outputs: bool,
+    /// [`lower`] only: cut points (`stopat`), as full hierarchical paths
+    /// from the top module (`top.u_core.sig`). Each named signal is cut
+    /// from its drivers and is a free value on every step. The svlang
+    /// front end applies them; the slang lowering rejects a non-empty list.
+    pub cut_points: Vec<String>,
 }
 
 /// The comment line that starts [`lower`]'s trace section: `output` lines
@@ -282,6 +287,13 @@ fn call(
 pub fn lower(req: &Request) -> Option<Lowered> {
     #[cfg(informal_slang)]
     {
+        if !req.cut_points.is_empty() {
+            return Some(Lowered {
+                ok: false,
+                errors: vec!["not modelled: cut points (stopat) with the slang lowering".into()],
+                ..Default::default()
+            });
+        }
         let json = call(ffi::informal_slang_lower, req);
         Some(serde_json::from_str(&json).unwrap_or_else(|e| Lowered {
             ok: false,
