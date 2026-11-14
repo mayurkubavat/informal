@@ -1590,6 +1590,12 @@ impl<'g> Ic3<'g> {
             .collect()
     }
 
+    /// The standing invariant (assumed or found by Houdini so far), as
+    /// cubes over latch literals.
+    pub fn standing_invariant(&self) -> Vec<Cube> {
+        self.inf.iter().flat_map(|c| self.expand(c)).collect()
+    }
+
     /// After [`Ic3::check`] said safe: the inductive invariant, as the cubes
     /// it blocks (the lemmas above the frame that emptied). `None` before.
     pub fn invariant(&self) -> Option<Vec<Cube>> {

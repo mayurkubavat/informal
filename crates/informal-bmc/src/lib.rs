@@ -925,21 +925,7 @@ impl Engine for Ic3Engine {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
-        let c = ctx.clone();
         let mini = self.mini;
-        let make = move || -> Box<dyn Sat> {
-            if !mini {
-                return solver(&c);
-            }
-            let mut s = informal_sat::Mini::with_seed(ic3_seed());
-            let (cancel, deadline) = (c.cancel.clone(), c.deadline);
-            s.set_terminate(Box::new(move || {
-                cancel.is_cancelled()
-                    || Instant::now() >= deadline
-                    || informal_engine::memory::exceeded()
-            }));
-            Box::new(s)
-        };
         if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
             let t = cnf::build(&g);
             eprintln!(
@@ -952,26 +938,83 @@ impl Engine for Ic3Engine {
                 t.clauses.iter().map(|c| c.len()).sum::<usize>()
             );
         }
-        let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(make)) else {
-            return Ok(result(
-                self.name(),
-                unknown("latch inits that are not constants"),
-                t0,
-            ));
+        // H16 (INFORMAL_IC3_RESTART=<seconds>): run in slices of that
+        // length, doubling; between slices keep only the lemmas that are
+        // inductive together and start again on another seed.
+        let restart: f64 = std::env::var("INFORMAL_IC3_RESTART")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(0.0);
+        let mut kept = stored_invariant(&g, ctx, self.name());
+        let mut attempt = 0u32;
+        let (ic3, v) = loop {
+            let mut slice = ctx.clone();
+            if restart > 0.0 {
+                let len = std::time::Duration::from_secs_f64(
+                    restart * f64::from(1u32 << attempt.min(16)),
+                );
+                slice.deadline = ctx.deadline.min(Instant::now() + len);
+            }
+            let c = slice.clone();
+            let seed = ic3_seed().wrapping_add(u64::from(attempt) * 7919);
+            let make = move || -> Box<dyn Sat> {
+                if !mini {
+                    return solver(&c);
+                }
+                let mut s = informal_sat::Mini::with_seed(seed);
+                let (cancel, deadline) = (c.cancel.clone(), c.deadline);
+                s.set_terminate(Box::new(move || {
+                    cancel.is_cancelled()
+                        || Instant::now() >= deadline
+                        || informal_engine::memory::exceeded()
+                }));
+                Box::new(s)
+            };
+            let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(make)) else {
+                return Ok(result(
+                    self.name(),
+                    unknown("latch inits that are not constants"),
+                    t0,
+                ));
+            };
+            if attempt == 0 && std::env::var_os("INFORMAL_IC3_MINE").is_some() {
+                mine_into(&g, &mut ic3, ctx, self.name());
+            }
+            if std::env::var_os("INFORMAL_IC3_HOUDINI").is_none() {
+                // H2 on by default here: gap set 1 -> 3 at 300 s, sample 20 -> 21.
+                ic3.set_config(ic3::Config {
+                    houdini_every: 4,
+                    ..ic3::Config::default()
+                });
+            }
+            ic3.assume_invariant(kept.clone());
+            let v = ic3.check(&slice);
+            if restart == 0.0 || !matches!(v, Verdict::Unknown { .. }) || ctx.should_stop() {
+                break (ic3, v);
+            }
+            // The slice ran out: what survives is the inductive core.
+            let th = Instant::now();
+            let mut cands = ic3.lemmas();
+            cands.extend(ic3.standing_invariant());
+            let n = cands.len();
+            let mut h = ctx.clone();
+            let rest = ctx.deadline.saturating_duration_since(th);
+            h.deadline = th + (rest / 10).min(std::time::Duration::from_secs(20));
+            if let Some(core) = invariant::houdini(&g, cands, || solver(&h), &h) {
+                kept = core;
+            }
+            if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+                eprintln!(
+                    "{}: restart {} at frame {}: {} of {n} lemmas kept, {:.2} s",
+                    self.name(),
+                    attempt + 1,
+                    ic3.depth(),
+                    kept.len(),
+                    th.elapsed().as_secs_f64()
+                );
+            }
+            attempt += 1;
         };
-        if std::env::var_os("INFORMAL_IC3_MINE").is_some() {
-            mine_into(&g, &mut ic3, ctx, self.name());
-        }
-        let stored = stored_invariant(&g, ctx, self.name());
-        if std::env::var_os("INFORMAL_IC3_HOUDINI").is_none() {
-            // H2 on by default here: gap set 1 -> 3 at 300 s, sample 20 -> 21.
-            ic3.set_config(ic3::Config {
-                houdini_every: 4,
-                ..ic3::Config::default()
-            });
-        }
-        ic3.assume_invariant(stored);
-        let v = ic3.check(ctx);
         let v = certified(req, &g, &ic3, v, ctx);
         if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
             eprintln!(

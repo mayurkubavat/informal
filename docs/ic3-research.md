@@ -504,6 +504,25 @@ and differ in the AND gates under it, so nothing was ever imported.
 Not part of the clean 319-model score: a result with a store depends
 on which siblings were solved before.
 
+### H16. Restarts that keep the inductive core (prediction, 2026-11-14)
+
+From `research/innovations-2026-11-14.md` (idea 2), built on H14's data:
+single IC3 solves about 6 of the 29 hard models per seed but 10 on some
+seed, and solve times on one model range from 13 s to more than 300 s.
+
+*Claim.* A run that is on a bad path should give up early and try
+another, keeping what it proved. `INFORMAL_IC3_RESTART=<seconds>`: IC3
+runs in slices of that length, doubling each time (20, 40, 80, 160 fill
+300 s). When a slice ends without a verdict, Houdini keeps the lemmas
+that are inductive together (with the invariant so far), and a new IC3
+starts on another seed with that core as its standing invariant.
+
+*Prediction.* Hard set, single IC3, 300 s, 3 seeds, base 20 s: a mean
+of at least 8 (6.0 without restarts), and no model that is solved on
+all three seeds today is lost.
+
+*Result:* pending.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
