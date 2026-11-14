@@ -101,6 +101,34 @@ Build CaDiCaL once (`./configure -fPIC && make` in
 and rebuild informal; without it these engines are left out of the portfolio.
 Tests run them on a small built-in DPLL solver instead.
 
+## Sharing invariants between properties of one design
+
+Off by default. With `INFORMAL_INV_STORE=<dir>` set, every invariant that
+passes its certificate is added to `<dir>/<design hash>.inv`, and
+`informal-ic3` and `informal-ic3-mt` import what is stored for the design
+before they start. The design hash covers the whole model except its bad
+outputs, so two properties of one design share a file; the clauses are
+over the latch indices of the model as loaded.
+
+Nothing read from the store is trusted. The importer maps the clauses
+onto the new property's simplified model, keeps only the ones Houdini
+proves inductive there (a tenth of the time left, 30 s at most), and the
+final certificate checks the whole invariant on the model as loaded.
+
+`INFORMAL_INV_STORE_READONLY=1` imports without adding (for
+measurements).
+
+This is for runs with many properties over one design (the FPV shell, or
+a family such as HWMCC'24's cv32e40x-pNNN). Benchmark scores that use a
+store are reported separately: a result then depends on which siblings
+were solved before.
+
+Environment switches of the in-house IC3 (experiments; see
+`docs/ic3-research.md`): `INFORMAL_IC3_SEED`, `INFORMAL_IC3_DERIVE`,
+`INFORMAL_IC3MT_DIVERSE`, `INFORMAL_IC3_HOUDINI`, `INFORMAL_IC3_PROMOTE`,
+`INFORMAL_IC3_CTGS`, `INFORMAL_IC3_CTG_DEPTH`, `INFORMAL_IC3_TRACE`,
+`INFORMAL_IC3_STATS`, `INFORMAL_SCORR_TL`, `INFORMAL_SCORR_NO_RANDOM`.
+
 ## Adding an engine
 
 1. Add an `[[engine]]` entry: `program`, `args` with `{model}`, `formats`.
@@ -114,10 +142,15 @@ An in-process engine implements `informal_engine::Engine` directly instead.
 
 ## Verdict trust
 
-Until phase 2 adds certificate checking (Certifaiger for invariants,
-BtorSim for witnesses), a verdict is only as trustworthy as the engine.
-The portfolio already reports engines that contradict each other as
-`unknown (engine conflict)` rather than picking one.
+Every SAFE and UNSAFE from an in-house engine is checked on the model as
+loaded before it is reported (`crates/informal-bmc/src/certify.rs`; D8 in
+`docs/decisions.md`): an invariant by three fresh SAT queries, a
+k-induction proof by its base and step, a counterexample by simulation.
+A verdict that fails is withdrawn to `unknown`. External engines are
+only as trustworthy as they are; Certifaiger certificates and AIGER
+witnesses in the competition's formats are still to do. The portfolio
+reports engines that contradict each other as `unknown (engine
+conflict)` rather than picking one.
 
 ## Shrinking a disagreement
 

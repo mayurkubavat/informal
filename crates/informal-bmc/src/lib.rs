@@ -12,6 +12,7 @@ pub mod ic3;
 pub mod invariant;
 pub mod mine;
 pub mod scorr;
+pub mod store;
 pub mod unroll;
 
 use informal_aig::preprocess::{InputMap, LatchMap};
@@ -28,13 +29,15 @@ pub use informal_aig::load as load_aig;
 
 /// The simplified model and the map from the loaded model's latches to it,
 /// or the reason this engine cannot take it.
-fn prepare(req: &CheckRequest) -> Result<(Aig, LatchMap, InputMap), String> {
+fn prepare(req: &CheckRequest) -> Result<(Aig, LatchMap, InputMap, u64), String> {
     let g = load_aig(&req.model).map_err(|e| format!("{e:#}"))?;
     if g.bads.is_empty() {
         return Err("model has no bad-state property".into());
     }
+    // Only needed (and only computed) when the invariant store is on.
+    let hash = store::dir().map_or(0, |_| store::design_hash(&g));
     let (s, _, map, imap) = informal_aig::preprocess::simplify_maps(&g);
-    Ok((s, map, imap))
+    Ok((s, map, imap, hash))
 }
 
 /// The model as the engines see it: simplified, latch-merged, and its CNF
@@ -48,6 +51,8 @@ pub struct Prepared {
     pub latch_map: LatchMap,
     /// From the loaded model's inputs to `aig`'s (UNSAFE certificates).
     pub input_map: InputMap,
+    /// [`store::design_hash`] of the loaded model (0 when the store is off).
+    pub design_hash: u64,
 }
 
 impl std::ops::Deref for Prepared {
@@ -254,9 +259,102 @@ fn certified(
             .ok_or("missing: IC3 said safe without an invariant")?;
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
         let inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
-        certify::check(&orig, &inv, &|| solver(ctx))
+        certify::check(&orig, &inv, &|| solver(ctx))?;
+        if store::dir().is_some() {
+            store_invariant(&orig, p.design_hash, &inv);
+        }
+        Ok(())
     })();
     report_certificate(req, r, t, ctx)
+}
+
+/// H15: add a certified invariant (clauses over the loaded model's latch
+/// literals) to the design's store.
+fn store_invariant(orig: &Aig, hash: u64, inv: &[certify::Clause]) {
+    let index: std::collections::HashMap<u32, u32> = orig
+        .latches
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (informal_aig::var(l.lit), i as u32))
+        .collect();
+    let clauses: Vec<store::IdxClause> = inv
+        .iter()
+        .filter_map(|c| {
+            c.iter()
+                .map(|&l| Some((*index.get(&informal_aig::var(l))?, informal_aig::is_neg(l))))
+                .collect()
+        })
+        .collect();
+    match store::save(hash, &clauses) {
+        Ok(n) if std::env::var_os("INFORMAL_IC3_STATS").is_some() => {
+            eprintln!(
+                "invariant store: {} clauses added, {n} held for this design",
+                clauses.len()
+            )
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("informal: invariant store not written: {e}"),
+    }
+}
+
+/// H15: the stored clauses of this design that Houdini proves inductive
+/// on the prepared model (within a tenth of the time left, 30 s at
+/// most), as cubes for [`ic3::Ic3::assume_invariant`]. Empty when the
+/// store is off or has nothing.
+fn stored_invariant(p: &Prepared, ctx: &RunContext, name: &str) -> Vec<ic3::Cube> {
+    use informal_aig::{neg, FALSE, TRUE};
+    if store::dir().is_none() {
+        return Vec::new();
+    }
+    let t0 = Instant::now();
+    let clauses = store::load(p.design_hash);
+    if clauses.is_empty() {
+        return Vec::new();
+    }
+    let is_latch: std::collections::HashSet<u32> =
+        p.latches.iter().map(|l| informal_aig::var(l.lit)).collect();
+    let mut cands: Vec<ic3::Cube> = Vec::new();
+    'clause: for c in &clauses {
+        // The clause through the latch map; its negation is the cube.
+        let mut cube = Vec::with_capacity(c.len());
+        for &(i, n) in c {
+            let Some(Some(l)) = p.latch_map.get(i as usize).copied() else {
+                continue 'clause; // a latch outside this property's cone
+            };
+            let l = if n { neg(l) } else { l };
+            if l == TRUE {
+                continue 'clause; // holds anyway
+            }
+            if l == FALSE {
+                continue;
+            }
+            if !is_latch.contains(&informal_aig::var(l)) {
+                continue 'clause;
+            }
+            cube.push(neg(l));
+        }
+        cube.sort_unstable();
+        cube.dedup();
+        if !cube.is_empty() {
+            cands.push(cube);
+        }
+    }
+    cands.sort();
+    cands.dedup();
+    let n = cands.len();
+    let mut h = ctx.clone();
+    let rest = ctx.deadline.saturating_duration_since(t0);
+    h.deadline = t0 + (rest / 10).min(std::time::Duration::from_secs(30));
+    let inv = invariant::houdini(p, cands, || solver(&h), &h).unwrap_or_default();
+    if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
+        eprintln!(
+            "{name}: invariant store: {} clauses stored, {n} apply here, {} proved inductive, {:.2} s",
+            clauses.len(),
+            inv.len(),
+            t0.elapsed().as_secs_f64()
+        );
+    }
+    inv
 }
 
 /// `v` with an UNSAFE kept only when [`certify::check_unsafe`] finds a
@@ -419,7 +517,7 @@ fn report_certificate(
 }
 
 fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, String> {
-    let (g, map, imap) = prepare(req)?;
+    let (g, map, imap, design_hash) = prepare(req)?;
     let (g, map, imap) = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
         (g, map, imap)
     } else {
@@ -458,6 +556,7 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext) -> Result<Prepared, Stri
         _template: Arc::new(t),
         latch_map: map,
         input_map: imap,
+        design_hash,
     })
 }
 
@@ -863,6 +962,7 @@ impl Engine for Ic3Engine {
         if std::env::var_os("INFORMAL_IC3_MINE").is_some() {
             mine_into(&g, &mut ic3, ctx, self.name());
         }
+        let stored = stored_invariant(&g, ctx, self.name());
         if std::env::var_os("INFORMAL_IC3_HOUDINI").is_none() {
             // H2 on by default here: gap set 1 -> 3 at 300 s, sample 20 -> 21.
             ic3.set_config(ic3::Config {
@@ -870,6 +970,7 @@ impl Engine for Ic3Engine {
                 ..ic3::Config::default()
             });
         }
+        ic3.assume_invariant(stored);
         let v = ic3.check(ctx);
         let v = certified(req, &g, &ic3, v, ctx);
         if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
@@ -1089,6 +1190,8 @@ impl Engine for Ic3Mt {
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
         let pool = Arc::new(ic3::LemmaPool::default());
+        // H15: proved once here, assumed by every worker.
+        let stored = stored_invariant(&g, ctx, self.name());
         // Workers stop on our token: cancelled by the winner or by `ctx`.
         let mut inner = ctx.clone();
         inner.cancel = informal_engine::CancelToken::new();
@@ -1110,6 +1213,7 @@ impl Engine for Ic3Mt {
                 .enumerate()
                 .map(|(id, &(mini, cfg))| {
                     let pool = pool.clone();
+                    let stored = stored.clone();
                     sc.spawn(move || {
                         let c = inner.clone();
                         let make = move || -> Box<dyn Sat> {
@@ -1136,6 +1240,7 @@ impl Engine for Ic3Mt {
                             return unknown("latch inits that are not constants");
                         };
                         ic3.share(pool, id);
+                        ic3.assume_invariant(stored);
                         let v = ic3.check(inner);
                         let v = certified(req, g, &ic3, v, inner);
                         if !matches!(v, Verdict::Unknown { .. }) {

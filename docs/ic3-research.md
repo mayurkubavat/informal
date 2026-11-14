@@ -443,6 +443,32 @@ the sample does not lose and the hard set does not either
 gain is small: the workers share lemmas, which pulls their paths
 together again.
 
+### H15. Reuse a proven invariant across sibling properties (prediction, 2026-11-14)
+
+From `research/innovations-2026-11-14.md` (idea 1). Checked here: all 86
+cv32e40x models have the same AIGER header and two of them differ in 6
+bytes; veer (4), veer_axi (9) and x-epic a16 are families of the same
+kind. Each file is one property of one design.
+
+*Claim.* A certified invariant of one property holds in every reachable
+state of the design, so a sibling can assume the part of it that is
+inductive on the sibling's own cone. Store: per design (a hash of the
+model without its bad outputs), the clauses of every certified
+invariant, over latch indices of the model as loaded
+(`INFORMAL_INV_STORE=<dir>`). Import: map the clauses through the
+sibling's latch map, keep what Houdini proves inductive there, and give
+it to IC3 as a standing invariant. The final certificate checks
+everything again, so the store is not trusted.
+
+*Reporting.* This crosses model files, so it is a separate mode: the
+clean 319-model score never uses a store.
+
+*Prediction.* Seed the store with a 60 s pass of informal-ic3 over the
+four families, then run the hard set (29 models, 300 s, 3 seeds) with
+the store on: single IC3 solves at least 12 on average (6.0 without).
+
+*Result:* pending.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
