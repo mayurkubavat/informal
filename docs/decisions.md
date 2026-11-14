@@ -273,9 +273,11 @@ the single-developer setup of that time.
 - **Gate:** `tests/sv` (20 known answers) and `tests/fpv` (counter, FIFO)
   through svlang in `cargo test`; the FIFO also through slang when built in.
   Gaps found in svlang are fixed in svlang, with a test there.
-- **Open issues:** concurrent assertions written in the RTL are not checked
-  (only properties given with `assert` / `cover`), and RTL `assume property`
-  is rejected; latches and several clocks or edges are rejected;
+- **Open issues:** concurrent properties written in the RTL are checked
+  when they have a fixed length (booleans, `##N`, `[*N]`, `|->`, `|=>`);
+  ranges, repetition ranges, `until` and liveness are not compiled yet (an
+  assertion or cover is then an error on that property, an assumption on
+  the design); latches and several clocks or edges are rejected;
   `$anyconst` / `$anyseq` as functions are unsupported (the attributes
   work); lowering speed on large designs is not measured yet.
 

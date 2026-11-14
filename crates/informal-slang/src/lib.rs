@@ -106,6 +106,10 @@ pub struct Design {
     /// Design browser). One root per top instance.
     #[serde(default)]
     pub hierarchy: Vec<Scope>,
+    /// The concurrent properties written in the RTL (svlang only; empty when
+    /// the design cannot be lowered, which prove then reports).
+    #[serde(default)]
+    pub properties: Vec<RtlProperty>,
 }
 
 impl Design {
@@ -197,6 +201,31 @@ pub struct Request {
     /// only, like [`Self::cut_points`].
     pub black_box_modules: Vec<String>,
     pub black_box_instances: Vec<String>,
+    /// [`lower`] only, svlang only: attempts of a concurrent property written
+    /// in the RTL that start in the first `skip_cycles` clock cycles are not
+    /// checked (the session holds reset for the first cycle).
+    pub skip_cycles: u32,
+    /// [`lower`] only, svlang only: write each cover in the RTL as a `bad`
+    /// line that is reached when the cover is hit. The session does, and
+    /// tells covers from assertions by [`Lowered::properties`].
+    pub cover_targets: bool,
+}
+
+/// A concurrent property written in the RTL (`assert property`, `assume
+/// property`, `cover property` inside a module), as the svlang front end
+/// found it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RtlProperty {
+    /// Full hierarchical name (`top.u_fifo.a_no_overflow`), also the name of
+    /// its `bad` line in the model (assertions and covers).
+    pub name: String,
+    /// `assert`, `assume` or `cover`.
+    pub kind: String,
+    /// Why it is not in the model, when it uses an operator the front end
+    /// does not compile yet.
+    pub unsupported: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<u32>,
 }
 
 /// The comment line that starts [`lower`]'s trace section: `output` lines
@@ -266,6 +295,9 @@ pub struct Lowered {
     pub notes: Vec<String>,
     #[serde(default)]
     pub btor2: String,
+    /// The concurrent properties written in the RTL (svlang only).
+    #[serde(default)]
+    pub properties: Vec<RtlProperty>,
 }
 
 #[cfg(informal_slang)]

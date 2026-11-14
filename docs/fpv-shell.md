@@ -191,8 +191,17 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
 ## Known gaps
 
 - Properties can name signals in sub-instances (`u_wp.p`). No `bind` yet.
-- Concurrent assertions written in the RTL are not checked (give them with
-  `assert` / `cover`); an `assume property` in the RTL is an error.
+- Concurrent properties written in the RTL (`assert property`, `assume
+  property`, `cover property` inside a module) are found at `elaborate`
+  and listed under their full hierarchical names (`top.u_fifo.a_full`,
+  `top._assert_1` without a label); `prove -all` checks them with the
+  rest, and an assumption constrains every proof. svlang compiles the
+  fixed-length ones: booleans, `##N`, `[*N]`, `|->`, `|=>`, `disable iff`,
+  `default clocking` and the sampled-value functions. An assertion or
+  cover that uses another operator (`##[m:n]`, `until`, `s_eventually`,
+  ...) gets the status error naming the operator; an assumption that does
+  is an error for the whole design. A concurrent assertion inside an `if`
+  of a clocked block is not supported yet.
 - One clock and one edge; every register steps on each model step. A
   design with blocks on two clocks or both edges is an error.
 - `$past`, `$rose`, `$fell`, `$stable` and `$changed` have no history in

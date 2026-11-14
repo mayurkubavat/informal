@@ -155,7 +155,7 @@ every engine change. To reproduce, download the models to
 | `informal-sat` | SAT interface: CaDiCaL through its C API, plus a small DPLL solver for tests. |
 | `informal-aig` | Bit-level model: AIG with structural hashing, AIGER reader and writer, Btor2 bit-blaster, preprocessing. |
 | `informal-bmc` | In-house engines on the AIG: BMC (also stepped), k-induction, IC3 / PDR (single and multi-threaded with lemma sharing), and IC3 lemmas feeding k-induction. Engine list in `docs/engines.md`. |
-| `informal-svlang` | SystemVerilog front end on svlang (pure Rust): diagnostics, top module, design hierarchy, and the word-level netlist written as Btor2 (`informal lower`). |
+| `informal-svlang` | SystemVerilog front end on svlang (pure Rust): diagnostics, top module, design hierarchy, the properties written in the RTL, and the word-level netlist written as Btor2 (`informal lower`). |
 | `informal-slang` | Optional cross-check front end on slang (C++ shim through FFI), `INFORMAL_FRONTEND=slang`; also holds the shared request and design types. |
 | `informal-bitwuzla` | Word-level engines on Bitwuzla (C++ shim through FFI): BMC over Btor2 with arrays. |
 | `informal-tcl` | Embedded Tcl 8.6 (the C library through FFI) for informal scripts. |

@@ -1,5 +1,5 @@
 //! The Btor2 the svlang front end writes: well formed (it parses back), and
-//! the modelling choices in `src/btor.rs` show up as the lines they promise.
+//! the modelling choices of `svlang::btor2` show up as the lines they promise.
 
 use informal_slang::Request;
 use std::path::PathBuf;

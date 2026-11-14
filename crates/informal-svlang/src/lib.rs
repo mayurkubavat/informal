@@ -1,15 +1,20 @@
 //! SystemVerilog front end on svlang (github.com/mayurkubavat/svlang), the
 //! pure-Rust IEEE 1800 compiler: svlang elaborates the design and lowers it
-//! to a word-level netlist, and [`btor`] writes that netlist as Btor2.
+//! to a word-level netlist, compiles the concurrent properties written in the
+//! RTL into checks, and writes the netlist as Btor2 (`svlang::btor2`).
 //!
 //! The request and result types are the slang front end's
 //! ([`informal_slang::Request`], [`informal_slang::Lowered`]), so the
 //! session can use either; svlang is the default (decision D14).
 
-pub mod btor;
-
-use informal_slang::{Design, Diagnostic, Instance, Lowered, Request, Scope, ScopeSignal, Signal};
-use svlang::netlist::{LowerConfig, LowerOutcome, NetlistDiag};
+use informal_slang::{
+    Design, Diagnostic, Instance, Lowered, Request, RtlProperty, Scope, ScopeSignal, Signal,
+};
+use svlang::btor2;
+use svlang::netlist::{
+    LowerConfig, LowerOutcome, Netlist, NetlistDiag, PropertyOptions, PropertyOutcome,
+};
+use svlang::semantic::PropKind;
 use svlang::{ElaboratedDesign, ScopeNode, Severity, SymbolKind};
 
 /// Memories up to this many words become one register per word; larger
@@ -44,10 +49,47 @@ fn show(d: &NetlistDiag) -> String {
     }
 }
 
+/// Compile the concurrent properties written in the RTL into checks, and
+/// list them: each with its full hierarchical name, and why not when it
+/// uses an operator svlang does not compile yet.
+fn rtl_properties(nl: &mut Netlist, skip_cycles: u32) -> Vec<RtlProperty> {
+    let mut opts = PropertyOptions::default();
+    opts.skip_cycles = skip_cycles;
+    let outcomes = nl.compile_properties(&opts);
+    nl.properties
+        .iter()
+        .zip(&nl.property_names)
+        .zip(outcomes)
+        .map(|((p, name), outcome)| RtlProperty {
+            name: name.clone(),
+            kind: match p.kind {
+                PropKind::Assert => "assert",
+                PropKind::Assume | PropKind::Restrict => "assume",
+                PropKind::Cover => "cover",
+            }
+            .into(),
+            unsupported: match outcome {
+                PropertyOutcome::Compiled { .. } => None,
+                PropertyOutcome::Unsupported(why) => Some(why),
+            },
+            file: nl
+                .files
+                .get(p.loc.file as usize)
+                .filter(|f| !f.is_empty())
+                .cloned(),
+            line: (p.loc.line > 0).then_some(p.loc.line),
+        })
+        .collect()
+}
+
 /// Elaborate and lower the design to a Btor2 model: every labelled
 /// immediate assertion becomes a `bad` line named by its label, and
-/// immediate assumptions become constraints. Never falls back: anything
-/// not modelled is an error (`fallback` is always false).
+/// immediate assumptions become constraints. A concurrent property written
+/// in the RTL becomes a `bad` line under its full hierarchical name (a
+/// cover with [`Request::cover_targets`]) or a constraint; the ones svlang
+/// cannot compile yet are listed in [`Lowered::properties`] with the
+/// reason, and an assumption among them is an error. Never falls back:
+/// anything not modelled is an error (`fallback` is always false).
 pub fn lower(req: &Request) -> Lowered {
     let fail = |errors: Vec<String>| Lowered {
         ok: false,
@@ -67,7 +109,7 @@ pub fn lower(req: &Request) -> Lowered {
         black_box_instances: req.black_box_instances.clone(),
         ..LowerConfig::default()
     };
-    let nl = match comp.lower_netlist(&config) {
+    let mut nl = match comp.lower_netlist(&config) {
         LowerOutcome::Lowered(nl) => nl,
         LowerOutcome::Unsupported(ds) => {
             return fail(
@@ -78,22 +120,60 @@ pub fn lower(req: &Request) -> Lowered {
         }
         LowerOutcome::Error(ds) => return fail(ds.iter().map(show).collect()),
     };
-    match btor::write(&nl, req.trace_outputs) {
-        Ok(m) => Lowered {
-            ok: true,
-            fallback: false,
-            errors: Vec::new(),
-            notes: m.notes,
-            btor2: m.btor2,
-        },
-        Err(btor::Fail::Unsupported(e)) => fail(vec![format!("not supported yet: {e}")]),
-        Err(btor::Fail::Rejected(e)) => fail(vec![format!("not modelled: {e}")]),
+    let properties = rtl_properties(&mut nl, req.skip_cycles);
+    // Leaving an assumption out would make the model weaker than the design says.
+    let lost: Vec<String> = properties
+        .iter()
+        .filter(|p| p.kind == "assume")
+        .filter_map(|p| {
+            let why = p.unsupported.as_ref()?;
+            Some(format!(
+                "not supported yet: assumption {} uses {why}",
+                p.name
+            ))
+        })
+        .collect();
+    if !lost.is_empty() {
+        return fail(lost);
+    }
+    let mut options = btor2::Options::default();
+    options.trace_outputs = req.trace_outputs;
+    options.trace_marker = informal_slang::TRACE_MARKER.into();
+    options.name_prefix = "informal".into();
+    options.covers = req.cover_targets;
+    match btor2::write(&nl, &options) {
+        Ok(m) => {
+            // The per-property notes below say more than the writer's count.
+            let mut notes: Vec<String> = m
+                .notes
+                .into_iter()
+                .filter(|n| !n.contains("compile_properties"))
+                .collect();
+            for p in &properties {
+                if let Some(why) = &p.unsupported {
+                    notes.push(format!(
+                        "{} {} is not checked: {why} is not supported yet",
+                        p.kind, p.name
+                    ));
+                }
+            }
+            Lowered {
+                ok: true,
+                fallback: false,
+                errors: Vec::new(),
+                notes,
+                btor2: m.btor2,
+                properties,
+            }
+        }
+        Err(e) => fail(vec![e.to_string()]),
     }
 }
 
 /// Compile and elaborate: diagnostics, top modules, the instance tree with
-/// each scope's ports and signals (the app's Design browser), and every
-/// signal's path and width (property names are checked against them).
+/// each scope's ports and signals (the app's Design browser), every
+/// signal's path and width (property names are checked against them), and
+/// the concurrent properties written in the RTL.
 pub fn compile(req: &Request) -> Design {
     let comp = match driver(req).compile() {
         Ok(c) => c,
@@ -127,6 +207,20 @@ pub fn compile(req: &Request) -> Design {
         })
         .collect();
     let ok = !diagnostics.iter().any(|d| d.severity == "error");
+    // A design that does not lower lists none here; prove reports why.
+    let properties = match ok {
+        true => {
+            let config = LowerConfig {
+                top: req.top.clone(),
+                ..LowerConfig::default()
+            };
+            match comp.lower_netlist(&config) {
+                LowerOutcome::Lowered(mut nl) => rtl_properties(&mut nl, 0),
+                _ => Vec::new(),
+            }
+        }
+        false => Vec::new(),
+    };
     let e = &elab.design;
     Design {
         ok,
@@ -143,6 +237,7 @@ pub fn compile(req: &Request) -> Design {
             .collect(),
         signals: signals(e),
         hierarchy: e.scope_tree().iter().map(scope).collect(),
+        properties,
     }
 }
 

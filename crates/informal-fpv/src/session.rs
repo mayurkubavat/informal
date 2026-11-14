@@ -105,6 +105,11 @@ pub struct Property {
     /// that created it, when that ran from a sourced file. `None` for
     /// properties typed at the console.
     pub source: Option<SourceLoc>,
+    /// Written in the RTL (`assert property` inside a module) and found at
+    /// elaboration, not created by a command. `name` is then its full
+    /// hierarchical name, `expr` is empty, and `source` is where it stands
+    /// in the design.
+    pub rtl: bool,
     /// The last prove's per-engine record: each portfolio engine's outcome
     /// (won/lost/timeout/killed/error), time and depth reached. Empty
     /// before a prove, or when no engine ran (elaboration, errors).
@@ -272,6 +277,7 @@ impl Session {
             status: Status::Unprocessed,
             trace: None,
             source: None,
+            rtl: false,
             engines: Vec::new(),
         });
         Ok(name)
@@ -391,6 +397,7 @@ impl Session {
             }
             self.hierarchy = d.instances.clone();
             self.design.hierarchy = d.hierarchy.clone();
+            self.rtl_properties(&d.properties);
             self.slang = Some(d);
         } else if self.design.top.is_none() {
             self.design.top = Some(guess_top(&self.design.files)?);
@@ -405,6 +412,39 @@ impl Session {
         self.check_black_boxes()?;
         self.elaborated = true;
         Ok(())
+    }
+
+    /// List the concurrent properties written in the RTL beside the ones
+    /// commands created, replacing those of an earlier elaboration.
+    fn rtl_properties(&mut self, found: &[informal_slang::RtlProperty]) {
+        self.props.retain(|p| !p.rtl);
+        for f in found {
+            if self.props.iter().any(|p| p.name == f.name) {
+                self.log(&format!(
+                    "{} in the RTL is not listed: a property of that name exists",
+                    f.name
+                ));
+                continue;
+            }
+            self.props.push(Property {
+                name: f.name.clone(),
+                kind: match f.kind.as_str() {
+                    "assume" => Kind::Assume,
+                    "cover" => Kind::Cover,
+                    _ => Kind::Assert,
+                },
+                expr: String::new(),
+                enabled: true,
+                status: Status::Unprocessed,
+                trace: None,
+                source: f.file.as_ref().map(|file| SourceLoc {
+                    file: file.clone(),
+                    line: f.line.unwrap_or(0),
+                }),
+                rtl: true,
+                engines: Vec::new(),
+            });
+        }
     }
 
     /// Match the requested black boxes against the elaborated design. A
@@ -463,6 +503,7 @@ impl Session {
                 let l = self
                     .props
                     .iter()
+                    .filter(|p| !p.rtl)
                     .find_map(|p| sva::parse(&p.expr).ok().and_then(|l| l.clock))
                     .ok_or_else(|| {
                         anyhow!("no clock: declare one with `clock` / `create_clock`")
@@ -482,7 +523,8 @@ impl Session {
             );
         }
         for (i, p) in self.props.iter().enumerate() {
-            if !p.enabled {
+            // A property written in the RTL is already in the design.
+            if !p.enabled || p.rtl {
                 continue;
             }
             let l = sva::parse(&p.expr).map_err(|e| anyhow!("{}: {e}", p.name))?;
@@ -656,7 +698,10 @@ impl Session {
             }
             let r = self.prove_targets(
                 &targets,
-                lowered.as_deref().map_err(String::as_str),
+                lowered
+                    .as_ref()
+                    .map(|(btor, rtl)| (btor.as_str(), rtl.as_slice()))
+                    .map_err(String::as_str),
                 &engines,
                 tracker.as_ref(),
             );
@@ -683,7 +728,7 @@ impl Session {
     fn prove_targets(
         &mut self,
         targets: &[usize],
-        lowered: Result<&str, &str>,
+        lowered: Result<(&str, &[informal_slang::RtlProperty]), &str>,
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
     ) -> usize {
@@ -695,7 +740,20 @@ impl Session {
                 t.running(slot);
             }
             // Properties added before elaboration are checked now.
-            if let Err(e) = self.check_names(&self.props[i].expr) {
+            let rtl = self.props[i].rtl;
+            if let Err(e) = self.check_names(&self.props[i].expr).and_then(|()| {
+                // One written in the RTL must be in this model, compiled.
+                let (Ok((_, found)), true) = (lowered, rtl) else {
+                    return Ok(());
+                };
+                match found.iter().find(|f| f.name == self.props[i].name) {
+                    None => Err("not in the model (inside a black box)".to_string()),
+                    Some(f) => match &f.unsupported {
+                        Some(why) => Err(format!("not supported yet: {why}")),
+                        None => Ok(()),
+                    },
+                }
+            }) {
                 let status = Status::Error { message: e };
                 if let Some(t) = tracker {
                     t.finished(slot, &status, &[]);
@@ -707,16 +765,24 @@ impl Session {
             let out = self.workdir.join(format!("prop_{i}.btor2"));
             let built = match lowered {
                 Err(e) => Err(anyhow!("{e}")),
-                Ok(btor) => {
-                    let keep = format!("informal_p{i}");
-                    let (model, section) = informal_slang::split_trace(btor);
-                    let mut r = std::fs::write(&out, only_bad(model, &keep));
-                    // The same model plus `output` lines naming the
-                    // combinational nets, for the VCD (trace_model).
-                    if r.is_ok() && !section.is_empty() {
-                        r = std::fs::write(trace_model(&out), only_bad(btor, &keep));
+                Ok((btor, _)) => {
+                    let keep = match rtl {
+                        true => self.props[i].name.clone(),
+                        false => format!("informal_p{i}"),
+                    };
+                    if rtl && !has_bad(btor, &keep) {
+                        // Without its line the model would hold trivially.
+                        Err(anyhow!("no check named {keep} in the model"))
+                    } else {
+                        let (model, section) = informal_slang::split_trace(btor);
+                        let mut r = std::fs::write(&out, only_bad(model, &keep));
+                        // The same model plus `output` lines naming the
+                        // combinational nets, for the VCD (trace_model).
+                        if r.is_ok() && !section.is_empty() {
+                            r = std::fs::write(trace_model(&out), only_bad(btor, &keep));
+                        }
+                        r.map_err(anyhow::Error::from)
                     }
-                    r.map_err(anyhow::Error::from)
                 }
             };
             self.props[i].trace = None;
@@ -751,7 +817,8 @@ impl Session {
         targets.len()
     }
 
-    /// One Btor2 model with every target's assertion. `Err` rejects the
+    /// One Btor2 model with every target's assertion, and the properties
+    /// written in the RTL as the front end compiled them. `Err` rejects the
     /// design: a compile error (an unknown name in a property or the reset,
     /// say) or a construct the front end does not model. There is no
     /// fallback: a guess there would turn a typo into a free signal (D13).
@@ -760,7 +827,7 @@ impl Session {
         fe: &'static str,
         files: &[PathBuf],
         targets: &[usize],
-    ) -> Result<String, String> {
+    ) -> Result<(String, Vec<informal_slang::RtlProperty>), String> {
         let mut defines = self.design.defines.clone();
         defines.extend(targets.iter().map(|i| (format!("INFORMAL_P{i}"), None)));
         let req = informal_slang::Request {
@@ -781,6 +848,10 @@ impl Session {
                 .iter()
                 .map(|i| format!("{}.{i}", self.design.top.as_deref().unwrap_or("")))
                 .collect(),
+            // As the harness does for its own properties: attempts that
+            // start in the reset cycle are not checked.
+            skip_cycles: u32::from(self.reset.is_some()),
+            cover_targets: true,
         };
         if !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {
             self.log(&format!(
@@ -810,7 +881,7 @@ impl Session {
             self.log(&format!("{fe}: {n}"));
         }
         if l.ok {
-            Ok(l.btor2)
+            Ok((l.btor2, l.properties))
         } else {
             Err(format!("{fe}: {}", l.errors.join("; ")))
         }
@@ -1088,6 +1159,14 @@ impl Session {
 /// the slang lowering's named-output section, used only to replay traces.
 fn trace_model(model: &Path) -> PathBuf {
     model.with_extension("trace.btor2")
+}
+
+/// True when the model has a `bad` line named `name`.
+fn has_bad(btor: &str, name: &str) -> bool {
+    btor.lines().any(|l| {
+        let w: Vec<&str> = l.split_whitespace().collect();
+        w.get(1) == Some(&"bad") && w.get(3) == Some(&name)
+    })
 }
 
 fn only_bad(btor: &str, keep: &str) -> String {
