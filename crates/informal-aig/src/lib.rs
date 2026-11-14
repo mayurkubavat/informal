@@ -14,6 +14,7 @@ pub mod aiger;
 pub mod btor;
 pub mod preprocess;
 pub mod reduce;
+pub mod split;
 pub mod words;
 
 use std::collections::HashMap;

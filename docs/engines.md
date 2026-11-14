@@ -122,6 +122,40 @@ a family such as HWMCC'24's cv32e40x-pNNN). Benchmark scores that use a
 store are reported separately: a result then depends on which siblings
 were solved before.
 
+## Proving a wide property term by term (`informal split`)
+
+A property's bad output is often an OR of many terms, so the property is
+a conjunction: HWMCC'24's ILA_Piccolo_JALR has 76 terms, each with a cone
+of about 2,500 latches against 6,000 for the whole property. Each term
+on the same design is a property of its own, and the terms are siblings
+in the sense of the section above: they share the design hash, so the
+invariant store carries what one proof found to the others.
+
+    informal split model.aig [--timeout 300] [--jobs 4] [--slice 10]
+
+1. The OR terms are found by opening negated AND nodes from the bad
+   output down (`informal_aig::split::terms`, at most `--max-terms`).
+2. One model per term is written to the scratch directory (same inputs,
+   latches and logic; only the bad output differs).
+3. The terms are proved by `informal-ic3`, `--jobs` at a time, with the
+   store on (a private one unless `INFORMAL_INV_STORE` is set). They run
+   in rounds: `--slice` seconds each in the first round, twice that in
+   the next, so the easy terms finish first and feed the hard ones.
+4. The verdict is an ordinary run on the model as given. When every term
+   is proved, `informal-ic3` proves the original with the store holding
+   all their invariants. When a term is reachable, the BMC engines look
+   for the counterexample on the original.
+
+Nothing in the driver is trusted: a term's SAFE is certified on the
+term's model, and the final SAFE or UNSAFE is certified on the model as
+given, like any other. When time runs out the output says how many terms
+were proved, and the per-term lines say which ones are still open.
+`--write-only` just writes the term models and lists them.
+
+Limits today: AIGER models (or Btor2 without non-constant resets); the
+last tenth of the budget is kept for the original; the final import goes
+through Houdini's usual budget (a tenth of the time left, 30 s at most).
+
 Environment switches of the in-house IC3 (experiments; see
 `docs/ic3-research.md`): `INFORMAL_IC3_SEED`, `INFORMAL_IC3_DERIVE`,
 `INFORMAL_IC3MT_DIVERSE`, `INFORMAL_IC3_HOUDINI`, `INFORMAL_IC3_PROMOTE`,

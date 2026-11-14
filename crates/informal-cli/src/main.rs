@@ -7,7 +7,10 @@
 //!   informal lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (slang)
 //!   informal shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
 //!   informal reduce <model.aig> (--disagree A,B | --test CMD) [-o small.aag]
+//!   informal split <model.aig> [--timeout S] [--jobs N]   prove a wide property term by term
 //!   informal bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
+
+mod split;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
@@ -130,6 +133,31 @@ enum Cmd {
         /// Scratch directory for candidates.
         #[arg(long, default_value = "informal_work/reduce")]
         workdir: PathBuf,
+    },
+    /// Prove a property whose bad output is an OR of several terms part by
+    /// part: one model per term, proved a few at a time with the
+    /// invariant store carrying each certified invariant to the others,
+    /// then the original with all of them (see docs/engines.md).
+    Split {
+        model: PathBuf,
+        /// Wall-clock budget in seconds, for the terms and the original.
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+        /// Terms proved at once.
+        #[arg(long, default_value_t = 4)]
+        jobs: usize,
+        /// Open OR nodes until there are this many terms.
+        #[arg(long, default_value_t = 256)]
+        max_terms: usize,
+        /// Seconds per term in the first round; doubles every round.
+        #[arg(long, default_value_t = 10)]
+        slice: u64,
+        /// Scratch directory for the term models and the private store.
+        #[arg(long, default_value = "informal_work/split")]
+        workdir: PathBuf,
+        /// Only write the term models (kept in the scratch directory).
+        #[arg(long)]
+        write_only: bool,
     },
     /// Run engines over every model in a directory and log to the run database.
     Bench {
@@ -271,6 +299,65 @@ fn main() -> anyhow::Result<()> {
                 _ => unreachable!(),
             }
             std::process::exit(match v {
+                Verdict::Unsafe { .. } => 10,
+                Verdict::Safe => 20,
+                Verdict::Unknown { .. } => 0,
+            });
+        }
+        Cmd::Split {
+            model,
+            timeout,
+            jobs,
+            max_terms,
+            slice,
+            workdir,
+            write_only,
+        } => {
+            let o = split::Options {
+                model,
+                timeout: Duration::from_secs(timeout),
+                jobs,
+                max_terms,
+                slice: Duration::from_secs(slice.max(1)),
+                workdir,
+                write_only,
+            };
+            let out = split::run(&o, &in_house(false)?);
+            split::clean(&o);
+            let out = out?;
+            for (i, t) in out.terms.iter().enumerate() {
+                if write_only {
+                    println!("{}", t.file.display());
+                } else {
+                    eprintln!(
+                        "  term {i:<4} {:<8} round {} {:>8} ms",
+                        t.verdict.label(),
+                        t.round,
+                        t.wall_ms
+                    );
+                }
+            }
+            if write_only {
+                return Ok(());
+            }
+            let proved = out
+                .terms
+                .iter()
+                .filter(|t| t.verdict == Verdict::Safe)
+                .count();
+            let n = out.terms.len();
+            match &out.verdict {
+                Verdict::Unsafe { depth } => println!(
+                    "UNSAFE (by {}, depth {})",
+                    out.by,
+                    depth.map_or("?".into(), |d| d.to_string())
+                ),
+                Verdict::Safe => println!("SAFE (by {}, {n} terms)", out.by),
+                Verdict::Unknown { reason } => {
+                    println!("UNKNOWN ({reason}; {proved} of {n} terms proved)")
+                }
+            }
+            std::process::exit(match out.verdict {
                 Verdict::Unsafe { .. } => 10,
                 Verdict::Safe => 20,
                 Verdict::Unknown { .. } => 0,

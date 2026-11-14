@@ -1,0 +1,12 @@
+aag 8 0 3 0 5 1
+2 6 1
+4 2
+6 4
+17
+8 2 4
+10 4 6
+12 2 6
+14 9 11
+16 14 13
+c
+a one-hot ring of three latches; bad = two of them set at once, as an OR of three pairs: safe, three terms
