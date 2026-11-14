@@ -48,6 +48,8 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D3. Internal tool, so GPL engines are fine; Verific optional
 
+*Superseded by D16 (2026-11-14): InFormal is open source under Apache-2.0.*
+
 - **Why:** never distributed, so GPL obligations do not bite.
 - **Open issues:** if the tool is ever shared outside the company, rIC3 and
   other GPL pieces must be isolated (process boundary only) or replaced. The
@@ -388,7 +390,7 @@ refer to the report.
 | --- | --- | --- |
 | D1 wrap engines | Modify: stop parsing stdout; validate certificate/witness files; add SuperCAR and AVR; fix Pono/BtorMC args. | Agree on file-based verdicts (matches D8). New engines: add after the P1 gate exists. |
 | D2 Rust + FFI | Change: make missing C++ libs a hard compile error via Cargo features; do **not** port CaDiCaL, Bitwuzla or slang to Rust; put pure-Rust effort into `Mini`. | Agree. This **narrows** the "move must-have libs to Rust over time" plan: only the IC3 solver is worth owning. Needs your confirmation. |
-| D3 GPL ok | Keep; skip Verific unless VHDL needed; says rIC3 and Pono are BSD-3. | **Check:** rIC3's `LICENSE` file is BSD-3-Clause but its `Cargo.toml` says `GPL-3.0`. Conflicting upstream; irrelevant while internal, but settle before any sharing. |
+| D3 GPL ok | Keep; skip Verific unless VHDL needed; says rIC3 and Pono are BSD-3. | **Check:** rIC3's `LICENSE` file is BSD-3-Clause but its `Cargo.toml` says `GPL-3.0`. Conflicting upstream; irrelevant while InFormal only runs it as a separate program (D16). |
 | D4 pinning | Modify: reproducible build script or container; automated sample gate on pin update. | Agree; the build steps are still reconstructed, not logged. |
 | D5 slang + Yosys | Change: use `yosys-slang` (the fork rIC3 uses) instead of raw Yosys, with `chformal -early`, to remove the 1-cycle depth mismatch and the second parser. | Plausible and cheap to try; verify with a bounded miter between the two paths. |
 | D6 Btor2 + AIG | Keep, plus a sidecar `InformalSymbolMap` from AIG literals to Btor2 nodes and slang scopes; enables IC3-INN and sub-instance lookup. | Agree; it also fixes the "top-scope signals only" limit. |
@@ -430,3 +432,29 @@ refer to the report.
 Effort figures and solve-count gains are the report's, not ours. Suggested
 first step: items 1 and 2 together, since the gate makes the IC3 changes safe
 to try.
+
+## D16. Open source under Apache-2.0, contributions under a CLA
+
+- **Chosen (2026-11-14):** the repository is public under the Apache License
+  2.0 (`LICENSE`, `NOTICE`), copyright Mayur Kubavat. Outside contributions
+  need the Contributor License Agreement in `CLA.md`: contributors keep
+  their copyright and grant a license that includes the right to relicense.
+- **Alternatives:** MIT (simpler, no patent grant); GPL-3.0 (blocks closed
+  forks, but puts off companies that would adopt it); a DCO sign-off instead
+  of a CLA (lighter, but no relicensing right).
+- **Why:** Apache-2.0 matches svlang, lets companies adopt the tool, and its
+  patent grant matters in EDA. The CLA keeps the option of other licenses
+  (for example a commercial edition) open.
+- **Licenses of what InFormal uses:** nothing third-party is vendored or
+  patched in this repository. Statically linked: CaDiCaL, Bitwuzla, slang
+  (MIT; Bitwuzla's symfpu is GPL-3.0 or BSD-3-Clause at our choice). Dynamically
+  linked: Tcl (BSD-style), GMP and MPFR (LGPL-3.0). Separate programs: rIC3,
+  ABC. All allow an Apache-2.0 InFormal. Full table: `docs/third-party.md`.
+- **Open issues**
+  - rIC3's `LICENSE` file says BSD-3-Clause but its `Cargo.toml` says
+    GPL-3.0. Harmless while InFormal only runs it as a process; settle it
+    before shipping rIC3 binaries with InFormal.
+  - Binary releases need a third-party notices file (the MIT notices of the
+    linked libraries, the LGPL notice for GMP/MPFR, and the Rust and npm
+    dependency licenses, e.g. from `cargo about`).
+  - Signing the CLA is manual until a CLA bot is set up on GitHub.

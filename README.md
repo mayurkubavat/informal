@@ -1,14 +1,12 @@
 # InFormal
 
-An internal formal verification tool for digital designs: a Rust
+An open-source formal verification tool for digital designs: a Rust
 orchestrator over a portfolio of model-checking engines, with an SVA front
 end, verification apps and a debug UI on top. Formerly FormalDV: older
 run databases and notes call the binary and in-house engines `fdv`.
 
-The plan this code follows is the research report and phased roadmap:
-Formal Verification Tool: Research Report & Architecture Plan (kept outside this repository).
-Background research (including the Gemini Deep Research reports) is kept
-in `research/` on the Mac copy only; it is not in this repository.
+The design decisions behind the code, and the issues still open, are in
+`docs/decisions.md`.
 
 ## Status: phase 1 (FPV MVP) in progress
 
@@ -101,7 +99,24 @@ before any in-house engine is compared against them.
 
 ## License
 
-Internal and proprietary; not for distribution. Some engines it runs or
-links are GPL (see `docs/third-party.md` and decision D3 in
-`docs/decisions.md`), so sharing outside the company needs a license
-review first.
+Copyright 2026 Mayur Kubavat. Licensed under the Apache License,
+Version 2.0 (`LICENSE`); see `NOTICE`.
+
+InFormal does not include third-party source code. It links CaDiCaL,
+Bitwuzla and slang (MIT) and the system Tcl, GMP and MPFR libraries, and
+runs rIC3 and ABC as separate programs. `docs/third-party.md` lists each
+one with its license and the exact commit used.
+
+## Contributing
+
+Contributions are welcome; see `CONTRIBUTING.md`. Contributors sign the
+Contributor License Agreement in `CLA.md` once, before their first pull
+request is merged.
+
+## Trademarks
+
+JasperGold and Xcelium are trademarks of Cadence Design Systems, Inc. VC
+Formal and Verdi are trademarks of Synopsys, Inc. Other names are
+trademarks of their owners. InFormal is an independent project, not
+affiliated with or endorsed by either company. These names are used only
+to say which tools' script commands InFormal accepts.

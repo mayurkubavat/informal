@@ -1,0 +1,12 @@
+InFormal
+Copyright 2026 Mayur Kubavat
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+InFormal links CaDiCaL, Bitwuzla and slang, which are MIT-licensed, and
+runs rIC3 and ABC as separate programs. Their source is not part of this
+repository; docs/third-party.md lists each one with its license.
+
+JasperGold and Xcelium are trademarks of Cadence Design Systems, Inc. VC
+Formal and Verdi are trademarks of Synopsys, Inc. InFormal is not
+affiliated with or endorsed by either company.

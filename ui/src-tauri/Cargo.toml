@@ -5,7 +5,8 @@
 name = "informal-app"
 version = "0.1.0"
 edition = "2021"
-license = "Proprietary"
+license = "Apache-2.0"
+repository = "https://github.com/mayurkubavat/informal"
 publish = false
 
 [workspace]

@@ -12,17 +12,24 @@ branch named `informal` in that checkout and list it in the table at the end.
 
 ## Pinned versions
 
-| Tool | Commit | Upstream | Used for | Found through |
-| --- | --- | --- | --- | --- |
-| svlang | pinned in the root `Cargo.toml` (`rev`) | github.com/mayurkubavat/svlang | SystemVerilog front end (crate `informal-svlang`, D14) | Cargo git dependency |
-| slang | `d02b7cd` (2026-11-02, master) | github.com/MikePopoloski/slang | Optional cross-check lowering (`INFORMAL_FRONTEND=slang`, crate `informal-slang`) | `INFORMAL_SLANG_DIR`, needs `build/lib/libsvlang.a` |
-| Bitwuzla | `9d391d1` (2026-10-30, main) | github.com/bitwuzla/bitwuzla | Word-level BMC `informal-wbmc`; its bundled CaDiCaL is also informal's SAT solver | `INFORMAL_BITWUZLA_DIR`, needs `install/` |
-| CaDiCaL (bundled) | `rel-3.0.1` with Bitwuzla's patches | via Bitwuzla's meson subproject | SAT for all in-house bit-level engines | linked from Bitwuzla's static library |
-| CaDiCaL (standalone) | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
-| rIC3 | `4d63899` (`v1.5.2-117`) | github.com/gipsyh/rIC3 | External engine and soundness oracle (`ric3`, `ric3-ic3`, `ric3-bmc`) | `~/.local/bin/ric3` symlink |
-| ABC | `77875a3b6` (2026-11-01, master) | github.com/berkeley-abc/abc | External engines `abc-pdr`, `abc-pdr-pp`, `abc-bmc3` | `~/.local/bin/abc` symlink |
+| Tool | License | Commit | Upstream | Used for | Found through |
+| --- | --- | --- | --- | --- | --- |
+| svlang | Apache-2.0 | pinned in the root `Cargo.toml` (`rev`) | github.com/mayurkubavat/svlang | SystemVerilog front end (crate `informal-svlang`, D14) | Cargo git dependency |
+| slang | MIT | `d02b7cd` (2026-11-02, master) | github.com/MikePopoloski/slang | Optional cross-check lowering (`INFORMAL_FRONTEND=slang`, crate `informal-slang`) | `INFORMAL_SLANG_DIR`, needs `build/lib/libsvlang.a` |
+| Bitwuzla | MIT | `9d391d1` (2026-10-30, main) | github.com/bitwuzla/bitwuzla | Word-level BMC `informal-wbmc`; its bundled CaDiCaL is also informal's SAT solver | `INFORMAL_BITWUZLA_DIR`, needs `install/` |
+| CaDiCaL (bundled) | MIT | `rel-3.0.1` with Bitwuzla's patches | via Bitwuzla's meson subproject | SAT for all in-house bit-level engines | linked from Bitwuzla's static library |
+| CaDiCaL (standalone) | MIT | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
+| rIC3 | BSD-3-Clause (LICENSE file; its Cargo.toml says GPL-3.0) | `4d63899` (`v1.5.2-117`) | github.com/gipsyh/rIC3 | External engine and soundness oracle (`ric3`, `ric3-ic3`, `ric3-bmc`) | `~/.local/bin/ric3` symlink |
+| ABC | BSD-style (UC Berkeley) | `77875a3b6` (2026-11-01, master) | github.com/berkeley-abc/abc | External engines `abc-pdr`, `abc-pdr-pp`, `abc-bmc3` | `~/.local/bin/abc` symlink |
 
-System packages (Ubuntu 26.04): `tcl8.6-dev` 8.6.17 (crate `informal-tcl`),
+How each one reaches InFormal: CaDiCaL, Bitwuzla and slang are linked
+statically; rIC3 and ABC run as separate programs; svlang is compiled in
+as a Cargo dependency. Bitwuzla also brings symfpu (GPL-3.0 or
+BSD-3-Clause, our choice) and links GMP and MPFR (LGPL-3.0) dynamically.
+None of these licenses restricts InFormal's own (Apache-2.0, decision D16).
+Their source is not in this repository.
+
+System packages (Ubuntu 26.04): `tcl8.6-dev` 8.6.17 (Tcl license, BSD-style; crate `informal-tcl`),
 meson (Bitwuzla build), and for the desktop app webkit2gtk-4.1, gtk3,
 libsoup3 and librsvg2 dev packages. Yosys is no longer used (D14).
 
