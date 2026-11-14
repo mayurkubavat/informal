@@ -224,6 +224,15 @@ fn ic3_seed() -> u64 {
     })
 }
 
+/// H14: informal-ic3-mt's workers get different seeds, and the third one
+/// the default settings with derived predicates in place of the no-CTG
+/// settings. On by default; INFORMAL_IC3MT_DIVERSE=0 restores four
+/// settings on one seed.
+fn ic3mt_diverse() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("INFORMAL_IC3MT_DIVERSE").map_or(true, |x| x != "0"))
+}
+
 /// `v`, IC3's verdict, with a SAFE kept only when its invariant passes the
 /// independent check on the model as loaded ([`certify`]); otherwise it
 /// becomes unknown, loudly. `INFORMAL_NO_CERT` skips the check (for
@@ -1001,6 +1010,7 @@ impl Default for Ic3Mt {
     fn default() -> Self {
         use ic3::Config;
         let d = Config::default();
+        let diverse = ic3mt_diverse();
         Ic3Mt {
             workers: vec![
                 // H2 (docs/ic3-research.md) in one worker: Houdini every
@@ -1017,16 +1027,29 @@ impl Default for Ic3Mt {
                     },
                 ),
                 (false, d),
-                (
-                    true,
-                    Config {
-                        max_ctgs: 0,
-                        max_ctg_depth: 0,
-                        reverse_drop: true,
-                        parent_lemma: true,
-                        ..d
-                    },
-                ),
+                if diverse {
+                    // H14: the default settings again, on another seed
+                    // and with derived predicates (H13).
+                    (
+                        true,
+                        Config {
+                            houdini_every: 4,
+                            derive: true,
+                            ..d
+                        },
+                    )
+                } else {
+                    (
+                        true,
+                        Config {
+                            max_ctgs: 0,
+                            max_ctg_depth: 0,
+                            reverse_drop: true,
+                            parent_lemma: true,
+                            ..d
+                        },
+                    )
+                },
                 (
                     true,
                     Config {
@@ -1093,7 +1116,14 @@ impl Engine for Ic3Mt {
                             if !mini {
                                 return solver(&c);
                             }
-                            let mut s = informal_sat::Mini::with_seed(ic3_seed());
+                            // H14: every worker on its own path. Worker 0
+                            // keeps the run's seed.
+                            let seed = if ic3mt_diverse() && id > 0 {
+                                ic3_seed().wrapping_mul(1000).wrapping_add(id as u64)
+                            } else {
+                                ic3_seed()
+                            };
+                            let mut s = informal_sat::Mini::with_seed(seed);
                             let (cancel, deadline) = (c.cancel.clone(), c.deadline);
                             s.set_terminate(Box::new(move || {
                                 cancel.is_cancelled()
@@ -1102,10 +1132,9 @@ impl Engine for Ic3Mt {
                             }));
                             Box::new(s)
                         };
-                        let Some(mut ic3) = ic3::Ic3::new(g, Box::new(make)) else {
+                        let Some(mut ic3) = ic3::Ic3::with_config(g, Box::new(make), cfg) else {
                             return unknown("latch inits that are not constants");
                         };
-                        ic3.set_config(cfg);
                         ic3.share(pool, id);
                         let v = ic3.check(inner);
                         let v = certified(req, g, &ic3, v, inner);

@@ -296,13 +296,23 @@ fn t(l: Lit) -> TLit {
 impl<'g> Ic3<'g> {
     /// `None` when the model has inits IC3 cannot express here.
     pub fn new(g: &'g Aig, make_sat: Box<dyn Fn() -> Box<dyn Sat>>) -> Option<Self> {
+        Self::with_config(g, make_sat, Config::default())
+    }
+
+    /// [`Ic3::new`] with a configuration (derived predicates need theirs
+    /// at construction: they reserve solver variables).
+    pub fn with_config(
+        g: &'g Aig,
+        make_sat: Box<dyn Fn() -> Box<dyn Sat>>,
+        cfg: Config,
+    ) -> Option<Self> {
         if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
             return None;
         }
         let tpl = cnf::template(g);
         // H13 reserves solver variables for derived predicates (none when
         // the feature is off, so variable numbering stays as it was).
-        let aux_cap = if Config::default().derive { AUX_MAX } else { 0 };
+        let aux_cap = if cfg.derive { AUX_MAX } else { 0 };
         let nvars = g.nodes.len() + 1 + 2 * aux_cap;
         let lift = Solver::new(&tpl, nvars, make_sat());
         // One literal for "some bad output": an extra variable when needed.
@@ -353,7 +363,7 @@ impl<'g> Ic3<'g> {
             make_sat,
             mark: vec![0; nvars + 2],
             epoch: 0,
-            cfg: Config::default(),
+            cfg,
             share: None,
             act: vec![0.0; g.nodes.len() + aux_cap],
             act_inc: 1.0,

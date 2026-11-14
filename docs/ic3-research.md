@@ -425,7 +425,23 @@ move ic3-mt from about 6 toward the union.
 *Prediction.* ic3-mt with per-worker seeds and predicates in one worker:
 mean of at least 8 on the seeded hard set (6.3 today), 0 wrong.
 
-*Result:* pending.
+*Result: a small gain, adopted as the default; the prediction (8) was
+missed.* Seeded hard set, informal-ic3-mt, 300 s, 3 seeds:
+
+| | Four settings, one seed | Per-worker seeds, predicates in worker 2 |
+|---|---|---|
+| Solved per seed | 6, 7, 6 (mean 6.3) | 6, 8, 7 (mean 7.0) |
+| Solved on some seed | 8 | 10 |
+
+Clear moves: cv32e40x-p607 gained (0/3 -> 3/3, about 150 s), cv32e40x-p033
+lost (2/3 -> 0/3). Also solved on one seed each for the first time in
+ic3-mt: p514, p568, veer_axi-p06. sample60 at 30 s: 23 and 23, 0 wrong
+both ways. With three seeds the difference in the mean is within what
+seeds alone produce, so this is weak evidence; it is the default because
+the sample does not lose and the hard set does not either
+(`INFORMAL_IC3MT_DIVERSE=0` turns it off). The lemma pool may be why the
+gain is small: the workers share lemmas, which pulls their paths
+together again.
 
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
