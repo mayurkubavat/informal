@@ -554,6 +554,10 @@ clearly gained, all cv32e40x (p019, p033, p478, p568, p584, p607,
 p658), none lost; 11 models are solved on every seed against 3. On the
 first runs p658 was certified in 32 s with 433 lemmas and p299 in 52 s.
 Every verdict passed the 2-step certificate on the loaded model.
+The 4-worker IC3 agrees: 16, 16, 14 (mean 15.3) against 6, 8, 7, with
+eight models clearly gained (the seven above without p607, plus p514
+and veer_axi-p06) and none lost. Folding is now the default in the IC3
+engines; `INFORMAL_FOLD=0` turns it off.
 
 ### H18. The shared lemma pool is a trace: import it without asking (prediction, 2026-11-14)
 

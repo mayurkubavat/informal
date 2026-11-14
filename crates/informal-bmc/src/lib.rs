@@ -170,10 +170,12 @@ fn prepare_ctx(req: &CheckRequest, ctx: &RunContext) -> Result<Arc<Prepared>, St
     prepare_ctx_fold(req, ctx, false)
 }
 
-/// INFORMAL_FOLD=1: the IC3 engines fold a free-running clock (H17).
+/// The IC3 engines fold a free-running clock when the model has one
+/// (H17: 13.3 against 6.0 solved on the seeded hard set).
+/// INFORMAL_FOLD=0 turns it off.
 fn fold_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("INFORMAL_FOLD").is_ok_and(|x| x != "0"))
+    *ON.get_or_init(|| std::env::var("INFORMAL_FOLD").map_or(true, |x| x != "0"))
 }
 
 /// [`prepare_ctx`], with the clock folded when `fold` is set and the
