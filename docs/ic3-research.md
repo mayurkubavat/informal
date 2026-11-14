@@ -548,7 +548,12 @@ at about half the frame number, and makes at least 40% fewer lemmas.
 Seeded hard set, single IC3, no store: a mean of at least 9 (6.0
 today).
 
-*Result:* pending.
+*Result (2026-11-14): hit.* Seeded hard set, single IC3, 300 s, no
+store: 14, 13, 13 solved (mean 13.3) against 6, 6, 6. Seven models
+clearly gained, all cv32e40x (p019, p033, p478, p568, p584, p607,
+p658), none lost; 11 models are solved on every seed against 3. On the
+first runs p658 was certified in 32 s with 433 lemmas and p299 in 52 s.
+Every verdict passed the 2-step certificate on the loaded model.
 
 ### H18. The shared lemma pool is a trace: import it without asking (prediction, 2026-11-14)
 
