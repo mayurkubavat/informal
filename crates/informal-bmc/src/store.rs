@@ -15,7 +15,7 @@
 //! only what Houdini proves on the new model, and the final certificate
 //! checks the whole invariant again.
 
-use informal_aig::{Aig, Init, Node};
+use informal_aig::{var, Aig, Init, Node};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -35,8 +35,12 @@ pub fn dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// A hash of the design: everything in `g` except its bad outputs (and
-/// names). Two properties of one design get the same value.
+/// A hash of the design: its latches (with inits), its constraints, and
+/// the logic their next-state functions and the constraints depend on.
+/// The logic that only a bad output depends on is left out, so two
+/// properties of one design get the same value. (Leaving out just the
+/// bad literal is not enough: in HWMCC'24's cv32e40x family every file
+/// has the same bad literal and differs in the few AND gates under it.)
 pub fn design_hash(g: &Aig) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     let mut add = |x: u64| {
@@ -44,10 +48,31 @@ pub fn design_hash(g: &Aig) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
         h ^= h >> 29;
     };
-    add(g.nodes.len() as u64);
+    // The cone of the transition relation and the constraints.
+    let mut need = vec![false; g.nodes.len()];
+    let mut stack: Vec<u32> = g.constraints.iter().map(|&c| var(c)).collect();
+    for l in &g.latches {
+        stack.push(var(l.next));
+        if let Init::Expr(e) = l.init {
+            stack.push(var(e));
+        }
+    }
+    while let Some(v) = stack.pop() {
+        if std::mem::replace(&mut need[v as usize], true) {
+            continue;
+        }
+        if let Node::And(a, b) = g.nodes[v as usize] {
+            stack.push(var(a));
+            stack.push(var(b));
+        }
+    }
     add(g.inputs.len() as u64);
     add(g.latches.len() as u64);
-    for n in &g.nodes {
+    for (v, n) in g.nodes.iter().enumerate() {
+        if !need[v] {
+            continue;
+        }
+        add(v as u64);
         match *n {
             Node::Const => add(1),
             Node::Input => add(2),
@@ -171,6 +196,12 @@ mod tests {
         let mut p2 = g.clone();
         p2.bads.push(b);
         assert_eq!(design_hash(&p1), design_hash(&p2));
+        // A property with logic of its own (an AND only the bad output
+        // uses) is still the same design.
+        let mut p3 = g.clone();
+        let both = p3.and(a, b);
+        p3.bads.push(both);
+        assert_eq!(design_hash(&p1), design_hash(&p3));
         let mut other = g.clone();
         other.set_next(b, neg(a));
         other.bads.push(a);
