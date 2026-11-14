@@ -11,14 +11,13 @@ Phase 0 runs existing model checkers as child processes. Each one is an
 | BtorMC (BMC) | Btor2 | no | yes | github.com/Boolector/boolector |
 
 Only rIC3 and ABC are built and checked (see `docs/third-party.md`); the
-Pono and BtorMC entries are unchecked guesses and those tools are not
-installed on the Linux box.
-| AVR, CAR, Avy | Btor2 / AIGER | yes | yes | to add (from the Gemini research) |
+Pono and BtorMC entries are unchecked guesses. AVR, CAR and Avy are
+candidates to add.
 
 ## Checked engine notes
 
 Checked on macOS arm64, 2026-11-02, with rIC3 1.5.2 and ABC from git
-(`b04e85589`), against `tests/models`, rIC3's `examples/counter/counter.aig`
+(commit `b04e85589` of ABC), against `tests/models`, rIC3's `examples/counter/counter.aig`
 and a sample of HWMCC'24 models with published answers.
 
 - **Both tools exit 0** whatever the verdict, so verdicts come from the
@@ -52,8 +51,8 @@ and a sample of HWMCC'24 models with published answers.
 runs the engine in a systemd user scope with `MemoryMax`, so the engine
 and every process it forks share one cap and only they die when it is
 exceeded (the run reads as unknown). The rIC3 portfolio is capped at
-14 GB: its 16 workers reached 18 GB together on HWMCC'24 models here, and
-the kernel then killed unrelated processes.
+14 GB: its 16 workers reached 18 GB together on HWMCC'24 models on a
+26 GB machine, and the kernel then killed unrelated processes.
 
 ## Preprocessed models for external engines
 
@@ -93,11 +92,11 @@ before the engines start.
 
 Not supported yet at bit level (they report unknown): arrays and
 liveness; `informal-wbmc` covers arrays for bug finding. Bitwuzla is built
-under `~/Silicon/DV/tools/bitwuzla` with its own patched CaDiCaL, and
+under `$INFORMAL_TOOLS_DIR/bitwuzla` with its own patched CaDiCaL, and
 informal links that one library for both (crate `informal-sat` decides).
 
 Build CaDiCaL once (`./configure -fPIC && make` in
-`~/Silicon/DV/tools/cadical`, or point `INFORMAL_CADICAL_DIR` at a checkout)
+`$INFORMAL_TOOLS_DIR/cadical`, or point `INFORMAL_CADICAL_DIR` at a checkout)
 and rebuild informal; without it these engines are left out of the portfolio.
 Tests run them on a small built-in DPLL solver instead.
 

@@ -10,7 +10,7 @@ models, frozen binaries and results stay local (see `.gitignore`).
 | `genset.txt` | 75-model set for IC3 generalization experiments |
 | `hwmcc-unsolved61.txt` | Models no tool solved at HWMCC'24 |
 | `memout8.txt` | Models that ran out of memory at 6 GB |
-| `unsafe-94f9a4b.txt` | UNSAFE verdicts re-checked after the scorr fix |
+| `unsafe-94f9a4b.txt` | UNSAFE verdicts re-checked after the scorr fix (the name is a commit of the pre-publication history; `ad7aace` here) |
 
 Local only (ignored):
 

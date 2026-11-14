@@ -1,19 +1,26 @@
 //! Compiles the C++ shim against slang when it is built. Looks in
 //! `INFORMAL_SLANG_DIR` (the slang checkout with its `build/`), then
-//! ~/Silicon/DV/tools/slang. Without it the crate still builds and
+//! `<tools>/slang`, where `<tools>` is `INFORMAL_TOOLS_DIR` (default
+//! `~/Silicon/DV/tools`). Without it the crate still builds and
 //! `available()` is false.
 
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=INFORMAL_SLANG_DIR");
+    println!("cargo:rerun-if-env-changed=INFORMAL_TOOLS_DIR");
     println!("cargo:rerun-if-changed=cpp/shim.cpp");
     println!("cargo:rerun-if-changed=cpp/lower.cpp");
     println!("cargo:rustc-check-cfg=cfg(informal_slang)");
     let dir = std::env::var_os("INFORMAL_SLANG_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Silicon/DV/tools/slang"))
+            std::env::var_os("INFORMAL_TOOLS_DIR")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Silicon/DV/tools"))
+                })
+                .map(|t| t.join("slang"))
         });
     let Some(dir) = dir.filter(|d| d.join("build/lib/libsvlang.a").is_file()) else {
         println!("cargo:warning=slang not found (set INFORMAL_SLANG_DIR); the SystemVerilog checks are skipped");

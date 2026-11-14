@@ -15,11 +15,20 @@ coverage, and engine work are all welcome.
 ## Making a change
 
 1. Fork the repository and branch from `main`.
-2. Build and test as described in the README. Run `scripts/check.sh`
-   (formatting, clippy, and all Rust and UI tests) before you open a pull
-   request; it must pass.
+2. Build and test as described in the README. Enable the commit hook once
+   per clone with `git config core.hooksPath scripts/hooks`. Run
+   `scripts/check.sh` (repository hygiene, formatting, clippy, and all Rust
+   and UI tests) before you open a pull request; it must pass. It does not
+   need the benchmark models.
 3. Keep commits focused, with messages that say what changed and why.
 4. Open a pull request against `main` and describe how you tested it.
+
+## Reporting a wrong verdict or a security problem
+
+A wrong SAFE or UNSAFE verdict is the most serious kind of bug here. Open
+an issue with the model or the smallest design that shows it
+(`informal reduce` can shrink an AIGER model). For a security problem,
+see `SECURITY.md`.
 
 ## Contributor License Agreement
 

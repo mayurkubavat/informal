@@ -5,7 +5,7 @@ Attach or paste `docs/decisions.md` first so the model sees our decisions.
 
 ---
 
-I am building InFormal, an internal formal verification tool for digital
+I am building InFormal, a formal verification tool for digital
 hardware: a Rust orchestrator over a portfolio of model checkers, with a
 SystemVerilog front end (slang), Btor2/AIGER models, in-house SAT-based
 engines (BMC, k-induction, IC3/PDR with lemma sharing, Houdini-strengthened

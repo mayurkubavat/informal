@@ -4,8 +4,6 @@ The console has two input modes: **Tcl** (commands, as always) and **Ask**
 (plain-language questions to an LLM). Switch with the `Tcl | Ask` control at
 the far right of the bottom-dock tabs, View > Input mode, or Ctrl+Shift+A.
 
-![Ask mode in the desktop app with local Gemma 3 12B](ask-live.png)
-
 ## Using it
 
 - In Ask mode the prompt reads `ask>`. The answer streams into the console as
@@ -125,9 +123,8 @@ nothing else changes.
 
 ## Live check (2026-11-08)
 
-Run with `npm run tauri dev` on display :20, `tests/fpv/counter/counter.jg.tcl`,
-and Ollama `gemma3:12b` on CPU, while another job (dvagent) was using the same
-model:
+Run with `npm run tauri dev`, `tests/fpv/counter/counter.jg.tcl`, and
+Ollama `gemma3:12b` on CPU, while another job was using the same model:
 
 - "prove only the a_never9 property": Gemma suggested `prove -property {a_never9}`.
   Enter ran it and a_never9 came back as a CEX. The whole answer took about 2 min

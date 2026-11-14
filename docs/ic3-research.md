@@ -25,7 +25,7 @@ rIC3's IC3 proves this model in about 11 s (17 frames, about 560 lemmas,
 
 - Preprocessing is not the gap: after scorr rIC3 has 5,893 latches, we
   have 5,886.
-- Solver calls cost 3.5 ms each before e3751bf and 1.8 ms after it
+- Solver calls cost 3.5 ms each before 03c84b7 and 1.8 ms after it
   (rIC3: 0.54 ms), and we make several times as many.
 - 867 lemmas: 512 from obligations, 355 from CTGs. Lengths: 102 with
   1 literal, 344 with 2, 189 with 3, 94 with 4.
@@ -166,7 +166,7 @@ repeated runs, since ic3-mt results vary by 3 between runs of the same
 code.
 
 Also new since H2's first measurement: with the solver hot-loop fixes
-(dab2f70) N=4 now solves 4 of the gap set, up from 3
+(1bb2d5b) N=4 now solves 4 of the gap set, up from 3
 (ILA_Piccolo_BEQ, 293 s).
 
 ### H2c. Both schedules in the 4-worker IC3 (prediction, 2026-11-11)
@@ -197,7 +197,7 @@ and there is no sign of a gain, so the switch was removed again.
 What the run did show: the baseline `informal-ic3-mt` now solves 6 of the
 23 gap models at 300 s (ILA_Piccolo_BEQ 23 s, BGEU 31 s, JALR 54 s,
 veer-p28 39 s, cv32e40x-p033 254 s, p584 298 s). None of these were solved
-by our portfolio in the 197-model run on eef6f82. The changes since then
+by our portfolio in the 197-model run on 29d6d69. The changes since then
 are H1/H4, the solver hot-loop fixes and UNSAFE certification.
 
 ### H6. Solver costs that grow with the number of queries (2026-11-11)
@@ -208,9 +208,9 @@ uses `Mini`, not in generalisation.
 
 | Cost | Evidence | Fix |
 |------|----------|-----|
-| Each query left a dead activation variable, a level-0 unit and dead clauses | 443k variables and a 143k-entry level-0 trail after 438k queries; clean-up and model copy were 25% of the time | `Sat::add_temp_clause` / `retire` (ecb0b7a): the clause and what was learned from it are removed, the variable is reused |
-| Learned-clause limit grew 10% per reduction, carried across solves | 38,000 learned clauses of 14 literals, twice the lemmas' watchers | limit restarts at 2000 per solve (5c48582) |
-| A query on F_i walked the watchers of every frame's lemmas | per-frame solvers were 1.7x faster per query | watch-list groups per level (5c48582) |
+| Each query left a dead activation variable, a level-0 unit and dead clauses | 443k variables and a 143k-entry level-0 trail after 438k queries; clean-up and model copy were 25% of the time | `Sat::add_temp_clause` / `retire` (d22ac53): the clause and what was learned from it are removed, the variable is reused |
+| Learned-clause limit grew 10% per reduction, carried across solves | 38,000 learned clauses of 14 literals, twice the lemmas' watchers | limit restarts at 2000 per solve (fecd0a4) |
+| A query on F_i walked the watchers of every frame's lemmas | per-frame solvers were 1.7x faster per query | watch-list groups per level (fecd0a4) |
 
 Results (single IC3, 300 s, six hard models, 3 at a time), solved: none
 of the last two 1, limit only 1, groups only 4, both 3. Per query: JALR
@@ -383,11 +383,11 @@ does not change.
 p658, p299 and a16-p128, and no loss on the seeded hard set. Stage B: at
 least 2 more of the 29 hard-set models solved on average over 3 seeds.
 
-*Result: no gain on average; off by default.* Built in e7b634b
+*Result: no gain on average; off by default.* Built in 039b601
 (`INFORMAL_IC3_DERIVE=1`). Seeded hard set (29 models, 300 s, 3 seeds, 3
 models at a time, quiet machine; `scripts/ic3_seeds.py`):
 
-| Engine | Baseline (2c0fe27) | With predicates |
+| Engine | Baseline (0e9473b) | With predicates |
 |--------|--------------------|-----------------|
 | informal-ic3, solved per seed | 6, 6, 6 | 4, 9, 5 |
 | informal-ic3, solved on some seed | 10 | 12 |
@@ -402,7 +402,7 @@ frame 19 against 15,800 made without), and stage B widens 12-17% of
 lemmas on the CPU models, but queries get slower (the predicates pull
 their members into every query's domain) and the path changes. 0 wrong;
 every certificate passed with predicates expanded. A correction to the
-commit message of e7b634b: the baseline single IC3 already solves p299 on
+commit message of 039b601: the baseline single IC3 already solves p299 on
 all 3 seeds since the scorr fix; it was not a first.
 
 ### H14. The runs are heavy-tailed: diversity beats any one setting (2026-11-13)
@@ -468,7 +468,7 @@ four families, then run the hard set (29 models, 300 s, 3 seeds) with
 the store on: single IC3 solves at least 12 on average (6.0 without).
 
 *Result: the prediction held; the largest gain of any hypothesis so
-far.* Built in eecb164 and 52a7fe3 (`INFORMAL_INV_STORE`). Protocol: a
+far.* Built in b96f4d5 and 287ba4f (`INFORMAL_INV_STORE`). Protocol: a
 seeding pass (informal-ic3-mt, 60 s, 131 models of the cv32e40x, veer,
 veer_axi and x-epic families, store read-write), then the hard set with
 the store read-only (29 models, 300 s, 3 seeds, 3 at a time).

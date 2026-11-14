@@ -182,7 +182,7 @@ last result, the ranked list of what the shell should learn next.
 
 ## Building with slang (optional cross-check)
 
-slang is found in `INFORMAL_SLANG_DIR` or `~/Silicon/DV/tools/slang` (a
+slang is found in `INFORMAL_SLANG_DIR` or `$INFORMAL_TOOLS_DIR/slang` (a
 checkout built with `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build`). The C++
 shim in `crates/informal-slang/cpp` is compiled against it. Without slang, informal

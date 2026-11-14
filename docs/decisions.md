@@ -1,9 +1,10 @@
 # Decisions, open issues and ideas to explore
 
-Status as of 2026-11-09. Each decision lists what we chose, the alternatives,
-the reason, and the issues still open. Reasons marked *(inferred)* are not
-written down elsewhere in the repo; confirm or correct them.
-Sources: README, `docs/`, git log, project notes.
+Status as of 2026-11-14. Each decision lists what we chose, the alternatives,
+the reason, and the issues still open. Reasons marked *(inferred)* were
+reconstructed after the fact. This is a working log from before the project
+was public: dates are when a decision was taken, and some entries describe
+the single-developer setup of that time.
 
 ---
 
@@ -118,7 +119,7 @@ Sources: README, `docs/`, git log, project notes.
   into k-induction strengthening. 204 of 319 HWMCC'24 bit-level models solved
   with no wrong verdicts across separate per-engine runs, level with rIC3's
   portfolio; as one in-process portfolio run (300 s, 14 GB) it was 184 on
-  2026-11-09, 191 after memory shedding (9d161b8).
+  2026-11-09, 191 after memory shedding (af4e70e).
 - **Open issues**
   - We only match rIC3's portfolio, not beat it. 115 models still unsolved.
   - IC3 lacks EXCTG and DynAMic; CTP is off by default and on in one worker.
@@ -129,8 +130,8 @@ Sources: README, `docs/`, git log, project notes.
     comparison, which suggests more may be hiding.
   - Engine memory: 16 rIC3 workers reached 18 GB; a CNF stage once needed
     10.9 GB. In one process the engines share one memory budget: over it,
-    the portfolio sheds engines one at a time, deep BMC first (9d161b8), and
-    every engine shares one prepared model and CNF template (d699008); each
+    the portfolio sheds engines one at a time, deep BMC first (af4e70e), and
+    every engine shares one prepared model and CNF template (133a212); each
     engine still loads its own SAT solvers (Problem07 still peaks at ~10 GB).
 - **Ideas:** see "Math and algorithm ideas" below.
 
@@ -138,7 +139,7 @@ Sources: README, `docs/`, git log, project notes.
 
 - **Chosen:** replay every BMC counterexample by simulation; conflicting
   engines give "unknown (engine conflict)"; imported IC3 lemmas are
-  re-checked. **Every IC3 SAFE is certified (2026-11-09, 7dd61c4):** the
+  re-checked. **Every IC3 SAFE is certified (2026-11-09, fc2a7e9):** the
   final invariant is carried back through simplification and `scorr` (latch
   maps, plus the constant and merged latches they assumed) and checked with
   three fresh SAT queries (init, consecution, safety) on a plain Tseitin
@@ -216,11 +217,11 @@ Sources: README, `docs/`, git log, project notes.
 
 ## D12. Process: local repo, HWMCC'24 benchmark, check.sh as gate
 
-- **Update 2026-11-09:** renamed to InFormal and pushed to a private GitHub
-  repo (`mayurkubavat/InFormal`), which retires the backup concern below.
-- **Open issues:** no CI, no remote, so a disk loss loses the history; the
-  Mac copy holds research docs that the repo does not; benchmark runs
-  compete with other work on the same box.
+- **Update 2026-11-14:** the repository is public at
+  `github.com/mayurkubavat/informal` (D16), which retires the backup
+  concern below.
+- **Open issues:** no CI; benchmark runs compete with other work on the
+  same machine.
 - **Ideas:** a nightly bare-repo backup and a scheduled regression run that
   records PAR-2 and verdict disagreements over time.
 
@@ -290,14 +291,14 @@ Sources: README, `docs/`, git log, project notes.
   process, so its workers keep their shared lemma pool. The default stays
   in-process.
 - **Why:** one engine's memory growth or a crash in an FFI library should
-  end that engine, not the run. In-process shedding (9d161b8) polls and
+  end that engine, not the run. In-process shedding (af4e70e) polls and
   frees memory late; a killed process frees it at once. Each child has the
   budget as its own limit (in-process, and a systemd scope's `MemoryMax`
   where user scopes work), and a monitor keeps the children's total under
   the budget by killing the one with the highest shed rank. The line
   protocol is also the way to plug in an engine written in anything.
 - **Cost:** each child loads and prepares the model and builds its own CNF
-  template, which in-process engines share (d699008); about 20 ms more per
+  template, which in-process engines share (133a212); about 20 ms more per
   check for the processes. Measurements: `docs/engines.md`.
 - **Open issues:** not used by the desktop app yet (it has no `informal`
   binary to spawn); lemma or invariant sharing across engines would need
@@ -332,9 +333,9 @@ Ordered roughly by expected payoff for HWMCC-style models.
    be checked independently.
 9. **Symmetry and compositional methods** for parameterised designs
    (assume-guarantee reasoning, abstraction of counters and FIFOs).
-10. **Engines from other fields:** the idea file
-    `research/docs/cross-field-engine-ideas.md` lives on the Mac copy only;
-    fold its predictions and results into this list once copied over.
+10. **Engines from other fields:** ideas borrowed from SAT, SMT and
+    software model checking; add each here with its prediction before it
+    is tried.
 
 ## Software engineering ideas to explore
 
@@ -354,10 +355,11 @@ Ordered roughly by expected payoff for HWMCC-style models.
 
 ---
 
-## Gemini Deep Research review (2026-11-09)
+## External literature review (2026-11-09)
 
-Source: `research/gemini-deep-research-decisions/report.md` (127 KB, prompt in
-`prompt.txt`). It reviewed D1-D12 and the ideas above. **Treat it as a
+Source: an AI-generated literature review of D1-D12 and the ideas above
+(the report is not in this repository; the prompt is
+`docs/research-prompt-decisions.md`). **Treat it as a
 literature-backed hypothesis list, not as measured fact:** its HWMCC'24/'25
 numbers, arXiv references (some dated 2026) and projected solve counts
 were not checked by us. Every projection below becomes a plan only after our own
@@ -379,17 +381,15 @@ refer to the report.
    VSIDS and temporary clauses (predicted 3x faster queries); parent-lemma
    CTP prediction. Note the 248 figure is a 16-thread official run, our 204 is
    a 300 s local run: the gap may be smaller than it looks, so re-measure
-   rIC3 on the same box first.
-3. **Backup the repo (report P1/D12).** Biggest operational risk is no remote.
-   Needs your decision, since "no GitHub remote" was a deliberate choice; a
-   local bare repo on another disk or machine keeps that policy.
+   rIC3 on the same machine first.
+3. **Backup the repo (report P1/D12).** Done: the repository is on GitHub.
 
 ### Where the report agrees, disagrees or adds to each decision
 
 | Decision | Report verdict | Our read |
 | --- | --- | --- |
 | D1 wrap engines | Modify: stop parsing stdout; validate certificate/witness files; add SuperCAR and AVR; fix Pono/BtorMC args. | Agree on file-based verdicts (matches D8). New engines: add after the P1 gate exists. |
-| D2 Rust + FFI | Change: make missing C++ libs a hard compile error via Cargo features; do **not** port CaDiCaL, Bitwuzla or slang to Rust; put pure-Rust effort into `Mini`. | Agree. This **narrows** the "move must-have libs to Rust over time" plan: only the IC3 solver is worth owning. Needs your confirmation. |
+| D2 Rust + FFI | Change: make missing C++ libs a hard compile error via Cargo features; do **not** port CaDiCaL, Bitwuzla or slang to Rust; put pure-Rust effort into `Mini`. | Agree. This **narrows** the "move must-have libs to Rust over time" plan: only the IC3 solver is worth owning. Confirmed. |
 | D3 GPL ok | Keep; skip Verific unless VHDL needed; says rIC3 and Pono are BSD-3. | **Check:** rIC3's `LICENSE` file is BSD-3-Clause but its `Cargo.toml` says `GPL-3.0`. Conflicting upstream; irrelevant while InFormal only runs it as a separate program (D16). |
 | D4 pinning | Modify: reproducible build script or container; automated sample gate on pin update. | Agree; the build steps are still reconstructed, not logged. |
 | D5 slang + Yosys | Change: use `yosys-slang` (the fork rIC3 uses) instead of raw Yosys, with `chformal -early`, to remove the 1-cycle depth mismatch and the second parser. | Plausible and cheap to try; verify with a bounded miter between the two paths. |

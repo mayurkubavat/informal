@@ -1,21 +1,150 @@
 # InFormal
 
-An open-source formal verification tool for digital designs: a Rust
-orchestrator over a portfolio of model-checking engines, with an SVA front
-end, verification apps and a debug UI on top. Formerly FormalDV: older
-run databases and notes call the binary and in-house engines `fdv`.
+InFormal is an open-source formal verification tool for digital designs.
+It reads SystemVerilog with assertions, runs a portfolio of model-checking
+engines on each property, and reports a proof or a counterexample trace.
+It accepts FPV setup scripts written in the command style of JasperGold
+and VC Formal, and has a desktop workbench for results and waveforms.
 
-The design decisions behind the code, and the issues still open, are in
-`docs/decisions.md`.
+**Status: pre-release (0.1).** The pieces below work and are tested, but
+the SystemVerilog and SVA coverage is a subset, command and file formats
+may change, and there are no binary releases yet. Do not rely on it for
+sign-off.
 
-## Status: phase 1 (FPV MVP) in progress
+![The InFormal workbench](docs/ui/workbench-light.png)
 
-Phase 0 (wrapped engines reproduce published HWMCC'24 results) is done.
-Phase 1 has the in-house bit-level engines (BMC, k-induction, IC3), the
-svlang front end, the JasperGold / VC Formal Tcl shell and the desktop app.
-On the 319 HWMCC'24 bit-level models (300 s per run), the in-house
-engines have solved 204 across runs with no wrong verdicts, level with
-rIC3's portfolio.
+## What works today
+
+- **Front end.** SystemVerilog through [svlang](https://github.com/mayurkubavat/svlang)
+  (pure Rust), lowered to a word-level Btor2 model. Constructs it cannot
+  model are rejected with a message, never guessed (decision D13).
+- **Engines.** In-house BMC, k-induction and IC3 / PDR at bit level, and
+  word-level BMC on Bitwuzla. External checkers (rIC3, ABC) join the same
+  portfolio as child processes when they are installed. The first
+  definitive verdict wins, and contradicting engines are flagged.
+- **Checked results.** A proof's invariant is checked against the model as
+  loaded, and every counterexample is replayed, before either is reported
+  (`docs/engines.md`).
+- **FPV shell.** `informal shell` runs Tcl setup scripts with `analyze`,
+  `elaborate`, `clock`, `reset`, `assert`, `assume`, `cover`, `prove`,
+  `stopat` and related commands in a real Tcl 8.6 interpreter
+  (`docs/fpv-shell.md` lists what is and is not accepted).
+- **Debugging aids.** `informal reduce` shrinks a model on which two engines
+  disagree; `informal simp`, `info`, `fmt` and `lower` inspect models.
+- **Desktop app.** A Tauri 2 + React workbench in `ui/`: property table,
+  Tcl console, source view, counterexample waveforms, and an optional
+  "Ask" mode backed by a local LLM (`ui/README.md`, `docs/ui/`).
+
+Not there yet: liveness, arrays at bit level, VHDL, most of concurrent
+SVA beyond the documented subset, coverage and other apps.
+
+## Quick start
+
+Tested on Ubuntu 26.04 (x86-64). macOS builds too (`docs/engines.md` has
+the differences).
+
+1. Install the prerequisites: a stable Rust toolchain from
+   [rustup](https://rustup.rs) (1.87 or newer), a C++ compiler, and the
+   Tcl 8.6 development library.
+
+   ```sh
+   sudo apt install build-essential tcl8.6-dev      # Ubuntu
+   brew install tcl-tk@8                            # macOS
+   ```
+
+2. Build CaDiCaL, the SAT solver the in-house engines use. Any directory
+   works; tell the build where it is with `INFORMAL_TOOLS_DIR`.
+
+   ```sh
+   export INFORMAL_TOOLS_DIR=$HOME/informal-tools
+   mkdir -p $INFORMAL_TOOLS_DIR && cd $INFORMAL_TOOLS_DIR
+   git clone https://github.com/arminbiere/cadical && cd cadical
+   git checkout rel-3.0.1 && ./configure -fPIC && make -j4
+   ```
+
+3. Build InFormal and run the counter example.
+
+   ```sh
+   git clone https://github.com/mayurkubavat/informal && cd informal
+   cargo build --release
+   target/release/informal shell tests/fpv/counter/counter.jg.tcl
+   ```
+
+   The run ends with a table like this (engines and times vary):
+
+   ```
+   property                     type    status        engine     detail
+   a_max                        assert  proven        informal-kind 0.06 s
+   a_step                       assert  proven        informal-kind 0.10 s
+   a_hold                       assert  proven        informal-kind 0.08 s
+   a_never9                     assert  cex           informal-bmc depth 10 in 0.06 s
+   a_no_wrap                    assert  proven        informal-kind-ic3 0.04 s
+   c_done                       cover   covered       informal-bmc depth 10 in 0.07 s
+   c_10                         cover   unreachable   informal-kind-ic3 0.06 s
+   ```
+
+Run commands from the repository root: `informal` reads
+`config/engines.toml` from the current directory.
+
+Optional, each picked up automatically when present (build steps and the
+exact versions used are in `docs/third-party.md`):
+
+| Add | Gives you | How it is found |
+| --- | --- | --- |
+| Bitwuzla | word-level BMC (`informal-wbmc`), arrays for bug finding | `$INFORMAL_TOOLS_DIR/bitwuzla/install` or `INFORMAL_BITWUZLA_DIR` |
+| rIC3, ABC | more engines in the portfolio | `ric3` and `abc` on `PATH` |
+| slang | a second front end for cross-checks (`INFORMAL_FRONTEND=slang`) | `$INFORMAL_TOOLS_DIR/slang` or `INFORMAL_SLANG_DIR` |
+
+Without CaDiCaL the build still succeeds, but the in-house engines are
+left out of the portfolio and every property comes back undetermined.
+External engines that are not installed are skipped.
+
+## Use
+
+```sh
+# Run an FPV script (flavor detected from the script), or start a prompt
+target/release/informal shell tests/fpv/counter/counter.jg.tcl
+target/release/informal shell --flavor vcf
+
+# List what a script uses that informal does not accept, without running it
+target/release/informal shell --check path/to/setup.tcl
+
+# Check one Btor2 or AIGER model (exit 10 unsafe, 20 safe, 0 unknown)
+target/release/informal check tests/models/toggle_unsafe.aag --timeout 60
+
+# Lower SystemVerilog to Btor2; inspect or canonicalize a model
+target/release/informal lower tests/sv/counter_ok.sv
+target/release/informal info tests/models/counter.btor2
+target/release/informal fmt tests/models/memory.btor2
+
+# Benchmark every engine on a model set and log to bench/runs.jsonl
+target/release/informal bench path/to/models --each --timeout 300 --jobs 8
+```
+
+The desktop app is built separately; see `ui/README.md`.
+
+## Benchmarks
+
+Development is measured on the 319 bit-level models of HWMCC'24 (Zenodo
+record 14775242; the models are not in this repository). Our own
+measurements, on one 16-core, 26 GB Linux machine with a 300 s limit per
+model, as of November 2026:
+
+- The in-house engines, run together as one portfolio with a 14 GB memory
+  cap, solved 191 of 319 (commit `af4e70e`).
+- Counting every model that any in-house engine solved across separate
+  per-engine runs gives 204 of 319, the same count the rIC3 portfolio
+  reached on that machine.
+- No engine has returned a verdict that contradicts the published answers
+  in these runs.
+
+These are local numbers, not competition results, and they move with
+every engine change. To reproduce, download the models to
+`bench/hwmcc24/`, then use `scripts/hwmcc_full.sh` or
+`scripts/inhouse_sample.sh` and score with `scripts/hwmcc_check.py`
+(`bench/README.md`).
+
+## Code map
 
 | Crate | What it does |
 | --- | --- |
@@ -34,48 +163,7 @@ rIC3's portfolio.
 | `informal-llm` | Swappable LLM providers (OpenAI-compatible streaming client, scripted fake) for the app's Ask mode; defaults to local Gemma on Ollama (`config/llm.toml`). |
 | `informal-cli` | The `informal` command. |
 
-The desktop app (Tauri 2 with a React UI) lives in `ui/`, outside the
-workspace; see `ui/README.md` and `docs/ui/`.
-
-## Build and test
-
-Needs a recent stable Rust toolchain (`rustup`; 1.87 or newer) and the
-Tcl 8.6 development library (`tcl8.6-dev` on Ubuntu, `tcl-tk@8` from
-Homebrew on macOS). Optional libraries are picked up when built under
-`~/Silicon/DV/tools` (CaDiCaL, Bitwuzla, slang; see
-`docs/third-party.md`); without them the matching engines are left out.
-The SystemVerilog front end is svlang, a pure-Rust Cargo dependency.
-
-```sh
-cargo build --release
-cargo test
-scripts/check.sh        # fmt, clippy, all Rust and UI tests: run before merging
-```
-
-## Use
-
-```sh
-# Validate a Btor2 model and print its features
-target/release/informal info tests/models/counter.btor2
-
-# Canonical Btor2
-target/release/informal fmt tests/models/memory.btor2
-
-# Check one model with the engine portfolio (exit 10 unsafe, 20 safe, 0 unknown)
-target/release/informal check tests/models/toggle_unsafe.aag --timeout 60
-
-# Benchmark every engine on a model set and log to bench/runs.jsonl
-target/release/informal bench path/to/hwmcc24 --each --timeout 300 --jobs 8
-
-# Run a JasperGold or VC Formal style FPV script
-target/release/informal shell tests/fpv/counter/counter.jg.tcl
-```
-
-External engines must be on `PATH` under the names in
-`config/engines.toml` (`ric3`, `abc`; the `pono` and `btormc` entries are
-unchecked and those tools are not installed here). rIC3 builds on stable Rust; rIC3, Pono
-and ABC all build from source (see `docs/engines.md`, which also covers
-macOS limits such as rIC3's Linux-only portfolio).
+The desktop app lives in `ui/`, outside the Cargo workspace.
 
 ## Layout
 
@@ -93,9 +181,9 @@ refs/          reference library: papers and specs (see refs/README.md)
 
 ### Local data (git-ignored)
 
-Each clone keeps its own working data in these places. `.gitignore` keeps
-them out, and `scripts/check.sh` (via `scripts/hygiene.sh`) fails if
-anything under `research/` or `docs/review/` is ever tracked.
+Working data stays out of git. `.gitignore` covers these places, and
+`scripts/check.sh` (via `scripts/hygiene.sh`) fails if anything under
+`research/` or `docs/review/` is ever tracked.
 
 ```
 bench/hwmcc24/       HWMCC'24 benchmark models (multi-GB)
@@ -111,11 +199,29 @@ refs/*.pdf           papers (copyrighted; the index in refs/ is tracked)
 
 Model lists such as `bench/*.txt` and `bench/sample60.csv` are tracked.
 
-## Phase 0 gate
+## Documentation
 
-Wrapped engines must reproduce their published HWMCC solve counts when run
-through `informal bench`. That validates the adapters and verdict patterns
-before any in-house engine is compared against them.
+| File | What |
+| --- | --- |
+| `docs/fpv-shell.md` | The FPV shell: commands, the SVA subset, how a prove runs |
+| `docs/engines.md` | Engines, memory limits, result checking |
+| `docs/third-party.md` | Third-party tools: licenses, versions, build steps |
+| `docs/decisions.md` | Design decisions, with reasons and open issues |
+| `docs/ic3-research.md` | IC3 experiments and their measured results |
+| `docs/vendor-script-tally.md` | How publicly available vendor-style scripts fare in the shell |
+| `docs/ui/` | Desktop app design notes and test strategy |
+
+## Build and test
+
+```sh
+cargo build --release
+cargo test
+scripts/check.sh        # hygiene, fmt, clippy, all Rust and UI tests: run before a pull request
+```
+
+`scripts/check.sh` does not need the benchmark models. Tests that need an
+external engine skip themselves when it is not installed. The UI steps
+need `npm install` in `ui/` first.
 
 ## License
 

@@ -1,9 +1,10 @@
 # Third-party tools and libraries
 
-What informal builds against on the Linux box, pinned to the exact commits in
-use. Everything lives under `~/Silicon/DV/tools` (`~/DV/tools` is a
-symlink), outside this repository. The build scripts find each library
-there by default, or through the environment variable listed.
+What informal builds against, pinned to the exact commits in use on the
+development machine. Everything lives in one tools directory outside this
+repository: set `INFORMAL_TOOLS_DIR` to it (the default is
+`~/Silicon/DV/tools`). The build scripts find each library there, or
+through the environment variable listed.
 
 Policy: we keep local patches only, never upstream ones. As of 2026-11-08
 none of the checkouts below carries a local patch (all working trees are
@@ -38,7 +39,7 @@ unchecked), Surfer (the app's trace hand-off hides itself without it).
 
 ## Build steps
 
-Run from `~/Silicon/DV/tools`. Rebuild informal afterwards (`cargo build`),
+Run from the tools directory (`$INFORMAL_TOOLS_DIR`). Rebuild informal afterwards (`cargo build`),
 since the build scripts link whatever they find. The original builds
 were run by hand and not logged; these commands are reconstructed from
 the recorded build configuration (slang `CMakeCache.txt`: Release,

@@ -1,7 +1,8 @@
 //! Links CaDiCaL's static library when it is built: `INFORMAL_CADICAL_DIR` (a
 //! checkout), else the patched copy Bitwuzla builds under
-//! ~/Silicon/DV/tools/bitwuzla, else ~/Silicon/DV/tools/cadical.
-//! When Bitwuzla is built (~/Silicon/DV/tools/bitwuzla/install or
+//! `<tools>/bitwuzla`, else `<tools>/cadical`, where `<tools>` is
+//! `INFORMAL_TOOLS_DIR` (default `~/Silicon/DV/tools`).
+//! When Bitwuzla is built (`<tools>/bitwuzla/install` or
 //! `INFORMAL_BITWUZLA_DIR`), its static library is linked instead: it carries
 //! the same patched CaDiCaL, so the binary has one copy.
 //! Without any of them the crate still builds, and `Cadical::new` returns an error.
@@ -11,16 +12,22 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-env-changed=INFORMAL_CADICAL_DIR");
     println!("cargo:rustc-check-cfg=cfg(informal_cadical)");
-    let home = std::env::var_os("HOME")
+    println!("cargo:rerun-if-env-changed=INFORMAL_TOOLS_DIR");
+    let tools = std::env::var_os("INFORMAL_TOOLS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join("Silicon/DV/tools")
+        });
     // Bitwuzla's static library already contains its patched CaDiCaL,
     // C API included: link it instead of a second CaDiCaL, and tell crates
     // that wrap Bitwuzla (DEP_CADICAL_BITWUZLA_ROOT) where it is.
     println!("cargo:rerun-if-env-changed=INFORMAL_BITWUZLA_DIR");
     let bw = std::env::var_os("INFORMAL_BITWUZLA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join("Silicon/DV/tools/bitwuzla/install"));
+        .unwrap_or_else(|| tools.join("bitwuzla/install"));
     let bwlib = ["lib/x86_64-linux-gnu", "lib", "lib64"]
         .iter()
         .map(|d| bw.join(d))
@@ -56,7 +63,7 @@ fn main() {
     if let Some(d) = std::env::var_os("INFORMAL_CADICAL_DIR") {
         dirs.push(PathBuf::from(d).join("build"));
     }
-    let sub = home.join("Silicon/DV/tools/bitwuzla/build/subprojects");
+    let sub = tools.join("bitwuzla/build/subprojects");
     if let Ok(rd) = std::fs::read_dir(&sub) {
         let mut found: Vec<PathBuf> = rd
             .flatten()
@@ -70,7 +77,7 @@ fn main() {
         found.sort();
         dirs.extend(found);
     }
-    dirs.push(home.join("Silicon/DV/tools/cadical/build"));
+    dirs.push(tools.join("cadical/build"));
     for dir in dirs {
         let lib = dir.join("libcadical.a");
         println!("cargo:rerun-if-changed={}", lib.display());
@@ -88,5 +95,5 @@ fn main() {
             return;
         }
     }
-    println!("cargo:warning=CaDiCaL not found (set INFORMAL_CADICAL_DIR); the in-house engines stay out of the portfolio until it is built");
+    println!("cargo:warning=CaDiCaL not found (set INFORMAL_TOOLS_DIR or INFORMAL_CADICAL_DIR); the in-house engines stay out of the portfolio until it is built");
 }
