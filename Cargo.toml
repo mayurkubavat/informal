@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-slang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm"]
+members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-slang", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,6 +27,9 @@ informal-sat = { path = "crates/informal-sat" }
 informal-aig = { path = "crates/informal-aig" }
 informal-bmc = { path = "crates/informal-bmc" }
 informal-slang = { path = "crates/informal-slang" }
+informal-svlang = { path = "crates/informal-svlang" }
+# Pinned by commit (docs/third-party.md).
+svlang = { git = "https://github.com/mayurkubavat/svlang", rev = "e2bd45e200957435c665a1bb33d90f4717febbe8" }
 informal-bitwuzla = { path = "crates/informal-bitwuzla" }
 informal-llm = { path = "crates/informal-llm" }
 
@@ -34,3 +37,4 @@ informal-llm = { path = "crates/informal-llm" }
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+

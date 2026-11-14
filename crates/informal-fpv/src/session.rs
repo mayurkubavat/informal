@@ -186,7 +186,7 @@ pub struct Session {
     /// Instance tree from slang, for the UI.
     pub hierarchy: Vec<informal_slang::Instance>,
     pub yosys: PathBuf,
-    /// Front end that built the last prove's models (`slang` or `yosys`).
+    /// Front end that built the last prove's models (`svlang`, `slang` or `yosys`).
     pub frontend: String,
     /// Set from another thread (the app's Stop) to end a running prove:
     /// checked between properties and forwarded to the engine portfolio,
@@ -334,7 +334,11 @@ impl Session {
             trace_outputs: false,
         };
         self.design.hierarchy.clear();
-        if let Some(d) = informal_slang::compile(&req) {
+        let compiled = match frontend() {
+            "svlang" => Some(informal_svlang::compile(&req)),
+            _ => informal_slang::compile(&req),
+        };
+        if let Some(d) = compiled {
             let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
             if !errors.is_empty() {
                 bail!("SystemVerilog errors:\n{}", errors.join("\n"));
@@ -360,7 +364,7 @@ impl Session {
         }
         // slang has already reported any errors; Yosys is only run here
         // when it is the front end (it runs at prove if a property needs it).
-        if self.slang.is_none() || std::env::var("INFORMAL_FRONTEND").is_ok_and(|v| v == "yosys") {
+        if self.slang.is_none() || frontend() == "yosys" {
             self.run_yosys(
                 &self.design.files.clone(),
                 &[],
@@ -610,12 +614,13 @@ impl Session {
             }
         };
         let engines = self.engines();
-        let (lowered, rejected) = match self.lower_with_slang(&files, &targets) {
+        let fe = frontend();
+        let (lowered, rejected) = match self.lower_with_slang(fe, &files, &targets) {
             Ok(l) => (l, None),
             Err(e) => (None, Some(e)),
         };
         self.frontend = if lowered.is_some() || rejected.is_some() {
-            "slang"
+            fe
         } else {
             "yosys"
         }
@@ -751,10 +756,11 @@ impl Session {
     /// Falling back to Yosys there would turn a typo into a free signal.
     fn lower_with_slang(
         &self,
+        fe: &'static str,
         files: &[PathBuf],
         targets: &[usize],
     ) -> Result<Option<String>, String> {
-        if std::env::var("INFORMAL_FRONTEND").is_ok_and(|v| v == "yosys") {
+        if fe == "yosys" {
             return Ok(None);
         }
         let mut defines = self.design.defines.clone();
@@ -770,6 +776,18 @@ impl Session {
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
         };
+        if fe == "svlang" {
+            // No fallback: whatever svlang does not model is an error (D14).
+            let l = informal_svlang::lower(&req);
+            for n in &l.notes {
+                self.log(&format!("svlang: {n}"));
+            }
+            return if l.ok {
+                Ok(Some(l.btor2))
+            } else {
+                Err(format!("svlang: {}", l.errors.join("; ")))
+            };
+        }
         let Some(l) = informal_slang::lower(&req) else {
             return Ok(None);
         };
@@ -1068,6 +1086,16 @@ fn only_bad(btor: &str, keep: &str) -> String {
         })
         .flat_map(|l| [l, "\n"])
         .collect()
+}
+
+/// The front end that lowers designs: `svlang` (the default), or `slang`
+/// (with the Yosys fallback) or `yosys` through `INFORMAL_FRONTEND`.
+pub fn frontend() -> &'static str {
+    match std::env::var("INFORMAL_FRONTEND").as_deref() {
+        Ok("yosys") => "yosys",
+        Ok("slang") => "slang",
+        _ => "svlang",
+    }
 }
 
 fn find_yosys() -> PathBuf {

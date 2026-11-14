@@ -74,8 +74,8 @@ fn run(c: &Case) -> Result<(), String> {
     }
     // The Yosys fallback is not what this suite is about.
     let frontend = sh.session.borrow().frontend.clone();
-    if frontend != "slang" {
-        return Err(format!("lowered by {frontend}, not slang"));
+    if frontend == "yosys" {
+        return Err(format!("lowered by {frontend}, not by a SystemVerilog front end"));
     }
     let got = compat::summary(&sh.session.borrow());
     for (name, want) in &c.expect {

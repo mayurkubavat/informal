@@ -1,0 +1,11 @@
+[package]
+name = "informal-svlang"
+description = "SystemVerilog front end on svlang (pure Rust): the elaborated design and its word-level netlist, written as Btor2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+informal-slang.workspace = true
+svlang.workspace = true

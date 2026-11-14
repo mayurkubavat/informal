@@ -72,8 +72,8 @@ enum Cmd {
         #[arg(long)]
         aag: bool,
     },
-    /// Lower SystemVerilog to Btor2 with slang; immediate assertions become
-    /// bad states (needs a build with slang).
+    /// Lower SystemVerilog to Btor2 with svlang (or slang with
+    /// INFORMAL_FRONTEND=slang); immediate assertions become bad states.
     Lower {
         files: Vec<PathBuf>,
         #[arg(long)]
@@ -326,7 +326,11 @@ fn main() -> anyhow::Result<()> {
                     .collect(),
                 ..Default::default()
             };
-            let l = informal_slang::lower(&req).context("this informal was built without slang")?;
+            let l = match informal_fpv::session::frontend() {
+                "slang" => informal_slang::lower(&req).context("this informal was built without slang")?,
+                "yosys" => bail!("`lower` uses svlang or slang (INFORMAL_FRONTEND=svlang|slang)"),
+                _ => informal_svlang::lower(&req),
+            };
             for n in &l.notes {
                 eprintln!("note: {n}");
             }

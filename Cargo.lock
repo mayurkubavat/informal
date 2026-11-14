@@ -654,6 +654,7 @@ dependencies = [
  "informal-fpv",
  "informal-ir",
  "informal-slang",
+ "informal-svlang",
  "informal-tcl",
  "serde_json",
 ]
@@ -691,6 +692,7 @@ dependencies = [
  "informal-engine",
  "informal-engines-ext",
  "informal-slang",
+ "informal-svlang",
  "informal-tcl",
  "regex",
  "serde",
@@ -731,6 +733,14 @@ dependencies = [
  "cc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "informal-svlang"
+version = "0.1.0"
+dependencies = [
+ "informal-slang",
+ "svlang",
 ]
 
 [[package]]
@@ -1249,6 +1259,57 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "sv-lexer"
+version = "0.1.0"
+
+[[package]]
+name = "sv-netlist"
+version = "0.1.0"
+dependencies = [
+ "sv-semantic",
+ "sv-syntax",
+]
+
+[[package]]
+name = "sv-preprocessor"
+version = "0.1.0"
+dependencies = [
+ "sv-lexer",
+]
+
+[[package]]
+name = "sv-semantic"
+version = "0.1.0"
+dependencies = [
+ "sv-source",
+ "sv-syntax",
+]
+
+[[package]]
+name = "sv-source"
+version = "0.1.0"
+
+[[package]]
+name = "sv-syntax"
+version = "0.1.0"
+dependencies = [
+ "sv-lexer",
+ "sv-preprocessor",
+]
+
+[[package]]
+name = "svlang"
+version = "0.1.0"
+dependencies = [
+ "sv-lexer",
+ "sv-netlist",
+ "sv-preprocessor",
+ "sv-semantic",
+ "sv-source",
+ "sv-syntax",
+]
 
 [[package]]
 name = "syn"

@@ -158,28 +158,29 @@ fn slang_rejects_typos_and_reports_source_errors() {
     assert!(e.message.contains("bad.sv:3:"), "{}", e.message);
 }
 
-/// The FIFO through both front ends: same verdict for every property.
+/// The FIFO through every front end: same verdict for every property.
 #[test]
-fn slang_and_yosys_front_ends_agree() {
+fn front_ends_agree() {
     if !informal_slang::available() {
         eprintln!("skipping: built without slang");
         return;
     }
-    let run = |yosys: bool| {
-        let sh = shell(Flavor::Jg, if yosys { "fifo-y" } else { "fifo-s" })?;
-        if yosys {
+    let run = |fe: &str| {
+        let sh = shell(Flavor::Jg, &format!("fifo-{fe}"))?;
+        if fe == "yosys" {
             sh.eval("set ::informal_frontend_yosys 1").unwrap();
-            std::env::set_var("INFORMAL_FRONTEND", "yosys");
         }
+        std::env::set_var("INFORMAL_FRONTEND", fe);
         let r = sh.source(&root().join("tests/fpv/fifo/fifo.jg.tcl"));
         std::env::remove_var("INFORMAL_FRONTEND");
         r.unwrap();
-        let fe = sh.session.borrow().frontend.clone();
-        Some((statuses(&sh), fe))
+        let got = sh.session.borrow().frontend.clone();
+        assert_eq!(got, fe);
+        Some(statuses(&sh))
     };
-    let Some((s, fe_s)) = run(false) else { return };
-    let Some((y, fe_y)) = run(true) else { return };
-    assert_eq!((fe_s.as_str(), fe_y.as_str()), ("slang", "yosys"));
+    let Some(v) = run("svlang") else { return };
+    let Some(s) = run("slang") else { return };
+    let Some(y) = run("yosys") else { return };
     let want = [
         ("a_count_max", "proven"),
         ("a_full_empty", "proven"),
@@ -194,6 +195,7 @@ fn slang_and_yosys_front_ends_agree() {
     ];
     let mut with_sub = want.to_vec();
     with_sub.insert(7, ("a_sub_ptr", "proven"));
+    assert_eq!(v, s, "svlang and slang disagree");
     assert_eq!(
         s,
         with_sub
