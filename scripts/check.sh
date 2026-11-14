@@ -15,6 +15,9 @@ e2e=0
 
 step() { printf '\n== %s\n' "$*"; }
 
+step "hygiene (no assistant state, keys or attribution)"
+scripts/hygiene.sh
+
 step "cargo fmt (workspace, app)"
 cargo fmt --all --check
 (cd ui/src-tauri && cargo fmt --check)
