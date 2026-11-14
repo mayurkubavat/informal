@@ -467,7 +467,42 @@ clean 319-model score never uses a store.
 four families, then run the hard set (29 models, 300 s, 3 seeds) with
 the store on: single IC3 solves at least 12 on average (6.0 without).
 
-*Result:* pending.
+*Result: the prediction held; the largest gain of any hypothesis so
+far.* Built in eecb164 and 52a7fe3 (`INFORMAL_INV_STORE`). Protocol: a
+seeding pass (informal-ic3-mt, 60 s, 131 models of the cv32e40x, veer,
+veer_axi and x-epic families, store read-write), then the hard set with
+the store read-only (29 models, 300 s, 3 seeds, 3 at a time).
+
+| Engine | Without a store | With the store |
+|--------|-----------------|----------------|
+| informal-ic3, solved per seed | 6, 6, 6 | 14, 10, 13 (mean 12.3) |
+| informal-ic3, solved on every seed | 3 | 10 |
+| informal-ic3-mt, solved per seed | 6, 8, 7 | 16, 15, 14 (mean 15.0) |
+| informal-ic3-mt, solved on every seed | 4 | 14 |
+
+No model was lost in either engine; 0 wrong, no conflicting verdicts
+between seeds, every SAFE certified on the loaded model. Clearly gained
+(by 2 seeds or more): single IC3 p033, p039, p478, p607, p649, p658;
+ic3-mt p033, p039, p478, p568, p584, p649, p658, veer_axi-p06. Three of
+the solved models (p607, p658, veer-p28) had been solved in the seeding
+pass itself, so in the measured run they imported their own proof (8-14
+s); without those three, single IC3 is 9.3 against 5.0 on the other 26.
+cv32e40x-p299 went from 82-154 s to 8 s on siblings' clauses alone, and
+p039, p478 and p649 had never been solved by us.
+
+What the store held: one file of 6,054 clauses for the cv32e40x design
+after the seeding pass (35 of 86 properties proved in 60 s each). The
+seeding pass itself solved p610 (10 s) and p658 (55 s), which the clean
+300 s portfolio never had. The gain is all in cv32e40x, veer and
+veer_axi; none of the six a16 models moved (their group of 16 siblings
+gave too little), and the ILA models have no siblings.
+
+A first run was void and is worth remembering: the design hash then
+left out only the bad literal, but these files share the bad literal
+and differ in the AND gates under it, so nothing was ever imported.
+
+Not part of the clean 319-model score: a result with a store depends
+on which siblings were solved before.
 
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
