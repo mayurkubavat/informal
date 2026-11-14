@@ -31,6 +31,24 @@ pub static DIAG_LI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 pub static DIAG_LIVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static DIAG_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// How an IC3 takes lemmas from the pool (see `Ic3::import`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Import {
+    /// Each lemma is re-checked against our own frames and added at the
+    /// highest level where it holds.
+    Checked,
+    /// Checked, and lemmas cut by our top are raised (with a check) when
+    /// the top grows; counts what fails. For validating `Unchecked`.
+    Validate,
+    /// Lemmas are adopted at their level without a query, and raised when
+    /// our top grows, so that our frames always hold the pool's prefix.
+    Unchecked,
+    /// Only the publishers' standing invariants are adopted (no query).
+    Core,
+    /// Nothing is imported.
+    Off,
+}
+
 /// How one IC3 generalizes; portfolio workers differ here.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -58,6 +76,8 @@ pub struct Config {
     /// H13: derived predicates for lemma groups that differ in one
     /// literal (single-solver layout only).
     pub derive: bool,
+    /// How lemmas of other workers are imported.
+    pub import: Import,
     pub houdini_every: usize,
     /// H2b: instead, run Houdini when the lemmas in the frames have
     /// doubled since its last run (and number at least 100).
@@ -88,6 +108,13 @@ impl Default for Config {
             parent_lemma: std::env::var_os("INFORMAL_IC3_PARENT").is_some(),
             promote: std::env::var("INFORMAL_IC3_PROMOTE").is_ok_and(|x| x != "0"),
             derive: std::env::var("INFORMAL_IC3_DERIVE").is_ok_and(|x| x != "0"),
+            import: match std::env::var("INFORMAL_IC3_IMPORT").as_deref() {
+                Ok("unchecked") => Import::Unchecked,
+                Ok("validate") => Import::Validate,
+                Ok("core") => Import::Core,
+                Ok("off") => Import::Off,
+                _ => Import::Checked,
+            },
             houdini_every: std::env::var("INFORMAL_IC3_HOUDINI")
                 .ok()
                 .and_then(|x| x.parse().ok())
@@ -267,6 +294,26 @@ pub struct Ic3<'g> {
     pub stats_ctg_fail: usize,
     pub stats_lemmas: usize,
     pub stats_imported: usize,
+    /// Pool entries seen from other workers, queries spent re-checking
+    /// them, and how many failed that check at the level they came with
+    /// (cut to our top). In theory none can: see `import`.
+    pub stats_import_seen: usize,
+    pub stats_import_queries: usize,
+    pub stats_import_first_fail: usize,
+    /// Entries skipped because we hold the same cube at that level or
+    /// above; lemmas raised after our top grew, and raises that failed
+    /// their check (Validate).
+    pub stats_import_dup: usize,
+    pub stats_import_raised: usize,
+    pub stats_import_raise_fail: usize,
+    /// The highest level at which we hold each cube (usize::MAX: in the
+    /// standing invariant). A stale copy lower down is dropped when
+    /// propagation reaches it.
+    level_of: std::collections::HashMap<Cube, usize>,
+    /// Pool entries whose level was above our top when we took them
+    /// (cube, pool level), and the top at which they were last raised.
+    cut: Vec<(Cube, usize)>,
+    cut_top: usize,
     pub stats_ctps: usize,
     pub stats_lift_fallbacks: usize,
     /// MIC calls, total length of their results and inputs, and literal
@@ -377,6 +424,15 @@ impl<'g> Ic3<'g> {
             stats_ctg_fail: 0,
             stats_lemmas: 0,
             stats_imported: 0,
+            stats_import_seen: 0,
+            stats_import_queries: 0,
+            stats_import_first_fail: 0,
+            stats_import_dup: 0,
+            stats_import_raised: 0,
+            stats_import_raise_fail: 0,
+            level_of: std::collections::HashMap::new(),
+            cut: Vec::new(),
+            cut_top: 0,
             stats_ctps: 0,
             stats_lift_fallbacks: 0,
             stats_mic: 0,
@@ -667,12 +723,33 @@ impl<'g> Ic3<'g> {
     }
 
     /// Add the other IC3s' new lemmas, each at its frame or our top.
+    /// Take the other IC3s' new lemmas from the pool.
+    ///
+    /// Read as "cube c is blocked in frames 1..=l", the pool is a valid
+    /// IC3 trace: every entry was relatively inductive to its publisher's
+    /// frames, and those held only pool entries that come before it (its
+    /// own lemmas and its imports). So an IC3 whose frames hold the whole
+    /// pool prefix, each entry at min(l, top), holds a valid trace too,
+    /// without asking anything. Two things break that if ignored. An
+    /// entry above our top is cut to the top, and must be raised when
+    /// the top grows: entries that come later rely on it at its own
+    /// level (with the cut copies left behind, 26,000 of 93,000 entries
+    /// failed their re-check at their own level on x-epic a03, which is
+    /// also how unchecked imports once gave a wrong SAFE there). And the
+    /// standing invariant a publisher's lemmas rely on must be in the
+    /// pool, so Houdini's moves are published at level usize::MAX.
     fn import(&mut self, ctx: &RunContext) {
-        let Some(sh) = &mut self.share else { return };
-        if sh.pool.len.load(std::sync::atomic::Ordering::Acquire) == sh.seen {
+        let mode = self.cfg.import;
+        if mode == Import::Off {
             return;
         }
-        let new: Vec<(Cube, usize)> = {
+        let Some(sh) = &mut self.share else { return };
+        let pending = sh.pool.len.load(std::sync::atomic::Ordering::Acquire) != sh.seen;
+        let raises = matches!(mode, Import::Validate | Import::Unchecked);
+        if !pending && (!raises || self.cut_top == self.frames.len()) {
+            return;
+        }
+        let new: Vec<(Cube, usize)> = if pending {
             let v = sh.pool.lemmas.lock().unwrap();
             let new = v[sh.seen..]
                 .iter()
@@ -681,27 +758,101 @@ impl<'g> Ic3<'g> {
                 .collect();
             sh.seen = v.len();
             new
+        } else {
+            Vec::new()
         };
-        // A lemma is only relatively inductive to its publisher's frames.
-        // The convergence proof needs every lemma of level L to be
-        // inductive relative to *our* F_{L-1}, so each import is
-        // re-checked here and added at the highest level where it is.
-        // (Unchecked imports gave wrong "safe" verdicts on a03/a11.)
+        // First what an earlier, lower top cut off, in pool order.
+        if raises && self.cut_top != self.frames.len() {
+            self.cut_top = self.frames.len();
+            for (c, l) in std::mem::take(&mut self.cut) {
+                self.adopt(c, l, false);
+            }
+        }
         for (c, l) in new {
             if ctx.should_stop() {
                 return;
             }
-            let mut lvl = l.min(self.top());
-            while lvl >= 1 && !self.already_blocked(&c, lvl) {
-                if self.relative_inductive(&c, lvl, false).is_ok() {
-                    self.trace_src = "import";
-                    self.add_lemma_quiet(c, lvl);
-                    self.trace_src = "po";
-                    self.stats_imported += 1;
-                    break;
-                }
-                lvl -= 1;
+            self.stats_import_seen += 1;
+            self.adopt(c, l, true);
+        }
+    }
+
+    /// One pool entry (`fresh`) or one raise of an entry we cut before.
+    fn adopt(&mut self, c: Cube, l: usize, fresh: bool) {
+        let mode = self.cfg.import;
+        if l == usize::MAX {
+            // A publisher's standing invariant: inductive on its own, so
+            // it can stand in every frame of ours as well.
+            if matches!(mode, Import::Unchecked | Import::Core)
+                && self.level_of.get(&c) != Some(&usize::MAX)
+            {
+                self.level_of.insert(c.clone(), usize::MAX);
+                self.assume_invariant(vec![c]);
+                self.stats_imported += 1;
             }
+            return;
+        }
+        let target = l.min(self.top());
+        if target < 1 || mode == Import::Core {
+            return;
+        }
+        if mode != Import::Checked && l > target {
+            self.cut.push((c.clone(), l));
+        }
+        if self.level_of.get(&c).is_some_and(|&x| x >= target) {
+            self.stats_import_dup += fresh as usize;
+            return;
+        }
+        if self.already_blocked(&c, target) {
+            return;
+        }
+        if mode == Import::Unchecked {
+            self.trace_src = "import";
+            self.add_lemma_quiet(c, target);
+            self.trace_src = "po";
+            if fresh {
+                self.stats_imported += 1;
+            } else {
+                self.stats_import_raised += 1;
+            }
+            return;
+        }
+        // A lemma is only relatively inductive to its publisher's frames;
+        // re-check it against ours and add it at the highest level where
+        // it holds.
+        let mut lvl = target;
+        while lvl >= 1 && !self.already_blocked(&c, lvl) {
+            self.stats_import_queries += 1;
+            if self.relative_inductive(&c, lvl, false).is_ok() {
+                self.trace_src = "import";
+                self.add_lemma_quiet(c, lvl);
+                self.trace_src = "po";
+                if fresh {
+                    self.stats_imported += 1;
+                } else if lvl == target {
+                    self.stats_import_raised += 1;
+                }
+                break;
+            }
+            if lvl == target {
+                if fresh {
+                    self.stats_import_first_fail += 1;
+                } else {
+                    self.stats_import_raise_fail += 1;
+                }
+                if self.stats_import_first_fail + self.stats_import_raise_fail == 1
+                    && std::env::var_os("INFORMAL_IC3_STATS").is_some()
+                {
+                    eprintln!(
+                        "import: first lemma to fail its re-check ({}): level {l} (ours {target}, top {}), {} literals, entry {} of the pool",
+                        if fresh { "new" } else { "raise" },
+                        self.top(),
+                        c.len(),
+                        self.stats_import_seen
+                    );
+                }
+            }
+            lvl -= 1;
         }
     }
 
@@ -747,6 +898,10 @@ impl<'g> Ic3<'g> {
             for i in 1..=level {
                 self.solvers[i].sat.add_clause(&clause);
             }
+        }
+        let held = self.level_of.entry(cube.clone()).or_insert(0);
+        if *held < level {
+            *held = level;
         }
         self.frames[level].push(cube);
         self.stats_lemmas += 1;
@@ -1406,6 +1561,11 @@ impl<'g> Ic3<'g> {
                     stay.push(c);
                     continue;
                 }
+                if self.level_of.get(&c).is_some_and(|&l| l > i) {
+                    // The same cube is held higher up (an import, a
+                    // promotion or a re-derivation): this copy is stale.
+                    continue;
+                }
                 let pushed = self.push_lemma(&c, i, ctx);
                 if !pushed && c.iter().any(|&l| self.is_aux(l)) {
                     // A group moves only as a whole; when it cannot, its
@@ -1419,6 +1579,7 @@ impl<'g> Ic3<'g> {
                     ));
                 }
                 if pushed {
+                    self.level_of.insert(c.clone(), i + 1);
                     self.publish(&c, i + 1);
                     let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
                     self.add_frame_clause(i + 1, &clause);
@@ -1675,6 +1836,13 @@ impl<'g> Ic3<'g> {
         }
         let had: std::collections::HashSet<&Cube> = self.inf.iter().collect();
         let new: Vec<Cube> = inv.iter().filter(|c| !had.contains(c)).cloned().collect();
+        for c in &new {
+            self.level_of.insert(c.clone(), usize::MAX);
+            if self.cfg.import != Import::Checked {
+                // Other workers' frames must hold what ours rely on.
+                self.publish(c, usize::MAX);
+            }
+        }
         self.assume_invariant(new);
     }
 

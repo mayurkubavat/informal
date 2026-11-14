@@ -1462,11 +1462,18 @@ impl Engine for Ic3Mt {
                         }
                         if stats {
                             eprintln!(
-                                "informal-ic3-mt[{id}]: {:?} frames {} lemmas {} imported {}",
+                                "informal-ic3-mt[{id}]: {:?} frames {} lemmas {} imported {} of {} seen ({} same cube held, {} raised; {} import queries of {} queries; failed at their level: {} new, {} raises)",
                                 v,
                                 ic3.depth(),
                                 ic3.stats_lemmas,
-                                ic3.stats_imported
+                                ic3.stats_imported,
+                                ic3.stats_import_seen,
+                                ic3.stats_import_dup,
+                                ic3.stats_import_raised,
+                                ic3.stats_import_queries,
+                                ic3.stats_queries,
+                                ic3.stats_import_first_fail,
+                                ic3.stats_import_raise_fail
                             );
                         }
                         v

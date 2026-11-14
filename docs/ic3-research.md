@@ -550,6 +550,42 @@ today).
 
 *Result:* pending.
 
+### H18. The shared lemma pool is a trace: import it without asking (prediction, 2026-11-14)
+
+*Evidence.* The 4-worker IC3 re-proves every lemma it takes from another
+worker, at the lemma's level and then lower until it holds. On x-epic
+a03 (40 s) those re-checks are up to 78% of one worker's SAT queries,
+and thousands of them fail at the lemma's own level (798, 5,642 and
+8,606 on three workers), so the lemma lands lower than its publisher
+had it or not at all.
+
+*Claim.* None of those failures is real. Read as "cube c is blocked in
+frames 1..=l", the pool in publication order is a valid IC3 trace: each
+entry was inductive relative to its publisher's frames, and those held
+only entries that come earlier in the pool. A worker that holds the
+whole prefix, each entry at min(l, its top), holds a valid trace too.
+The failures come from two gaps in what a worker holds. An entry above
+the worker's top is cut to the top and was never raised when the top
+grew, while later entries rely on it at its own level. And lemmas that
+Houdini moved to a publisher's standing invariant were not in the pool.
+
+*Test of the claim.* `INFORMAL_IC3_IMPORT=validate` closes the first
+gap (cut entries are raised when the top grows) and still re-checks
+every import. On a03 the failures at an entry's own level go from
+thousands to 0 on all four workers, for new entries and for raises.
+
+*Prediction (before the seeded run).* `INFORMAL_IC3_IMPORT=unchecked`
+adds each entry at min(l, top) with no query. On a03 in 40 s the
+workers reach a higher frame (measured once: 298 to 350 against 157 to
+270). Seeded hard set, 4-worker IC3, 300 s, 3 seeds, four arms (no
+sharing, checked, unchecked, standing invariants only; the values
+`off`, `checked`, `unchecked`, `core`): unchecked has a
+mean of at least 8 (checked: 7.0), and no verdict is withdrawn by the
+certificate in any arm. If a single certificate fails, the claim is
+wrong somewhere and the mode stays off.
+
+*Result:* pending. The default stays `checked`.
+
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new
   lemma would already have blocked. If that's high, generalising against
