@@ -265,7 +265,8 @@ last result, the ranked list of what the shell should learn next.
   that changes while clk is high makes an edge. A property may be on
   such a clock too (`@(posedge gclk) ...`): it is checked on the values
   the edge sampled, and `$past` counts that clock's edges. A memory
-  written on a computed clock is an error.
+  written on a computed clock works when it has up to 4096 words (its
+  words are registers in the model); a larger one is an error.
   Properties given by command are on the first declared clock unless
   they name their own (`@(posedge clk2) ...`).
 - A latch (`always_latch`, or an `always @*` that does not assign on

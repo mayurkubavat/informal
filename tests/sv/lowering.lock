@@ -13,6 +13,10 @@ both_edges x_data a21e9d4410bd725e lines=128 state=13 input=3 bad=1 constraint=2
 both_edges x_late 795fa3a6c163bab0 lines=128 state=13 input=3 bad=1 constraint=2 justice=0
 both_edges c_one f038fca3ebc7fc4f lines=128 state=13 input=3 bad=1 constraint=2 justice=0
 child_clock a_same b468efc862489e39 lines=31 state=4 input=3 bad=1 constraint=1 justice=0
+command_memory a_written 311dfb6fa4473425 lines=132 state=11 input=9 bad=1 constraint=1 justice=0
+command_memory a_other 6368918e49a5fb19 lines=132 state=11 input=9 bad=1 constraint=1 justice=0
+command_memory a_wrong 06badbe8a9bd038d lines=132 state=11 input=9 bad=1 constraint=1 justice=0
+command_memory c_word d902270823c03ecc lines=132 state=11 input=9 bad=1 constraint=1 justice=0
 command_ranges a_window 15c3e8b39289ebe5 lines=206 state=18 input=4 bad=1 constraint=2 justice=0
 command_ranges a_early 56339f85d77e20e5 lines=206 state=18 input=4 bad=1 constraint=2 justice=0
 command_ranges a_held 01a034d61d835766 lines=206 state=18 input=4 bad=1 constraint=2 justice=0
@@ -39,6 +43,10 @@ gated_clock x_cell_wrong e7ee12b735fe8d73 lines=210 state=27 input=4 bad=1 const
 gated_clock x_same 6a625d253ebf501f lines=210 state=27 input=4 bad=1 constraint=2 justice=0
 gated_clock x_always 37d727081122f826 lines=210 state=27 input=4 bad=1 constraint=2 justice=0
 gated_clock c_differs 88e78ed5057e2985 lines=210 state=27 input=4 bad=1 constraint=2 justice=0
+gated_memory x_read 0f577894708ce0e7 lines=203 state=21 input=7 bad=1 constraint=2 justice=0
+gated_memory x_keep 36ee8385a8f09995 lines=203 state=21 input=7 bad=1 constraint=2 justice=0
+gated_memory x_always 56deb84e51123a72 lines=203 state=21 input=7 bad=1 constraint=2 justice=0
+gated_memory c_two 84f06ca953a3d644 lines=203 state=21 input=7 bad=1 constraint=2 justice=0
 initial_value a_parity 6d277b81b712ea08 lines=15 state=1 input=1 bad=1 constraint=0 justice=0
 latches a_open e89abd7713f6113c lines=126 state=9 input=7 bad=1 constraint=1 justice=0
 latches a_closed 7c861871adae5cfc lines=126 state=9 input=7 bad=1 constraint=1 justice=0
