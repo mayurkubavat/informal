@@ -142,7 +142,11 @@ fn command_properties(
                     None,
                 ),
             };
-            let liveness = matches!(made, Some(Ok(svlang::netlist::Compiled::Liveness(_))));
+            use svlang::netlist::Compiled;
+            let liveness = matches!(
+                made,
+                Some(Ok(Compiled::Liveness(_) | Compiled::CheckAndLiveness(..)))
+            );
             let unsupported = made.and_then(Result::err);
             RtlProperty {
                 name: name.clone(),

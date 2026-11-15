@@ -72,11 +72,16 @@ Supported: `@(posedge clk)` / `@(negedge clk)`, `disable iff (expr)`,
 booleans joined by delays (`a ##1 b ##2 c`, a leading `##N`, ranges
 `##[M:N]`), repetition `[*N]` and `[*M:N]`, sequence `and`, `or`,
 `intersect`, `within`, `throughout` and `first_match`, `|->` and `|=>`,
-`b until c` / `b until_with c` between booleans, `s_eventually b`, and any
-boolean SystemVerilog expression inside, including `$past(x[, n])`,
+`b until c` / `b until_with c` between booleans and their strong forms
+`s_until` / `s_until_with`, `s_eventually b`, `nexttime`, `eventually` and
+`always` with a bound (`nexttime [2] b`, `s_eventually [1:3] b`, `always
+[0:2] b`), and any boolean SystemVerilog expression inside, including `$past(x[, n])`,
 `$rose`, `$fell`, `$stable`, `$changed`.
 
-`s_eventually` is a liveness property: no finite trace violates it. Its
+`s_eventually` is a liveness property: no finite trace violates it. (A
+strong until is both: what has to hold meanwhile is a safety check, and
+its end having to come is liveness; the property is proven when both
+are.) Its
 model line is a Btor2 `justice`, which informal's own engines check as a
 safety property (liveness to safety, `informal_aig::l2s`: a shadow copy of
 the state and a free choice of the step where a loop starts). `proven`
@@ -88,9 +93,8 @@ properties. External engines are not run on them.
 A property given by command is bound at `prove`. Rejected at the command
 itself, with an error naming the construct: a name the top module does
 not have, and the operators the compiler does not take (`[->n]`, `[=n]`,
-`s_until`, `eventually` with a range, `always`, `nexttime`, `not`,
-`strong` / `weak`, `accept_on`). A range that ends at `$` is an error on
-that property at `prove`.
+`not`, `accept_on`, `#-#`). A range that ends at `$`, and `always` with
+no bound inside another operator, are errors on that property at `prove`.
 
 ## Command map
 

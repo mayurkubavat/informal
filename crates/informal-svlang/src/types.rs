@@ -135,7 +135,16 @@ impl Design {
             "first_match",
             "until",
             "until_with",
+            "s_until",
+            "s_until_with",
             "s_eventually",
+            "eventually",
+            "nexttime",
+            "s_nexttime",
+            "always",
+            "s_always",
+            "strong",
+            "weak",
         ];
         let prefix = format!("{top}.");
         // Signals, plus instance names (the start of a hierarchical name).

@@ -1194,27 +1194,10 @@ fn target_name(name: &str) -> String {
 
 /// Operators the front end's property compiler does not take, checked
 /// when a property is given so that the command fails and not the prove.
-/// (It takes bounded sequences, `until`, `until_with` and `s_eventually`;
-/// a range that ends at `$` is found when it binds the property.)
-const NOT_COMPILED: &[&str] = &[
-    "[->",
-    "[=",
-    "[+]",
-    "s_until_with",
-    "s_until",
-    "eventually",
-    "s_nexttime",
-    "nexttime",
-    "s_always",
-    "always",
-    "strong(",
-    "weak(",
-    "accept_on",
-    "reject_on",
-    "#-#",
-    "#=#",
-    "not ",
-];
+/// (It takes bounded sequences, the `until` family, `s_eventually`, and
+/// `nexttime`, `eventually` and `always` with a bound; a range that ends
+/// at `$` where it may not is found when it binds the property.)
+const NOT_COMPILED: &[&str] = &["[->", "[=", "accept_on", "reject_on", "#-#", "#=#", "not "];
 
 /// `Err` for a property text that is empty or uses one of [`NOT_COMPILED`].
 fn check_operators(expr: &str) -> Result<(), String> {
