@@ -282,8 +282,8 @@ the single-developer setup of that time.
   the design); both edges of one clock are modelled with two steps per
   cycle; latches are transparent within a step (loops through open
   latches are rejected); several declared top-level clocks are driven by
-  the model (`clock -factor -phase`), divided and gated clocks are
-  rejected;
+  the model (`clock -factor -phase`), and registers on divided and gated
+  clocks follow them (a computed clock is read once per model step);
   `$anyconst` / `$anyseq` as functions are unsupported (the attributes
   work); lowering speed on large designs is not measured yet.
 

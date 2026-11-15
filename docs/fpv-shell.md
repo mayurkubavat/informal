@@ -235,9 +235,18 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   -factor 2` make `clk2` twice as slow as `clk`, and `-phase N` moves a
   clock's wave N model steps later (0 by default, so all clocks rise
   together for the first time). Every clock the design uses must be
-  declared and be a top-level input; a clock computed in the design
-  (divided or gated) is an error, as is both edges of such a clock. The
-  reset is held until every declared clock has had a whole period.
+  declared and be a top-level input. The reset is held until every
+  declared clock has had a whole period.
+- A register may be on a clock computed in the design (a gated clock,
+  also through a clock-gating latch, or a divided one) once a clock is
+  declared. Such a clock is read once in every model step, like any
+  signal: the register takes the data of the step before when its clock
+  has its edge between that step and this one. So a register on a
+  divided clock sees the other registers as they were before the
+  dividing edge (a simulator shows them after it), a plain `clk & en`
+  gate opens with the value `en` has once clk is high, and an enable
+  that changes while clk is high makes an edge. Memory writes, `$past`
+  and its relatives, and assertions on a computed clock are an error.
   Properties given by command are on the first declared clock unless
   they name their own (`@(posedge clk2) ...`).
 - A latch (`always_latch`, or an `always @*` that does not assign on
