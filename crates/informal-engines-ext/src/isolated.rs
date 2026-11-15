@@ -238,6 +238,7 @@ impl Engine for Isolated {
             Some(b) => {
                 let mut c = Command::new("systemd-run");
                 c.args(["--user", "--scope", "--quiet", "--collect"])
+                    .args(crate::rdev_slice())
                     // Above the child's own budget, so that stops it first.
                     .arg(format!("-pMemoryMax={}M", b / 1_000_000 / 10 * 12))
                     .arg("-pMemorySwapMax=0")

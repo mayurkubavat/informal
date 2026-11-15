@@ -187,6 +187,22 @@ fn scopes_available() -> bool {
     })
 }
 
+/// `--slice=rdev.slice` when that user unit exists (the remote-development kit's job slice), so the box's job
+/// queue sees an engine's scope and counts it. Inside a queue job the scope inherits `$RDEV_JOB_ID`, which tells
+/// the queue the scope is part of that job.
+pub(crate) fn rdev_slice() -> Option<&'static str> {
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    OK.get_or_init(|| {
+        Command::new("systemctl")
+            .args(["--user", "cat", "rdev.slice"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+    .then_some("--slice=rdev.slice")
+}
+
 /// A preprocessed model held in memory for a child process.
 struct Staged {
     path: String,
@@ -319,6 +335,7 @@ impl Engine for ExternalEngine {
             Some(mb) => {
                 let mut c = Command::new("systemd-run");
                 c.args(["--user", "--scope", "--quiet", "--collect"])
+                    .args(rdev_slice())
                     .arg(format!("-pMemoryMax={mb}M"))
                     .arg("-pMemorySwapMax=0")
                     .arg(&self.spec.program);
