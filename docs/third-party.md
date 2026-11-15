@@ -34,6 +34,7 @@ in the table so far: no gate step runs them yet.
 | AIGER tools | MIT | `039ec1a` (2026-01-08, master) | github.com/arminbiere/aiger | Tests only: `aigsim` replays counterexamples, `aigsplit` and `aigtocnf` prepare Certifaiger's conditions; its library is compiled into Certifaiger | `INFORMAL_TOOLS_DIR/aiger/<tool>`, or `AIGSIM`, `AIGSPLIT`, `AIGTOCNF` |
 | Kissat | MIT | `8af8e56` = `rel-4.0.4` | github.com/arminbiere/kissat | Tests only: the SAT solver for Certifaiger's conditions, as in Certifaiger's own scripts | `INFORMAL_TOOLS_DIR/kissat/build/kissat`, or `KISSAT` |
 | btor2tools (BtorSim) | MIT | `e6941e3` (2026-10-21, master) | github.com/Boolector/btor2tools | Tests only: `scripts/btorsim_replay.py` replays the counterexamples of `tests/sv` in the gate; never linked or shipped | `INFORMAL_TOOLS_DIR/btor2tools/build/bin/btorsim`, or `BTORSIM` |
+| AIGER tools (aigfuzz) | MIT | `039ec1a` (2026-01-08, master) | github.com/arminbiere/aiger | Tests only: `scripts/fuzz.py` makes random models from it (nightly run); never linked or shipped | `INFORMAL_TOOLS_DIR/aiger/aigfuzz`, or `AIGFUZZ` (not in `tools.lock`: the gate does not use it) |
 
 How each one reaches InFormal: CaDiCaL and Bitwuzla are linked
 statically; rIC3 and ABC run as separate programs; svlang is compiled in

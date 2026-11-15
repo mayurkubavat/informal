@@ -17,6 +17,10 @@
 #      (scripts/inhouse_sample.sh): a verdict that contradicts the
 #      published answer fails the run. Needs the models, which are not in
 #      git: $HWMCC_DIR, default ~/Silicon/DV/git/InFormal/bench/hwmcc24.
+#   4. 200 random AIGER models (scripts/fuzz.py, seeded by the date), each
+#      checked by every engine: two opposite verdicts, or an in-house
+#      verdict whose certificate check fails, fail the run and are kept,
+#      shrunk, in target/fuzz/failures.
 #
 # Every step runs even if an earlier one failed. The report goes to
 # ~/.local/state/informal/nightly/<date>.log; its last line, also printed,
@@ -106,6 +110,14 @@ failed=0
         else
             results+=("hwmcc sample FAIL (bench/inhouse-sample60-$tag.log in $land)"); failed=1
         fi
+    fi
+
+    echo; echo "== 4. fuzzing: random AIGER models, every engine, compared"
+    if cargo build --locked --release -q -p informal-cli \
+        && line=$(python3 -I scripts/fuzz.py --count 200 --seed "$(date +%Y%m%d)000" | tail -n 1); then
+        echo "$line"; results+=("${line,,}")
+    else
+        echo "$line"; results+=("fuzz FAIL (target/fuzz/failures in $land)"); failed=1
     fi
 } >"$report" 2>&1
 
