@@ -356,7 +356,10 @@ def run_informal(c: dict, config: str, out: Path, args) -> dict:
     script.write_text("\n".join(lines) + "\n")
     cmd = [str(INFORMAL), "shell", str(script), "--flavor", "jg", "--workdir", str(out / "work"),
            "--engines", str(REPO / "config/engines.toml")]
-    r = run_program(cmd, REPO, out / "log.txt", args.timeout, None, 0)
+    # InFormal's limit is per property, enforced by the tool; the limit on
+    # the whole run is only there to end a hang. A design with several
+    # undecided properties must not be cut off before it reports them.
+    r = run_program(cmd, REPO, out / "log.txt", max(args.timeout, args.informal_timeout), None, 0)
     log = (out / "log.txt").read_text(errors="replace")
     props = []
     elaborated = False
@@ -642,7 +645,8 @@ def cmd_run(args) -> None:
     load = os.getloadavg()[0]
     meta = {"record": "run", "id": run_id, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "purpose": args.purpose, "tools": tool_versions(), "timeout_s": args.timeout,
-            "prop_timeout_s": args.prop_timeout, "depth": args.depth, "mem_gb": args.mem_gb,
+            "prop_timeout_s": args.prop_timeout, "informal_timeout_s": args.informal_timeout,
+            "depth": args.depth, "mem_gb": args.mem_gb,
             "load_at_start": round(load, 1), "cpus": os.cpu_count(), "nice": os.nice(0),
             "machine": os.environ.get("COMPARE_MACHINE", "")}
     if args.purpose == "timing" and load > 1.0:
@@ -800,7 +804,8 @@ def cmd_report(args) -> None:
     w(f"- Run `{meta.get('id')}` ({meta.get('purpose')}), started {meta.get('started')}; "
       f"machine load at start {meta.get('load_at_start')} on {meta.get('cpus')} CPUs, priority (nice) {meta.get('nice')}.")
     w(f"- InFormal `{t.get('informal')}`; {t.get('sby')}; {t.get('yosys')} (OSS CAD Suite {t.get('oss-cad-suite')}); {t.get('ebmc')}.")
-    w(f"- Limits: {meta.get('timeout_s')} s per tool run, {meta.get('prop_timeout_s')} s per property in InFormal, "
+    w(f"- Limits: {meta.get('timeout_s')} s per SymbiYosys or EBMC run (one configuration, all properties), "
+      f"{meta.get('prop_timeout_s')} s per property in InFormal, "
       f"depth {meta.get('depth')} for the bounded engines of SymbiYosys and EBMC.")
     if meta.get("purpose") != "timing":
         w("- **The times in this run are not measurements**: the machine was busy and the tools ran at low priority. "
@@ -977,6 +982,8 @@ def main() -> None:
     p.add_argument("--configs", nargs="+")
     p.add_argument("--timeout", type=float, default=300, help="seconds per tool run")
     p.add_argument("--prop-timeout", type=float, default=60, help="seconds per property (InFormal)")
+    p.add_argument("--informal-timeout", type=float, default=1800,
+                   help="seconds for a whole InFormal run (all properties); only ends a hang")
     p.add_argument("--depth", type=int, default=20, help="bound for the bounded engines (SymbiYosys's default)")
     p.add_argument("--mem-gb", type=float, default=8, help="address-space cap for SymbiYosys and EBMC runs")
     p.add_argument("--repeat", type=int, default=1)

@@ -72,7 +72,12 @@ in `cases.toml` gets none in any flow.
 `config/engines.toml`, which includes the external checkers rIC3 and ABC
 when they are installed; `inhouse` is InFormal's own engines only. A
 property's verdict is whatever the tool reports. The per-property time
-limit is `--prop-timeout` (60 s).
+limit is `--prop-timeout` (60 s). The limits are not the same shape as
+the other tools': SymbiYosys and EBMC get `--timeout` (120 s in the
+recorded run) for one configuration with all the design's properties,
+InFormal gets its limit for each property. A design with many properties
+therefore gives InFormal more total time; the run file has the time each
+run took.
 
 **SymbiYosys.** A design that ships with its own `.sby` file (the
 SymbiYosys examples, common_cells) is run with that file, unchanged, one
