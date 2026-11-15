@@ -19,6 +19,16 @@ jobs=${CARGO_BUILD_JOBS:-$(nproc)}
 
 manifest() { grep -v '^\s*\(#\|$\)' tools.lock; }
 
+# The tool's artifact, or "" if it is not built. A path under a Debian
+# multiarch directory (install/lib/x86_64-linux-gnu) is also looked for
+# without it, where macOS and other systems install.
+built() {
+    local dir=$1 artifact=$2
+    if [ -e "$dir/$artifact" ]; then echo "$dir/$artifact"
+    elif [ -e "$dir/${artifact/\/x86_64-linux-gnu/}" ]; then echo "$dir/${artifact/\/x86_64-linux-gnu/}"
+    fi
+}
+
 # The commit the checkout is at, or a word saying why there is none.
 at() {
     if [ ! -d "$tools/$1/.git" ]; then echo "missing"; return; fi
@@ -63,24 +73,36 @@ build() {
     git -C "$dir" -c advice.detachedHead=false checkout -q "$commit"
     echo "tools: building $name at $commit in $dir"
     case "$name" in
-        bitwuzla) (cd "$dir" && ./configure.py --static --prefix "$dir/install" && cd build && meson compile -j "$jobs" && meson install) ;;
+        bitwuzla)
+            # Its meson build downloads CaDiCaL and mimalloc archives; where
+            # only git reaches GitHub, make them from git (hash-checked).
+            python3 -I scripts/wrap_prefill.py "$dir" cadical mimalloc
+            (cd "$dir" && ./configure.py --static --prefix "$dir/install" && cd build && meson compile -j "$jobs" && meson install) ;;
         cadical) (cd "$dir" && ./configure -fPIC && make -j "$jobs") ;;
-        rIC3) (cd "$dir" && cargo build --release -j "$jobs") && ln -sf "$dir/$artifact" "$HOME/.local/bin/ric3" ;;
-        abc) make -C "$dir" -j "$jobs" ABC_USE_NO_READLINE=1 abc && ln -sf "$dir/$artifact" "$HOME/.local/bin/abc" ;;
+        rIC3) (cd "$dir" && cargo build --release -j "$jobs") && mkdir -p "$HOME/.local/bin" && ln -sf "$dir/$artifact" "$HOME/.local/bin/ric3" ;;
+        abc) make -C "$dir" -j "$jobs" ABC_USE_NO_READLINE=1 abc && mkdir -p "$HOME/.local/bin" && ln -sf "$dir/$artifact" "$HOME/.local/bin/abc" ;;
         btor2tools) (cd "$dir" && ./configure.sh && cd build && make -j "$jobs") ;;
         aiger) (cd "$dir" && ./configure.sh && make -j "$jobs" aigsim aigsplit aigtocnf aigfuzz) ;;
         certifaiger)
             # One source file and the AIGER library; its own `make` would
             # also download the tools around it.
             [ -f "$tools/aiger/aiger.c" ] || { echo "tools: certifaiger needs aiger first (scripts/tools.sh build aiger)" >&2; exit 1; }
-            (cd "$dir" && mkdir -p bin && g++ -std=c++23 -O2 -DNDEBUG -DVERSION='"10.4.1"' \
-                -DGITID="\"$(git -C "$dir" rev-parse --short HEAD)\"" -I "$tools/aiger" \
-                -x c++ src/certifaiger.cpp -x c "$tools/aiger/aiger.c" -o bin/certifaiger) ;;
+            # aiger.c compiled on its own as C, and its directory searched only
+            # for quoted includes: on a case-insensitive file system (macOS)
+            # -I would make <version> find aiger's VERSION file.
+            (cd "$dir" && mkdir -p bin && cc -O2 -DNDEBUG -c "$tools/aiger/aiger.c" -o bin/aiger.o \
+                && c++ -std=c++23 -O2 -DNDEBUG -DVERSION='"10.4.1"' \
+                -DGITID="\"$(git -C "$dir" rev-parse --short HEAD)\"" -iquote "$tools/aiger" \
+                src/certifaiger.cpp bin/aiger.o -o bin/certifaiger) ;;
         kissat) (cd "$dir" && ./configure && make -j "$jobs") ;;
         *) echo "tools: no build steps for $name" >&2; exit 2 ;;
     esac
-    [ -e "$dir/$artifact" ] || { echo "tools: built $name but $dir/$artifact is missing" >&2; exit 1; }
+    [ -n "$(built "$dir" "$artifact")" ] || { echo "tools: built $name but $dir/$artifact is missing" >&2; exit 1; }
     echo "tools: $name built; rebuild informal (cargo build) if it links it"
+    case "$name:$PATH:" in
+        rIC3:*":$HOME/.local/bin:"*|abc:*":$HOME/.local/bin:"*) ;;
+        rIC3:*|abc:*) echo "tools: put ~/.local/bin on PATH: the gate runs ric3 and abc from there" ;;
+    esac
 }
 
 case "${1:-}" in

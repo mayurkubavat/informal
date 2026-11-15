@@ -50,9 +50,15 @@ arrays at bit level, VHDL, coverage and other apps.
 Tested on Ubuntu 26.04 (x86-64). macOS builds too (`docs/engines.md` has
 the differences).
 
-1. Install the prerequisites: a stable Rust toolchain from
-   [rustup](https://rustup.rs) (1.87 or newer), a C++ compiler, and the
-   Tcl 8.6 development library.
+On a fresh Debian or Ubuntu machine, `scripts/bootstrap.sh --apt` does all
+of this and more: the system packages, the pinned Rust, every tool of
+`tools.lock` (Bitwuzla, CaDiCaL, rIC3, ABC and the checkers), the UI
+packages, and then the gate. The steps below are the minimum for the
+in-house engines.
+
+1. Install the prerequisites: [rustup](https://rustup.rs) (it installs the
+   Rust version that `rust-toolchain.toml` pins, now 1.99.1), a C++
+   compiler, and the Tcl 8.6 development library.
 
    ```sh
    sudo apt install build-essential tcl8.6-dev      # Ubuntu

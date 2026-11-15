@@ -43,6 +43,17 @@ Their source is not in this repository.
 System packages (Ubuntu 26.04): `tcl8.6-dev` 8.6.17 (Tcl license, BSD-style; crate `informal-tcl`),
 meson (Bitwuzla build), and for the desktop app webkit2gtk-4.1, gtk3,
 libsoup3 and librsvg2 dev packages. Yosys is no longer used (D14).
+`scripts/bootstrap.sh --apt` installs the Debian/Ubuntu packages (it also
+needs `libgmp-dev`, `libmpfr-dev`, `meson`, `ninja-build` and `cmake` for
+Bitwuzla) and builds everything of `tools.lock`. Where only git reaches
+GitHub, `scripts/wrap_prefill.py` makes Bitwuzla's CaDiCaL and mimalloc
+archives from git, checked against the hashes in Bitwuzla's wrap files.
+
+macOS (MacBook, arm64): Homebrew has no `tcl-tk@8` any more; point
+`INFORMAL_TCL_LIB_DIR` at a Tcl 8.6 library (8.6.15 works). GMP needs
+`RUSTFLAGS="-L /opt/homebrew/lib"`. Bitwuzla installs its library in
+`install/lib`, not `install/lib/x86_64-linux-gnu`, so `scripts/tools.sh
+check` reports it missing there although the build finds it.
 
 Not installed: Pono and BtorMC (their `engines.toml` entries are
 unchecked), Surfer (the app's trace hand-off hides itself without it).
