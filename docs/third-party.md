@@ -19,8 +19,6 @@ tool at another commit, not built, or not the `ric3` / `abc` on `PATH`
 fails the gate. `scripts/tools.sh build <name>` checks out the pinned commit
 and builds it with the steps below. The table repeats the commits for
 reading; when a pin moves, change both.
-The certificate checkers (Certifaiger, the AIGER tools, Kissat) are only
-in the table so far: no gate step runs them yet.
 
 | Tool | License | Commit | Upstream | Used for | Found through |
 | --- | --- | --- | --- | --- | --- |

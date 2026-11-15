@@ -173,6 +173,19 @@ elif [ "$replay" != 0 ]; then
     exit 1
 fi
 
+# Every proof and counterexample of the in-house engines on tests/models,
+# confirmed from its certificate by Certifaiger and aigsim, which share no
+# code with InFormal (docs/certificates.md).
+step "certificates (Certifaiger, aigsim)"
+cert=0
+python3 -I scripts/certificate_check.py --models tests/models --quiet \
+    --expect invariant,k-induction,two-step,trace || cert=$?
+if [ "$cert" = 2 ] && [ "$strict" = 0 ]; then
+    echo "skipped: no certificate checkers"
+elif [ "$cert" != 0 ]; then
+    exit 1
+fi
+
 step "ui: tsc and vitest"
 (cd ui && npx --no-install tsc --noEmit && npx --no-install vitest run)
 

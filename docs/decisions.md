@@ -591,4 +591,3 @@ to try.
     so the Btor2 reader and bit-blaster stay trusted there, and
     liveness to safety for a justice property.
   - External engines' verdicts (rIC3, ABC) carry no certificate.
-  - The checkers are not in `tools.lock` and no gate step runs them yet.

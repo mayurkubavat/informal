@@ -11,3 +11,6 @@ cadical     c607304   https://github.com/arminbiere/cadical      build/libcadica
 rIC3        4d63899   https://github.com/gipsyh/rIC3             target/release/ric3
 abc         77875a3b6 https://github.com/berkeley-abc/abc        abc
 btor2tools  e6941e3   https://github.com/Boolector/btor2tools    build/bin/btorsim
+aiger       039ec1a   https://github.com/arminbiere/aiger        aigsim
+certifaiger b540f0c   https://github.com/Froleyks/certifaiger    bin/certifaiger
+kissat      8af8e56   https://github.com/arminbiere/kissat       build/kissat

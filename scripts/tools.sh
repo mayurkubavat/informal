@@ -68,6 +68,15 @@ build() {
         rIC3) (cd "$dir" && cargo build --release -j "$jobs") && ln -sf "$dir/$artifact" "$HOME/.local/bin/ric3" ;;
         abc) make -C "$dir" -j "$jobs" ABC_USE_NO_READLINE=1 abc && ln -sf "$dir/$artifact" "$HOME/.local/bin/abc" ;;
         btor2tools) (cd "$dir" && ./configure.sh && cd build && make -j "$jobs") ;;
+        aiger) (cd "$dir" && ./configure.sh && make -j "$jobs" aigsim aigsplit aigtocnf) ;;
+        certifaiger)
+            # One source file and the AIGER library; its own `make` would
+            # also download the tools around it.
+            [ -f "$tools/aiger/aiger.c" ] || { echo "tools: certifaiger needs aiger first (scripts/tools.sh build aiger)" >&2; exit 1; }
+            (cd "$dir" && mkdir -p bin && g++ -std=c++23 -O2 -DNDEBUG -DVERSION='"10.4.1"' \
+                -DGITID="\"$(git -C "$dir" rev-parse --short HEAD)\"" -I "$tools/aiger" \
+                -x c++ src/certifaiger.cpp -x c "$tools/aiger/aiger.c" -o bin/certifaiger) ;;
+        kissat) (cd "$dir" && ./configure && make -j "$jobs") ;;
         *) echo "tools: no build steps for $name" >&2; exit 2 ;;
     esac
     [ -e "$dir/$artifact" ] || { echo "tools: built $name but $dir/$artifact is missing" >&2; exit 1; }
