@@ -297,6 +297,7 @@ mod tests {
                         verdict: Verdict::Unknown { reason },
                         wall_ms: t.elapsed().as_millis(),
                         witness: None,
+                        certificate: None,
                     });
                 }
                 std::thread::sleep(Duration::from_millis(5));
@@ -306,6 +307,7 @@ mod tests {
                 verdict: self.verdict.clone(),
                 wall_ms: t.elapsed().as_millis(),
                 witness: None,
+                certificate: None,
             })
         }
     }

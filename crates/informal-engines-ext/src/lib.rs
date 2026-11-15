@@ -435,6 +435,7 @@ impl Engine for ExternalEngine {
             verdict,
             wall_ms: start.elapsed().as_millis(),
             witness,
+            certificate: None,
         })
     }
 }

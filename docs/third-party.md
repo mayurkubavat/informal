@@ -19,6 +19,8 @@ tool at another commit, not built, or not the `ric3` / `abc` on `PATH`
 fails the gate. `scripts/tools.sh build <name>` checks out the pinned commit
 and builds it with the steps below. The table repeats the commits for
 reading; when a pin moves, change both.
+The certificate checkers (Certifaiger, the AIGER tools, Kissat) are only
+in the table so far: no gate step runs them yet.
 
 | Tool | License | Commit | Upstream | Used for | Found through |
 | --- | --- | --- | --- | --- | --- |
@@ -28,6 +30,9 @@ reading; when a pin moves, change both.
 | CaDiCaL (standalone) | MIT | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
 | rIC3 | BSD-3-Clause (LICENSE file; its Cargo.toml says GPL-3.0) | `4d63899` (`v1.5.2-117`) | github.com/gipsyh/rIC3 | External engine and soundness oracle (`ric3`, `ric3-ic3`, `ric3-bmc`) | `~/.local/bin/ric3` symlink |
 | ABC | BSD-style (UC Berkeley) | `77875a3b6` (2026-11-01, master) | github.com/berkeley-abc/abc | External engines `abc-pdr`, `abc-pdr-pp`, `abc-bmc3` | `~/.local/bin/abc` symlink |
+| Certifaiger | MIT | `b540f0c` (2026-11-05, main; version 10.4.1) | github.com/Froleyks/certifaiger | Tests only: checks the witness circuits that `informal check --certificate` writes for proofs (`scripts/certificate_check.py`, D18); never linked or shipped | `INFORMAL_TOOLS_DIR/certifaiger/bin/certifaiger`, or `CERTIFAIGER` |
+| AIGER tools | MIT | `039ec1a` (2026-01-08, master) | github.com/arminbiere/aiger | Tests only: `aigsim` replays counterexamples, `aigsplit` and `aigtocnf` prepare Certifaiger's conditions; its library is compiled into Certifaiger | `INFORMAL_TOOLS_DIR/aiger/<tool>`, or `AIGSIM`, `AIGSPLIT`, `AIGTOCNF` |
+| Kissat | MIT | `8af8e56` = `rel-4.0.4` | github.com/arminbiere/kissat | Tests only: the SAT solver for Certifaiger's conditions, as in Certifaiger's own scripts | `INFORMAL_TOOLS_DIR/kissat/build/kissat`, or `KISSAT` |
 | btor2tools (BtorSim) | MIT | `e6941e3` (2026-10-21, master) | github.com/Boolector/btor2tools | Tests only: `scripts/btorsim_replay.py` replays the counterexamples of `tests/sv` in the gate; never linked or shipped | `INFORMAL_TOOLS_DIR/btor2tools/build/bin/btorsim`, or `BTORSIM` |
 
 How each one reaches InFormal: CaDiCaL and Bitwuzla are linked
@@ -62,6 +67,16 @@ cd cadical && ./configure -fPIC && make -j16 && cd ..
 
 # btor2tools (BtorSim, for the gate's witness replay)
 git clone https://github.com/Boolector/btor2tools && (cd btor2tools && ./configure.sh && cd build && make)
+
+# The certificate checkers (for scripts/certificate_check.py): the AIGER
+# tools, Certifaiger compiled against their library, and Kissat.
+# Certifaiger's own `make` builds the same binary and also downloads the
+# tools around it; this compiles its one source file with what is here.
+git clone https://github.com/arminbiere/aiger && (cd aiger && ./configure.sh && make aigsim aigsplit aigtocnf)
+git clone https://github.com/Froleyks/certifaiger && (cd certifaiger && mkdir -p bin && \
+  g++ -std=c++23 -O2 -DNDEBUG -DVERSION='"10.4.1"' -DGITID="\"$(git rev-parse --short HEAD)\"" \
+      -I ../aiger -x c++ src/certifaiger.cpp -x c ../aiger/aiger.c -o bin/certifaiger)
+git clone https://github.com/arminbiere/kissat && (cd kissat && ./configure && make)
 
 # rIC3 (stable Rust)
 cd rIC3 && cargo build --release && cd ..

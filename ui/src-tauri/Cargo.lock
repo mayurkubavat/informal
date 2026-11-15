@@ -1554,6 +1554,8 @@ dependencies = [
  "informal-engine",
  "informal-ir",
  "informal-sat",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

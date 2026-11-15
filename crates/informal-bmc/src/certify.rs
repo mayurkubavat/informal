@@ -281,7 +281,7 @@ impl Enc {
 /// inits. Everything outside is unconstrained by the queries, so leaving
 /// it out changes no answer (the big CPU models have many unrelated
 /// properties' logic in one file).
-fn cone(g: &Aig, inv: &[Clause]) -> Vec<bool> {
+pub(crate) fn cone(g: &Aig, inv: &[Clause]) -> Vec<bool> {
     let index: HashMap<u32, usize> = g
         .latches
         .iter()
@@ -420,6 +420,21 @@ pub fn check_kind(
     new_sat: &dyn Fn() -> Box<dyn Sat>,
     stop: &dyn Fn() -> bool,
 ) -> Result<(), String> {
+    check_kind_paths(g, inv, true, k, new_sat, stop).map(|_| ())
+}
+
+/// [`check_kind`], returning how many pairs of states the step had to be
+/// told to differ on: 0 means the proof holds without the simple-path
+/// condition. Without `simple_path` no such constraint is ever added, so
+/// the step must hold as it is (plain k-induction).
+pub fn check_kind_paths(
+    g: &Aig,
+    inv: &[Clause],
+    simple_path: bool,
+    k: usize,
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+    stop: &dyn Fn() -> bool,
+) -> Result<usize, String> {
     if k == 0 {
         return Err("k-induction at depth 0".into());
     }
@@ -467,15 +482,18 @@ pub fn check_kind(
         e.sat.add_clause(&[-bad]);
     }
     let bad = e.any_bad(g, &frames[k]);
+    let mut differ = 0;
     loop {
         if stop() {
             return Err("step check stopped".into());
         }
         match e.sat.solve(&[bad]) {
-            Answer::Unsat => return Ok(()),
+            Answer::Unsat => return Ok(differ),
             Answer::Unknown => return Err("step check stopped".into()),
+            Answer::Sat if !simple_path => return Err("step fails".into()),
             Answer::Sat => {}
         }
+        differ += 1;
         // Two equal states on the path: require them to differ.
         let val = |f: &Frame, e: &Enc| -> Vec<bool> {
             reps.iter().map(|&r| e.sat.value(f.lit(r))).collect()
@@ -571,6 +589,16 @@ pub fn check_unsafe(
     new_sat: &dyn Fn() -> Box<dyn Sat>,
     stop: &dyn Fn() -> bool,
 ) -> Result<(), String> {
+    find_unsafe(g, depth, new_sat, stop).map(|_| ())
+}
+
+/// [`check_unsafe`], returning the trace it found and replayed.
+pub fn find_unsafe(
+    g: &Aig,
+    depth: usize,
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+    stop: &dyn Fn() -> bool,
+) -> Result<Trace, String> {
     let cone = cone(g, &[]);
     let mut e = Enc::new(new_sat());
     let mut frames = vec![e.frame(g, &cone, None)];
@@ -615,12 +643,14 @@ pub fn check_unsafe(
             })
             .collect(),
     };
-    replay_unsafe(g, depth, &trace)
+    replay_unsafe(g, depth, &trace)?;
+    Ok(trace)
 }
 
 /// A counterexample on the model as loaded: the value of every latch in
 /// the initial state (used only for latches whose init is not constant)
 /// and of every input in each frame, by index.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trace {
     pub init: Vec<bool>,
     pub inputs: Vec<Vec<bool>>,
@@ -629,6 +659,12 @@ pub struct Trace {
 /// Simulate `trace` through `g` for frames 0..=depth: initial values and
 /// constraints must hold, and some bad output in frame `depth`.
 pub fn replay_unsafe(g: &Aig, depth: usize, trace: &Trace) -> Result<(), String> {
+    replay_unsafe_bad(g, depth, trace).map(|_| ())
+}
+
+/// [`replay_unsafe`], returning the index of the first bad output that is
+/// true in frame `depth`.
+pub fn replay_unsafe_bad(g: &Aig, depth: usize, trace: &Trace) -> Result<usize, String> {
     if trace.inputs.len() <= depth || trace.init.len() != g.latches.len() {
         return Err("unsafe fails: trace has the wrong shape".into());
     }
@@ -691,11 +727,10 @@ pub fn replay_unsafe(g: &Aig, depth: usize, trace: &Trace) -> Result<(), String>
             state[i] = lv(&v, l.next);
         }
     }
-    if g.bads.iter().any(|&b| lv(&v, b)) {
-        Ok(())
-    } else {
-        Err("unsafe fails: simulated trace does not reach a bad state".into())
-    }
+    g.bads
+        .iter()
+        .position(|&b| lv(&v, b))
+        .ok_or_else(|| "unsafe fails: simulated trace does not reach a bad state".into())
 }
 
 #[cfg(test)]

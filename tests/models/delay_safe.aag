@@ -1,0 +1,11 @@
+aag 7 1 4 0 2 1
+2
+4 12
+6 4
+8 6
+10 8
+14
+12 2 5
+14 10 8
+c
+a = in & !a, then b, c, d each take the latch before; bad = d & c: safe (a is never set twice in a row), 3-inductive and not 2-inductive

@@ -637,6 +637,8 @@ dependencies = [
  "informal-engine",
  "informal-ir",
  "informal-sat",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -653,6 +655,7 @@ dependencies = [
  "informal-engines-ext",
  "informal-fpv",
  "informal-ir",
+ "informal-sat",
  "informal-svlang",
  "informal-tcl",
  "serde_json",

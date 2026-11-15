@@ -3,9 +3,11 @@
 //!   informal info  <model.btor2>                      parse, validate, print features
 //!   informal fmt   <model.btor2>                      print canonical Btor2
 //!   informal check <model> [--engines F] [--timeout S]  run the portfolio
+//!                  [--certificate DIR]                   and write a checkable certificate
 //!   informal simp  <model>                          bit-level model before / after preprocessing
 //!   informal lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (svlang)
 //!   informal shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
+//!                  [--certificate DIR]                   and a certificate per property
 //!   informal reduce <model.aig> (--disagree A,B | --test CMD) [-o small.aag]
 //!   informal split <model.aig> [--timeout S] [--jobs N]   prove a wide property term by term
 //!   informal bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
@@ -67,6 +69,13 @@ enum Cmd {
         /// Only use these engines (comma-separated names).
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
+        /// Write the verdict's certificate into this directory, for a
+        /// checker that shares no code with InFormal: a counterexample as
+        /// an AIGER witness (aigsim), a proof as a witness circuit
+        /// (Certifaiger), and `<model>.cert.json`, which says what was
+        /// written (see docs/certificates.md).
+        #[arg(long, value_name = "DIR")]
+        certificate: Option<PathBuf>,
     },
     /// Load a model at bit level (AIGER, or Btor2 bit-blasted), preprocess
     /// it and print its size before and after; `--aag` prints the result.
@@ -116,6 +125,11 @@ enum Cmd {
         /// With --check: print the report as JSON.
         #[arg(long, requires = "check")]
         json: bool,
+        /// Write the certificate of every property the in-house engines
+        /// settle into this directory, as `check --certificate` does for a
+        /// model (docs/certificates.md).
+        #[arg(long, value_name = "DIR", conflicts_with = "check")]
+        certificate: Option<PathBuf>,
     },
     /// Shrink an AIGER model while two engines keep disagreeing on it, or
     /// while a test command keeps exiting 0 (delta debugging).
@@ -264,6 +278,7 @@ fn main() -> anyhow::Result<()> {
             engines,
             timeout,
             only,
+            certificate,
         } => {
             let format = ModelFormat::of_path(&model)
                 .context("unknown model extension (expected .btor2, .btor, .aig, .aag)")?;
@@ -304,6 +319,16 @@ fn main() -> anyhow::Result<()> {
                 (Verdict::Safe, Some(w)) => println!("SAFE (by {})", w.engine),
                 (Verdict::Unknown { reason }, _) => println!("UNKNOWN ({reason})"),
                 _ => unreachable!(),
+            }
+            if let (Some(dir), Some(w), true) = (&certificate, &o.winner, v.is_definitive()) {
+                let s = informal_bmc::certificate::write(
+                    dir,
+                    &req.model,
+                    &w.engine,
+                    &v,
+                    w.certificate.as_ref(),
+                )?;
+                println!("{}", s.line());
             }
             std::process::exit(match v {
                 Verdict::Unsafe { .. } => 10,
@@ -445,6 +470,7 @@ fn main() -> anyhow::Result<()> {
             commands,
             check,
             json,
+            certificate,
         } => {
             let text = match &script {
                 Some(p) => std::fs::read_to_string(p)
@@ -470,7 +496,8 @@ fn main() -> anyhow::Result<()> {
             }
             let mut engines = informal_engines_ext::load(&engines)?;
             engines.extend(in_house(isolate)?);
-            let session = informal_fpv::Session::new(engines, workdir);
+            let mut session = informal_fpv::Session::new(engines, workdir);
+            session.certificates = certificate;
             let shell = informal_fpv::Shell::new(session, flavor);
             for c in &commands {
                 if let Err(e) = shell.eval(c) {

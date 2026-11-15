@@ -202,6 +202,7 @@ impl Engine for WordBmc {
             verdict,
             wall_ms: t0.elapsed().as_millis(),
             witness: None,
+            certificate: None,
         })
     }
 }

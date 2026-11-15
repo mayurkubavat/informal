@@ -6,6 +6,7 @@
 //! round-2 plan; IC3 follows in stage 2. Arrays and liveness are not
 //! supported at bit level yet and report unknown.
 
+pub mod certificate;
 pub mod certify;
 pub mod cnf;
 pub mod ic3;
@@ -18,7 +19,8 @@ pub mod unroll;
 use informal_aig::preprocess::{InputMap, LatchMap};
 use informal_aig::Aig;
 use informal_engine::{
-    Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
+    Capabilities, Certificate, CheckRequest, Engine, EngineResult, ModelFormat, Progress,
+    RunContext, Verdict,
 };
 use informal_sat::{Answer, Sat};
 use std::sync::Arc;
@@ -343,11 +345,12 @@ fn certified(
     ic3: &ic3::Ic3,
     v: Verdict,
     ctx: &RunContext,
-) -> Verdict {
+) -> Checked {
     if v != Verdict::Safe || std::env::var_os("INFORMAL_NO_CERT").is_some() {
-        return v;
+        return v.into();
     }
     let t = Instant::now();
+    let mut cert = None;
     let r = (|| {
         let lemmas = ic3
             .invariant()
@@ -359,7 +362,14 @@ fn certified(
             // holds invariants of every reachable state).
             let mut inv = certify::lift_folded(&orig, &p.latch_map, p, &lemmas, f.ok)?;
             inv.extend(certify::equalities(&p.merged));
-            return certify::check_folded(&orig, &inv, &|| solver(ctx));
+            certify::check_folded(&orig, &inv, &|| solver(ctx))?;
+            // The check reads the fold's `ok` as true everywhere.
+            inv.retain(|c| !c.contains(&certify::OK));
+            for c in &mut inv {
+                c.retain(|&l| l != certify::OK ^ 1);
+            }
+            cert = Some(Certificate::TwoStep { clauses: inv });
+            return Ok(());
         }
         let mut inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
         inv.extend(certify::equalities(&p.merged));
@@ -367,9 +377,10 @@ fn certified(
         if store::dir().is_some() {
             store_invariant(&orig, p.design_hash, &inv);
         }
+        cert = Some(Certificate::Invariant { clauses: inv });
         Ok(())
     })();
-    report_certificate(req, r, t, ctx)
+    Checked::new(report_certificate(req, r, t, ctx), cert)
 }
 
 /// H15: add a certified invariant (clauses over the loaded model's latch
@@ -467,10 +478,10 @@ fn stored_invariant(p: &Prepared, ctx: &RunContext, name: &str) -> Vec<ic3::Cube
 /// gives unknown). `INFORMAL_NO_CERT` skips the check.
 fn unsafe_certified(
     req: &CheckRequest,
-    v: Verdict,
+    v: impl Into<Checked>,
     ctx: &RunContext,
     trace: Option<(&Prepared, PreparedTrace)>,
-) -> Verdict {
+) -> Checked {
     unsafe_certified_at(req, v, ctx, trace, false)
 }
 
@@ -479,12 +490,13 @@ fn unsafe_certified(
 /// more in the loaded model. The reported depth is the loaded model's.
 fn unsafe_certified_at(
     req: &CheckRequest,
-    v: Verdict,
+    v: impl Into<Checked>,
     ctx: &RunContext,
     trace: Option<(&Prepared, PreparedTrace)>,
     folded: bool,
-) -> Verdict {
-    let Verdict::Unsafe { depth } = v else {
+) -> Checked {
+    let v: Checked = v.into();
+    let Verdict::Unsafe { depth } = v.verdict else {
         return v;
     };
     if std::env::var_os("INFORMAL_NO_CERT").is_some() {
@@ -498,7 +510,7 @@ fn unsafe_certified_at(
         if folded {
             let mut last = Err("unsafe fails: no depth tried".to_string());
             for d2 in [2 * d, 2 * d + 1] {
-                last = certify::check_unsafe(&orig, d2, &|| solver(ctx), &|| ctx.should_stop());
+                last = certify::find_unsafe(&orig, d2, &|| solver(ctx), &|| ctx.should_stop());
                 if last.is_ok() {
                     real = Some(d2 as u32);
                     break;
@@ -512,18 +524,32 @@ fn unsafe_certified_at(
         if let Some((p, pt)) = &trace {
             let t = pt.lift(p, &orig);
             match certify::replay_unsafe(&orig, d, &t) {
-                Ok(()) => return Ok(()),
+                Ok(()) => return Ok(t),
                 Err(e) => eprintln!(
                     "informal: engine trace did not replay on the loaded model ({e}); searching: {}",
                     req.model.display()
                 ),
             }
         }
-        certify::check_unsafe(&orig, d, &|| solver(ctx), &|| ctx.should_stop())
+        certify::find_unsafe(&orig, d, &|| solver(ctx), &|| ctx.should_stop())
     })();
+    let (r, trace) = match r {
+        Ok(t) => (Ok(()), Some(t)),
+        Err(e) => (Err(e), None),
+    };
     match report_certificate(req, r, t, ctx) {
-        Verdict::Safe => Verdict::Unsafe { depth: real },
-        other => other,
+        Verdict::Safe => Checked::new(
+            Verdict::Unsafe { depth: real },
+            trace.map(|t| Certificate::Trace {
+                init: informal_engine::certificate::bits(t.init),
+                inputs: t
+                    .inputs
+                    .into_iter()
+                    .map(informal_engine::certificate::bits)
+                    .collect(),
+            }),
+        ),
+        other => other.into(),
     }
 }
 
@@ -599,23 +625,31 @@ fn kind_certified(
     v: (Verdict, Option<usize>),
     strengthening: &[ic3::Cube],
     ctx: &RunContext,
-) -> Verdict {
+) -> Checked {
     let (v, k) = v;
     if v != Verdict::Safe || std::env::var_os("INFORMAL_NO_CERT").is_some() {
-        return v;
+        return v.into();
     }
     let t = Instant::now();
+    let mut cert = None;
     let r = (|| {
         let k = k.ok_or("missing: k-induction said safe without a depth")?;
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
         let (mut inv, _) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;
         inv.extend(certify::equalities(&p.merged));
         // Depth k here is the number of good frames before the bad one.
-        certify::check_kind(&orig, &inv, k.max(1), &|| solver(ctx), &|| {
+        let k = k.max(1);
+        let differ = certify::check_kind_paths(&orig, &inv, true, k, &|| solver(ctx), &|| {
             ctx.should_stop()
-        })
+        })?;
+        cert = Some(Certificate::KInduction {
+            k: k as u32,
+            clauses: inv,
+            simple_path: differ > 0,
+        });
+        Ok(())
     })();
-    report_certificate(req, r, t, ctx)
+    Checked::new(report_certificate(req, r, t, ctx), cert)
 }
 
 /// Turn a certificate check's outcome into the verdict to report.
@@ -744,12 +778,37 @@ fn unknown(reason: impl Into<String>) -> Verdict {
     }
 }
 
-fn result(name: &str, verdict: Verdict, t0: Instant) -> EngineResult {
+/// A verdict after its independent check, with what an outside checker
+/// needs to confirm it (only kept with a definitive verdict).
+struct Checked {
+    verdict: Verdict,
+    certificate: Option<Certificate>,
+}
+
+impl Checked {
+    fn new(verdict: Verdict, certificate: Option<Certificate>) -> Self {
+        let certificate = certificate.filter(|_| verdict.is_definitive());
+        Checked {
+            verdict,
+            certificate,
+        }
+    }
+}
+
+impl From<Verdict> for Checked {
+    fn from(verdict: Verdict) -> Self {
+        Checked::new(verdict, None)
+    }
+}
+
+fn result(name: &str, v: impl Into<Checked>, t0: Instant) -> EngineResult {
+    let v: Checked = v.into();
     EngineResult {
         engine: name.into(),
-        verdict,
+        verdict: v.verdict,
         wall_ms: t0.elapsed().as_millis(),
         witness: None,
+        certificate: v.certificate,
     }
 }
 
@@ -1296,7 +1355,10 @@ impl Engine for KindIc3 {
             // still gets its turn.
             let v = ic3.check(&phase);
             match certified(req, &g, &ic3, v, ctx) {
-                Verdict::Unknown { .. } => {}
+                Checked {
+                    verdict: Verdict::Unknown { .. },
+                    ..
+                } => {}
                 v => return Ok(result(self.name(), unsafe_certified(req, v, ctx, None), t0)),
             }
             // Houdini gets up to half of what is left.
@@ -1415,7 +1477,7 @@ impl Engine for Ic3Mt {
         inner.cancel = informal_engine::CancelToken::new();
         let done = std::sync::atomic::AtomicBool::new(false);
         let stats = std::env::var_os("INFORMAL_IC3_STATS").is_some();
-        let verdicts: Vec<Verdict> = std::thread::scope(|sc| {
+        let verdicts: Vec<Checked> = std::thread::scope(|sc| {
             let (g, inner, done) = (&g, &inner, &done);
             sc.spawn(move || {
                 while !done.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1455,19 +1517,19 @@ impl Engine for Ic3Mt {
                             Box::new(s)
                         };
                         let Some(mut ic3) = ic3::Ic3::with_config(g, Box::new(make), cfg) else {
-                            return unknown("latch inits that are not constants");
+                            return unknown("latch inits that are not constants").into();
                         };
                         ic3.share(pool, id);
                         ic3.assume_invariant(stored);
                         let v = ic3.check(inner);
                         let v = certified(req, g, &ic3, v, inner);
-                        if !matches!(v, Verdict::Unknown { .. }) {
+                        if v.verdict.is_definitive() {
                             inner.cancel.cancel();
                         }
                         if stats {
                             eprintln!(
                                 "informal-ic3-mt[{id}]: {:?} frames {} lemmas {} imported {} of {} seen ({} same cube held, {} raised; {} import queries of {} queries; failed at their level: {} new, {} raises)",
-                                v,
+                                v.verdict,
                                 ic3.depth(),
                                 ic3.stats_lemmas,
                                 ic3.stats_imported,
@@ -1489,10 +1551,9 @@ impl Engine for Ic3Mt {
             vs
         });
         let v = verdicts
-            .iter()
-            .find(|v| !matches!(v, Verdict::Unknown { .. }))
-            .cloned()
-            .unwrap_or_else(|| unknown(ctx.stop_reason()));
+            .into_iter()
+            .find(|v| v.verdict.is_definitive())
+            .unwrap_or_else(|| unknown(ctx.stop_reason()).into());
         Ok(result(
             self.name(),
             unsafe_certified_at(req, v, ctx, None, g.folded.is_some()),

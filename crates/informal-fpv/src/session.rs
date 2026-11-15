@@ -228,6 +228,10 @@ pub struct Session {
     /// witness). Tests and diagnostics read it.
     #[serde(skip)]
     pub trace_reruns: Arc<std::sync::atomic::AtomicUsize>,
+    /// Where each settled property's certificate is written for an outside
+    /// checker (`informal shell --certificate`; docs/certificates.md).
+    #[serde(skip)]
+    pub certificates: Option<PathBuf>,
 }
 
 impl Session {
@@ -251,6 +255,7 @@ impl Session {
             dry_run: false,
             sink: None,
             trace_reruns: Arc::default(),
+            certificates: None,
         }
     }
 
@@ -260,7 +265,9 @@ impl Session {
         let engines = std::mem::take(&mut self.engines);
         let workdir = std::mem::take(&mut self.workdir);
         let (stop, sink, dry_run) = (self.stop.clone(), self.sink.take(), self.dry_run);
+        let certificates = self.certificates.take();
         *self = Session::new(engines, workdir);
+        self.certificates = certificates;
         self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
@@ -934,7 +941,21 @@ impl Session {
             .unwrap_or_default();
         let ms = o.wall_ms;
         let winner = engine.clone();
-        let status = match (portfolio::verdict(&o), kind) {
+        let verdict = portfolio::verdict(&o);
+        if let (Some(dir), Some(w), true) = (&self.certificates, &o.winner, verdict.is_definitive())
+        {
+            // A cover's trace and an unreachable cover's proof are
+            // certificates like an assertion's.
+            let cert = w.certificate.as_ref();
+            match informal_bmc::certificate::write(dir, model, &w.engine, &verdict, cert) {
+                Ok(s) => self.log(&format!("{}: {}", self.props[i].name, s.line())),
+                Err(e) => self.log(&format!(
+                    "{}: certificate not written: {e:#}",
+                    self.props[i].name
+                )),
+            }
+        }
+        let status = match (verdict, kind) {
             (Verdict::Safe, Kind::Cover) => Status::Unreachable { engine, ms },
             (Verdict::Safe, _) => Status::Proven { engine, ms },
             (Verdict::Unsafe { depth }, Kind::Cover) => Status::Covered { engine, depth, ms },

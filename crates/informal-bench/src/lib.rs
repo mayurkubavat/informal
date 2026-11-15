@@ -407,6 +407,7 @@ mod tests {
                 verdict: self.1.clone(),
                 wall_ms: self.2,
                 witness: None,
+                certificate: None,
             })
         }
     }

@@ -4,10 +4,12 @@
 //! The orchestrator only sees verdicts, progress and capabilities, so new
 //! algorithms plug in without touching the rest of the tool.
 //!
-//! Soundness rule: a `Safe` or `Unsafe` verdict is a claim. From phase 2
-//! the orchestrator checks it with an independent certificate checker
-//! (Certifaiger for invariants, BtorSim for witnesses) before reporting it.
+//! Soundness rule: a `Safe` or `Unsafe` verdict is a claim. The in-house
+//! engines check theirs on the model as loaded before reporting it, and
+//! hand back a [`Certificate`] that an independent checker (Certifaiger
+//! for proofs, aigsim for counterexamples) can confirm from files.
 
+pub mod certificate;
 pub mod memory;
 pub mod portfolio;
 pub mod witness;
@@ -24,6 +26,7 @@ pub fn tool_missing(what: &str) {
     eprintln!("skipping: {what}");
 }
 
+pub use certificate::Certificate;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +93,10 @@ pub struct EngineResult {
     /// Raw witness text (Btor2 or AIGER witness format) when the engine printed one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<String>,
+    /// What an outside checker needs to confirm a definitive verdict (see
+    /// [`certificate`]); `None` from engines that give none.
+    #[serde(skip)]
+    pub certificate: Option<Certificate>,
 }
 
 /// What an engine can do. The scheduler uses this to route models.

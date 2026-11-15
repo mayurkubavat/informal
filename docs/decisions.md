@@ -163,8 +163,9 @@ the single-developer setup of that time.
     and left 0 wrong.
 - **Open issues:** still trusted: the AIGER/Btor2 reader and bit-blaster,
   `certify.rs`, and
-  CaDiCaL's UNSAT answers. Certifaiger (safe) and BtorSim (witnesses) as
-  outside checkers are still planned.
+  CaDiCaL's UNSAT answers. Outside checkers take those out for AIGER
+  models: Certifaiger for proofs and aigsim for counterexamples (D18), and
+  BtorSim replays the counterexamples of `tests/sv` in the gate.
 - **Ideas:** proof logging (DRAT/LRAT) from CaDiCaL for the three UNSAT
   answers; a verified checker.
 
@@ -483,3 +484,54 @@ to try.
     linked libraries, the LGPL notice for GMP/MPFR, and the Rust and npm
     dependency licenses, e.g. from `cargo about`).
   - Signing the CLA is manual until a CLA bot is set up on GitHub.
+
+## D18. Certificates in the competition's formats, checked by its checkers
+
+- **Chosen (2026-11-15):** `informal check --certificate <dir>` (and
+  `informal shell --certificate <dir>`, per property) writes what
+  an outside program needs to confirm the verdict, in the formats of the
+  Hardware Model Checking Competition: a counterexample as an AIGER witness
+  (checked by `aigsim`), a proof as a witness circuit in AIGER (checked by
+  Certifaiger, whose conditions go to a SAT solver), and a JSON summary per
+  verdict that names the file and the checker, or says why there is none.
+  `scripts/certificate_check.py` runs the checkers. Formats, constructions
+  and what is not covered: `docs/certificates.md`.
+- **How:** an engine's result carries a `Certificate` in terms of the model
+  as loaded (`informal-engine`): the clauses of the invariant, the depth of
+  a k-induction proof, or the trace. It is what `certify.rs` has just
+  checked, so nothing is searched again; `informal-bmc/src/certificate.rs`
+  writes the files. Three kinds of proof become witness circuits: an
+  inductive invariant; k-induction, with the last `k - 1` states kept in
+  the circuit so that its one inductive condition is the base and the step;
+  and the two-step invariant of a clock-folded model, with one remembered
+  state and a parity bit. The circuit holds only the cone the proof is
+  about, mapped to the model through the symbol table.
+- **Alternatives:** a format of our own with our own checker (nobody else
+  would trust or run it); proof logs of the three SAT answers of
+  `certify.rs` (DRAT/LRAT: checks the solver, still trusts our encoding and
+  reader); writing the whole model into the witness circuit (simplest, and
+  the first version: on a 189,000-latch CPU model of HWMCC'24, Certifaiger's
+  transition condition then took Kissat 713 s; with the cone, 6,000 latches,
+  all conditions take under 2 s).
+- **Why:** the competition counts only answers its checkers confirm, and a
+  result that an independent tool confirms is the evidence a tool paper
+  needs. Certifaiger shares nothing with InFormal, so a wrong witness
+  circuit is rejected: the construction does not have to be trusted.
+- **Evidence:** every proof kind and trace on `tests/models` (31 verdicts
+  over five engines) is confirmed by Certifaiger and aigsim; a circuit
+  without its invariant and a trace with one input changed are rejected. On
+  a first sample of 22 fast HWMCC'24 verdicts (9 unsafe, 13 safe: 6 by
+  invariant, 7 by k-induction) all are confirmed, in 15 s together. The share over all of
+  HWMCC'24 is still to be measured.
+- **Open issues**
+  - k-induction proofs that need the simple-path condition have no witness
+    circuit: that a path repeats no state is not a property of its last
+    `k` states. The summary says so; how often it happens on HWMCC'24 is
+    not measured yet.
+  - A k-induction circuit has `k` copies of the cone, and its inductive
+    condition is as hard as the proof was. Deep proofs may be slow to check.
+  - Btor2 models are certified on the bit-blasted model InFormal writes,
+    so the Btor2 reader and bit-blaster stay trusted there, and
+    liveness to safety for a justice property.
+  - External engines' verdicts (rIC3, ABC) carry no certificate.
+  - The checkers are not in `tools.lock` and no gate step runs them yet.

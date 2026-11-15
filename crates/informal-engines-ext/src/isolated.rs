@@ -52,6 +52,8 @@ pub struct WireResult {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate: Option<informal_engine::Certificate>,
 }
 
 impl WireResult {
@@ -66,6 +68,7 @@ impl WireResult {
             depth,
             reason,
             witness: r.witness.clone(),
+            certificate: r.certificate.clone(),
         }
     }
 
@@ -328,8 +331,12 @@ impl Engine for Isolated {
             reason: reason.into(),
         };
         let was_shed = shed.load(std::sync::atomic::Ordering::SeqCst);
+        let mut certificate = None;
         let (verdict, witness) = match (result, status) {
-            (Some(r), _) => (r.verdict(), r.witness),
+            (Some(r), _) => {
+                certificate = r.certificate.clone();
+                (r.verdict(), r.witness)
+            }
             (None, _) if was_shed => (unknown("memory"), None),
             (None, None) if ctx.cancel.is_cancelled() => (unknown("cancelled"), None),
             (None, None) => (unknown("timeout"), None),
@@ -350,6 +357,7 @@ impl Engine for Isolated {
             verdict,
             wall_ms: start.elapsed().as_millis(),
             witness,
+            certificate,
         })
     }
 }
@@ -372,6 +380,10 @@ mod tests {
             depth: Some(3),
             reason: None,
             witness: Some("1\nb0\n.\n".into()),
+            certificate: Some(informal_engine::Certificate::Trace {
+                init: "0".into(),
+                inputs: vec!["1".into()],
+            }),
         });
         let s = serde_json::to_string(&r).unwrap();
         assert_eq!(serde_json::from_str::<Line>(&s).unwrap(), r);

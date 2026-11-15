@@ -199,8 +199,9 @@ impl Aig {
     }
 
     /// Add an AND node exactly as given (readers that must keep variable
-    /// numbering); still recorded for structural hashing.
-    pub(crate) fn raw_and(&mut self, a: Lit, b: Lit) -> Lit {
+    /// numbering, and copies that must keep a model's structure); still
+    /// recorded for structural hashing.
+    pub fn raw_and(&mut self, a: Lit, b: Lit) -> Lit {
         let l = 2 * self.num_vars();
         self.nodes.push(Node::And(a, b));
         self.strash

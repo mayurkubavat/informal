@@ -114,6 +114,11 @@ target/release/informal shell --check path/to/setup.tcl
 # Check one Btor2 or AIGER model (exit 10 unsafe, 20 safe, 0 unknown)
 target/release/informal check tests/models/toggle_unsafe.aag --timeout 60
 
+# The same, leaving a certificate that Certifaiger or aigsim confirms
+# (docs/certificates.md), and checking it with them
+target/release/informal check tests/models/delay_safe.aag --certificate certs/
+python3 -I scripts/certificate_check.py certs/
+
 # Lower SystemVerilog to Btor2; inspect or canonicalize a model
 target/release/informal lower tests/sv/counter_ok.sv
 target/release/informal info tests/models/counter.btor2
