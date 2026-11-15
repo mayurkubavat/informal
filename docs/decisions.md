@@ -176,9 +176,14 @@ the single-developer setup of that time.
 - **Open issues**
   - Only a subset of the vendor command set and options is supported;
     unknown options are errors, which is correct but surprising.
-  - SVA support is a subset: no `##[m:n]`, repetition, `throughout`,
-    `within`, `intersect`, `first_match`, `until`, `s_eventually`, `not`,
-    `strong`/`weak`. Liveness operators are missing entirely.
+  - SVA support is a subset (`docs/fpv-shell.md`, updated 2026-11-15):
+    delays and ranges, repetition `[*N]` / `[*M:N]`, sequence `and`, `or`,
+    `intersect`, `within`, `throughout`, `first_match`, `until` /
+    `until_with` and their strong forms, `s_eventually`, and bounded
+    `nexttime`, `eventually` and `always` are compiled; `[->n]`, `[=n]`,
+    `not`, `accept_on` and `#-#` are rejected, and ranges that end at `$`
+    are errors. Liveness (`s_eventually`, strong `until`) is checked by the
+    in-house engines through liveness-to-safety only.
   - The shell thread runs one request at a time, so console commands typed
     during a prove wait; Stop right before a prove starts can be lost.
 - **Ideas:** a full SVA-to-automaton compiler (sequence NFA/DFA, then

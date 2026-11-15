@@ -35,8 +35,11 @@ sign-off.
   Tcl console, source view, counterexample waveforms, and an optional
   "Ask" mode backed by a local LLM (`ui/README.md`, `docs/ui/`).
 
-Not there yet: liveness, arrays at bit level, VHDL, most of concurrent
-SVA beyond the documented subset, coverage and other apps.
+Liveness (`s_eventually`, the strong `until` forms) is checked by the
+in-house engines through liveness-to-safety; external engines are not run
+on it. Not there yet: the SVA operators `[->n]`, `[=n]`, `not`, `accept_on`
+and ranges that end at `$` (`docs/fpv-shell.md` has the full subset),
+arrays at bit level, VHDL, coverage and other apps.
 
 ## Quick start
 
@@ -247,6 +250,26 @@ models changed. `scripts/nightly.sh` is the nightly run on the same machine:
 the gate with the Playwright suites on main, what svlang's current main
 would change, and the in-house engines on the HWMCC'24 sample; its report
 ends with `NIGHTLY PASS` or `NIGHTLY FAIL`.
+
+## Citing
+
+If you use this project, please cite the technical report:
+
+> M. Kubavat, "InFormal: An Open-Source Formal Property Verifier for SystemVerilog with Checked Verdicts," technical report, Zenodo, Nov. 2026. doi: [10.5281/zenodo.24261270](https://doi.org/10.5281/zenodo.24261270)
+
+```bibtex
+@techreport{kubavat2026informal,
+  author      = {Kubavat, Mayur},
+  title       = {{InFormal}: An Open-Source Formal Property Verifier for {SystemVerilog} with Checked Verdicts},
+  institution = {Zenodo},
+  year        = {2026},
+  month       = nov,
+  doi         = {10.5281/zenodo.24261270},
+  url         = {https://doi.org/10.5281/zenodo.24261270}
+}
+```
+
+GitHub's "Cite this repository" button reads the same data from `CITATION.cff`.
 
 ## License
 

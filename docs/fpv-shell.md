@@ -232,9 +232,9 @@ last result, the ranked list of what the shell should learn next.
   `and`, `or`, `intersect`, `within`, `throughout` and `first_match`,
   under `|->` and `|=>`, with `disable iff`, `default clocking` and the
   sampled-value functions, `b until c` / `b until_with c` between
-  booleans, and `s_eventually b` (liveness, see the SVA subset above). An
-  assertion or cover that uses another operator (`##[1:$]`, `[->N]`,
-  `s_until`, ...) gets the
+  booleans and their strong forms, and `s_eventually b` (liveness, see the
+  SVA subset above). An assertion or cover that uses another operator
+  (`##[1:$]`, `[->N]`, ...) gets the
   status error naming the operator; an assumption that does
   is an error for the whole design. A concurrent assertion under an `if`
   or `case` in a clocked block is checked only when the flow reaches it
