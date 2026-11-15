@@ -237,7 +237,10 @@ the gate on that result and pushes it only if the gate passed, so main is
 always a commit that was tested as it is (`--dry-run` does all but the
 push). `scripts/repin.sh` moves the svlang pin: `Cargo.toml`, both lock
 files and `tests/sv/lowering.lock` together, and lists the designs whose
-models changed.
+models changed. `scripts/nightly.sh` is the nightly run on the same machine:
+the gate with the Playwright suites on main, what svlang's current main
+would change, and the in-house engines on the HWMCC'24 sample; its report
+ends with `NIGHTLY PASS` or `NIGHTLY FAIL`.
 
 ## License
 
