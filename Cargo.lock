@@ -1264,7 +1264,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sv-aiger"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-btor2",
  "sv-netlist",
@@ -1273,7 +1273,7 @@ dependencies = [
 [[package]]
 name = "sv-btor2"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-netlist",
  "sv-semantic",
@@ -1282,12 +1282,12 @@ dependencies = [
 [[package]]
 name = "sv-lexer"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 
 [[package]]
 name = "sv-netlist"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-semantic",
  "sv-syntax",
@@ -1296,7 +1296,7 @@ dependencies = [
 [[package]]
 name = "sv-preprocessor"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-lexer",
 ]
@@ -1304,7 +1304,7 @@ dependencies = [
 [[package]]
 name = "sv-semantic"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-source",
  "sv-syntax",
@@ -1313,12 +1313,12 @@ dependencies = [
 [[package]]
 name = "sv-source"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 
 [[package]]
 name = "sv-syntax"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-lexer",
  "sv-preprocessor",
@@ -1327,7 +1327,7 @@ dependencies = [
 [[package]]
 name = "sv-yosys"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-netlist",
  "sv-semantic",
@@ -1336,7 +1336,7 @@ dependencies = [
 [[package]]
 name = "svlang"
 version = "0.1.1"
-source = "git+https://github.com/mayurkubavat/svlang?rev=0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb#0c27cef51a8791a6fd17a3b7bd9ec6a4a99b39cb"
+source = "git+https://github.com/mayurkubavat/svlang?rev=5cdc05e19f93f903cbf33e7502a935872aecaea3#5cdc05e19f93f903cbf33e7502a935872aecaea3"
 dependencies = [
  "sv-aiger",
  "sv-btor2",

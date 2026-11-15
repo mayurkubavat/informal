@@ -23,6 +23,9 @@
 //= x_same cex
 //= x_always cex
 //= c_differs covered
+//= gated_clock.a_cell proven
+//= gated_clock.a_cell_wrong cex
+//= gated_clock.c_cell covered
 module gated_clock(input logic clk, input logic rst, input logic en, input logic d);
   logic en_q, p, q, r;
   logic g, en_l, g_l;
@@ -35,4 +38,9 @@ module gated_clock(input logic clk, input logic rst, input logic en, input logic
   assign g_l = clk & en_l;
   always_ff @(posedge g)   q <= p;
   always_ff @(posedge g_l) r <= p;
+  // Properties on the gated clock itself: at each of its rising edges, r
+  // still holds what p was at the edge before.
+  a_cell:       assert property (@(posedge g_l) r == $past(p));
+  a_cell_wrong: assert property (@(posedge g_l) r == p);
+  c_cell:       cover property (@(posedge g_l) r && !p ##1 !r && p);
 endmodule

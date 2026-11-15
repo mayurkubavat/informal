@@ -245,8 +245,10 @@ builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
   divided clock sees the other registers as they were before the
   dividing edge (a simulator shows them after it), a plain `clk & en`
   gate opens with the value `en` has once clk is high, and an enable
-  that changes while clk is high makes an edge. Memory writes, `$past`
-  and its relatives, and assertions on a computed clock are an error.
+  that changes while clk is high makes an edge. A property may be on
+  such a clock too (`@(posedge gclk) ...`): it is checked on the values
+  the edge sampled, and `$past` counts that clock's edges. A memory
+  written on a computed clock is an error.
   Properties given by command are on the first declared clock unless
   they name their own (`@(posedge clk2) ...`).
 - A latch (`always_latch`, or an `always @*` that does not assign on
