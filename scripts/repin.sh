@@ -14,6 +14,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+# The builds and test runs below wait in the dvq build queue
+# (~/.local/bin/dvq, the front end of rdev queue); DVQ= runs them directly.
+DVQ="${DVQ-$HOME/.local/bin/dvq run build --}"; [ -x "$HOME/.local/bin/dvq" ] || DVQ=
 
 url=$(sed -n 's/^svlang *= *{ *git *= *"\([^"]*\)".*/\1/p' Cargo.toml)
 old=$(sed -n 's/^svlang *= *{.*rev *= *"\([0-9a-f]\{40\}\)".*/\1/p' Cargo.toml)
@@ -38,7 +41,7 @@ fi
 models=target/repin-models
 rm -rf "$models"
 run_designs() {
-    INFORMAL_KEEP_MODELS="$PWD/$models/$1" INFORMAL_BLESS=$2 cargo nextest run --locked \
+    INFORMAL_KEEP_MODELS="$PWD/$models/$1" INFORMAL_BLESS=$2 $DVQ cargo nextest run --locked \
         -p informal-fpv --test sv_semantics --status-level fail --final-status-level fail
 }
 echo "models under the current pin ${old:0:7}"
@@ -61,7 +64,7 @@ fi
 
 echo "rewriting tests/sv/lowering.lock under the new pin"
 run_designs new 1
-cargo build --locked -q -p informal-cli
+$DVQ cargo build --locked -q -p informal-cli
 changed=$(git diff --numstat -- tests/sv/lowering.lock | awk '{print $1}')
 echo
 if [ -z "$changed" ]; then

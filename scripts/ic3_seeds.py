@@ -12,7 +12,11 @@ usage: python3 -I scripts/ic3_seeds.py --models DIR|LIST [--bin PATH]
            [--seeds 3] [--env KEY=VAL ...] [--tag NAME] [--out DIR]
        python3 -I scripts/ic3_seeds.py --compare A.json B.json
 
-Run it on a quiet machine. Compare two builds or settings by running it
+Run it on a quiet machine. Where the dvq job queue is installed
+(~/.local/bin/dvq), each seed's bench waits in its formal class with 12
+CPUs, the count the 300 s timeouts were measured with, and the --mem-gb cap
+plus 2G; DVQ= in the environment runs the benches directly, and
+DVQ_CPU/DVQ_MEM change the reservation. Compare two builds or settings by running it
 twice with different --tag/--bin/--env and then --compare on the two
 summaries: a model counts as gained or lost only when its solve count
 differs by at least 2 seeds, or changes between none and all.
@@ -22,6 +26,19 @@ import json
 import os
 import subprocess
 import sys
+
+
+def dvq_prefix(env, mem_gb):
+    """The dvq command a bench runs under, or [] to run it directly."""
+    dvq = env.get("DVQ")
+    if dvq is None:
+        exe = os.path.expanduser("~/.local/bin/dvq")
+        dvq = f"{exe} run formal --" if os.access(exe, os.X_OK) else ""
+    if not dvq or env.get("DVQ_CLASS") or env.get("RDEV_JOB_ID"):
+        return []
+    env.setdefault("DVQ_CPU", "1200%")
+    env.setdefault("DVQ_MEM", f"{-int(-(mem_gb + 2) // 1)}G")
+    return dvq.split()
 
 
 def run(args):
@@ -52,7 +69,7 @@ def run(args):
             os.remove(db)
         e = dict(env, INFORMAL_IC3_SEED=str(seed))
         subprocess.run(
-            [args.bin, "--mem-gb", str(args.mem_gb), "bench", args.models,
+            dvq_prefix(e, args.mem_gb) + [args.bin, "--mem-gb", str(args.mem_gb), "bench", args.models,
              "--each", "--only", args.engine, "--timeout", str(args.timeout),
              "--jobs", str(args.jobs), "--db", db],
             env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)

@@ -30,7 +30,25 @@
 # priority of everything the gate starts, and skips the one UI test that
 # asserts a wall-clock budget (the result line says so). A test that runs
 # the engine portfolio still uses one thread per engine, at low priority.
+#
+# On a machine with the dvq job queue (~/.local/bin/dvq, the front end of
+# rdev queue) the whole gate runs as one job of the build class, so a gate or
+# a landing waits for CPUs and memory instead of fighting a timing run for
+# them. The output, the GATE line and the exit status are passed through.
+# DVQ= runs the gate directly; DVQ_CPU/DVQ_MEM change the reservation.
 set -euo pipefail
+DVQ="${DVQ-$HOME/.local/bin/dvq run build --}"; [ -x "$HOME/.local/bin/dvq" ] || DVQ=
+if [ -n "$DVQ" ] && [ -z "${DVQ_CLASS:-}${RDEV_JOB_ID:-}" ]; then
+    # More than the build class preset (4 CPUs, 6G): a full run builds and
+    # tests the whole workspace in parallel; 12G leaves room for that.
+    # --quiet (land.sh --busy) builds with 2 jobs, so 4 CPUs are enough.
+    case " $* " in
+        *" --quiet "*) export DVQ_CPU="${DVQ_CPU:-400%}" ;;
+        *) export DVQ_CPU="${DVQ_CPU:-800%}" ;;
+    esac
+    export DVQ_MEM="${DVQ_MEM:-12G}"
+    exec $DVQ "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" "$@"
+fi
 cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
@@ -55,6 +73,9 @@ for arg in "$@"; do
         *) echo "check.sh: unknown option $arg" >&2; exit 2 ;;
     esac
 done
+# Inside a queue job, build with as many jobs as the job has CPUs (--quiet
+# has already set 2).
+if [ -n "${RDEV_JOB_CPUS:-}" ]; then export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$RDEV_JOB_CPUS}"; fi
 
 current="setup"
 finish() {
