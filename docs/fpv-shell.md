@@ -145,6 +145,28 @@ affected. Later reads of a variable inside the same procedural block that
 assigned it see the block's own value, not the cut. svlang applies the cut
 (`LowerConfig::cut_points`).
 
+## Constructs left out on request
+
+Two constructs that svlang reports as not supported can be left out of
+the model, each by its own switch. Both are off unless set, so nothing is
+skipped silently, and every `prove` logs the ones that are on.
+
+```
+set_lowering skip_initial_checks on
+set_lowering isunknown_is_false on
+set_lowering                          ;# shows both settings
+```
+
+- `skip_initial_checks`: an immediate assertion in an `initial` block
+  that checks a signal at time zero (OpenTitan's `ASSERT_INIT_NET`) is
+  left out. Only that check is not made; the design behaves the same.
+- `isunknown_is_false`: `$isunknown(x)` is 0, since the model has no
+  unknown value. A check such as `assert (!$isunknown(x))` then always
+  holds, and says nothing about the design.
+
+`informal lower` has the same two as `--skip-initial-checks` and
+`--isunknown-is-false`. `clear -all` turns both off again.
+
 ## Black boxes
 
 `elaborate -top T -bbox_m {ram fifo}` (VC Formal: `set_blackbox -designs

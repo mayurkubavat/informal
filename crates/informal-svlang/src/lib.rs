@@ -44,6 +44,17 @@ fn driver(req: &Request) -> svlang::Driver {
     d
 }
 
+/// For the two constructs a user may choose to have left out: how.
+fn hint(message: &str) -> &'static str {
+    if message.contains("$isunknown") {
+        " (`set_lowering isunknown_is_false on` lowers $isunknown as 0)"
+    } else if message.contains("immediate assertion on a non-constant value inside initial block") {
+        " (`set_lowering skip_initial_checks on` leaves such checks out)"
+    } else {
+        ""
+    }
+}
+
 fn show(d: &NetlistDiag) -> String {
     if d.file.is_empty() {
         d.message.clone()
@@ -358,6 +369,8 @@ pub fn lower(req: &Request) -> Lowered {
         cut_points: req.cut_points.clone(),
         black_box_modules: req.black_box_modules.clone(),
         black_box_instances: req.black_box_instances.clone(),
+        skip_initial_checks: req.skip_initial_checks,
+        isunknown_is_false: req.isunknown_is_false,
         ..LowerConfig::default()
     };
     let base = match comp.lower_netlist(&config) {
@@ -365,7 +378,7 @@ pub fn lower(req: &Request) -> Lowered {
         LowerOutcome::Unsupported(ds) => {
             return fail(
                 ds.iter()
-                    .map(|d| format!("not supported yet: {}", show(d)))
+                    .map(|d| format!("not supported yet: {}{}", show(d), hint(&d.message)))
                     .collect(),
             )
         }
@@ -463,6 +476,8 @@ pub fn compile(req: &Request) -> Design {
         true => {
             let config = LowerConfig {
                 top: req.top.clone(),
+                skip_initial_checks: req.skip_initial_checks,
+                isunknown_is_false: req.isunknown_is_false,
                 ..LowerConfig::default()
             };
             match comp.lower_netlist(&config) {

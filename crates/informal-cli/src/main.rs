@@ -4,7 +4,7 @@
 //!   informal fmt   <model.btor2>                      print canonical Btor2
 //!   informal check <model> [--engines F] [--timeout S]  run the portfolio
 //!   informal simp  <model>                          bit-level model before / after preprocessing
-//!   informal lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (slang)
+//!   informal lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (svlang)
 //!   informal shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
 //!   informal reduce <model.aig> (--disagree A,B | --test CMD) [-o small.aag]
 //!   informal split <model.aig> [--timeout S] [--jobs N]   prove a wide property term by term
@@ -75,8 +75,8 @@ enum Cmd {
         #[arg(long)]
         aag: bool,
     },
-    /// Lower SystemVerilog to Btor2 with svlang (or slang with
-    /// INFORMAL_FRONTEND=slang); immediate assertions become bad states.
+    /// Lower SystemVerilog to Btor2 with svlang; immediate assertions
+    /// become bad states.
     Lower {
         files: Vec<PathBuf>,
         #[arg(long)]
@@ -84,6 +84,13 @@ enum Cmd {
         /// Preprocessor defines (NAME or NAME=VALUE).
         #[arg(short = 'D')]
         define: Vec<String>,
+        /// Leave out assertions in initial blocks that check a signal at
+        /// time zero (otherwise not supported).
+        #[arg(long)]
+        skip_initial_checks: bool,
+        /// Lower $isunknown as 0 (otherwise not supported).
+        #[arg(long)]
+        isunknown_is_false: bool,
     },
     /// Run a JasperGold or VC Formal style Tcl script (or an interactive
     /// shell when no script is given).
@@ -400,7 +407,13 @@ fn main() -> anyhow::Result<()> {
             &out,
             &workdir,
         )?,
-        Cmd::Lower { files, top, define } => {
+        Cmd::Lower {
+            files,
+            top,
+            define,
+            skip_initial_checks,
+            isunknown_is_false,
+        } => {
             let req = informal_svlang::Request {
                 files,
                 top,
@@ -411,6 +424,8 @@ fn main() -> anyhow::Result<()> {
                             .map_or((d.clone(), None), |(k, v)| (k.into(), Some(v.into())))
                     })
                     .collect(),
+                skip_initial_checks,
+                isunknown_is_false,
                 ..Default::default()
             };
             let l = informal_svlang::lower(&req);

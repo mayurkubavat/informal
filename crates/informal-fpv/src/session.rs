@@ -177,10 +177,16 @@ pub struct Design {
     /// Cut points (`stopat`), as paths from the top module (`u_core.sig`):
     /// each is cut from its drivers and free on every step.
     pub stopats: Vec<String>,
-    /// slang's scope tree after elaboration: instances with their ports and
+    /// `set_lowering skip_initial_checks on`: time-zero checks of signals in
+    /// `initial` blocks are left out of the model, not reported as
+    /// unsupported.
+    pub skip_initial_checks: bool,
+    /// `set_lowering isunknown_is_false on`: `$isunknown(x)` is 0 in the
+    /// model, not reported as unsupported.
+    pub isunknown_is_false: bool,
+    /// The scope tree after elaboration: instances with their ports and
     /// named signals (the app's Design browser). Also written to
-    /// `<workdir>/design.hierarchy.json`. Empty without slang (the app then
-    /// scans the top file's port list).
+    /// `<workdir>/design.hierarchy.json`.
     pub hierarchy: Vec<informal_svlang::Scope>,
 }
 
@@ -386,6 +392,8 @@ impl Session {
             top: self.design.top.clone(),
             params: self.design.params.clone(),
             trace_outputs: false,
+            skip_initial_checks: self.design.skip_initial_checks,
+            isunknown_is_false: self.design.isunknown_is_false,
             ..Default::default()
         };
         self.design.hierarchy.clear();
@@ -809,7 +817,16 @@ impl Session {
             cover_targets: true,
             reset: self.reset.clone(),
             tick: self.tick_reset(),
+            skip_initial_checks: self.design.skip_initial_checks,
+            isunknown_is_false: self.design.isunknown_is_false,
         };
+        // What the user chose to leave out is said with every model.
+        if req.skip_initial_checks {
+            self.log("set_lowering skip_initial_checks is on: assertions in initial blocks that check a signal at time zero are left out of this model");
+        }
+        if req.isunknown_is_false {
+            self.log("set_lowering isunknown_is_false is on: $isunknown is 0 in this model, so a property that only says a signal is known holds without saying anything about the design");
+        }
         if !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {
             self.log(&format!(
                 "black boxes in this model (outputs free, contents not modelled): {}. A proof holds for the design; a counterexample may use output values the boxed logic cannot produce",

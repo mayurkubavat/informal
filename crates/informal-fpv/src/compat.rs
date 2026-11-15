@@ -617,6 +617,37 @@ const COMMON: &[(&str, Body)] = &[
             .map(Value::from)
             .map_err(|e| e.to_string())
     }),
+    ("set_lowering", |s, a| {
+        // informal's own: constructs the front end reports as unsupported
+        // unless the user says to leave them out. Nothing is on by default.
+        let state = |on: bool| if on { "on" } else { "off" };
+        let Some(name) = a.get(1) else {
+            return Ok(Value::from(format!(
+                "skip_initial_checks {} isunknown_is_false {}",
+                state(s.design.skip_initial_checks),
+                state(s.design.isunknown_is_false)
+            )));
+        };
+        let option = match name.as_str() {
+            "skip_initial_checks" => &mut s.design.skip_initial_checks,
+            "isunknown_is_false" => &mut s.design.isunknown_is_false,
+            _ => {
+                return Err(format!(
+                    "set_lowering: unknown option {name}; options: skip_initial_checks, isunknown_is_false"
+                ))
+            }
+        };
+        match a.get(2).map(String::as_str) {
+            Some("on") => *option = true,
+            Some("off") => *option = false,
+            None => return Ok(Value::from(state(*option))),
+            Some(v) => return Err(format!("set_lowering {name}: on or off, not `{v}`")),
+        }
+        // The design is read again with the new setting at the next
+        // elaborate or prove.
+        s.elaborated = false;
+        Ok(().into())
+    }),
     ("set_engines", |s, a| {
         let names: Vec<String> = a[1..]
             .iter()
@@ -1367,6 +1398,31 @@ mod tests {
         // Nothing ran: the properties exist, unprocessed; the shell is usable after.
         assert_eq!(sh.eval("get_property_list").unwrap(), "q_a q_b c1");
         assert!(!sh.session.borrow().dry_run);
+    }
+
+    #[test]
+    fn lowering_switches_are_off_until_asked_for() {
+        let sh = shell(Flavor::Jg);
+        assert_eq!(
+            sh.eval("set_lowering").unwrap(),
+            "skip_initial_checks off isunknown_is_false off"
+        );
+        sh.eval("set_lowering isunknown_is_false on").unwrap();
+        assert_eq!(sh.eval("set_lowering isunknown_is_false").unwrap(), "on");
+        assert_eq!(sh.eval("set_lowering skip_initial_checks").unwrap(), "off");
+        assert!(sh.session.borrow().design.isunknown_is_false);
+        sh.eval("set_lowering isunknown_is_false off").unwrap();
+        assert!(!sh.session.borrow().design.isunknown_is_false);
+        let e = sh.eval("set_lowering everything on").unwrap_err();
+        assert!(
+            e.message.contains("unknown option everything"),
+            "{}",
+            e.message
+        );
+        let e = sh
+            .eval("set_lowering skip_initial_checks maybe")
+            .unwrap_err();
+        assert!(e.message.contains("on or off"), "{}", e.message);
     }
 
     #[test]

@@ -236,6 +236,16 @@ pub struct Request {
     /// Model only: the reset's length for a model that drives the clocks
     /// (a design on both clock edges, several clocks or computed clocks).
     pub tick: TickReset,
+    /// Leave out the immediate assertions in `initial` blocks that check a
+    /// signal at time zero (OpenTitan's `ASSERT_INIT_NET`), which are
+    /// otherwise not supported. Only those checks are not made; the
+    /// design's behaviour is the same. Off unless the user asks.
+    pub skip_initial_checks: bool,
+    /// Lower `$isunknown(x)` as 0, since the model has no unknown value;
+    /// it is otherwise not supported. A check such as `assert
+    /// (!$isunknown(x))` then always holds and says nothing about the
+    /// design. Off unless the user asks.
+    pub isunknown_is_false: bool,
 }
 
 /// How long the reset lasts in a model that drives the clocks, where one
