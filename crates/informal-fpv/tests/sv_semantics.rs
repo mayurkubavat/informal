@@ -89,9 +89,14 @@ fn lock_lines(c: &Case, sh: &Shell, work: &Path) -> Vec<String> {
     lines
 }
 
+/// The session's working directory for a design, one per test process.
+fn work_dir(top: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("informal-sv-{top}-{}", std::process::id()))
+}
+
 /// The case's lowering.lock lines, or a description of how it went wrong.
 fn run(c: &Case) -> Result<Vec<String>, String> {
-    let work = std::env::temp_dir().join(format!("informal-sv-{}-{}", c.top, std::process::id()));
+    let work = work_dir(&c.top);
     let sh = Shell::new(
         Session::new(informal_bmc::engines(), work.clone()),
         Flavor::Jg,
@@ -191,6 +196,9 @@ fn case(name: &str) {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let c = parse(&root().join("tests/sv").join(format!("{name}.sv")));
     let got = run(&c).unwrap_or_else(|e| panic!("{name}: {e}"));
+    // A passing case leaves nothing behind (the directory is in /tmp, often
+    // a RAM disk); a failing one keeps its models for a look.
+    let _ = std::fs::remove_dir_all(work_dir(name));
     if std::env::var_os("INFORMAL_BLESS").is_some() {
         rewrite_lock(|by_design| {
             by_design.remove(name);
