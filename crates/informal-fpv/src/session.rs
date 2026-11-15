@@ -540,7 +540,29 @@ impl Session {
         }
         self.hierarchy = d.instances.clone();
         self.design.hierarchy = d.hierarchy.clone();
+        // A design with no model lists no properties of its own. Say so here,
+        // with the reasons: an empty table must not read as "nothing to
+        // prove". A property given by command gets the same reasons as its
+        // error, and a prove with nothing to run fails with them.
+        if !d.not_lowered.is_empty() {
+            self.log("NOT MODELLED: the design does not lower, so its own properties are not listed and nothing can be proved until this is resolved:");
+            for line in d.not_lowered.iter().take(20) {
+                self.log(&format!("  {line}"));
+            }
+        }
         self.rtl_properties(&d.properties);
+        if !d.unlisted_checks.is_empty() {
+            self.log(&format!(
+                "NOT CHECKED: {} immediate assertion(s) or cover(s) in the RTL are not in the property table (give each a label of its own, `name: assert (...)`):",
+                d.unlisted_checks.len()
+            ));
+            for line in d.unlisted_checks.iter().take(20) {
+                self.log(&format!("  {line}"));
+            }
+            if d.unlisted_checks.len() > 20 {
+                self.log(&format!("  ... and {} more", d.unlisted_checks.len() - 20));
+            }
+        }
         self.elab = Some(d);
         std::fs::create_dir_all(&self.workdir)?;
         let tree = self.workdir.join("design.hierarchy.json");
@@ -734,6 +756,19 @@ impl Session {
                 .filter(|&i| self.props[i].kind != Kind::Assume)
                 .collect()
         };
+        if targets.is_empty() {
+            if let Some(why) = self
+                .elab
+                .as_ref()
+                .map(|d| &d.not_lowered)
+                .filter(|w| !w.is_empty())
+            {
+                bail!(
+                    "nothing was proved: the design cannot be modelled\n{}",
+                    why.iter().take(20).cloned().collect::<Vec<_>>().join("\n")
+                );
+            }
+        }
         let tracker = self.sink.clone().map(|sink| {
             Tracker::start(
                 sink,

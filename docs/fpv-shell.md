@@ -36,6 +36,14 @@ directory (`informal_work/` by default).
    wrong verdict. `tests/sv` holds small designs with known answers for
    this. `informal lower design.sv -D NAME` prints the Btor2 for a design
    whose labelled immediate assertions become bad states.
+   A design that does not lower has no model, so its own properties are
+   not listed: `elaborate` says `NOT MODELLED` with the constructs, a
+   property given by command gets them as its error, and a `prove` with
+   nothing to run fails with them. An empty table never means "nothing
+   to prove". An immediate assertion or cover in an always block that has
+   a label of its own is listed under that label and proved like any
+   property; one with no label, or with a label used twice, is reported
+   at `elaborate` as `NOT CHECKED`, with its file and line.
 4. Each property given by command is bound by svlang in the top module's
    scope, so it sees every signal there and in the instances below, and is
    compiled by the same property compiler as the properties written in

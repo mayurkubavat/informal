@@ -47,6 +47,9 @@ gated_memory x_read a532c5e096a73d03 lines=203 state=21 input=7 bad=1 constraint
 gated_memory x_keep 6d5d8148e617fa0d lines=203 state=21 input=7 bad=1 constraint=2 justice=0
 gated_memory x_always 7221a68382d6d032 lines=203 state=21 input=7 bad=1 constraint=2 justice=0
 gated_memory c_two f16dde76f6d88642 lines=203 state=21 input=7 bad=1 constraint=2 justice=0
+immediate_asserts a_le9 5bf8e5755079b122 lines=36 state=2 input=2 bad=1 constraint=1 justice=0
+immediate_asserts a_never9 4fffdfce1a46aa61 lines=36 state=2 input=2 bad=1 constraint=1 justice=0
+immediate_asserts c_five 3dfab88b1f8dbb7a lines=36 state=2 input=2 bad=1 constraint=1 justice=0
 initial_value a_parity b89a234164fda0cc lines=15 state=1 input=1 bad=1 constraint=0 justice=0
 latches a_open fa43348b6b159377 lines=114 state=9 input=7 bad=1 constraint=1 justice=0
 latches a_closed 352548efb831ec2d lines=114 state=9 input=7 bad=1 constraint=1 justice=0

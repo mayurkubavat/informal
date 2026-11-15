@@ -255,6 +255,74 @@ fn rtl_properties(
         .collect()
 }
 
+/// Adds the labelled immediate assertions and covers of `nl` to `listed`,
+/// under the name their target has in the model (the label), and returns a
+/// line for each one that cannot be listed: it has no label, or its label
+/// is used by another check or property, so the model's targets could not
+/// be told apart. An immediate assumption is a constraint of the model
+/// whether or not it has a name, so it is neither listed nor reported.
+fn immediate_checks(nl: &Netlist, listed: &mut Vec<RtlProperty>) -> Vec<String> {
+    use svlang::netlist::CheckKind;
+    let place = |c: &svlang::netlist::Check| {
+        let file = nl
+            .files
+            .get(c.loc.file as usize)
+            .filter(|f| !f.is_empty())
+            .cloned();
+        (file, (c.loc.line > 0).then_some(c.loc.line))
+    };
+    let at = |c: &svlang::netlist::Check| match place(c) {
+        (Some(f), Some(l)) => format!("{f}:{l}"),
+        (Some(f), None) => f,
+        _ => "the design".into(),
+    };
+    // The name of an immediate check's target: its label without the scope.
+    let short = |c: &svlang::netlist::Check| {
+        c.label
+            .as_deref()
+            .map(|l| l.rsplit('.').next().unwrap_or(l).to_string())
+    };
+    let checks: Vec<&svlang::netlist::Check> = nl
+        .checks
+        .iter()
+        .filter(|c| c.immediate && c.kind != CheckKind::Assume)
+        .collect();
+    let mut uses: std::collections::HashMap<String, usize> = Default::default();
+    for name in checks.iter().filter_map(|c| short(c)) {
+        *uses.entry(name).or_default() += 1;
+    }
+    let mut unlisted = Vec::new();
+    for c in checks {
+        let what = if c.kind == CheckKind::Cover {
+            "cover"
+        } else {
+            "assert"
+        };
+        match short(c) {
+            None => unlisted.push(format!("{}: immediate {what} with no label", at(c))),
+            Some(name) if uses[&name] > 1 || listed.iter().any(|p| p.name == name) => unlisted
+                .push(format!(
+                    "{}: immediate {what} `{name}`: another check or property has that name",
+                    at(c)
+                )),
+            Some(name) => {
+                let (file, line) = place(c);
+                listed.push(RtlProperty {
+                    name,
+                    kind: what.into(),
+                    unsupported: None,
+                    error: None,
+                    liveness: false,
+                    text: None,
+                    file,
+                    line,
+                });
+            }
+        }
+    }
+    unlisted
+}
+
 /// The value of the reset condition `text`, an expression in the top
 /// module's scope, in `nl`. Lowering it may re-index the netlist's values,
 /// so nothing else may be added to `nl` after this.
@@ -297,6 +365,9 @@ fn model(
 ) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
     let mut nl = base.clone();
     let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips);
+    // The labelled immediate assertions are targets of the model too, under
+    // their labels (the ones that cannot be listed were reported at compile).
+    immediate_checks(&nl, &mut properties);
     properties.extend(command_properties(
         comp,
         design,
@@ -475,22 +546,31 @@ pub fn compile(req: &Request) -> Design {
         })
         .collect();
     let ok = !diagnostics.iter().any(|d| d.severity == "error");
-    // A design that does not lower lists none here; prove reports why.
-    let properties = match ok {
-        true => {
-            let config = LowerConfig {
-                top: req.top.clone(),
-                skip_initial_checks: req.skip_initial_checks,
-                isunknown_is_false: req.isunknown_is_false,
-                ..LowerConfig::default()
-            };
-            match comp.lower_netlist(&config) {
-                LowerOutcome::Lowered(mut nl) => rtl_properties(&mut nl, 0, &[]),
-                _ => Vec::new(),
+    // A design that does not lower has no properties to list, and says why:
+    // an empty table must never be mistaken for a design with nothing to prove.
+    let (mut properties, mut not_lowered, mut unlisted_checks) =
+        (Vec::new(), Vec::new(), Vec::new());
+    if ok {
+        let config = LowerConfig {
+            top: req.top.clone(),
+            skip_initial_checks: req.skip_initial_checks,
+            isunknown_is_false: req.isunknown_is_false,
+            ..LowerConfig::default()
+        };
+        match comp.lower_netlist(&config) {
+            LowerOutcome::Lowered(mut nl) => {
+                properties = rtl_properties(&mut nl, 0, &[]);
+                unlisted_checks = immediate_checks(&nl, &mut properties);
             }
+            LowerOutcome::Unsupported(ds) => {
+                not_lowered = ds
+                    .iter()
+                    .map(|d| format!("not supported yet: {}{}", show(d), hint(&d.message)))
+                    .collect();
+            }
+            LowerOutcome::Error(ds) => not_lowered = ds.iter().map(show).collect(),
         }
-        false => Vec::new(),
-    };
+    }
     let e = &elab.design;
     Design {
         ok,
@@ -508,6 +588,8 @@ pub fn compile(req: &Request) -> Design {
         signals: signals(e),
         hierarchy: e.scope_tree().iter().map(scope).collect(),
         properties,
+        not_lowered,
+        unlisted_checks,
     }
 }
 
