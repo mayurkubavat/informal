@@ -68,7 +68,7 @@ build() {
         rIC3) (cd "$dir" && cargo build --release -j "$jobs") && ln -sf "$dir/$artifact" "$HOME/.local/bin/ric3" ;;
         abc) make -C "$dir" -j "$jobs" ABC_USE_NO_READLINE=1 abc && ln -sf "$dir/$artifact" "$HOME/.local/bin/abc" ;;
         btor2tools) (cd "$dir" && ./configure.sh && cd build && make -j "$jobs") ;;
-        aiger) (cd "$dir" && ./configure.sh && make -j "$jobs" aigsim aigsplit aigtocnf) ;;
+        aiger) (cd "$dir" && ./configure.sh && make -j "$jobs" aigsim aigsplit aigtocnf aigfuzz) ;;
         certifaiger)
             # One source file and the AIGER library; its own `make` would
             # also download the tools around it.

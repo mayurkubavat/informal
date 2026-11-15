@@ -18,14 +18,14 @@ comparison also catches the external engines.
 The last line is "FUZZ: <n> models, <d> with a definitive verdict, <k>
 disagreements"; the exit status is 1 if there is a disagreement.
 aigfuzz is looked for as $AIGFUZZ or in $INFORMAL_TOOLS_DIR/aiger/
-(default ~/Silicon/DV/tools; built from commit AIGER_COMMIT below).
+(default ~/Silicon/DV/tools), the AIGER checkout pinned in tools.lock
+(scripts/tools.sh build aiger).
 """
 import argparse
 import os
 import subprocess
 import sys
 
-AIGER_COMMIT = "039ec1a"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERDICT = {10: "unsafe", 20: "safe"}
 
@@ -34,9 +34,7 @@ def aigfuzz():
     tools = os.environ.get("INFORMAL_TOOLS_DIR", os.path.expanduser("~/Silicon/DV/tools"))
     path = os.environ.get("AIGFUZZ") or os.path.join(tools, "aiger/aigfuzz")
     if not os.access(path, os.X_OK):
-        sys.exit(f"fuzz: no aigfuzz at {path}: git clone https://github.com/arminbiere/aiger "
-                 f"{tools}/aiger && git -C {tools}/aiger checkout {AIGER_COMMIT} && "
-                 f"(cd {tools}/aiger && ./configure.sh && make aigfuzz)")
+        sys.exit(f"fuzz: no aigfuzz at {path}: scripts/tools.sh build aiger")
     return path
 
 
