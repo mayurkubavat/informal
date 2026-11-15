@@ -4,6 +4,8 @@ import type { ConsoleLine, EngineLine, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
 // it found it where that matters.
+// vi.waitFor gives up after 1 s by default; the mock ticks on real timers.
+const WAIT = { timeout: 10_000 };
 const status = async (name: string) => (await mock("snapshot", {})).session!.props.find((p) => p.name === name)!;
 
 describe("browser mock", () => {
@@ -123,7 +125,7 @@ describe("browser mock: live progress and stop", () => {
   it("stops mid-run: unfinished properties become undetermined (stopped)", async () => {
     mockOptions.freeze = 2;
     const pending = mock("shell_eval", { script: "prove -all" });
-    await vi.waitFor(() => expect(events).toHaveLength(3));
+    await vi.waitFor(() => expect(events).toHaveLength(3), WAIT);
     expect(running(events[2])).toEqual(["a_step", "a_never9"]);
     expect(mockRunning()).toBe(true);
     const again = await mock("shell_eval", { script: "check_fv" });
@@ -154,7 +156,7 @@ describe("browser mock: live progress and stop", () => {
   it("source prove-on-source.tcl proves properties the session gets only with the reply", async () => {
     mockOptions.freeze = 1;
     const pending = mock("shell_source", { path: PROVE_ON_SOURCE });
-    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await vi.waitFor(() => expect(events).toHaveLength(2), WAIT);
     expect(events[0].props.map((p) => [p.name, p.kind, p.status])).toEqual([
       ["a_src_ok", "assert", "running"], ["c_src_hit", "cover", "running"],
     ]);
@@ -175,7 +177,7 @@ describe("browser mock: live progress and stop", () => {
   it("holds the stop under ?holdStop so the run stays up", async () => {
     Object.assign(mockOptions, { freeze: 1, holdStop: true });
     void mock("shell_eval", { script: "prove -all" });
-    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await vi.waitFor(() => expect(events).toHaveLength(2), WAIT);
     let answered = false;
     void mock("shell_stop", {}).then(() => (answered = true));
     await new Promise((r) => setTimeout(r, 250));

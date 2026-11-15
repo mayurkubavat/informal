@@ -18,16 +18,18 @@
 # changes how the tool runs is cleared first, so a tuning or debugging
 # setting in the calling shell cannot change what the gate tests.
 #
-# --quiet sets CARGO_BUILD_JOBS, RUST_TEST_THREADS and VITEST_MAX_WORKERS to
-# 2 (a value already in the environment wins) and lowers the priority of
-# everything the gate starts. A test that runs the engine portfolio still
-# uses one thread per engine, at that low priority.
+# --quiet sets CARGO_BUILD_JOBS, RUST_TEST_THREADS, VITEST_MAX_WORKERS and
+# PW_WORKERS to 2 (a value already in the environment wins), lowers the
+# priority of everything the gate starts, and skips the one UI test that
+# asserts a wall-clock budget (the result line says so). A test that runs
+# the engine portfolio still uses one thread per engine, at low priority.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
 e2e=0
 strict=1
+quiet=0
 for arg in "$@"; do
     case "$arg" in
         --e2e) e2e=1 ;;
@@ -36,6 +38,9 @@ for arg in "$@"; do
             export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
             export RUST_TEST_THREADS="${RUST_TEST_THREADS:-2}"
             export VITEST_MAX_WORKERS="${VITEST_MAX_WORKERS:-2}"
+            export PW_WORKERS="${PW_WORKERS:-2}"
+            export UI_SKIP_PERF=1
+            quiet=1
             renice -n 19 -p $$ >/dev/null
             ;;
         *) echo "check.sh: unknown option $arg" >&2; exit 2 ;;
@@ -45,7 +50,9 @@ done
 current="setup"
 finish() {
     rc=$?
-    if [ "$rc" = 0 ] && [ "$strict" = 1 ]; then
+    if [ "$rc" = 0 ] && [ "$strict" = 1 ] && [ "$quiet" = 1 ] && [ "$e2e" = 1 ]; then
+        printf '\nGATE: PASS (--quiet: the UI wall-clock budget test was not run)\n'
+    elif [ "$rc" = 0 ] && [ "$strict" = 1 ]; then
         printf '\nGATE: PASS\n'
     elif [ "$rc" = 0 ]; then
         printf '\nGATE: PASS (tool-dependent tests were allowed to skip: not a valid gate run)\n'
@@ -96,5 +103,5 @@ step "ui: tsc and vitest"
 
 if [ "$e2e" = 1 ]; then
     step "ui: playwright (e2e + visual)"
-    (cd ui && npx --no-install playwright test)
+    (cd ui && npx --no-install playwright test ${PW_WORKERS:+--workers="$PW_WORKERS"})
 fi

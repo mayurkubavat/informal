@@ -10,7 +10,8 @@ Tauri build is needed. Run from `ui/`.
 | `npm run test:visual` | Screenshot diffs, light/dark x 1440x900/1000x700 | `tests/visual/` |
 | `npm run test:update` | Regenerate screenshot baselines | `tests/__screenshots__/` |
 
-Playwright starts `npm run dev` on :1420 (or reuses a running one). First run
+Playwright starts its own dev server on :1431 (`UI_TEST_PORT` changes it) and
+never reuses a running one, so it always tests this checkout. First run
 on a new machine: `npx playwright install chromium`. Baselines carry the
 platform in their file names (`-linux`, `-darwin`), so each OS keeps its own;
 generate them with `test:update` and review the PNGs before committing.

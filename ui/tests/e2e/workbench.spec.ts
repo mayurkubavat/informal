@@ -471,7 +471,7 @@ test.describe("virtualized table (5,000 properties)", () => {
     await row(page, "a_max").click();
     await page.keyboard.press("End");
     await expect(selectedName(page)).toHaveText("p_04999");
-    expect(await selInView(page)).toBe(true);
+    await expect.poll(() => selInView(page)).toBe(true);
     expect(await domRows(page).count()).toBeLessThan(100);
     await page.keyboard.press("Home");
     await expect(selectedName(page)).toHaveText("a_max");
@@ -479,10 +479,10 @@ test.describe("virtualized table (5,000 properties)", () => {
     await page.keyboard.press("PageDown");
     const afterPage = await selectedName(page).textContent();
     expect(afterPage).toMatch(/^p_000\d\d$/);
-    expect(await selInView(page)).toBe(true);
+    await expect.poll(() => selInView(page)).toBe(true);
     await page.keyboard.press("PageDown");
     await page.keyboard.press("ArrowDown");
-    expect(await selInView(page)).toBe(true);
+    await expect.poll(() => selInView(page)).toBe(true);
     await expect(page.getByRole("tab", { name: /^Details: p_0/ })).toBeVisible();
   });
 
@@ -508,6 +508,8 @@ test.describe("virtualized table (5,000 properties)", () => {
   });
 
   test("a selection change renders in under 16 ms", async ({ page }) => {
+    // A wall-clock budget only means something on a quiet machine.
+    test.skip(!!process.env.UI_SKIP_PERF, "wall-clock budget: needs a quiet machine (UI_SKIP_PERF)");
     await row(page, "a_max").click();
     const times = await page.evaluate(async () => {
       const wrap = document.querySelector<HTMLElement>(".table-wrap")!;

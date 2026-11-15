@@ -6,6 +6,14 @@ import { defineConfig, devices } from "@playwright/test";
 // macOS baselines can sit side by side.
 const size = { width: 1440, height: 900 };
 
+// The suites start their own dev server on their own port and never reuse
+// one that is already up: a server on the app's port 1420 may belong to
+// another checkout, and the tests would then run against that tree. Two
+// runs at once need different UI_TEST_PORT values (the second fails to
+// start otherwise, which is the safe outcome).
+const port = Number(process.env.UI_TEST_PORT ?? 1431);
+const url = `http://localhost:${port}`;
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
@@ -17,7 +25,7 @@ export default defineConfig({
     toHaveScreenshot: { maxDiffPixelRatio: 0.001, animations: "disabled", caret: "hide" },
   },
   use: {
-    baseURL: "http://localhost:1420",
+    baseURL: url,
     trace: "off",
   },
   projects: [
@@ -34,9 +42,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:1420",
-    reuseExistingServer: true,
+    command: `npx vite --port ${port} --strictPort`,
+    url,
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 });
