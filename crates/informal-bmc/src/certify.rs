@@ -401,13 +401,21 @@ pub fn check(g: &Aig, inv: &[Clause], new_sat: &dyn Fn() -> Box<dyn Sat>) -> Res
 /// Check a k-induction proof at depth `k` (k >= 1) on `g`: `inv` (the
 /// strengthening, and what preprocessing assumed) is an inductive
 /// invariant; no bad state is reachable in fewer than `k` steps; and on
-/// every path of `k` good states that satisfy `inv` and differ pairwise
-/// on `reps`, the next state is good. The simple-path constraints are
-/// added lazily, as the engine does, but with this file's own encoding.
+/// every path of `k` good states that satisfy `inv` and differ pairwise,
+/// the next state is good. The simple-path constraints are added lazily,
+/// as the engine does, but with this file's own encoding.
+///
+/// Two states differ when they differ on some latch of the cone this
+/// file computes itself on `g` (bad and constraint outputs and the
+/// invariant's latches, through next states). The engine's own notion of
+/// "differ" (the latches its preprocessing kept) is not taken on trust:
+/// distinctness over fewer latches than the cone has would cut real
+/// paths and could let a wrong proof pass. Where preprocessing merged or
+/// fixed latches correctly, `inv` says so and is assumed in every frame,
+/// so both notions agree and no correct proof is lost.
 pub fn check_kind(
     g: &Aig,
     inv: &[Clause],
-    reps: &[Lit],
     k: usize,
     new_sat: &dyn Fn() -> Box<dyn Sat>,
     stop: &dyn Fn() -> bool,
@@ -415,15 +423,14 @@ pub fn check_kind(
     if k == 0 {
         return Err("k-induction at depth 0".into());
     }
-    let mut cone = cone(g, inv);
-    // The distinctness constraints read the rep latches too.
-    {
-        let extra: Vec<Clause> = reps.iter().map(|&r| vec![r]).collect();
-        let c2 = self::cone(g, &extra);
-        for (a, b) in cone.iter_mut().zip(c2) {
-            *a |= b;
-        }
-    }
+    let cone = cone(g, inv);
+    let state: Vec<Lit> = g
+        .latches
+        .iter()
+        .map(|l| l.lit)
+        .filter(|&l| cone[var(l) as usize])
+        .collect();
+    let reps = &state[..];
     check_inductive(g, &cone, inv, new_sat)?;
 
     // Base: no bad state in frames 0..k-1 from the initial states.
@@ -770,22 +777,60 @@ mod tests {
     fn checks_k_induction_depth_base_and_step() {
         let never = || false;
         let g = shift(Init::Zero);
-        let reps: Vec<Lit> = g.latches.iter().map(|l| l.lit).collect();
-        assert_eq!(check_kind(&g, &[], &reps, 2, &sat, &never), Ok(()));
+        assert_eq!(check_kind(&g, &[], 2, &sat, &never), Ok(()));
         assert_eq!(
-            check_kind(&g, &[], &reps, 1, &sat, &never),
+            check_kind(&g, &[], 1, &sat, &never),
             Err("step fails".into())
         );
         let bad = shift(Init::One);
         assert_eq!(
-            check_kind(&bad, &[], &reps, 2, &sat, &never),
+            check_kind(&bad, &[], 2, &sat, &never),
             Err("base fails".into())
         );
         // A strengthening that is not inductive is caught first.
         let a = g.latches[0].lit;
         assert_eq!(
-            check_kind(&g, &[vec![a]], &reps, 2, &sat, &never),
+            check_kind(&g, &[vec![a]], 2, &sat, &never),
             Err("init fails".into())
+        );
+    }
+
+    /// A 3-bit counter from 0, bad at 7 (reached at depth 7). Paths of
+    /// three states that differ pairwise on the low bit alone do not
+    /// exist, so a check that took "differ" from a caller who named only
+    /// that bit would pass a 2-induction proof of a false property. The
+    /// check computes the state itself and rejects it.
+    #[test]
+    fn k_induction_distinctness_covers_the_whole_cone() {
+        let never = || false;
+        let mut g = Aig::new();
+        let b: Vec<Lit> = (0..3).map(|_| g.latch(Init::Zero)).collect();
+        let c1 = g.and(b[0], b[1]);
+        let x1 = {
+            let n = g.and(neg(b[0]), neg(b[1]));
+            g.and(neg(c1), neg(n))
+        };
+        let x2 = {
+            let n = g.and(neg(c1), neg(b[2]));
+            let both = g.and(c1, b[2]);
+            g.and(neg(both), neg(n))
+        };
+        g.set_next(b[0], neg(b[0]));
+        g.set_next(b[1], x1);
+        g.set_next(b[2], x2);
+        let top = g.and(c1, b[2]);
+        g.bads.push(top);
+        assert_eq!(
+            check_kind(&g, &[], 2, &sat, &never),
+            Err("step fails".into())
+        );
+        assert_eq!(
+            check_kind(&g, &[], 7, &sat, &never),
+            Err("step fails".into())
+        );
+        assert_eq!(
+            check_kind(&g, &[], 8, &sat, &never),
+            Err("base fails".into())
         );
     }
 

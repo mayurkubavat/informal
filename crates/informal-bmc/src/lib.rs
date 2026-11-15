@@ -608,10 +608,10 @@ fn kind_certified(
     let r = (|| {
         let k = k.ok_or("missing: k-induction said safe without a depth")?;
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
-        let (mut inv, reps) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;
+        let (mut inv, _) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;
         inv.extend(certify::equalities(&p.merged));
         // Depth k here is the number of good frames before the bad one.
-        certify::check_kind(&orig, &inv, &reps, k.max(1), &|| solver(ctx), &|| {
+        certify::check_kind(&orig, &inv, k.max(1), &|| solver(ctx), &|| {
             ctx.should_stop()
         })
     })();
