@@ -4,6 +4,9 @@ Tiny designs, each with a known answer, run through the whole shell flow
 (svlang lowering, the injected harness, the in-house engines) by
 `crates/informal-fpv/tests/sv_semantics.rs`, so `cargo test` and
 `scripts/check.sh` catch a front-end change that gives a wrong verdict.
+Each design is its own test, `sv_<file stem>` (the crate's build script
+lists the directory), so one design can be run alone:
+`cargo test -p informal-fpv --test sv_semantics sv_latches`.
 
 Each `.sv` file carries its own script and expectations in comments:
 

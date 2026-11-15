@@ -224,7 +224,12 @@ tool is missing fails (plain `cargo test` prints why and skips it;
 `scripts/check.sh --allow-missing-tools` does the same, but is not a valid
 gate run). The gate clears `INFORMAL_*` tuning variables, checks the Rust
 and Node versions against `rust-toolchain.toml` and `ui/.nvmrc`, and builds
-with `--locked`. The UI steps need `npm ci` in `ui/` first.
+with `--locked`. The UI steps need `npm ci` in `ui/` first, and the Rust
+tests run under [cargo-nextest](https://nexte.st) (one process per test;
+install the prebuilt binary with
+`curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin`).
+`scripts/check.sh --fast` is a quick check while working, and `--quiet`
+runs the gate at low priority on a busy machine.
 
 ## License
 

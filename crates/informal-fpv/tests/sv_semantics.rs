@@ -136,63 +136,117 @@ fn run(c: &Case) -> Result<Vec<String>, String> {
     Ok(lock_lines(c, &sh, &work))
 }
 
-#[test]
-fn sv_known_answers() {
+/// The designs run one at a time inside one test process (each starts the
+/// engines); under nextest every test is its own process and the `engines`
+/// test group does the same job (.config/nextest.toml).
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+const BLESS: &str = "If the change is meant, rewrite the file with\n  \
+                     INFORMAL_BLESS=1 cargo test -p informal-fpv --test sv_semantics\n\
+                     and say in the commit why the models changed.";
+
+fn lock_path() -> PathBuf {
+    root().join("tests/sv/lowering.lock")
+}
+
+/// tests/sv/lowering.lock with `edit` applied to its lines grouped by
+/// design, written back in design order. Several test processes may do
+/// this at once, so the file is locked for the read and the write.
+fn rewrite_lock(edit: impl FnOnce(&mut std::collections::BTreeMap<String, Vec<String>>)) {
+    use std::io::{Read, Seek, Write};
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path())
+        .unwrap();
+    f.lock().unwrap();
+    let mut text = String::new();
+    f.read_to_string(&mut text).unwrap();
+    let mut by_design = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for l in text.lines() {
+        let design = l.split(' ').next().unwrap().to_string();
+        by_design.entry(design).or_default().push(l.to_string());
+    }
+    edit(&mut by_design);
+    let out: String = by_design
+        .values()
+        .flatten()
+        .map(|l| format!("{l}\n"))
+        .collect();
+    f.rewind().unwrap();
+    f.set_len(0).unwrap();
+    f.write_all(out.as_bytes()).unwrap();
+}
+
+/// One design: its known answers, then its lines of the lowering record.
+/// INFORMAL_BLESS rewrites those lines (scripts/check.sh clears that
+/// variable, so the gate only ever compares).
+fn case(name: &str) {
     if informal_bmc::engines().is_empty() {
         informal_engine::tool_missing("needs CaDiCaL");
         return;
     }
-    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("tests/sv"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|x| x == "sv"))
-        .collect();
-    files.sort();
-    assert!(!files.is_empty());
-    let mut failures = Vec::new();
-    let mut lock = Vec::new();
-    for c in files.iter().map(|f| parse(f)) {
-        match run(&c) {
-            Ok(lines) => lock.extend(lines),
-            Err(e) => failures.push(format!("{}: {e}", c.top)),
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{} of {} cases wrong:\n  {}",
-        failures.len(),
-        files.len(),
-        failures.join("\n  ")
-    );
-
-    // The lowering record. INFORMAL_BLESS rewrites it (scripts/check.sh
-    // clears that variable, so the gate only ever compares).
-    let path = root().join("tests/sv/lowering.lock");
-    let got = lock.join("\n") + "\n";
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let c = parse(&root().join("tests/sv").join(format!("{name}.sv")));
+    let got = run(&c).unwrap_or_else(|e| panic!("{name}: {e}"));
     if std::env::var_os("INFORMAL_BLESS").is_some() {
-        std::fs::write(&path, &got).unwrap();
+        rewrite_lock(|by_design| {
+            by_design.remove(name);
+            if !got.is_empty() {
+                by_design.insert(name.to_string(), got.clone());
+            }
+        });
         return;
     }
-    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = std::fs::read_to_string(lock_path()).unwrap_or_default();
+    let want: Vec<&str> = text
+        .lines()
+        .filter(|l| l.split(' ').next() == Some(name))
+        .collect();
     if got != want {
-        let old: Vec<&str> = want.lines().collect();
-        let changed: Vec<String> = lock
+        let changed: Vec<String> = got
             .iter()
-            .filter(|l| !old.contains(&l.as_str()))
+            .filter(|l| !want.contains(&l.as_str()))
             .map(|l| format!("+ {l}"))
             .chain(
-                old.iter()
-                    .filter(|l| !lock.iter().any(|n| n == *l))
+                want.iter()
+                    .filter(|l| !got.iter().any(|n| n == *l))
                     .map(|l| format!("- {l}")),
             )
             .collect();
         panic!(
-            "the lowering of {} properties differs from tests/sv/lowering.lock:\n  {}\n\
-             If the change is meant, rewrite the file with\n  \
-             INFORMAL_BLESS=1 cargo test -p informal-fpv --test sv_semantics\n\
-             and say in the commit why the models changed.",
-            changed.iter().filter(|l| l.starts_with('+')).count().max(1),
+            "{name}: the models differ from tests/sv/lowering.lock:\n  {}\n{BLESS}",
             changed.join("\n  ")
         );
     }
+}
+
+// `fn sv_<design>() { case("<design>") }` for every tests/sv/*.sv (build.rs).
+include!(concat!(env!("OUT_DIR"), "/sv_cases.rs"));
+
+/// The record names no design that is gone (INFORMAL_BLESS drops them).
+#[test]
+fn lowering_lock_has_no_stale_design() {
+    let exists = |design: &str| {
+        root()
+            .join("tests/sv")
+            .join(format!("{design}.sv"))
+            .is_file()
+    };
+    if std::env::var_os("INFORMAL_BLESS").is_some() {
+        rewrite_lock(|by_design| by_design.retain(|design, _| exists(design)));
+        return;
+    }
+    let text = std::fs::read_to_string(lock_path()).unwrap_or_default();
+    let stale: std::collections::BTreeSet<&str> = text
+        .lines()
+        .map(|l| l.split(' ').next().unwrap())
+        .filter(|d| !exists(d))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "tests/sv/lowering.lock has lines for designs that are gone: {stale:?}\n{BLESS}"
+    );
 }

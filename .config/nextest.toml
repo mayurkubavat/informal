@@ -1,0 +1,25 @@
+# cargo-nextest settings (scripts/check.sh runs the Rust tests with it).
+# Each test is its own process: it passes, fails and times out on its own.
+
+[profile.default]
+# No retries: a test that only passes on a second try is a bug to fix.
+retries = 0
+fail-fast = false
+# A test is reported as slow after a minute and killed after five. The
+# slowest today takes a few seconds; the room is for a busy machine.
+slow-timeout = { period = "60s", terminate-after = 5 }
+status-level = "fail"
+final-status-level = "slow"
+
+# Tests that start the engines (in-house portfolio or rIC3) run one at a
+# time: each uses a thread per engine, and their time limits are wall-clock.
+[test-groups]
+engines = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate)'
+test-group = 'engines'
+
+# scripts/check.sh --fast: everything except the engine tests above.
+[profile.fast]
+default-filter = 'not (binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate))'

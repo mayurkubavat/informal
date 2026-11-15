@@ -4,6 +4,10 @@
 # type check and unit tests.
 #
 #   scripts/check.sh                        all of it
+#   scripts/check.sh --fast                 a quick check while working: hygiene,
+#                                           fmt, clippy, the Rust tests that do
+#                                           not start the engines, and the UI
+#                                           type check (not a valid gate run)
 #   scripts/check.sh --e2e                  also the Playwright e2e and visual suites
 #   scripts/check.sh --allow-missing-tools  let tests skip when CaDiCaL, Bitwuzla
 #                                           or rIC3 is missing (not a valid gate run)
@@ -30,9 +34,11 @@ cd "$(dirname "$0")/.."
 e2e=0
 strict=1
 quiet=0
+fast=0
 for arg in "$@"; do
     case "$arg" in
         --e2e) e2e=1 ;;
+        --fast) fast=1 ;;
         --allow-missing-tools) strict=0 ;;
         --quiet)
             export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
@@ -50,7 +56,9 @@ done
 current="setup"
 finish() {
     rc=$?
-    if [ "$rc" = 0 ] && [ "$strict" = 1 ] && [ "$quiet" = 1 ] && [ "$e2e" = 1 ]; then
+    if [ "$rc" = 0 ] && [ "$fast" = 1 ]; then
+        printf '\nGATE: FAST PASS (engine, app and UI tests were not run: not a valid gate run)\n'
+    elif [ "$rc" = 0 ] && [ "$strict" = 1 ] && [ "$quiet" = 1 ] && [ "$e2e" = 1 ]; then
         printf '\nGATE: PASS (--quiet: the UI wall-clock budget test was not run)\n'
     elif [ "$rc" = 0 ] && [ "$strict" = 1 ]; then
         printf '\nGATE: PASS\n'
@@ -81,7 +89,8 @@ want_node=$(cat ui/.nvmrc)
 have_node=$(node --version | sed 's/^v\([0-9]*\).*/\1/')
 [ "$have_node" = "$want_node" ] || { echo "node is major $have_node, ui/.nvmrc pins $want_node"; exit 1; }
 [ -d ui/node_modules ] || { echo "ui/node_modules is missing: run 'npm ci' in ui/"; exit 1; }
-echo "rustc $have_rust, node $have_node"
+cargo nextest --version >/dev/null 2>&1 || { echo "cargo-nextest is missing: see README (Build and test)"; exit 1; }
+echo "rustc $have_rust, node $have_node, $(cargo nextest --version | head -1)"
 
 step "hygiene (no assistant state, keys or attribution)"
 scripts/hygiene.sh
@@ -94,8 +103,19 @@ step "clippy (workspace, app)"
 cargo clippy --locked --workspace --all-targets -- -D warnings
 (cd ui/src-tauri && cargo clippy --locked --all-targets -- -D warnings)
 
-step "cargo test (workspace, app)"
-cargo test --locked --workspace
+if [ "$fast" = 1 ]; then
+    step "rust tests without the engine tests (nextest, profile fast)"
+    cargo nextest run --locked --workspace --profile fast
+    step "ui: tsc"
+    (cd ui && npx --no-install tsc --noEmit)
+    exit 0
+fi
+
+# One process per test, engine tests one at a time (.config/nextest.toml).
+# nextest does not run doc tests, hence the second command.
+step "rust tests (workspace: nextest and doc tests; app)"
+cargo nextest run --locked --workspace
+cargo test --locked --workspace --doc
 (cd ui/src-tauri && cargo test --locked)
 
 step "ui: tsc and vitest"
