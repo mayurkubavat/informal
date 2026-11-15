@@ -67,6 +67,13 @@ fn lock_lines(c: &Case, sh: &Shell, work: &Path) -> Vec<String> {
         let Ok(model) = std::fs::read_to_string(work.join(format!("prop_{i}.btor2"))) else {
             continue;
         };
+        // INFORMAL_KEEP_MODELS=<dir> keeps a copy of every model, to compare
+        // two lowerings with scripts/btor2_equiv.py.
+        if let Some(dir) = std::env::var_os("INFORMAL_KEEP_MODELS") {
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{}.{}.btor2", c.top, p.name)), &model).unwrap();
+        }
         let count = |op: &str| {
             model
                 .lines()

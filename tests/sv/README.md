@@ -31,5 +31,12 @@ is changed on purpose, rewrite it with
     INFORMAL_BLESS=1 cargo test -p informal-fpv --test sv_semantics
 
 and say in the commit why the models changed: the diff lists exactly which
-properties moved. To see how a model changed, run the design at both
-commits and compare `prop_N.btor2` in the session's working directory.
+properties moved.
+
+Whether a changed model still means the same is a separate question, and
+`scripts/btor2_equiv.py <old.btor2> <new.btor2>` answers it: it proves that
+two models have the same transition system (inputs and registers matched by
+name, every next-state function, initial value, constraint and check
+compared), or shows that they differ. `scripts/repin.sh` runs it on every
+model a new svlang pin changes. `INFORMAL_KEEP_MODELS=<dir>` makes the test
+keep a copy of each model for it.
