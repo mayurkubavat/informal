@@ -12,6 +12,18 @@ pub mod memory;
 pub mod portfolio;
 pub mod witness;
 
+/// For a test that needs a tool this build or machine may lack (CaDiCaL,
+/// Bitwuzla, rIC3). Under the gate (`INFORMAL_REQUIRE_TOOLS` set, as
+/// `scripts/check.sh` does) a missing tool fails the test, since a test
+/// that did not run must not count as passed. Otherwise this prints why
+/// and the caller returns.
+pub fn tool_missing(what: &str) {
+    if std::env::var_os("INFORMAL_REQUIRE_TOOLS").is_some_and(|v| !v.is_empty()) {
+        panic!("{what} (INFORMAL_REQUIRE_TOOLS is set: a missing tool fails the test)");
+    }
+    eprintln!("skipping: {what}");
+}
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -38,7 +38,7 @@ fn value_at(vcd: &str, name: &str, t: u64) -> Option<String> {
 fn prove_counter(engine: &str, tag: &str) -> Option<Shell> {
     let mut engines = informal_bmc::engines();
     if engines.is_empty() {
-        eprintln!("skipping: informal-bmc engines need CaDiCaL");
+        informal_engine::tool_missing("informal-bmc engines need CaDiCaL");
         return None;
     }
     if engine == "fake-cex" {
@@ -60,7 +60,7 @@ unsafe = '(?m)^SAT$'
         let on_path = std::env::var_os("PATH")
             .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("ric3").is_file()));
         if !on_path {
-            eprintln!("skipping: needs ric3 on PATH");
+            informal_engine::tool_missing("needs ric3 on PATH");
             return None;
         }
         engines = informal_engines_ext::load(&root().join("config/engines.toml")).unwrap();

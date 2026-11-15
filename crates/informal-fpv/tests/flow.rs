@@ -17,7 +17,7 @@ fn on_path(bin: &str) -> bool {
 
 fn shell(flavor: Flavor, tag: &str) -> Option<Shell> {
     if !on_path("ric3") {
-        eprintln!("skipping: needs ric3 on PATH");
+        informal_engine::tool_missing("needs ric3 on PATH");
         return None;
     }
     let mut engines = informal_engines_ext::load(&root().join("config/engines.toml")).unwrap();

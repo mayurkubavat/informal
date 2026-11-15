@@ -93,7 +93,7 @@ fn run(c: &Case) -> Result<(), String> {
 #[test]
 fn sv_known_answers() {
     if informal_bmc::engines().is_empty() {
-        eprintln!("skipping: needs CaDiCaL");
+        informal_engine::tool_missing("needs CaDiCaL");
         return;
     }
     let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("tests/sv"))

@@ -444,6 +444,7 @@ mod tests {
     #[test]
     fn counter_and_memory() {
         if !available() {
+            informal_engine::tool_missing("needs Bitwuzla");
             return;
         }
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/models");
@@ -462,6 +463,7 @@ mod tests {
     #[test]
     fn array_bug_is_found() {
         if !available() {
+            informal_engine::tool_missing("needs Bitwuzla");
             return;
         }
         // mem starts all zero; each step writes 1 at address `a`; bad when

@@ -12,5 +12,7 @@ base=$(git merge-base HEAD origin/main 2>/dev/null || true)
 if [ -n "$base" ]; then
     msgs=$(git log --format='%h %an <%ae>%n%B' "$base"..HEAD | grep -iE '^(co-authored-by|generated[ -]with|generated-by):|noreply@anthropic\.com|claude\.ai/'  || true)
     [ -n "$msgs" ] && { echo "hygiene: unpushed commits carry assistant attribution:"; echo "$msgs"; bad=1; }
+else
+    echo "hygiene: no origin/main here, so unpushed commit messages were NOT checked"
 fi
 exit $bad

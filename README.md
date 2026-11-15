@@ -217,9 +217,14 @@ cargo test
 scripts/check.sh        # hygiene, fmt, clippy, all Rust and UI tests: run before a pull request
 ```
 
-`scripts/check.sh` does not need the benchmark models. Tests that need an
-external engine skip themselves when it is not installed. The UI steps
-need `npm install` in `ui/` first.
+`scripts/check.sh` does not need the benchmark models. Its exit status is
+the result, and its last line is `GATE: PASS` or `GATE: FAIL (<step>)`. It
+needs CaDiCaL, Bitwuzla and `ric3` on `PATH`: under the gate a test whose
+tool is missing fails (plain `cargo test` prints why and skips it;
+`scripts/check.sh --allow-missing-tools` does the same, but is not a valid
+gate run). The gate clears `INFORMAL_*` tuning variables, checks the Rust
+and Node versions against `rust-toolchain.toml` and `ui/.nvmrc`, and builds
+with `--locked`. The UI steps need `npm ci` in `ui/` first.
 
 ## License
 

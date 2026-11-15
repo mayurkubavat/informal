@@ -1,7 +1,8 @@
 """Compare an informal run database with HWMCC'24 expected verdicts.
 
 usage: python3 -I hwmcc_check.py <expected.json> <runs.jsonl>
-Any safe/unsafe verdict that contradicts the expected status is a bug.
+Any safe/unsafe verdict that contradicts the expected status is a bug:
+the exit status is 1 if there is one, 0 otherwise.
 """
 import json, re, statistics, sys
 
@@ -38,3 +39,4 @@ if times:
           f'median ratio {statistics.median(ratios):.2f}')
     for a, b, k in sorted(times, key=lambda t: -t[1])[:8]:
         print(f'   {k}: local {a:.1f}s  published {b:.1f}s')
+sys.exit(1 if bad else 0)

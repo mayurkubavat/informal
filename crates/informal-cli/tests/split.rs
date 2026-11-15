@@ -53,7 +53,7 @@ fn have_engines() -> bool {
 #[test]
 fn a_safe_or_is_proved_term_by_term() {
     if !have_engines() {
-        eprintln!("skipping: no in-house engines in this build");
+        informal_engine::tool_missing("no in-house engines in this build");
         return;
     }
     let (code, out, err) = split("tests/models/split_safe.aag", &[]);
@@ -68,7 +68,7 @@ fn a_safe_or_is_proved_term_by_term() {
 #[test]
 fn a_reachable_term_gives_a_counterexample_on_the_original() {
     if !have_engines() {
-        eprintln!("skipping: no in-house engines in this build");
+        informal_engine::tool_missing("no in-house engines in this build");
         return;
     }
     let (code, out, err) = split("tests/models/split_unsafe.aag", &[]);

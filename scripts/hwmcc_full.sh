@@ -22,4 +22,10 @@ informal=target/release/informal
   echo "== portfolio done $(date -Is)"
   python3 -I scripts/hwmcc_check.py bench/hwmcc24/expected.json "$db"
   echo "== end $(date -Is)"
-} >>"$log" 2>&1
+} >>"$log" 2>&1 || {
+  rc=$?
+  echo "FAILED (exit $rc): see $log" >&2
+  grep -A20 '^DISAGREEMENTS:' "$log" | tail -21 >&2 || true
+  exit $rc
+}
+grep '^DISAGREEMENTS:' "$log" | tail -1

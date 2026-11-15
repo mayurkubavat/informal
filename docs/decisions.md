@@ -220,8 +220,14 @@ the single-developer setup of that time.
 - **Update 2026-11-14:** the repository is public at
   `github.com/mayurkubavat/informal` (D16), which retires the backup
   concern below.
-- **Open issues:** no CI; benchmark runs compete with other work on the
-  same machine.
+- **Update 2026-11-15:** the gate stays local by decision: no hosted CI.
+  `scripts/check.sh` now fails when a test's tool (CaDiCaL, Bitwuzla, rIC3)
+  is missing instead of counting the skipped test as passed, clears
+  `INFORMAL_*` tuning variables, checks the pinned Rust and Node versions,
+  builds with `--locked`, and ends with `GATE: PASS` or `GATE: FAIL`.
+  `scripts/hwmcc_check.py` exits 1 on a verdict disagreement.
+- **Open issues:** benchmark runs compete with other work on the same
+  machine (`scripts/check.sh --quiet` runs the gate at low priority).
 - **Ideas:** a nightly bare-repo backup and a scheduled regression run that
   records PAR-2 and verdict disagreements over time.
 

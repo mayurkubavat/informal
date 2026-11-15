@@ -400,7 +400,13 @@ mod tests {
                 assert!(Cadical::signature().unwrap().starts_with("cadical"));
                 exercise(&mut c);
             }
-            Err(e) => eprintln!("skipping: {e}"),
+            Err(e) => {
+                // Same rule as informal_engine::tool_missing (this crate is below it).
+                if std::env::var_os("INFORMAL_REQUIRE_TOOLS").is_some_and(|v| !v.is_empty()) {
+                    panic!("{e} (INFORMAL_REQUIRE_TOOLS is set: a missing tool fails the test)");
+                }
+                eprintln!("skipping: {e}")
+            }
         }
     }
 

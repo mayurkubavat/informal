@@ -29,7 +29,9 @@ fn check(model: &str, engine: &str, isolate: bool) -> (Option<i32>, String) {
 fn isolated_engines_agree_with_in_process_ones() {
     let (code, out) = check("tests/models/counter2_unsafe.aag", "informal-bmc", false);
     if code != Some(10) {
-        eprintln!("skipping: no in-house engines in this build ({code:?}: {out})");
+        informal_engine::tool_missing(&format!(
+            "no in-house engines in this build ({code:?}: {out})"
+        ));
         return;
     }
     let verdict = |s: &str| {
@@ -62,7 +64,7 @@ fn engine_subcommand_speaks_the_line_protocol() {
         .output()
         .unwrap();
     if !o.status.success() {
-        eprintln!("skipping: no in-house engines in this build");
+        informal_engine::tool_missing("no in-house engines in this build");
         return;
     }
     let out = String::from_utf8_lossy(&o.stdout);
