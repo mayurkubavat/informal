@@ -1,0 +1,346 @@
+# The designs of the comparison. Each case is one top module with the
+# properties written in its SystemVerilog sources; every flow gets the same
+# files. `group` says whose ground a design is: `informal`, `sby` and
+# `ebmc` are each tool's own tests and examples, `neutral` is third-party
+# RTL written for none of the three.
+#
+#   source   an entry of tools.toml, `sby-examples`, or `local` (this repository)
+#   files    relative to the source's root
+#   clock    the clock's name (default clk); reset: `rst` or `!rst_n`, or empty
+#   glob     one case per matching file, top = the file's first module
+#   sby_shipped  [file.sby, task]: SymbiYosys runs this script as shipped
+
+# ---- InFormal's own tests ------------------------------------------------
+
+[[case]]
+# Every tests/sv design that has properties in the RTL and whose script is
+# one clock and a reset. The `//=` lines give the expected answers.
+name = "informal-tests"
+group = "informal"
+glob = "tests/sv/*.sv"
+informal_test = true
+
+[[case]]
+# tests/fpv/counter with the script's properties in a bound module.
+name = "informal-fpv/counter"
+group = "informal"
+files = ["tests/fpv/counter/counter.sv", "bench/compare/props/counter_props.sv"]
+top = "counter"
+reset = "!rst_n"
+
+[[case]]
+name = "informal-fpv/fifo"
+group = "informal"
+files = ["tests/fpv/fifo/fifo.sv", "bench/compare/props/fifo_props.sv"]
+top = "fifo"
+reset = "!rst_n"
+
+# ---- SymbiYosys's examples -------------------------------------------------
+# SymbiYosys runs each with the script that ships beside it. Its `read
+# -formal` defines FORMAL, so the other flows get that define.
+
+[[case]]
+name = "sby-examples/fifo"
+group = "sby"
+source = "sby-examples"
+files = ["fifo/fifo.sv"]
+top = "fifo"
+defines = ["FORMAL"]
+sby_shipped = "fifo/fifo.sby"
+sby_tasks = ["basic", "cover"]
+
+[[case]]
+name = "sby-examples/fifo-nofullskip"
+group = "sby"
+source = "sby-examples"
+files = ["fifo/fifo.sv"]
+top = "fifo"
+defines = ["FORMAL", "NO_FULL_SKIP=1"]
+sby_shipped = "fifo/fifo.sby"
+sby_tasks = ["nofullskip"]
+
+[[case]]
+name = "sby-examples/quickstart-demo"
+group = "sby"
+source = "sby-examples"
+files = ["quickstart/demo.sv"]
+top = "demo"
+defines = ["FORMAL"]
+sby_shipped = "quickstart/demo.sby"
+
+[[case]]
+name = "sby-examples/quickstart-prove"
+group = "sby"
+source = "sby-examples"
+files = ["quickstart/prove.sv"]
+top = "testbench"
+defines = ["FORMAL"]
+sby_shipped = "quickstart/prove.sby"
+
+[[case]]
+name = "sby-examples/quickstart-cover"
+group = "sby"
+source = "sby-examples"
+files = ["quickstart/cover.sv"]
+top = "top"
+defines = ["FORMAL"]
+sby_shipped = "quickstart/cover.sby"
+
+[[case]]
+name = "sby-examples/quickstart-memory"
+group = "sby"
+source = "sby-examples"
+files = ["quickstart/memory.sv"]
+top = "testbench"
+defines = ["FORMAL"]
+sby_shipped = "quickstart/memory.sby"
+
+[[case]]
+name = "sby-examples/divider"
+group = "sby"
+source = "sby-examples"
+files = ["autotune/divider.sv"]
+top = "divider"
+defines = ["FORMAL", "WIDTH=8"]
+sby_shipped = "autotune/divider.sby"
+sby_tasks = ["small"]
+
+[[case]]
+name = "sby-examples/fib"
+group = "sby"
+source = "sby-examples"
+files = ["demos/fib.sv"]
+top = "fib"
+defines = ["FORMAL"]
+sby_shipped = "demos/fib.sby"
+sby_tasks = ["cover", "prove", "live"]
+
+[[case]]
+name = "sby-examples/picorv32-axicheck"
+group = "sby"
+source = "sby-examples"
+files = ["demos/picorv32.v", "demos/axicheck.v"]
+top = "testbench"
+defines = ["FORMAL"]
+sby_shipped = "demos/picorv32_axicheck.sby"
+sby_tasks = ["yices"]
+
+[[case]]
+name = "sby-examples/dpmem"
+group = "sby"
+source = "sby-examples"
+files = ["multiclk/dpmem.sv"]
+top = "top"
+clock = ""
+defines = ["FORMAL"]
+sby_shipped = "multiclk/dpmem.sby"
+
+[[case]]
+name = "sby-examples/djb2hash"
+group = "sby"
+source = "sby-examples"
+files = ["puzzles/djb2hash.sv"]
+top = "djb2hash"
+clock = "clock"
+defines = ["FORMAL"]
+sby_shipped = "puzzles/djb2hash.sby"
+
+[[case]]
+name = "sby-examples/pour-853-to-4"
+group = "sby"
+source = "sby-examples"
+files = ["puzzles/pour_853_to_4.sv"]
+top = "pour_853_to_4"
+defines = ["FORMAL"]
+sby_shipped = "puzzles/pour_853_to_4.sby"
+
+[[case]]
+name = "sby-examples/wolf-goat-cabbage"
+group = "sby"
+source = "sby-examples"
+files = ["puzzles/wolf_goat_cabbage.sv"]
+top = "wolf_goat_cabbage"
+defines = ["FORMAL"]
+sby_shipped = "puzzles/wolf_goat_cabbage.sby"
+
+[[case]]
+name = "sby-examples/primegen"
+group = "sby"
+source = "sby-examples"
+files = ["puzzles/primegen.sv"]
+top = "primegen"
+clock = ""
+defines = ["FORMAL"]
+sby_shipped = "puzzles/primegen.sby"
+sby_tasks = ["primegen"]
+
+# ---- EBMC's examples -----------------------------------------------------
+
+[[case]]
+name = "ebmc-examples"
+group = "ebmc"
+source = "ebmc-examples"
+glob = "examples/Benchmarks/*.sv"
+
+# ---- Third-party designs ---------------------------------------------------
+
+# pulp-platform common_cells: the properties and SymbiYosys scripts of its
+# formal/ directory. The properties constrain reset themselves.
+
+[[case]]
+name = "common_cells/lzc"
+source = "common_cells"
+sby_tree = "."
+files = ["src/cc_pkg.sv", "src/cc_lzc.sv", "formal/cc_lzc_properties.sv", "formal/cc_lzc_formal.sv"]
+incdirs = ["include"]
+top = "cc_lzc_formal"
+clock = ""
+sby_shipped = "formal/lzc.sby"
+sby_workdir = "build/lzc"
+
+[[case]]
+name = "common_cells/heaviside"
+source = "common_cells"
+sby_tree = "."
+files = ["src/cc_pkg.sv", "src/cc_heaviside.sv", "formal/cc_heaviside_properties.sv", "formal/cc_heaviside_formal.sv"]
+incdirs = ["include"]
+top = "cc_heaviside_formal"
+clock = ""
+sby_shipped = "formal/heaviside.sby"
+sby_workdir = "build/heaviside"
+
+[[case]]
+name = "common_cells/ecc"
+source = "common_cells"
+sby_tree = "."
+files = ["src/cc_pkg.sv", "src/cc_ecc_encode.sv", "src/cc_ecc_decode.sv", "formal/cc_ecc_properties.sv", "formal/cc_ecc_formal.sv"]
+incdirs = ["include"]
+top = "cc_ecc_formal"
+clock = ""
+sby_shipped = "formal/ecc.sby"
+sby_workdir = "build/ecc"
+sby_tasks = ["prove", "cover"]
+
+[[case]]
+name = "common_cells/fifo"
+source = "common_cells"
+sby_tree = "."
+files = ["src/cc_pkg.sv", "src/cc_fifo.sv", "formal/cc_fifo_properties.sv"]
+incdirs = ["include"]
+top = "cc_fifo"
+clock = "clk_i"
+defines = ["FORMAL"]
+sby_shipped = "formal/fifo.sby"
+
+[[case]]
+name = "common_cells/counter"
+source = "common_cells"
+sby_tree = "."
+files = ["src/cc_delta_counter.sv", "src/cc_counter.sv", "formal/cc_counter_properties.sv"]
+incdirs = ["include"]
+top = "cc_counter"
+clock = "clk_i"
+defines = ["FORMAL"]
+sby_shipped = "formal/counter.sby"
+
+[[case]]
+name = "common_cells/fall-through-register"
+source = "common_cells"
+sby_tree = "."
+files = ["src/cc_pkg.sv", "src/cc_fifo.sv", "src/cc_fall_through_register.sv", "formal/cc_fall_through_register_properties.sv"]
+incdirs = ["include"]
+top = "cc_fall_through_register"
+clock = "clk_i"
+defines = ["FORMAL"]
+sby_shipped = "formal/fall_through_register.sby"
+
+# OpenTitan primitives with a formal test bench (hw/ip/prim/fpv), written
+# for a commercial tool. FPV_ON is the define its own flow sets. For
+# SymbiYosys the YOSYS define selects the assertion macros OpenTitan
+# provides for Yosys. InFormal is told to leave out the time-zero net
+# checks (ASSERT_INIT_NET), which it does not model and reports unless
+# told so; the switch is documented in docs/fpv-shell.md and off by default.
+
+[[case]]
+name = "opentitan/prim_arbiter_fixed"
+source = "opentitan"
+files = ["hw/ip/prim/rtl/prim_arbiter_fixed.sv", "hw/ip/prim/fpv/tb/prim_arbiter_fixed_tb.sv"]
+incdirs = ["hw/ip/prim/rtl"]
+top = "prim_arbiter_fixed_tb"
+clock = "clk_i"
+reset = "!rst_ni"
+defines = ["FPV_ON"]
+sby_defines = ["FPV_ON", "YOSYS"]
+informal_setup = ["set_lowering skip_initial_checks on"]
+
+[[case]]
+name = "opentitan/prim_arbiter_ppc"
+source = "opentitan"
+files = ["hw/ip/prim/rtl/prim_util_pkg.sv", "hw/ip/prim/rtl/prim_leading_one_ppc.sv", "hw/ip/prim/rtl/prim_arbiter_ppc.sv", "hw/ip/prim/fpv/tb/prim_arbiter_ppc_tb.sv"]
+incdirs = ["hw/ip/prim/rtl"]
+top = "prim_arbiter_ppc_tb"
+clock = "clk_i"
+reset = "!rst_ni"
+defines = ["FPV_ON"]
+sby_defines = ["FPV_ON", "YOSYS"]
+informal_setup = ["set_lowering skip_initial_checks on"]
+
+[[case]]
+name = "opentitan/prim_arbiter_tree"
+source = "opentitan"
+files = ["hw/ip/prim/rtl/prim_arbiter_tree.sv", "hw/ip/prim/fpv/tb/prim_arbiter_tree_tb.sv"]
+incdirs = ["hw/ip/prim/rtl"]
+top = "prim_arbiter_tree_tb"
+clock = "clk_i"
+reset = "!rst_ni"
+defines = ["FPV_ON"]
+sby_defines = ["FPV_ON", "YOSYS"]
+informal_setup = ["set_lowering skip_initial_checks on"]
+
+[[case]]
+name = "opentitan/prim_count"
+source = "opentitan"
+files = ["hw/ip/prim/rtl/prim_count_pkg.sv", "hw/ip/prim_generic/rtl/prim_flop.sv", "hw/ip/prim/rtl/prim_count.sv", "hw/ip/prim/fpv/tb/prim_count_tb.sv"]
+incdirs = ["hw/ip/prim/rtl"]
+top = "prim_count_tb"
+clock = "clk_i"
+reset = "!rst_ni"
+defines = ["FPV_ON"]
+sby_defines = ["FPV_ON", "YOSYS"]
+informal_setup = ["set_lowering skip_initial_checks on"]
+
+[[case]]
+name = "opentitan/prim_fifo_sync"
+source = "opentitan"
+files = ["hw/ip/prim/rtl/prim_util_pkg.sv", "hw/ip/prim/rtl/prim_count_pkg.sv", "hw/ip/prim_generic/rtl/prim_flop.sv", "hw/ip/prim/rtl/prim_count.sv", "hw/ip/prim/rtl/prim_fifo_sync_cnt.sv", "hw/ip/prim/rtl/prim_fifo_sync.sv", "hw/ip/prim/fpv/vip/prim_fifo_sync_assert_fpv.sv", "hw/ip/prim/fpv/tb/prim_fifo_sync_bind_fpv.sv", "hw/ip/prim/fpv/tb/prim_fifo_sync_tb.sv"]
+incdirs = ["hw/ip/prim/rtl"]
+top = "prim_fifo_sync_tb"
+clock = "clk_i"
+reset = "!rst_ni"
+defines = ["FPV_ON"]
+sby_defines = ["FPV_ON", "YOSYS"]
+informal_setup = ["set_lowering skip_initial_checks on"]
+
+[[case]]
+name = "opentitan/prim_esc_rxtx"
+source = "opentitan"
+files = ["hw/ip/prim/rtl/prim_util_pkg.sv", "hw/ip/prim/rtl/prim_count_pkg.sv", "hw/ip/prim/rtl/prim_esc_pkg.sv", "hw/ip/prim_generic/rtl/prim_flop.sv", "hw/ip/prim_generic/rtl/prim_buf.sv", "hw/ip/prim_generic/rtl/prim_xnor2.sv", "hw/ip/prim_generic/rtl/prim_flop_2sync.sv", "hw/ip/prim/rtl/prim_sec_anchor_flop.sv", "hw/ip/prim/rtl/prim_sec_anchor_buf.sv", "hw/ip/prim/rtl/prim_count.sv", "hw/ip/prim/rtl/prim_diff_decode.sv", "hw/ip/prim/rtl/prim_esc_receiver.sv", "hw/ip/prim/rtl/prim_esc_sender.sv", "hw/ip/prim/fpv/vip/prim_esc_rxtx_assert_fpv.sv", "hw/ip/prim/fpv/tb/prim_esc_rxtx_bind_fpv.sv", "hw/ip/prim/fpv/tb/prim_esc_rxtx_tb.sv"]
+incdirs = ["hw/ip/prim/rtl"]
+top = "prim_esc_rxtx_tb"
+clock = "clk_i"
+reset = "!rst_ni"
+defines = ["FPV_ON"]
+sby_defines = ["FPV_ON", "YOSYS"]
+informal_setup = ["set_lowering skip_initial_checks on"]
+
+[[case]]
+name = "opentitan/prim_alert_rxtx"
+source = "opentitan"
+files = ["hw/ip/prim/rtl/prim_util_pkg.sv", "hw/ip/prim/rtl/prim_mubi_pkg.sv", "hw/ip/prim/rtl/prim_alert_pkg.sv", "hw/ip/prim_generic/rtl/prim_flop.sv", "hw/ip/prim_generic/rtl/prim_buf.sv", "hw/ip/prim_generic/rtl/prim_xnor2.sv", "hw/ip/prim_generic/rtl/prim_flop_2sync.sv", "hw/ip/prim/rtl/prim_sec_anchor_flop.sv", "hw/ip/prim/rtl/prim_sec_anchor_buf.sv", "hw/ip/prim/rtl/prim_diff_decode.sv", "hw/ip/prim/rtl/prim_alert_receiver.sv", "hw/ip/prim/rtl/prim_alert_sender.sv", "hw/ip/prim/fpv/vip/prim_alert_rxtx_assert_fpv.sv", "hw/ip/prim/fpv/tb/prim_alert_rxtx_bind_fpv.sv", "hw/ip/prim/fpv/tb/prim_alert_rxtx_tb.sv"]
+incdirs = ["hw/ip/prim/rtl"]
+top = "prim_alert_rxtx_tb"
+clock = "clk_i"
+reset = "!rst_ni"
+defines = ["FPV_ON"]
+sby_defines = ["FPV_ON", "YOSYS"]
+informal_setup = ["set_lowering skip_initial_checks on"]

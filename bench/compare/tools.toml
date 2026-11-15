@@ -1,0 +1,37 @@
+# The tools InFormal is compared with, and the third-party designs the
+# comparison runs on. Both are fetched by compare.py (`tools`, `fetch`) and
+# stay outside this repository. The comparison tools are run as outside
+# programs only; none is linked, vendored or used by InFormal itself, and
+# they are not part of tools.lock or of the gate.
+
+[tool.oss-cad-suite]
+# SymbiYosys, Yosys, the yosys-slang SystemVerilog front end and the
+# solvers SymbiYosys starts, as one dated binary release.
+version = "20261115"
+yosys = "Yosys 0.71+34"
+sby = "SBY v0.70-9-g79fc9ed"
+url = "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-11-15/oss-cad-suite-linux-x64-20261115.tgz"
+sha256 = "e4c4d05fe9c74f7f5c2393679a4878834319f20bb6d68e3d41881c7024a4642c"
+
+[tool.ebmc]
+version = "6.2"
+url = "https://github.com/diffblue/hw-cbmc/releases/download/ebmc-6.2/ebmc_6.2_amd64.deb"
+sha256 = "d19cfe01be4ba068b24772b923f1fd13494450dfd87050bfab4569f2f568d471"
+
+# Designs. `sby-examples` needs no entry: the examples ship inside the
+# OSS CAD Suite release above.
+
+[source.ebmc-examples]
+# EBMC's own example benchmarks (tag ebmc-6.2). BSD-3-Clause.
+git = "https://github.com/diffblue/hw-cbmc"
+commit = "7186d1afdb18cedc738c57dc7696e3ddb7fd18c4"
+
+[source.common_cells]
+# Its formal/ directory holds properties and SymbiYosys scripts. SHL-0.51.
+git = "https://github.com/pulp-platform/common_cells"
+commit = "e73baaec2ca665cd80c3c384e9258e35242b829c"
+
+[source.opentitan]
+# The primitives with formal test benches under hw/ip/prim/fpv. Apache-2.0.
+git = "https://github.com/lowRISC/opentitan"
+commit = "0d2b191a4a78d4c3fcb487e116eb2e7b54223841"
