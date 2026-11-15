@@ -252,9 +252,11 @@ the single-developer setup of that time.
   the design and lowers it to a word-level netlist; `informal-svlang`
   writes that netlist as Btor2. Elaboration (diagnostics, top module,
   Design browser tree, name checks) and lowering both use it. The Yosys
-  path is removed. The slang lowering stays for now as a cross-check only
-  (`INFORMAL_FRONTEND=slang`, no fallback), to be removed once svlang has
-  run on more designs.
+  path is removed. The slang lowering stayed at first as a cross-check
+  (`INFORMAL_FRONTEND=slang`); it was removed on 2026-11-15 with its crate
+  and C++ shim, once properties given by command went through svlang's
+  binder and property compiler and the reset became part of the model.
+  svlang is the only front end, and no source file is copied or edited.
 - **Split:** svlang owns everything up to the netlist (binding, typing,
   procedural semantics, drivers, loops, functions, memories). InFormal owns
   what is formal policy: one clock and edge per model step, async reset
@@ -271,7 +273,7 @@ the single-developer setup of that time.
   same verdicts and counterexample depths as the Yosys model on the correct
   core and on three forwarding-network mutants.
 - **Gate:** `tests/sv` (20 known answers) and `tests/fpv` (counter, FIFO)
-  through svlang in `cargo test`; the FIFO also through slang when built in.
+  through svlang in `cargo test`.
   Gaps found in svlang are fixed in svlang, with a test there.
 - **Open issues:** concurrent properties written in the RTL are checked
   when they are bounded (booleans, `##N`, `##[M:N]`, `[*M:N]`, sequence

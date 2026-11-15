@@ -3,19 +3,22 @@
 //! to a word-level netlist, compiles the concurrent properties written in the
 //! RTL into checks, and writes the netlist as Btor2 (`svlang::btor2`).
 //!
-//! The request and result types are the slang front end's
-//! ([`informal_slang::Request`], [`informal_slang::Lowered`]), so the
-//! session can use either; svlang is the default (decision D14).
+//! svlang is the only front end (decision D14): the properties given by
+//! command and the reset are bound and compiled here too, so no source file
+//! is copied or edited.
 
-use informal_slang::{
-    Design, Diagnostic, Instance, Lowered, Request, RtlProperty, Scope, ScopeSignal, Signal,
-};
+mod types;
+
 use svlang::btor2;
 use svlang::netlist::{
     LowerConfig, LowerOutcome, Netlist, NetlistDiag, PropertyOptions, PropertyOutcome,
 };
 use svlang::semantic::PropKind;
 use svlang::{ElaboratedDesign, ScopeNode, Severity, SymbolKind};
+pub use types::{
+    split_trace, Design, Diagnostic, Instance, Lowered, Request, RtlProperty, Scope, ScopeSignal,
+    Signal, TickReset, TRACE_MARKER,
+};
 
 /// Memories up to this many words become one register per word; larger
 /// ones stay Btor2 arrays (which only some engines take).
@@ -74,6 +77,7 @@ fn property_options(skip_cycles: u32, clock_skips: &[(String, bool, u32)]) -> Pr
 /// compile yet.
 fn command_properties(
     comp: &svlang::Compilation,
+    design: &svlang::ElaboratedDesign,
     nl: &mut Netlist,
     properties: &[(String, String)],
     opts: &PropertyOptions,
@@ -81,14 +85,13 @@ fn command_properties(
     if properties.is_empty() {
         return Vec::new();
     }
-    let elab = comp.elaborate();
     let top = nl.top.clone();
     let mut arenas = Vec::new();
     let mut bound = Vec::new();
     for (_, text) in properties {
         let mut arena = svlang::ExprArena::new();
         bound.push(
-            comp.bind_property_in_scope(&elab.design, &top, text, &mut arena)
+            comp.bind_property_in_scope(design, &top, text, &mut arena)
                 .map_err(|ds| {
                     ds.iter()
                         .map(|d| d.message.clone())
@@ -110,7 +113,7 @@ fn command_properties(
         })
         .collect();
     let mut compiled = nl
-        .compile_external_properties(&elab.design, &external, opts)
+        .compile_external_properties(design, &external, opts)
         .into_iter();
     properties
         .iter()
@@ -237,50 +240,54 @@ fn rtl_properties(
         .collect()
 }
 
-/// Elaborate and lower the design to a Btor2 model: every labelled
-/// immediate assertion becomes a `bad` line named by its label, and
-/// immediate assumptions become constraints. A concurrent property written
-/// in the RTL becomes a `bad` line under its full hierarchical name (a
-/// cover with [`Request::cover_targets`]) or a constraint; the ones svlang
-/// cannot compile yet are listed in [`Lowered::properties`] with the
-/// reason, and an assumption among them is an error. Never falls back:
-/// anything not modelled is an error (`fallback` is always false).
-pub fn lower(req: &Request) -> Lowered {
-    let fail = |errors: Vec<String>| Lowered {
-        ok: false,
-        fallback: false,
-        errors,
-        ..Default::default()
+/// The value of the reset condition `text`, an expression in the top
+/// module's scope, in `nl`. Lowering it may re-index the netlist's values,
+/// so nothing else may be added to `nl` after this.
+fn reset_value(
+    comp: &svlang::Compilation,
+    design: &svlang::ElaboratedDesign,
+    nl: &mut Netlist,
+    text: &str,
+) -> Result<svlang::netlist::ValueId, String> {
+    let said = |ds: Vec<String>| format!("reset {{{text}}}: {}", ds.join("; "));
+    let mut arena = svlang::ExprArena::new();
+    let top = nl.top.clone();
+    let prop = comp
+        .bind_property_in_scope(design, &top, &format!("({text})"), &mut arena)
+        .map_err(|ds| said(ds.into_iter().map(|d| d.message).collect()))?;
+    let svlang::PropExpr::Seq(svlang::SeqExpr::Bool(e)) = prop.expr else {
+        return Err(said(vec!["not a boolean expression".into()]));
     };
-    let comp = match driver(req).compile() {
-        Ok(c) => c,
-        Err(e) => return fail(vec![format!("svlang: {e}")]),
-    };
-    let config = LowerConfig {
-        top: req.top.clone(),
-        blast_memories_up_to: Some(BLAST_WORDS),
-        cut_points: req.cut_points.clone(),
-        black_box_modules: req.black_box_modules.clone(),
-        black_box_instances: req.black_box_instances.clone(),
-        ..LowerConfig::default()
-    };
-    let mut nl = match comp.lower_netlist(&config) {
-        LowerOutcome::Lowered(nl) => nl,
-        LowerOutcome::Unsupported(ds) => {
-            return fail(
-                ds.iter()
-                    .map(|d| format!("not supported yet: {}", show(d)))
-                    .collect(),
-            )
-        }
-        LowerOutcome::Error(ds) => return fail(ds.iter().map(show).collect()),
-    };
-    let mut properties = rtl_properties(&mut nl, req.skip_cycles, &req.clock_skips);
+    let pairs = nl
+        .lower_external_property(design, &arena, &prop, false)
+        .map_err(|ds| said(ds.into_iter().map(|d| d.message).collect()))?;
+    pairs
+        .into_iter()
+        .find(|(id, _)| *id == e)
+        .map(|(_, v)| v)
+        .ok_or_else(|| said(vec!["the expression was not lowered".into()]))
+}
+
+/// One model of `base`: the properties compiled, the reset applied and the
+/// netlist written, with the reset's length and the cycles left out of the
+/// properties as given.
+fn model(
+    req: &Request,
+    comp: &svlang::Compilation,
+    design: &svlang::ElaboratedDesign,
+    base: &Netlist,
+    reset_steps: u32,
+    skip_cycles: u32,
+    clock_skips: &[(String, bool, u32)],
+) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
+    let mut nl = base.clone();
+    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips);
     properties.extend(command_properties(
-        &comp,
+        comp,
+        design,
         &mut nl,
         &req.properties,
-        &property_options(req.skip_cycles, &req.clock_skips),
+        &property_options(skip_cycles, clock_skips),
     ));
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
@@ -296,11 +303,11 @@ pub fn lower(req: &Request) -> Lowered {
         })
         .collect();
     if !lost.is_empty() {
-        return fail(lost);
+        return Err(lost);
     }
     let mut options = btor2::Options::default();
     options.trace_outputs = req.trace_outputs;
-    options.trace_marker = informal_slang::TRACE_MARKER.into();
+    options.trace_marker = TRACE_MARKER.into();
     options.name_prefix = "informal".into();
     options.covers = req.cover_targets;
     // A design on both edges of its clock gets two model steps per cycle.
@@ -314,8 +321,76 @@ pub fn lower(req: &Request) -> Lowered {
             phase: *phase,
         })
         .collect();
-    match btor2::write(&nl, &options) {
-        Ok(m) => {
+    if let Some(text) = &req.reset {
+        let value = reset_value(comp, design, &mut nl, text).map_err(|e| vec![e])?;
+        options.reset = Some(btor2::Reset {
+            value,
+            steps: reset_steps,
+        });
+    }
+    let m = btor2::write(&nl, &options).map_err(|e| vec![e.to_string()])?;
+    Ok((m, properties))
+}
+
+/// Elaborate and lower the design to a Btor2 model. Every labelled
+/// immediate assertion becomes a `bad` line named by its label, and
+/// immediate assumptions become constraints. A concurrent property, written
+/// in the RTL or given in [`Request::properties`], becomes a `bad` line
+/// under its name (a cover with [`Request::cover_targets`], a liveness
+/// property a `justice` line) or a constraint; the ones svlang cannot
+/// compile are listed in [`Lowered::properties`] with the reason, and an
+/// assumption among them is an error. The reset of [`Request::reset`] is
+/// part of the model. Nothing is guessed: anything not modelled is an
+/// error.
+pub fn lower(req: &Request) -> Lowered {
+    let fail = |errors: Vec<String>| Lowered {
+        ok: false,
+        errors,
+        ..Default::default()
+    };
+    let comp = match driver(req).compile() {
+        Ok(c) => c,
+        Err(e) => return fail(vec![format!("svlang: {e}")]),
+    };
+    let config = LowerConfig {
+        top: req.top.clone(),
+        blast_memories_up_to: Some(BLAST_WORDS),
+        cut_points: req.cut_points.clone(),
+        black_box_modules: req.black_box_modules.clone(),
+        black_box_instances: req.black_box_instances.clone(),
+        ..LowerConfig::default()
+    };
+    let base = match comp.lower_netlist(&config) {
+        LowerOutcome::Lowered(nl) => nl,
+        LowerOutcome::Unsupported(ds) => {
+            return fail(
+                ds.iter()
+                    .map(|d| format!("not supported yet: {}", show(d)))
+                    .collect(),
+            )
+        }
+        LowerOutcome::Error(ds) => return fail(ds.iter().map(show).collect()),
+    };
+    let elab = comp.elaborate();
+    // First as a model with one step per clock cycle, where the reset is the
+    // first step. If the design turns out to need the clocks driven (both
+    // edges, several clocks, computed clocks), again with that model's
+    // reset length: which model it is depends on the properties' clocks too.
+    let reset = u32::from(req.reset.is_some());
+    let mut built = model(req, &comp, &elab.design, &base, reset, reset, &[]);
+    if matches!(&built, Ok((m, _)) if m.steps_per_cycle > 1) && req.reset.is_some() {
+        built = model(
+            req,
+            &comp,
+            &elab.design,
+            &base,
+            req.tick.steps,
+            req.tick.cycles,
+            &req.tick.by_clock,
+        );
+    }
+    match built {
+        Ok((m, properties)) => {
             // The per-property notes below say more than the writer's count.
             let mut notes: Vec<String> = m
                 .notes
@@ -335,7 +410,6 @@ pub fn lower(req: &Request) -> Lowered {
             }
             Lowered {
                 ok: true,
-                fallback: false,
                 errors: Vec::new(),
                 notes,
                 btor2: m.btor2,
@@ -343,7 +417,7 @@ pub fn lower(req: &Request) -> Lowered {
                 half_cycle: m.steps_per_cycle > 1,
             }
         }
-        Err(e) => fail(vec![e.to_string()]),
+        Err(errors) => fail(errors),
     }
 }
 

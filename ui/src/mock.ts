@@ -71,7 +71,7 @@ export function mockText(path: string): string | null {
 }
 const at = (file: string, line: number) => ({ file, line });
 
-// slang's scope tree for the counter above (informal_slang::Scope, as the app's
+// the scope tree for the counter above (informal_svlang::Scope, as the app's
 // snapshot carries it in design.hierarchy).
 const port = (name: string, dir: "input" | "output", width = 1) => ({ name, width, kind: "port" as const, dir });
 export const MOCK_HIERARCHY: DesignScope[] = [

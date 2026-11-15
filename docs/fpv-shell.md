@@ -27,24 +27,23 @@ directory (`informal_work/` by default).
    module declares, so a typo is an error rather than an implicit net that
    makes the check vacuous. The `reset` expression and `clock` names are
    checked the same way.
-3. The models are built by svlang: it lowers the design (with the property
-   harness injected) to a word-level netlist, and `crates/informal-svlang`
-   writes it as Btor2. Nothing falls back: a SystemVerilog error in the
-   harness, a construct svlang does not handle yet, and a construct it does
-   not model (`$isunknown`, latches, blocks on different clocks or edges,
-   the same bits assigned in two always blocks) make the property an error,
-   naming the construct. A wrong guess there would be a wrong verdict.
-   `tests/sv` holds small designs with known answers for this.
-   `INFORMAL_FRONTEND=slang` uses the older slang lowering instead, as a
-   cross-check. `informal lower design.sv -D NAME` prints the Btor2 for a
-   design whose labelled immediate assertions become bad states.
-4. Each property is lowered by the SVA subset compiler (`informal-fpv/src/sva.rs`)
-   into an immediate assertion over `$past`, and the checker block is
-   inserted before the top module's `endmodule`, so properties see every
-   signal in the top module's scope (not yet signals inside sub-instances).
+3. The models are built by svlang, the only front end: it lowers the
+   design to a word-level netlist, and `crates/informal-svlang` writes it
+   as Btor2. Nothing falls back: a construct svlang does not handle yet,
+   and a construct it does not model (`$isunknown`, two clocks that are
+   not declared, the same bits assigned in two always blocks) make the
+   property an error, naming the construct. A wrong guess there would be a
+   wrong verdict. `tests/sv` holds small designs with known answers for
+   this. `informal lower design.sv -D NAME` prints the Btor2 for a design
+   whose labelled immediate assertions become bad states.
+4. Each property given by command is bound by svlang in the top module's
+   scope, so it sees every signal there and in the instances below, and is
+   compiled by the same property compiler as the properties written in
+   the RTL. No source file is copied or edited.
 5. Reset: the reset condition holds in cycle 0 and is released after, as
-   both vendor tools do by default. Checks start once the property's whole
-   window lies after reset.
+   both vendor tools do by default (longer in a model that drives the
+   clocks, see Known gaps). It is part of the model. Checks start once the
+   property's whole window lies after reset.
 6. Each assertion and cover becomes its own Btor2 model, with every
    assumption as a constraint, and runs through the engine portfolio with
    the session time limit. A cover is checked as "never matches": a
@@ -66,16 +65,16 @@ top design file when it is absent.
 
 ## SVA subset
 
-Supported in properties given by command: `@(posedge clk)` / `@(negedge
-clk)`, `disable iff (expr)`, sequences of boolean terms joined by fixed
-delays (`a ##1 b ##2 c`, a leading `##N`), `|->` and `|=>`, and any
-boolean SystemVerilog expression inside a term, including `$past(x[, n])`,
-`$rose`, `$fell`, `$stable`, `$changed`.
+Properties given by command and properties written in the RTL go through
+the same compiler in svlang.
 
-Also supported, through svlang's property compiler: `##[M:N]` ranges,
-`[*N]` and `[*M:N]`, `throughout`, `within`, `intersect`, `first_match`,
-`b until c` / `b until_with c` between booleans, and `s_eventually b`
-(each alone or after `|->` or `|=>`).
+Supported: `@(posedge clk)` / `@(negedge clk)`, `disable iff (expr)`,
+booleans joined by delays (`a ##1 b ##2 c`, a leading `##N`, ranges
+`##[M:N]`), repetition `[*N]` and `[*M:N]`, sequence `and`, `or`,
+`intersect`, `within`, `throughout` and `first_match`, `|->` and `|=>`,
+`b until c` / `b until_with c` between booleans, `s_eventually b`, and any
+boolean SystemVerilog expression inside, including `$past(x[, n])`,
+`$rose`, `$fell`, `$stable`, `$changed`.
 
 `s_eventually` is a liveness property: no finite trace violates it. Its
 model line is a Btor2 `justice`, which informal's own engines check as a
@@ -84,14 +83,14 @@ the state and a free choice of the step where a loop starts). `proven`
 means no loop of states leaves the awaited condition out for ever; `cex`
 is such a loop, and the trace's first comment says which frames repeat.
 An `assume` of `s_eventually` is a fairness constraint for these
-properties. External engines are not run on them. A property that uses one of these is bound in the top
-module by the front end at `prove`, so a name it does not know, or a
-range that ends at `$`, is an error on that property then, not at the
-command.
+properties. External engines are not run on them.
 
-Rejected at the command with an error naming the construct: `[->n]`,
-`[=n]`, `s_until`, `eventually` with a range and other liveness operators, `not`,
-`strong` / `weak`.
+A property given by command is bound at `prove`. Rejected at the command
+itself, with an error naming the construct: a name the top module does
+not have, and the operators the compiler does not take (`[->n]`, `[=n]`,
+`s_until`, `eventually` with a range, `always`, `nexttime`, `not`,
+`strong` / `weak`, `accept_on`). A range that ends at `$` is an error on
+that property at `prove`.
 
 ## Command map
 
@@ -144,7 +143,7 @@ counter, a memory or a whole sub-block out of the proof:
 The signals that drive the cut one, and signals it merely copied, are not
 affected. Later reads of a variable inside the same procedural block that
 assigned it see the block's own value, not the cut. svlang applies the cut
-(`LowerConfig::cut_points`); the slang cross-check lowering rejects it.
+(`LowerConfig::cut_points`).
 
 ## Black boxes
 
@@ -194,14 +193,6 @@ when anything but `ignored` was found.
 `scripts/vendor_tcl_corpus.py` fetches public vendor scripts and tallies
 these findings over all of them; `docs/vendor-script-tally.md` holds the
 last result, the ranked list of what the shell should learn next.
-
-## Building with slang (optional cross-check)
-
-slang is found in `INFORMAL_SLANG_DIR` or `$INFORMAL_TOOLS_DIR/slang` (a
-checkout built with `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
--DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build`). The C++
-shim in `crates/informal-slang/cpp` is compiled against it. Without slang, informal
-builds as usual; only `INFORMAL_FRONTEND=slang` is unavailable.
 
 ## Known gaps
 

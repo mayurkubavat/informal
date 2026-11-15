@@ -55,7 +55,7 @@ export interface SourceLoc {
   line: number;
 }
 
-// One instance in slang's scope tree (informal_slang::Scope): its ports and
+// One instance in the design's scope tree (informal_svlang::Scope): its ports and
 // named signals, and its child instances. Signal names are relative to the
 // scope; `path + "." + name` is the hierarchical name (and the VCD path).
 export interface ScopeSignal {
@@ -74,7 +74,7 @@ export interface DesignScope {
 }
 
 export interface SessionView {
-  // `hierarchy`: slang's scope tree after elaboration; empty or absent with
+  // `hierarchy`: the scope tree after elaboration; empty or absent with
   // a session elaborated without a SystemVerilog front end (the Design tab then scans the top file's ports).
   design: { files: string[]; top: string | null; defines: [string, string | null][]; hierarchy?: DesignScope[] };
   elaborated: boolean;

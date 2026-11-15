@@ -5,17 +5,16 @@
 //! Elaboration runs svlang (the pure-Rust SystemVerilog front end, crate
 //! `informal-svlang`) over the design: SystemVerilog errors come back with
 //! file and line, the top module is taken from it, and property expressions
-//! are checked against the names the top module declares. Properties are
-//! lowered by [`crate::sva`] and injected as immediate assertions at the end
-//! of the top module, so they see every signal in its scope; svlang then
-//! lowers the whole design to one Btor2 model (decision D14). Each assertion
-//! or cover gets its own copy with only its `bad` line and all assumptions,
-//! and runs through the engine portfolio on its own. `INFORMAL_FRONTEND=slang`
-//! uses the older slang lowering instead, as a cross-check.
+//! are checked against the names the top module declares. svlang lowers the
+//! whole design to one Btor2 model (decision D14), binding each property
+//! given by command in the top module's scope, so it sees every signal
+//! there, and compiling it with the properties written in the RTL; the
+//! reset is part of the model too. Each assertion or cover gets its own
+//! copy with only its target line and all assumptions, and runs through
+//! the engine portfolio on its own.
 
 use crate::progress::{ProveSink, Tracker};
-use crate::sva;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use informal_engine::portfolio::EngineRun;
 use informal_engine::{portfolio, CheckRequest, Engine, ModelFormat, Progress, Verdict};
 use serde::Serialize;
@@ -110,10 +109,6 @@ pub struct Property {
     /// hierarchical name, `expr` is its text as written there (empty when
     /// that cannot be read), and `source` is where it stands in the design.
     pub rtl: bool,
-    /// Given by command with a bounded sequence operator (`##[1:3]`,
-    /// `throughout`, ...): the front end binds `expr` in the top module and
-    /// compiles it, where the others go through the fixed-delay harness.
-    pub bound: bool,
     /// The last prove's per-engine record: each portfolio engine's outcome
     /// (won/lost/timeout/killed/error), time and depth reached. Empty
     /// before a prove, or when no engine ran (elaboration, errors).
@@ -186,7 +181,7 @@ pub struct Design {
     /// named signals (the app's Design browser). Also written to
     /// `<workdir>/design.hierarchy.json`. Empty without slang (the app then
     /// scans the top file's port list).
-    pub hierarchy: Vec<informal_slang::Scope>,
+    pub hierarchy: Vec<informal_svlang::Scope>,
 }
 
 #[derive(Serialize)]
@@ -205,9 +200,9 @@ pub struct Session {
     pub engines: Vec<Arc<dyn Engine>>,
     /// slang's view of the design, after elaboration (when linked).
     #[serde(skip)]
-    pub slang: Option<informal_slang::Design>,
+    pub elab: Option<informal_svlang::Design>,
     /// Instance tree from slang, for the UI.
-    pub hierarchy: Vec<informal_slang::Instance>,
+    pub hierarchy: Vec<informal_svlang::Instance>,
     /// Front end that built the last prove's models (`svlang` or `slang`).
     pub frontend: String,
     /// Set from another thread (the app's Stop) to end a running prove:
@@ -243,7 +238,7 @@ impl Session {
             engine_filter: Vec::new(),
             workdir,
             engines,
-            slang: None,
+            elab: None,
             hierarchy: Vec::new(),
             frontend: String::new(),
             stop: Arc::default(),
@@ -271,14 +266,11 @@ impl Session {
         name: Option<String>,
         expr: &str,
     ) -> Result<String, String> {
-        // Reject what neither lowering can handle up front. A property
-        // with bounded sequence operators goes to the front end's compiler.
-        let bound = sva::needs_compiler(expr);
-        // (The front end reports a name it cannot bind on the property.)
-        if !bound {
-            sva::parse(expr)?;
-            self.check_names(expr)?;
-        }
+        // Reject up front what the front end's property compiler is known
+        // not to take, and names the design does not have. The front end
+        // binds the property at prove and has the last word on both.
+        check_operators(expr)?;
+        self.check_names(expr)?;
         let name = name.unwrap_or_else(|| {
             let n = self.props.iter().filter(|p| p.kind == kind).count();
             format!("{}_{}", kind.label(), n)
@@ -295,7 +287,6 @@ impl Session {
             trace: None,
             source: None,
             rtl: false,
-            bound,
             engines: Vec::new(),
         });
         Ok(name)
@@ -305,7 +296,7 @@ impl Session {
     /// not declare (typos would otherwise become implicit nets that make a
     /// property vacuous).
     fn check_names(&self, expr: &str) -> Result<(), String> {
-        if let (Some(d), Some(top)) = (&self.slang, &self.design.top) {
+        if let (Some(d), Some(top)) = (&self.elab, &self.design.top) {
             let unknown = d.unknown_names(top, expr);
             if !unknown.is_empty() {
                 return Err(format!(
@@ -342,7 +333,7 @@ impl Session {
             .and_then(|r| r.strip_prefix('.'))
             .filter(|_| !top.is_empty())
             .unwrap_or(name);
-        if let (Some(d), false) = (&self.slang, top.is_empty()) {
+        if let (Some(d), false) = (&self.elab, top.is_empty()) {
             let full = format!("{top}.{rel}");
             // A whole signal, or a part of one (`pkt.valid`, `mem[3]`).
             let known = d.signals.iter().filter(|s| !s.constant).any(|s| {
@@ -388,7 +379,7 @@ impl Session {
         if self.design.files.is_empty() {
             bail!("no design files: run analyze / read_file first");
         }
-        let req = informal_slang::Request {
+        let req = informal_svlang::Request {
             files: self.design.files.clone(),
             defines: self.design.defines.clone(),
             incdirs: self.design.incdirs.clone(),
@@ -398,28 +389,21 @@ impl Session {
             ..Default::default()
         };
         self.design.hierarchy.clear();
-        let compiled = match frontend() {
-            "svlang" => Some(informal_svlang::compile(&req)),
-            _ => informal_slang::compile(&req),
-        };
-        if let Some(d) = compiled {
-            let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
-            if !errors.is_empty() {
-                bail!("SystemVerilog errors:\n{}", errors.join("\n"));
-            }
-            if self.design.top.is_none() {
-                match d.tops.as_slice() {
-                    [t] => self.design.top = Some(t.clone()),
-                    tops => bail!("cannot tell the top module (candidates: {tops:?}); use -top"),
-                }
-            }
-            self.hierarchy = d.instances.clone();
-            self.design.hierarchy = d.hierarchy.clone();
-            self.rtl_properties(&d.properties);
-            self.slang = Some(d);
-        } else if self.design.top.is_none() {
-            self.design.top = Some(guess_top(&self.design.files)?);
+        let d = informal_svlang::compile(&req);
+        let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
+        if !errors.is_empty() {
+            bail!("SystemVerilog errors:\n{}", errors.join("\n"));
         }
+        if self.design.top.is_none() {
+            match d.tops.as_slice() {
+                [t] => self.design.top = Some(t.clone()),
+                tops => bail!("cannot tell the top module (candidates: {tops:?}); use -top"),
+            }
+        }
+        self.hierarchy = d.instances.clone();
+        self.design.hierarchy = d.hierarchy.clone();
+        self.rtl_properties(&d.properties);
+        self.elab = Some(d);
         std::fs::create_dir_all(&self.workdir)?;
         let tree = self.workdir.join("design.hierarchy.json");
         if self.design.hierarchy.is_empty() {
@@ -434,7 +418,7 @@ impl Session {
 
     /// List the concurrent properties written in the RTL beside the ones
     /// commands created, replacing those of an earlier elaboration.
-    fn rtl_properties(&mut self, found: &[informal_slang::RtlProperty]) {
+    fn rtl_properties(&mut self, found: &[informal_svlang::RtlProperty]) {
         self.props.retain(|p| !p.rtl);
         for f in found {
             if self.props.iter().any(|p| p.name == f.name) {
@@ -462,7 +446,6 @@ impl Session {
                     line: f.line.unwrap_or(0),
                 }),
                 rtl: true,
-                bound: false,
                 engines: Vec::new(),
             });
         }
@@ -473,7 +456,7 @@ impl Session {
     /// list boxes for every configuration); an instance path that does not
     /// exist, or the top module, is an error.
     fn check_black_boxes(&mut self) -> anyhow::Result<()> {
-        let (Some(d), Some(top)) = (&self.slang, self.design.top.clone()) else {
+        let (Some(d), Some(top)) = (&self.elab, self.design.top.clone()) else {
             return Ok(());
         };
         if self.design.bbox.contains(&top) {
@@ -504,206 +487,55 @@ impl Session {
         Ok(())
     }
 
-    fn clock_for(&self, l: &sva::Lowered) -> anyhow::Result<(String, &'static str)> {
-        if let Some(c) = &l.clock {
-            return Ok((c.signal.clone(), c.edge));
-        }
-        let c = self
-            .clocks
-            .first()
-            .ok_or_else(|| anyhow!("no clock: declare one with `clock` / `create_clock`"))?;
-        Ok((c.signal.clone(), c.edge))
-    }
-
-    /// Cycles of the first clock the reset is held for. One, except in a
-    /// model that drives several clocks (`half_cycle`): there the reset
-    /// stays until every declared clock has had a whole period, so that
-    /// registers on any clock and edge see it. Zero without a reset.
-    fn reset_cycles(&self, half_cycle: bool) -> u32 {
+    /// How long the reset lasts in a model that drives the clocks (a design
+    /// on both clock edges, several clocks or computed clocks), where one
+    /// model step is half a period of a `-factor 1` clock: until every
+    /// declared clock has had a whole period, and then on to the first
+    /// clock's next rising edge, so that registers on any clock and edge
+    /// see the reset and the properties start with a clock cycle. With it,
+    /// for each declared clock and edge, how many of its edges fall in the
+    /// reset: a property on that clock and edge skips those attempts.
+    fn tick_reset(&self) -> informal_svlang::TickReset {
         if self.reset.is_none() {
-            return 0;
+            return informal_svlang::TickReset::default();
         }
-        let distinct = self
-            .clocks
-            .iter()
-            .any(|c| c.signal != self.clocks[0].signal);
-        if !(half_cycle && distinct) {
-            return 1;
-        }
-        // In model steps: clock c first completes a period at phase + 2 *
-        // factor, and the first clock's n-th rising edge ends step
-        // phase0 + factor0 - 1 + (n - 1) * period0.
+        // With no clock declared (a property names its own), the one clock
+        // in use toggles on every step.
+        let default = Clock {
+            signal: String::new(),
+            edge: "posedge",
+            factor: 1,
+            phase: 0,
+        };
+        let c0 = self.clocks.first().unwrap_or(&default);
+        // Clock c first completes a period at step phase + 2 * factor, and
+        // the first clock's n-th rising edge ends step phase0 + factor0 - 1
+        // + (n - 1) * period0.
         let whole = |c: &Clock| c.phase + 2 * c.factor;
-        let window = self.clocks.iter().map(whole).max().unwrap_or(0);
-        let c0 = &self.clocks[0];
+        let window = self.clocks.iter().map(whole).max().unwrap_or(whole(c0));
         let rest = window.saturating_sub(c0.phase + c0.factor);
-        rest.div_ceil(2 * c0.factor) + 1
-    }
-
-    /// For a model that drives several clocks: how many rising and falling
-    /// edges of each declared clock end a model step while the reset is
-    /// held, so that a property in the RTL on that clock and edge skips
-    /// exactly the attempts that start in reset. Empty otherwise.
-    fn clock_skips(&self, half_cycle: bool) -> Vec<(String, bool, u32)> {
-        let cycles = self.reset_cycles(half_cycle);
-        if cycles < 2 {
-            return Vec::new();
-        }
-        // The first step without reset: after the first clock's last
-        // rising edge in reset (see reset_cycles).
-        let c0 = &self.clocks[0];
-        let release = c0.phase + c0.factor + (cycles - 1) * 2 * c0.factor;
-        let mut out = Vec::new();
+        let cycles = rest.div_ceil(2 * c0.factor) + 1;
+        let distinct = self.clocks.iter().any(|c| c.signal != c0.signal);
+        // One clock: the reset ends with its first whole period, as soon as
+        // its falling edge has passed.
+        let steps = match distinct {
+            true => c0.phase + c0.factor + (cycles - 1) * 2 * c0.factor,
+            false => window,
+        };
+        let mut by_clock = Vec::new();
         for c in &self.clocks {
             let period = 2 * c.factor;
             let shift = (period - c.phase % period) % period;
             for (posedge, last) in [(true, c.factor - 1), (false, period - 1)] {
-                let edges = (0..release)
-                    .filter(|t| (t + shift) % period == last)
-                    .count();
-                out.push((c.signal.clone(), posedge, edges as u32));
+                let edges = (0..steps).filter(|t| (t + shift) % period == last).count();
+                by_clock.push((c.signal.clone(), posedge, edges as u32));
             }
         }
-        out
-    }
-
-    /// The generated checker text injected into the top module. With
-    /// `half_cycle` (a design on both clock edges, where one model step is
-    /// half a cycle) the reset is held until the first falling edge has
-    /// passed, so that registers on either edge see it.
-    fn harness(&self, half_cycle: bool) -> anyhow::Result<String> {
-        let (clk, edge) = match self.clocks.first() {
-            Some(c) => (c.signal.clone(), c.edge),
-            None => {
-                // A property with its own clocking event can supply it.
-                let l = self
-                    .props
-                    .iter()
-                    .filter(|p| !p.rtl && !p.bound)
-                    .find_map(|p| sva::parse(&p.expr).ok().and_then(|l| l.clock))
-                    .ok_or_else(|| {
-                        anyhow!("no clock: declare one with `clock` / `create_clock`")
-                    })?;
-                (l.signal, l.edge)
-            }
-        };
-        let first = self.reset_cycles(half_cycle);
-        let mut v = String::from("\n// ---- informal formal harness (generated) ----\n");
-        // The cycle counter stops at the last value any guard below asks
-        // about. (Stopping late would only cost: a liveness counterexample
-        // is a loop of states, and the counter is part of the state.)
-        let last = self
-            .props
-            .iter()
-            .filter(|p| p.enabled && !p.rtl && !p.bound)
-            .filter_map(|p| sva::parse(&p.expr).ok())
-            .map(|l| (first + l.span).max(l.history()))
-            .chain([first, 1])
-            .max()
-            .unwrap_or(1)
-            .min(0xffff);
-        v += "reg [15:0] informal_cyc = 16'd0;\n";
-        v += &format!(
-            "always @({edge} {clk}) if (informal_cyc != 16'd{last}) informal_cyc <= informal_cyc + 16'd1;\n"
-        );
-        match &self.reset {
-            // Several clocks: held until each has had a whole period.
-            Some(r) if half_cycle && first > 1 => {
-                v += &format!(
-                    "always @* if (informal_cyc < 16'd{first}) assume ({r}); else assume (!({r}));\n"
-                );
-            }
-            Some(r) if half_cycle => {
-                v += "reg informal_half = 1'b0;\n";
-                v += &format!("always @(negedge {clk}) informal_half <= 1'b1;\n");
-                v +=
-                    &format!("always @* if (!informal_half) assume ({r}); else assume (!({r}));\n");
-            }
-            Some(r) => {
-                v += &format!(
-                    "always @* if (informal_cyc == 16'd0) assume ({r}); else assume (!({r}));\n"
-                );
-            }
-            None => {}
+        informal_svlang::TickReset {
+            steps,
+            cycles: if distinct { cycles } else { 1 },
+            by_clock,
         }
-        for (i, p) in self.props.iter().enumerate() {
-            // A property written in the RTL is already in the design.
-            // One the front end compiles is handed to it as text.
-            if !p.enabled || p.rtl || p.bound {
-                continue;
-            }
-            let l = sva::parse(&p.expr).map_err(|e| anyhow!("{}: {e}", p.name))?;
-            let (pclk, pedge) = self.clock_for(&l)?;
-            // After the reset cycle, and once the history it reads is real.
-            let warm = (first + l.span).max(l.history());
-            let mut guard = format!("informal_cyc >= 16'd{warm}");
-            if let Some(d) = l.not_disabled() {
-                guard += &format!(" && {d}");
-            }
-            let check = match p.kind {
-                Kind::Assert | Kind::Assume => format!("!({}) || ({})", l.enable(), l.body()),
-                // A cover is checked as "never matches"; a counterexample covers it.
-                Kind::Cover => format!("!({} && {})", l.enable(), l.body()),
-            };
-            let verb = if p.kind == Kind::Assume {
-                "assume"
-            } else {
-                "assert"
-            };
-            let label = format!("informal_p{i}");
-            let line = format!(
-                "always @({pedge} {pclk}) if ({guard}) {label}: {verb} ({check}); // {} {}\n",
-                p.kind.label(),
-                p.name
-            );
-            if p.kind == Kind::Assume {
-                v += &line;
-            } else {
-                v += &format!("`ifdef INFORMAL_P{i}\n{line}`endif\n");
-            }
-        }
-        v += "// ---- end informal formal harness ----\n";
-        Ok(v)
-    }
-
-    /// Copy the file holding the top module with the harness inserted
-    /// before its `endmodule`; other files are used as they are.
-    fn injected_files(&self, half_cycle: bool) -> anyhow::Result<Vec<PathBuf>> {
-        let top = self
-            .design
-            .top
-            .as_deref()
-            .ok_or_else(|| anyhow!("no top module"))?;
-        let harness = self.harness(half_cycle)?;
-        let re = regex::Regex::new(&format!(r"(?m)\bmodule\s+{}\b", regex::escape(top)))?;
-        let end = regex::Regex::new(r"\bendmodule\b")?;
-        let mut out = Vec::new();
-        let mut found = false;
-        for f in &self.design.files {
-            let text =
-                std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?;
-            match re.find(&text) {
-                Some(m) if !found => {
-                    let e = end
-                        .find_at(&text, m.end())
-                        .ok_or_else(|| anyhow!("no endmodule for {top} in {}", f.display()))?;
-                    let name = f.file_name().unwrap_or_default().to_string_lossy();
-                    let copy = self.workdir.join(format!("informal_{name}"));
-                    let mut s = String::with_capacity(text.len() + harness.len());
-                    s += &text[..e.start()];
-                    s += &harness;
-                    s += &text[e.start()..];
-                    std::fs::write(&copy, s)?;
-                    out.push(copy);
-                    found = true;
-                }
-                _ => out.push(f.clone()),
-            }
-        }
-        if !found {
-            bail!("top module `{top}` not found in the analyzed files");
-        }
-        Ok(out)
     }
 
     fn engines(&self) -> Vec<Arc<dyn Engine>> {
@@ -770,28 +602,9 @@ impl Session {
                     .map(|&i| (self.props[i].name.clone(), self.props[i].kind.label())),
             )
         });
-        let files = match self.injected_files(false) {
-            Ok(f) => f,
-            Err(e) => {
-                if let Some(t) = &tracker {
-                    t.end(false);
-                }
-                return Err(e);
-            }
-        };
         let engines = self.engines();
-        let fe = frontend();
-        let mut lowered = self.lower(fe, &files, &targets, true, false);
-        // A design on both clock edges: build the model again with the
-        // harness that holds reset for the whole first clock cycle.
-        if matches!(&lowered, Ok((_, _, true))) && self.reset.is_some() {
-            lowered = self
-                .injected_files(true)
-                .map_err(|e| format!("{e:#}"))
-                .and_then(|files| self.lower(fe, &files, &targets, false, true));
-        }
-        let lowered = lowered.map(|(btor, rtl, _)| (btor, rtl));
-        self.frontend = fe.into();
+        let lowered = self.lower();
+        self.frontend = "svlang".into();
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
         // between property events.
@@ -842,7 +655,7 @@ impl Session {
     fn prove_targets(
         &mut self,
         targets: &[usize],
-        lowered: Result<(&str, &[informal_slang::RtlProperty]), &str>,
+        lowered: Result<(&str, &[informal_svlang::RtlProperty]), &str>,
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
     ) -> usize {
@@ -854,19 +667,21 @@ impl Session {
                 t.running(slot);
             }
             // Properties added before elaboration are checked now.
-            let rtl = self.props[i].rtl || self.props[i].bound;
-            // (One the front end binds itself gets its names checked there.)
-            let names = match rtl {
+            // (One written in the RTL had its names bound in its own scope.)
+            let names = match self.props[i].rtl {
                 true => Ok(()),
                 false => self.check_names(&self.props[i].expr),
             };
             if let Err(e) = names.and_then(|()| {
-                // One written in the RTL must be in this model, compiled.
-                let (Ok((_, found)), true) = (lowered, rtl) else {
+                // The property must be in this model, compiled.
+                let Ok((_, found)) = lowered else {
                     return Ok(());
                 };
                 match found.iter().find(|f| f.name == self.props[i].name) {
-                    None => Err("not in the model (inside a black box)".to_string()),
+                    None if self.props[i].rtl => {
+                        Err("not in the model (inside a black box)".to_string())
+                    }
+                    None => Err("not in the model (disabled)".to_string()),
                     Some(f) => match (&f.unsupported, &f.error) {
                         (Some(why), _) => Err(format!("not supported yet: {why}")),
                         (None, Some(e)) => Err(e.clone()),
@@ -886,15 +701,12 @@ impl Session {
             let built = match lowered {
                 Err(e) => Err(anyhow!("{e}")),
                 Ok((btor, _)) => {
-                    let keep = match rtl {
-                        true => self.props[i].name.clone(),
-                        false => format!("informal_p{i}"),
-                    };
-                    if rtl && !has_target(btor, &keep) {
+                    let keep = target_name(&self.props[i].name);
+                    if !has_target(btor, &keep) {
                         // Without its line the model would hold trivially.
                         Err(anyhow!("no check named {keep} in the model"))
                     } else {
-                        let (model, section) = informal_slang::split_trace(btor);
+                        let (model, section) = informal_svlang::split_trace(btor);
                         let mut r = std::fs::write(&out, only_target(model, &keep));
                         // The same model plus `output` lines naming the
                         // combinational nets, for the VCD (trace_model).
@@ -937,12 +749,12 @@ impl Session {
         targets.len()
     }
 
-    /// The enabled properties the front end compiles from text, each as the
-    /// name of its check and a whole directive on its clock: its own
-    /// clocking event, or the first declared clock.
+    /// The enabled properties given by command, each as the name of its
+    /// check and a whole directive on its clock: its own clocking event, or
+    /// the first declared clock.
     fn bound_properties(&self) -> Result<Vec<(String, String)>, String> {
         let mut out = Vec::new();
-        for p in self.props.iter().filter(|p| p.bound && p.enabled) {
+        for p in self.props.iter().filter(|p| !p.rtl && p.enabled) {
             let expr = p.expr.trim();
             let clocked = if expr.starts_with('@') {
                 expr.to_string()
@@ -956,36 +768,28 @@ impl Session {
                 format!("@({} {}) {expr}", c.edge, c.signal)
             };
             out.push((
-                p.name.clone(),
+                target_name(&p.name),
                 format!("{} property ({clocked})", p.kind.label()),
             ));
         }
         Ok(out)
     }
 
-    /// One Btor2 model with every target's assertion, and the properties
-    /// written in the RTL as the front end compiled them. `Err` rejects the
-    /// design: a compile error (an unknown name in a property or the reset,
-    /// say) or a construct the front end does not model. There is no
-    /// fallback: a guess there would turn a typo into a free signal (D13).
-    fn lower(
-        &self,
-        fe: &'static str,
-        files: &[PathBuf],
-        targets: &[usize],
-        notes: bool,
-        half_cycle: bool,
-    ) -> Result<(String, Vec<informal_slang::RtlProperty>, bool), String> {
-        let mut defines = self.design.defines.clone();
-        defines.extend(targets.iter().map(|i| (format!("INFORMAL_P{i}"), None)));
-        let req = informal_slang::Request {
-            files: files.to_vec(),
-            defines,
+    /// One Btor2 model with every enabled property, and the properties as
+    /// the front end compiled them: those written in the RTL, then those
+    /// given by command. `Err` rejects the design: a compile error, a reset
+    /// that does not bind, or a construct the front end does not model.
+    /// Nothing is guessed: a guess would turn a typo into a free signal
+    /// (D13).
+    fn lower(&self) -> Result<(String, Vec<informal_svlang::RtlProperty>), String> {
+        let req = informal_svlang::Request {
+            files: self.design.files.clone(),
+            defines: self.design.defines.clone(),
             incdirs: self.design.incdirs.clone(),
             top: self.design.top.clone(),
             params: self.design.params.clone(),
             // Appends named outputs for combinational nets after
-            // informal_slang::TRACE_MARKER: engines get the text before it
+            // informal_svlang::TRACE_MARKER: engines get the text before it
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
             cut_points: self.cut_points(),
@@ -996,10 +800,6 @@ impl Session {
                 .iter()
                 .map(|i| format!("{}.{i}", self.design.top.as_deref().unwrap_or("")))
                 .collect(),
-            // As the harness does for its own properties: attempts that
-            // start in the reset cycle are not checked.
-            skip_cycles: self.reset_cycles(half_cycle),
-            clock_skips: self.clock_skips(half_cycle),
             properties: self.bound_properties()?,
             clocks: self
                 .clocks
@@ -1007,8 +807,10 @@ impl Session {
                 .map(|c| (c.signal.clone(), c.factor, c.phase))
                 .collect(),
             cover_targets: true,
+            reset: self.reset.clone(),
+            tick: self.tick_reset(),
         };
-        if notes && !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {
+        if !(req.black_box_modules.is_empty() && req.black_box_instances.is_empty()) {
             self.log(&format!(
                 "black boxes in this model (outputs free, contents not modelled): {}. A proof holds for the design; a counterexample may use output values the boxed logic cannot produce",
                 self.design
@@ -1020,25 +822,21 @@ impl Session {
                     .join(", ")
             ));
         }
-        if notes && !req.cut_points.is_empty() {
+        if !req.cut_points.is_empty() {
             self.log(&format!(
                 "{} cut point(s) (stopat) are free in this model: {}. A proof holds for the design; a counterexample may use values the design cannot produce there",
                 self.design.stopats.len(),
                 self.design.stopats.join(", ")
             ));
         }
-        let l = if fe == "slang" {
-            informal_slang::lower(&req).ok_or("slang: this informal was built without slang")?
-        } else {
-            informal_svlang::lower(&req)
-        };
-        for n in l.notes.iter().filter(|_| notes) {
-            self.log(&format!("{fe}: {n}"));
+        let l = informal_svlang::lower(&req);
+        for n in &l.notes {
+            self.log(&format!("svlang: {n}"));
         }
         if l.ok {
-            Ok((l.btor2, l.properties, l.half_cycle))
+            Ok((l.btor2, l.properties))
         } else {
-            Err(format!("{fe}: {}", l.errors.join("; ")))
+            Err(format!("svlang: {}", l.errors.join("; ")))
         }
     }
 
@@ -1369,40 +1167,58 @@ fn only_target(btor: &str, keep: &str) -> String {
         .collect()
 }
 
-/// The front end that elaborates and lowers designs: `svlang` (the
-/// default), or `slang` through `INFORMAL_FRONTEND=slang` (a cross-check).
-pub fn frontend() -> &'static str {
-    match std::env::var("INFORMAL_FRONTEND").as_deref() {
-        Ok("slang") => "slang",
-        _ => "svlang",
-    }
+/// A property's name as its target line in the model has it: a Btor2
+/// symbol has no white space.
+fn target_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_whitespace() { '_' } else { c })
+        .collect()
 }
 
-/// The single module never instantiated by another, when there is one.
-fn guess_top(files: &[PathBuf]) -> anyhow::Result<String> {
-    let decl = regex::Regex::new(r"(?m)^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)")?;
-    let mut text = String::new();
-    for f in files {
-        text += &std::fs::read_to_string(f)?;
+/// Operators the front end's property compiler does not take, checked
+/// when a property is given so that the command fails and not the prove.
+/// (It takes bounded sequences, `until`, `until_with` and `s_eventually`;
+/// a range that ends at `$` is found when it binds the property.)
+const NOT_COMPILED: &[&str] = &[
+    "[->",
+    "[=",
+    "[+]",
+    "s_until_with",
+    "s_until",
+    "eventually",
+    "s_nexttime",
+    "nexttime",
+    "s_always",
+    "always",
+    "strong(",
+    "weak(",
+    "accept_on",
+    "reject_on",
+    "#-#",
+    "#=#",
+    "not ",
+];
+
+/// `Err` for a property text that is empty or uses one of [`NOT_COMPILED`].
+fn check_operators(expr: &str) -> Result<(), String> {
+    if expr.trim().is_empty() {
+        return Err("empty property".into());
     }
-    let names: Vec<String> = decl
-        .captures_iter(&text)
-        .map(|c| c[1].to_string())
-        .collect();
-    let roots: Vec<&String> = names
-        .iter()
-        .filter(|n| {
-            let inst = regex::Regex::new(&format!(
-                r"(?m)^\s*{}\s+(#\s*\(|[A-Za-z_])",
-                regex::escape(n)
-            ))
-            .unwrap();
-            !inst.is_match(&text)
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    // The operator as a whole word where it is one (`until` in `s_until`
+    // or in a signal name is not it).
+    let used = |word: &str| {
+        expr.match_indices(word).any(|(i, _)| {
+            let before = expr[..i].chars().next_back();
+            let after = expr[i + word.len()..].chars().next();
+            let (first, last) = (word.chars().next(), word.chars().next_back());
+            (!first.is_some_and(ident) || !before.is_some_and(ident))
+                && (!last.is_some_and(ident) || !after.is_some_and(ident))
         })
-        .collect();
-    match roots.as_slice() {
-        [one] => Ok((*one).clone()),
-        _ => bail!("cannot tell the top module (candidates: {roots:?}); use -top"),
+    };
+    match NOT_COMPILED.iter().find(|w| used(w)) {
+        Some(w) => Err(format!("`{}` is not supported yet in a property", w.trim())),
+        None => Ok(()),
     }
 }
 

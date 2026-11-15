@@ -148,20 +148,17 @@ fn front_end_rejects_typos_and_reports_source_errors() {
     assert!(e.message.contains("bad.sv:3:"), "{}", e.message);
 }
 
-/// The FIFO through svlang, and through slang as a cross-check when it is
-/// built in: the known verdict for every property.
+/// The FIFO: the known verdict for every property.
 #[test]
 fn fifo_known_answers() {
-    let run = |fe: &str| {
-        let sh = shell(Flavor::Jg, &format!("fifo-{fe}"))?;
-        std::env::set_var("INFORMAL_FRONTEND", fe);
-        let r = sh.source(&root().join("tests/fpv/fifo/fifo.jg.tcl"));
-        std::env::remove_var("INFORMAL_FRONTEND");
-        r.unwrap();
-        assert_eq!(sh.session.borrow().frontend, fe);
+    let run = || {
+        let sh = shell(Flavor::Jg, "fifo")?;
+        sh.source(&root().join("tests/fpv/fifo/fifo.jg.tcl"))
+            .unwrap();
+        assert_eq!(sh.session.borrow().frontend, "svlang");
         Some(statuses(&sh))
     };
-    let Some(v) = run("svlang") else { return };
+    let Some(v) = run() else { return };
     let want = [
         ("a_count_max", "proven"),
         ("a_full_empty", "proven"),
@@ -178,7 +175,4 @@ fn fifo_known_answers() {
     want.insert(7, ("a_sub_ptr", "proven"));
     let want: Vec<_> = want.iter().map(|(n, st)| (n.to_string(), *st)).collect();
     assert_eq!(v, want);
-    if informal_slang::available() {
-        assert_eq!(run("slang").unwrap(), want, "slang disagrees");
-    }
 }

@@ -401,7 +401,7 @@ fn main() -> anyhow::Result<()> {
             &workdir,
         )?,
         Cmd::Lower { files, top, define } => {
-            let req = informal_slang::Request {
+            let req = informal_svlang::Request {
                 files,
                 top,
                 defines: define
@@ -413,12 +413,7 @@ fn main() -> anyhow::Result<()> {
                     .collect(),
                 ..Default::default()
             };
-            let l = match informal_fpv::session::frontend() {
-                "slang" => {
-                    informal_slang::lower(&req).context("this informal was built without slang")?
-                }
-                _ => informal_svlang::lower(&req),
-            };
+            let l = informal_svlang::lower(&req);
             for n in &l.notes {
                 eprintln!("note: {n}");
             }

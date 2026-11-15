@@ -123,24 +123,17 @@ fn check_counter_traces(sh: &Shell, engine: &str) {
             vcd.contains(" clk $end") && vcd.contains(" en $end") && vcd.contains(" rst_n $end")
         );
         assert!(vcd.trim_end().ends_with(&format!("#{}", 10 * (depth + 1))));
-        // Combinational nets come from the named outputs (slang front end
-        // only): `done` = (q == 9) rises with q in the last cycle.
-        if s.frontend == "slang" {
-            assert_eq!(
-                value_at(&vcd, "done", 10 * depth).as_deref(),
-                Some("1"),
-                "{vcd}"
-            );
-            assert_eq!(
-                value_at(&vcd, "done", 10 * depth - 10).as_deref(),
-                Some("0")
-            );
-            assert_eq!(
-                value_at(&vcd, "nxt", 10 * depth - 10).as_deref(),
-                Some("1001")
-            );
-            assert_eq!(value_at(&vcd, "wrap", 0).as_deref(), Some("0"));
-        }
+        // Combinational nets come from the named outputs: `done` = (q == 9)
+        // rises with q in the last cycle.
+        assert_eq!(
+            value_at(&vcd, "done", 10 * depth).as_deref(),
+            Some("1"),
+            "{vcd}"
+        );
+        assert_eq!(
+            value_at(&vcd, "done", 10 * depth - 10).as_deref(),
+            Some("0")
+        );
     }
     assert_eq!(get("m_en_burst").trace, None);
     let json = serde_json::to_value(&*s).unwrap();

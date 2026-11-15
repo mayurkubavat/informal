@@ -1381,7 +1381,7 @@ mod tests {
             .borrow()
             .props
             .iter()
-            .any(|p| p.name == "r" && p.bound));
+            .any(|p| p.name == "r" && !p.rtl));
         let e = sh.eval("prove -all -frobnicate").unwrap_err();
         assert!(e.message.contains("unsupported option -frobnicate"));
         // Engine-tuning options are accepted.

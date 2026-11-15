@@ -15,7 +15,6 @@ informal-engine.workspace = true
 informal-aig.workspace = true
 informal-bmc.workspace = true
 informal-tcl.workspace = true
-informal-slang.workspace = true
 informal-svlang.workspace = true
 
 [dev-dependencies]

@@ -1,10 +1,10 @@
 //! The Btor2 the svlang front end writes: well formed (it parses back), and
 //! the modelling choices of `svlang::btor2` show up as the lines they promise.
 
-use informal_slang::Request;
+use informal_svlang::Request;
 use std::path::PathBuf;
 
-fn lower(name: &str, src: &str) -> informal_slang::Lowered {
+fn lower(name: &str, src: &str) -> informal_svlang::Lowered {
     let dir = std::env::temp_dir().join(format!("informal-svlang-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let f: PathBuf = dir.join(format!("{name}.sv"));
@@ -83,7 +83,6 @@ fn two_clocks_and_latch_loops_are_rejected() {
         "{:?}",
         l.errors
     );
-    assert!(!l.fallback);
     // A latch is written (transparent within a step); one that reads its
     // own output while open is not.
     let l = lower(
@@ -105,7 +104,6 @@ fn two_clocks_and_latch_loops_are_rejected() {
         "{:?}",
         l.errors
     );
-    assert!(!l.fallback);
 }
 
 #[test]
@@ -128,7 +126,7 @@ fn trace_section_names_combinational_nets() {
         ..Default::default()
     });
     assert!(l.ok, "{:?}", l.errors);
-    let (model, section) = informal_slang::split_trace(&l.btor2);
+    let (model, section) = informal_svlang::split_trace(&l.btor2);
     informal_ir::parse(model).unwrap();
     assert!(section.lines().any(|x| x.ends_with(" tr.n")), "{section}");
 }

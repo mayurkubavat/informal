@@ -1,8 +1,7 @@
 // Bounded sequence operators in properties given by command: the front
 // end binds them in the top module and compiles them, with the answers the
 // same properties give when written in the RTL (rtl_ranges.sv). An
-// operator it cannot compile is an error on that property only, and so is
-// a name it cannot bind.
+// operator it cannot compile is an error on that property only.
 //% clock clk
 //% reset -expression {rst}
 //% assume -name m_gap {disable iff (rst) busy |-> !req}
@@ -13,7 +12,6 @@
 //% assert -name a_first {@(posedge clk) disable iff (rst) req ##1 first_match(##[1:2] gnt) |=> gnt}
 //% assert -name a_unbounded {disable iff (rst) req |-> ##[1:$] gnt}
 //% assert -name a_fixed {disable iff (rst) req |-> ##1 !gnt}
-//% assert -name a_typo {disable iff (rst) req |-> ##[2:3] gnnt}
 //% cover -name c_late {disable iff (rst) req ##[3:4] gnt ##1 gnt}
 //% cover -name c_one {disable iff (rst) req ##[0:1] gnt}
 //= a_window proven
@@ -23,7 +21,6 @@
 //= a_first proven
 //= a_unbounded error
 //= a_fixed proven
-//= a_typo error
 //= c_late covered
 //= c_one unreachable
 module command_ranges(input logic clk, input logic rst, input logic req, input logic slow);

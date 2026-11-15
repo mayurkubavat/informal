@@ -16,14 +16,13 @@ branch named `informal` in that checkout and list it in the table at the end.
 | Tool | License | Commit | Upstream | Used for | Found through |
 | --- | --- | --- | --- | --- | --- |
 | svlang | Apache-2.0 | pinned in the root `Cargo.toml` (`rev`) | github.com/mayurkubavat/svlang | SystemVerilog front end (crate `informal-svlang`, D14) | Cargo git dependency |
-| slang | MIT | `d02b7cd` (2026-11-02, master) | github.com/MikePopoloski/slang | Optional cross-check lowering (`INFORMAL_FRONTEND=slang`, crate `informal-slang`) | `INFORMAL_SLANG_DIR`, needs `build/lib/libsvlang.a` |
 | Bitwuzla | MIT | `9d391d1` (2026-10-30, main) | github.com/bitwuzla/bitwuzla | Word-level BMC `informal-wbmc`; its bundled CaDiCaL is also informal's SAT solver | `INFORMAL_BITWUZLA_DIR`, needs `install/` |
 | CaDiCaL (bundled) | MIT | `rel-3.0.1` with Bitwuzla's patches | via Bitwuzla's meson subproject | SAT for all in-house bit-level engines | linked from Bitwuzla's static library |
 | CaDiCaL (standalone) | MIT | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
 | rIC3 | BSD-3-Clause (LICENSE file; its Cargo.toml says GPL-3.0) | `4d63899` (`v1.5.2-117`) | github.com/gipsyh/rIC3 | External engine and soundness oracle (`ric3`, `ric3-ic3`, `ric3-bmc`) | `~/.local/bin/ric3` symlink |
 | ABC | BSD-style (UC Berkeley) | `77875a3b6` (2026-11-01, master) | github.com/berkeley-abc/abc | External engines `abc-pdr`, `abc-pdr-pp`, `abc-bmc3` | `~/.local/bin/abc` symlink |
 
-How each one reaches InFormal: CaDiCaL, Bitwuzla and slang are linked
+How each one reaches InFormal: CaDiCaL and Bitwuzla are linked
 statically; rIC3 and ABC run as separate programs; svlang is compiled in
 as a Cargo dependency. Bitwuzla also brings symfpu (GPL-3.0 or
 BSD-3-Clause, our choice) and links GMP and MPFR (LGPL-3.0) dynamically.
@@ -42,16 +41,10 @@ unchecked), Surfer (the app's trace hand-off hides itself without it).
 Run from the tools directory (`$INFORMAL_TOOLS_DIR`). Rebuild informal afterwards (`cargo build`),
 since the build scripts link whatever they find. The original builds
 were run by hand and not logged; these commands are reconstructed from
-the recorded build configuration (slang `CMakeCache.txt`: Release,
-static, PIC; Bitwuzla meson options: release, static, CaDiCaL only, no
-Python), so check the first rebuild against it.
+the recorded build configuration (Bitwuzla meson options: release,
+static, CaDiCaL only, no Python), so check the first rebuild against it.
 
 ```sh
-# slang: static release build with the tools
-cmake -S slang -B slang/build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DSLANG_INCLUDE_TESTS=OFF
-cmake --build slang/build -j16
-
 # Bitwuzla: static, CaDiCaL only, installed into bitwuzla/install
 cd bitwuzla && ./configure.py --static --prefix "$PWD/install" && \
   cd build && meson compile && meson install && cd ../..

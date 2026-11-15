@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-informal-slang.workspace = true
+serde.workspace = true
 svlang.workspace = true
 
 [dev-dependencies]

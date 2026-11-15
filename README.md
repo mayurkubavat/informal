@@ -93,7 +93,6 @@ exact versions used are in `docs/third-party.md`):
 | --- | --- | --- |
 | Bitwuzla | word-level BMC (`informal-wbmc`), arrays for bug finding | `$INFORMAL_TOOLS_DIR/bitwuzla/install` or `INFORMAL_BITWUZLA_DIR` |
 | rIC3, ABC | more engines in the portfolio | `ric3` and `abc` on `PATH` |
-| slang | a second front end for cross-checks (`INFORMAL_FRONTEND=slang`) | `$INFORMAL_TOOLS_DIR/slang` or `INFORMAL_SLANG_DIR` |
 
 Without CaDiCaL the build still succeeds, but the in-house engines are
 left out of the portfolio and every property comes back undetermined.
@@ -155,11 +154,10 @@ every engine change. To reproduce, download the models to
 | `informal-sat` | SAT interface: CaDiCaL through its C API, plus a small DPLL solver for tests. |
 | `informal-aig` | Bit-level model: AIG with structural hashing, AIGER reader and writer, Btor2 bit-blaster, preprocessing. |
 | `informal-bmc` | In-house engines on the AIG: BMC (also stepped), k-induction, IC3 / PDR (single and multi-threaded with lemma sharing), and IC3 lemmas feeding k-induction. Engine list in `docs/engines.md`. |
-| `informal-svlang` | SystemVerilog front end on svlang (pure Rust): diagnostics, top module, design hierarchy, the properties written in the RTL, and the word-level netlist written as Btor2 (`informal lower`). |
-| `informal-slang` | Optional cross-check front end on slang (C++ shim through FFI), `INFORMAL_FRONTEND=slang`; also holds the shared request and design types. |
+| `informal-svlang` | SystemVerilog front end on svlang (pure Rust): diagnostics, top module, design hierarchy, the properties (written in the RTL or given by command) and the reset compiled into the model, and the word-level netlist written as Btor2 (`informal lower`). |
 | `informal-bitwuzla` | Word-level engines on Bitwuzla (C++ shim through FFI): BMC over Btor2 with arrays. |
 | `informal-tcl` | Embedded Tcl 8.6 (the C library through FFI) for informal scripts. |
-| `informal-fpv` | FPV sessions: design setup, SVA subset compiler, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
+| `informal-fpv` | FPV sessions: design setup, properties, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
 | `informal-llm` | Swappable LLM providers (OpenAI-compatible streaming client, scripted fake) for the app's Ask mode; defaults to local Gemma on Ollama (`config/llm.toml`). |
 | `informal-cli` | The `informal` command. |
 
@@ -228,8 +226,8 @@ need `npm install` in `ui/` first.
 Copyright 2026 Mayur Kubavat. Licensed under the Apache License,
 Version 2.0 (`LICENSE`); see `NOTICE`.
 
-InFormal does not include third-party source code. It links CaDiCaL,
-Bitwuzla and slang (MIT) and the system Tcl, GMP and MPFR libraries, and
+InFormal does not include third-party source code. It links CaDiCaL and
+Bitwuzla (MIT) and the system Tcl, GMP and MPFR libraries, and
 runs rIC3 and ABC as separate programs. `docs/third-party.md` lists each
 one with its license and the exact commit used.
 
