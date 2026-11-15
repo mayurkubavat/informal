@@ -60,7 +60,7 @@ written in that file. A property made by `eval` of a built string has no
 line info; then the first line of the sourced script (`info script`) naming
 the property as a whole word is used. Properties typed at the console get
 `null`. A property written in the RTL carries the place it stands in the
-design. The app's source view opens `source.file` at `source.line` (F3,
+design, and its `expr` is its text as written there. The app's source view opens `source.file` at `source.line` (F3,
 Show source, the Details Source row) and only falls back to searching the
 top design file when it is absent.
 

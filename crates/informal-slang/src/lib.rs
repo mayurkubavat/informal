@@ -247,6 +247,11 @@ pub struct RtlProperty {
     /// model is a `justice` line, not a `bad`.
     #[serde(default)]
     pub liveness: bool,
+    /// The property as written in the RTL: what stands between the
+    /// parentheses of `assert property ( ... )`, on one line. `None` when
+    /// it cannot be read from the source (code from a macro, say).
+    #[serde(default)]
+    pub text: Option<String>,
     pub file: Option<String>,
     pub line: Option<u32>,
 }

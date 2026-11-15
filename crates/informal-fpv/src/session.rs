@@ -107,8 +107,8 @@ pub struct Property {
     pub source: Option<SourceLoc>,
     /// Written in the RTL (`assert property` inside a module) and found at
     /// elaboration, not created by a command. `name` is then its full
-    /// hierarchical name, `expr` is empty, and `source` is where it stands
-    /// in the design.
+    /// hierarchical name, `expr` is its text as written there (empty when
+    /// that cannot be read), and `source` is where it stands in the design.
     pub rtl: bool,
     /// Given by command with a bounded sequence operator (`##[1:3]`,
     /// `throughout`, ...): the front end binds `expr` in the top module and
@@ -451,7 +451,9 @@ impl Session {
                     "cover" => Kind::Cover,
                     _ => Kind::Assert,
                 },
-                expr: String::new(),
+                // As written in the design, for the reader: the model has
+                // its own compiled check.
+                expr: f.text.clone().unwrap_or_default(),
                 enabled: true,
                 status: Status::Unprocessed,
                 trace: None,
@@ -853,7 +855,8 @@ impl Session {
             }
             // Properties added before elaboration are checked now.
             let rtl = self.props[i].rtl || self.props[i].bound;
-            let names = match self.props[i].bound {
+            // (One the front end binds itself gets its names checked there.)
+            let names = match rtl {
                 true => Ok(()),
                 false => self.check_names(&self.props[i].expr),
             };

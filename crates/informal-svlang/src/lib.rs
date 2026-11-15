@@ -136,11 +136,53 @@ fn command_properties(
                 unsupported,
                 error,
                 liveness,
+                text: None,
                 file: None,
                 line: None,
             }
         })
         .collect()
+}
+
+/// The property specification that starts at `line` and `column` (both from
+/// 1, the column in bytes) of `source`: what stands between the parentheses
+/// after `property` (or `sequence`, for `cover sequence`), with runs of
+/// white space made one space. `None` when the text there does not look
+/// like a concurrent assertion.
+fn property_text(source: &str, line: u32, column: u32) -> Option<String> {
+    let start: usize = source
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)? as usize)
+        .map(str::len)
+        .sum::<usize>()
+        + column.checked_sub(1)? as usize;
+    let rest = source.get(start..)?;
+    // The statement ends at its semicolon; the keyword comes before that.
+    let end = rest.find(';').unwrap_or(rest.len());
+    let keyword = ["property", "sequence"]
+        .iter()
+        .filter_map(|k| rest[..end].find(k).map(|i| i + k.len()))
+        .min()?;
+    let open = keyword + rest[keyword..].find('(')?;
+    if !rest[keyword..open].trim().is_empty() {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (i, c) in rest[open..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let inner = &rest[open + 1..open + i];
+                    let one_line = inner.split_whitespace().collect::<Vec<_>>().join(" ");
+                    return (!one_line.is_empty()).then_some(one_line);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn rtl_properties(
@@ -150,11 +192,28 @@ fn rtl_properties(
 ) -> Vec<RtlProperty> {
     let opts = property_options(skip_cycles, clock_skips);
     let outcomes = nl.compile_properties(&opts);
+    // The source files the properties stand in, read once each.
+    let mut sources: std::collections::HashMap<u32, Option<String>> = Default::default();
+    let mut text_of = |loc: svlang::semantic::Loc| -> Option<String> {
+        // Code from a macro has no place of its own in a file.
+        if loc.expansion.is_some() {
+            return None;
+        }
+        let source = sources
+            .entry(loc.file)
+            .or_insert_with(|| {
+                let path = nl.files.get(loc.file as usize)?;
+                std::fs::read_to_string(path).ok()
+            })
+            .as_deref()?;
+        property_text(source, loc.line, loc.column)
+    };
     nl.properties
         .iter()
         .zip(&nl.property_names)
         .zip(outcomes)
         .map(|((p, name), outcome)| RtlProperty {
+            text: text_of(p.loc),
             liveness: matches!(outcome, PropertyOutcome::Liveness { .. }),
             name: name.clone(),
             kind: match p.kind {
@@ -419,5 +478,29 @@ fn fold(n: &ScopeNode, prefix: &str, out: &mut Scope) {
         } else {
             out.children.push(scope(c));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::property_text;
+
+    #[test]
+    fn the_text_of_a_property_is_what_its_parentheses_hold() {
+        let src = "module m;\n  a_x: assert property (@(posedge clk) disable iff (rst)\n      req |-> ##[1:3] (gnt && !err));\n  cover sequence (a ##1 b);\n  assign y = f(x);\nendmodule\n";
+        assert_eq!(
+            property_text(src, 2, 3).as_deref(),
+            Some("@(posedge clk) disable iff (rst) req |-> ##[1:3] (gnt && !err)")
+        );
+        // From the keyword itself, as well as from the label.
+        assert_eq!(
+            property_text(src, 2, 8).as_deref().map(|t| t.len()),
+            Some(62)
+        );
+        assert_eq!(property_text(src, 4, 3).as_deref(), Some("a ##1 b"));
+        // Not an assertion, or no such place.
+        assert_eq!(property_text(src, 5, 3), None);
+        assert_eq!(property_text(src, 40, 1), None);
+        assert_eq!(property_text(src, 0, 0), None);
     }
 }

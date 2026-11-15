@@ -132,3 +132,44 @@ fn trace_section_names_combinational_nets() {
     informal_ir::parse(model).unwrap();
     assert!(section.lines().any(|x| x.ends_with(" tr.n")), "{section}");
 }
+
+#[test]
+fn properties_in_the_rtl_come_with_their_text_and_place() {
+    let dir = std::env::temp_dir().join(format!("informal-svlang-text-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("tx.sv");
+    std::fs::write(
+        &f,
+        "module tx_child(input logic clk, input logic a);\n\
+           assert property (@(posedge clk) a |=> !a);\n\
+         endmodule\n\
+         module tx(input logic clk, rst, req, output logic gnt);\n\
+           always_ff @(posedge clk) gnt <= rst ? 1'b0 : req;\n\
+           default clocking @(posedge clk); endclocking\n\
+           a_next: assert property (disable iff (rst)\n\
+                                    req |=> gnt);\n\
+           always @(posedge clk) if (req) c_in: cover property (gnt ##1 gnt);\n\
+           tx_child u(.clk(clk), .a(gnt));\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let d = informal_svlang::compile(&Request {
+        files: vec![f],
+        top: Some("tx".into()),
+        ..Default::default()
+    });
+    assert!(d.ok, "{:?}", d.diagnostics);
+    let got: Vec<(&str, Option<&str>, Option<u32>)> = d
+        .properties
+        .iter()
+        .map(|p| (p.name.as_str(), p.text.as_deref(), p.line))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("tx.a_next", Some("disable iff (rst) req |=> gnt"), Some(7)),
+            ("tx.c_in", Some("gnt ##1 gnt"), Some(9)),
+            ("tx.u._assert_1", Some("@(posedge clk) a |=> !a"), Some(2)),
+        ]
+    );
+}
