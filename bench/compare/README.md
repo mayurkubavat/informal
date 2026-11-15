@@ -108,7 +108,7 @@ the report says so.
 
 | Set | Cases | From |
 | --- | ---: | --- |
-| InFormal's own tests | 14 | `tests/sv` designs that have properties in the RTL and a script of one clock and a reset and no assumption given by command; `tests/fpv` counter and fifo with the properties of their scripts written in a bound module (`props/`) |
+| InFormal's own tests | 15 | `tests/sv` designs that have properties in the RTL and a script of one clock and a reset and no assumption given by command; `tests/fpv` counter and fifo with the properties of their scripts written in a bound module (`props/`) |
 | SymbiYosys examples | 14 | the examples that ship in the OSS CAD Suite, with their `.sby` files |
 | EBMC examples | 123 | `examples/Benchmarks` of the EBMC repository at tag `ebmc-6.2` |
 | Third-party designs | 13 | pulp-platform common_cells with the properties of its `formal/` directory; OpenTitan primitives with the formal test benches of `hw/ip/prim/fpv` |
@@ -163,6 +163,14 @@ authors.
   run prints "SAT checker inconsistent" on other designs when `--reset` is
   given, so its proofs under a reset are not counted as agreement or
   disagreement with anything; the flow's verdict is the counterexample.
+- **`sby-examples/fifo-nofullskip`, covers `w_underfill` and
+  `w_overfill`: InFormal unreachable, EBMC covered.** With the skip logic
+  defined away, an address can only move when its enable is set, which
+  the cover excludes. EBMC's cover trace for `w_underfill` has two states
+  and the covered expression is false in both (`past_nwen` is 0). A
+  SymbiYosys cover run on the same define (depth 40, not part of the
+  recorded run) does not reach either cover. Read as a fault in EBMC's
+  handling of an immediate cover inside a clocked block under a condition.
 - **Covers under EBMC's IC3 engine.** It reports REFUTED for covers that
   EBMC's own bounded check reaches with a trace (`sby-examples/fifo`
   `w_nreset`, `quickstart-cover`): it answers the cover as an assertion of
@@ -179,6 +187,8 @@ left out), and a bounded SymbiYosys pass was counted as a proof.
 Recorded as found, at the commit of the run; a fix is a change made
 because of this comparison and is listed in the next section when it lands.
 
+(At `6dde4a5`; the first three are what `98b4b81` addresses.)
+
 - `informal shell` printed an empty property table and exited 0 for a
   design it could not model (OpenTitan `prim_count`, until
   `set_lowering skip_initial_checks on` is given) and for a design whose
@@ -187,12 +197,24 @@ because of this comparison and is listed in the next section when it lands.
   clocked or combinational block) and said nothing about them. Every
   SymbiYosys example and three of the common_cells proofs are written
   that way.
+- Immediate assertions without a label are still not checked (reported
+  NOT CHECKED): 9 of the 14 SymbiYosys examples and common_cells `lzc`,
+  `ecc` and `heaviside`, which SymbiYosys proves, get no verdict.
+- An unbounded `always` inside a property (`always s_eventually p`, the
+  EBMC PWM examples) is not supported.
 - svlang accepts the `bind` of common_cells `cc_fifo`, which slang rejects
   when run to the letter of the standard.
 
 ## Changes made because of this comparison
 
-None in InFormal or svlang yet.
+- InFormal `98b4b81` ("No silent empty property table"): a design that
+  cannot be modelled is reported NOT MODELLED and `prove` fails; labelled
+  immediate assertions and covers are checked; unlabelled ones are listed
+  NOT CHECKED. It was written after the first pass of this comparison
+  showed the empty tables. `results/before-fix-6dde4a5.jsonl` is that
+  first pass on the hand-listed cases, kept so that the effect can be
+  seen: on the SymbiYosys examples InFormal went from 1 property decided
+  to 37, and OpenTitan `prim_count` from none to 14. No engine was changed.
 
 In the cases: the OpenTitan designs set `set_lowering skip_initial_checks
 on` for InFormal (a documented switch, off by default), because their

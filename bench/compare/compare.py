@@ -647,12 +647,18 @@ def cmd_run(args) -> None:
             "machine": os.environ.get("COMPARE_MACHINE", "")}
     if args.purpose == "timing" and load > 1.0:
         die(f"load is {load:.1f}: a timing run needs a quiet machine (use --purpose verdicts)")
+    done = set()
+    if args.skip_done and out_file.exists():
+        for line in out_file.read_text().splitlines():
+            r = json.loads(line)
+            if r["record"] == "result":
+                done.add((r["case"], r["flow"], r["config"]))
     with open(out_file, "a") as out:
         out.write(json.dumps(meta) + "\n")
         for c in cases:
             for flow in args.flows:
                 for config in configs_for(flow, c):
-                    if args.configs and config not in args.configs:
+                    if args.configs and config not in args.configs or (c["name"], flow, config) in done:
                         continue
                     d = run_dir / c["name"].replace("/", "__") / f"{flow}-{config.replace(':', '_')}"
                     if d.exists():
@@ -721,31 +727,45 @@ def read_results(path: Path) -> tuple[dict, list[dict]]:
     return meta, list(last.values())
 
 
+UNNAMED = re.compile(r"^(?:(.*)\.)?(?:_(assert|cover)_(\d+)|_witness_\.\S+)$")
+
+
 def align_unnamed(by_flow: dict) -> None:
-    """SymbiYosys names an unnamed assertion after an internal cell, the
-    others by its order in the module. Match them through the source line
-    InFormal records."""
-    lines = {(p.get("file"), p.get("line")): k for k, p in by_flow.get("informal", {}).items() if p.get("line")}
-    sby = by_flow.get("sby", {})
-    for key in list(sby):
-        p = sby[key]
-        if key not in by_flow.get("informal", {}) and (p.get("file"), p.get("line")) in lines:
-            new = lines[(p.get("file"), p.get("line"))]
-            if new not in sby:
-                sby[new] = sby.pop(key)
-    # Where InFormal has no line to offer: EBMC numbers the unnamed
-    # assertions of a module in source order, so they are paired with
-    # SymbiYosys's in line order when both flows have the same number of
-    # them.
+    """One key for a property that has no label. InFormal and SymbiYosys
+    give its source line, so it becomes `<scope>.<kind>@<line>`. EBMC gives
+    only a running number over the statements of the design, so its
+    unnamed properties are paired with those lines in source order, and
+    only when it has exactly as many of that kind as the lines known."""
+    lines: dict = {"assert": set(), "cover": set()}
+    for flow in ("informal", "sby"):
+        mine = by_flow.get(flow, {})
+        for key in list(mine):
+            p = mine[key]
+            m = UNNAMED.match(key)
+            if not m or not p.get("line"):
+                continue
+            scope = (m.group(1) + ".") if m.group(1) else ""
+            new = f"{scope}{p['kind']}@{p['line']}"
+            n = 2
+            while new in mine:
+                new = f"{scope}{p['kind']}@{p['line']}#{n}"
+                n += 1
+            mine[new] = mine.pop(key)
+            lines[p["kind"]].add(new)
     ebmc = by_flow.get("ebmc", {})
+
+    def where(key):
+        scope, _, rest = key.rpartition(".")
+        line, _, n = rest.partition("@")[2].partition("#")
+        return (int(line), scope, int(n or 1))
+
     for kind in ("assert", "cover"):
-        left = sorted((k for k, p in sby.items() if "_witness_" in k and p["kind"] == kind and k not in ebmc),
-                      key=lambda k: (sby[k].get("file") or "", sby[k].get("line") or 0))
-        right = sorted((k for k, p in ebmc.items() if re.search(rf"_{kind}_\d+$", k) and k not in sby),
-                       key=lambda k: (k.rsplit("_", 1)[0], int(k.rsplit("_", 1)[1])))
-        if left and len(left) == len(right):
-            for a, b in zip(left, right):
-                sby[b] = sby.pop(a)
+        have = sorted(((int(UNNAMED.match(k).group(3)), k) for k, p in ebmc.items()
+                       if p["kind"] == kind and UNNAMED.match(k) and UNNAMED.match(k).group(3)))
+        want = sorted(lines[kind], key=where)
+        if have and len(have) == len(want):
+            for (_, old), new in zip(have, want):
+                ebmc[new] = ebmc.pop(old)
 
 
 def cmd_report(args) -> None:
@@ -761,6 +781,13 @@ def cmd_report(args) -> None:
             mine = [r for r in recs if r["case"] == n and r["flow"] == flow]
             if mine:
                 by_flow[flow] = merged(mine)
+            # EBMC's bounded check marks the design's assumptions ASSUMED and
+            # they are left out; its other engines list some of them as
+            # unsupported properties. Not properties: dropped here too.
+            bmc = [r for r in mine if flow == "ebmc" and r["config"] == "bmc" and r["accepted"]]
+            if bmc:
+                checked = {p["key"] for p in bmc[0]["props"]}
+                by_flow[flow] = {k: v for k, v in by_flow[flow].items() if k in checked}
         align_unnamed(by_flow)
         table[n] = by_flow
     out = []
@@ -814,7 +841,9 @@ def cmd_report(args) -> None:
                         cnt["undetermined"] += 1
                     else:
                         cnt["refused"] += 1
-            row = (f"| {label.get(g, 'All')} | {len(ns)} | {nprops} | {flow} | {read} | {cnt['definite']} | "
+            total = sum(1 for c in cases.values() if g == "all" or c["group"] == g)
+            shown = f"{len(ns)}" if len(ns) == total else f"{len(ns)} of {total}"
+            row = (f"| {label.get(g, 'All')} | {shown} | {nprops} | {flow} | {read} | {cnt['definite']} | "
                    f"{cnt['bounded']} | {cnt['undetermined']} | {cnt['refused']} |")
             w(row)
     w("")
@@ -954,6 +983,7 @@ def main() -> None:
     p.add_argument("--purpose", choices=("verdicts", "timing"), default="verdicts")
     p.add_argument("--id")
     p.add_argument("--out")
+    p.add_argument("--skip-done", action="store_true", help="leave out what the run file already has (to resume a run)")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("report")
     p.add_argument("--results")
