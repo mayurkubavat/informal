@@ -2,6 +2,11 @@
 //! goes through the shell flow (svlang lowering, injected harness, the
 //! in-house engines) and must give the answer IEEE 1800 gives. Skipped
 //! without CaDiCaL.
+//!
+//! The same run records what each property's model looked like
+//! (tests/sv/lowering.lock): a change that is meant to keep the lowering
+//! as it is must leave that file alone, and one that changes it shows
+//! which properties moved and by how much.
 
 use informal_fpv::{compat, Flavor, Session, Shell};
 use std::path::{Path, PathBuf};
@@ -46,10 +51,51 @@ fn parse(path: &Path) -> Case {
     c
 }
 
-/// The case's outcome, or a description of how it went wrong.
-fn run(c: &Case) -> Result<(), String> {
+/// FNV-1a, 64 bits: enough to see that a model changed.
+fn digest(text: &str) -> u64 {
+    text.bytes().fold(0xcbf29ce484222325, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    })
+}
+
+/// One lowering.lock line per property that got a model: its digest and
+/// the counts that say how large it is.
+fn lock_lines(c: &Case, sh: &Shell, work: &Path) -> Vec<String> {
+    let session = sh.session.borrow();
+    let mut lines = Vec::new();
+    for (i, p) in session.props.iter().enumerate() {
+        let Ok(model) = std::fs::read_to_string(work.join(format!("prop_{i}.btor2"))) else {
+            continue;
+        };
+        let count = |op: &str| {
+            model
+                .lines()
+                .filter(|l| l.split_whitespace().nth(1) == Some(op))
+                .count()
+        };
+        lines.push(format!(
+            "{} {} {:016x} lines={} state={} input={} bad={} constraint={} justice={}",
+            c.top,
+            p.name,
+            digest(&model),
+            model.lines().count(),
+            count("state"),
+            count("input"),
+            count("bad"),
+            count("constraint"),
+            count("justice"),
+        ));
+    }
+    lines
+}
+
+/// The case's lowering.lock lines, or a description of how it went wrong.
+fn run(c: &Case) -> Result<Vec<String>, String> {
     let work = std::env::temp_dir().join(format!("informal-sv-{}-{}", c.top, std::process::id()));
-    let sh = Shell::new(Session::new(informal_bmc::engines(), work), Flavor::Jg);
+    let sh = Shell::new(
+        Session::new(informal_bmc::engines(), work.clone()),
+        Flavor::Jg,
+    );
     let mut script = vec![
         format!("analyze -sv {{{}}}", c.path.display()),
         format!("elaborate -top {}", c.top),
@@ -63,7 +109,7 @@ fn run(c: &Case) -> Result<(), String> {
         if let Err(e) = sh.eval(cmd) {
             let e = e.to_string();
             return match &c.error {
-                Some(want) if e.contains(want.as_str()) => Ok(()),
+                Some(want) if e.contains(want.as_str()) => Ok(Vec::new()),
                 Some(want) => Err(format!("`{cmd}` failed with `{e}`, want `{want}`")),
                 None => Err(format!("`{cmd}` failed: {e}")),
             };
@@ -87,7 +133,7 @@ fn run(c: &Case) -> Result<(), String> {
             return Err(format!("{name}: got {status:?} ({detail}), want {want}"));
         }
     }
-    Ok(())
+    Ok(lock_lines(c, &sh, &work))
 }
 
 #[test]
@@ -103,11 +149,14 @@ fn sv_known_answers() {
         .collect();
     files.sort();
     assert!(!files.is_empty());
-    let failures: Vec<String> = files
-        .iter()
-        .map(|f| parse(f))
-        .filter_map(|c| run(&c).err().map(|e| format!("{}: {e}", c.top)))
-        .collect();
+    let mut failures = Vec::new();
+    let mut lock = Vec::new();
+    for c in files.iter().map(|f| parse(f)) {
+        match run(&c) {
+            Ok(lines) => lock.extend(lines),
+            Err(e) => failures.push(format!("{}: {e}", c.top)),
+        }
+    }
     assert!(
         failures.is_empty(),
         "{} of {} cases wrong:\n  {}",
@@ -115,4 +164,35 @@ fn sv_known_answers() {
         files.len(),
         failures.join("\n  ")
     );
+
+    // The lowering record. INFORMAL_BLESS rewrites it (scripts/check.sh
+    // clears that variable, so the gate only ever compares).
+    let path = root().join("tests/sv/lowering.lock");
+    let got = lock.join("\n") + "\n";
+    if std::env::var_os("INFORMAL_BLESS").is_some() {
+        std::fs::write(&path, &got).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    if got != want {
+        let old: Vec<&str> = want.lines().collect();
+        let changed: Vec<String> = lock
+            .iter()
+            .filter(|l| !old.contains(&l.as_str()))
+            .map(|l| format!("+ {l}"))
+            .chain(
+                old.iter()
+                    .filter(|l| !lock.iter().any(|n| n == *l))
+                    .map(|l| format!("- {l}")),
+            )
+            .collect();
+        panic!(
+            "the lowering of {} properties differs from tests/sv/lowering.lock:\n  {}\n\
+             If the change is meant, rewrite the file with\n  \
+             INFORMAL_BLESS=1 cargo test -p informal-fpv --test sv_semantics\n\
+             and say in the commit why the models changed.",
+            changed.iter().filter(|l| l.starts_with('+')).count().max(1),
+            changed.join("\n  ")
+        );
+    }
 }
