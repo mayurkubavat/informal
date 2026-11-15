@@ -17,6 +17,34 @@ Local only (ignored):
 - `hwmcc24/` the extracted models (Zenodo 14775242) and `expected.json`
 - `bin/` frozen `informal-<commit>` binaries used by long runs
 - `runs-*.jsonl` run databases, `*.log` run logs
+- `measure/` runs of `scripts/measure.py`
+
+## Measurements for publication
+
+`scripts/measure.py` is the harness for numbers that are published:
+
+```sh
+python3 -I scripts/measure.py freeze             # bench/bin/informal-<commit>
+python3 -I scripts/measure.py run --binary bench/bin/informal-<commit> \
+    --models bench/full319.txt --config portfolio --timeout 3600 --mem 20G --repeats 3
+python3 -I scripts/measure.py table bench/measure/<run> [<run> ...] \
+    --expected bench/hwmcc24/expected.json --format md   # or csv, tex
+```
+
+Each model runs in its own cgroup scope with a hard memory limit and no
+swap. Before each model the harness measures how much CPU is in use
+outside it and waits until that is under `--max-outside` (default 10% of
+the CPUs), and it refuses to start on a busy machine; each row records the
+value. `--config` is `portfolio` or one engine of `config/engines.toml`
+(`ric3`, `informal-ic3`, ...). A run directory under `bench/measure/` holds
+`manifest.json` (binary hash, `tools.lock`, machine, limits, model list
+hash) and `runs.jsonl`; the same command resumes an interrupted run and
+refuses to mix settings. `table` prints, per configuration, the median
+number solved over the repeats with the lowest and highest, PAR-2, the
+models only that configuration solves, and every verdict that contradicts
+the published answer (the exit status is 1 if there is one).
+
+## Day-to-day runs
 
 Run with `scripts/hwmcc_full.sh`, `scripts/inhouse_sample.sh` or
 `scripts/inhouse_capped.sh`; score with `python3 -I scripts/hwmcc_check.py`.

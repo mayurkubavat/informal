@@ -13,6 +13,7 @@
 /bench/runs*.jsonl
 /bench/seeds/
 /bench/store*/
+/bench/measure/
 *.log
 
 # Research notes, reports and review notes stay local (not for the repo)
