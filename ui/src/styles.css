@@ -550,6 +550,7 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .mode-switch button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
 .mode-switch button[aria-pressed="true"] { color: var(--text); background: var(--surface); font-weight: 500; }
 .line.ask { color: var(--text-2); }
+.line.ask-step { color: var(--muted); }
 .prompt-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .statusbar-btn { padding: 0 4px; margin: 0 -4px; border-radius: 3px; color: var(--text-2); }
 .statusbar-btn:hover { color: var(--text); background: var(--hover); }

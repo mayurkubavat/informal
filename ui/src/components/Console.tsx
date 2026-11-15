@@ -120,7 +120,7 @@ export function Console({
             </div>
           ) : (
             <div key={i} className={`line ${l.kind}`}>
-              {l.kind === "in" ? `${tclPrompt} ${l.text}` : l.kind === "ask-in" ? `ask> ${l.text}` : l.text}
+              {l.kind === "in" ? `${tclPrompt} ${l.text}` : l.kind === "ask-in" ? `ask> ${l.text}` : l.kind === "ask-step" ? `ask: looked up ${l.text}` : l.text}
             </div>
           ),
         )}

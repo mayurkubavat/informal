@@ -5,6 +5,12 @@
 # file, the INFORMAL_LLM_PROVIDER environment variable, or the status-bar menu in
 # the app (that one lasts until the app closes; this file is not rewritten).
 #
+# `tools` says how a model is given the tools Ask uses to read the session
+# before it answers: "native" (the API's own tool calling), "text" (the
+# tools are described in the prompt and the model answers a call as JSON;
+# for models served without tool calling, such as Gemma on Ollama) or
+# "off". Left out: native for kind = "anthropic", text otherwise.
+#
 # Keys are never written here: api_key_env names the environment variable
 # that holds one. Ask mode never runs anything by itself; a suggested Tcl
 # command waits on the prompt until you press Enter.
@@ -60,17 +66,14 @@ temperature = 0.2
 # max_tokens = 512
 # temperature = 0.2
 
-# Anthropic, through its OpenAI SDK compatibility endpoint.
-# TODO: a native Messages API adapter (kind = "anthropic") for features the
-# compatibility layer leaves out.
+# Anthropic, through the Messages API (base_url defaults to
+# https://api.anthropic.com/v1; temperature is not sent, the API rejects it).
 # [providers.anthropic]
-# kind = "openai-compat"
-# base_url = "https://api.anthropic.com/v1"
-# model = "claude-sonnet-5-5"
+# kind = "anthropic"
+# model = "claude-opus-5-5"
 # api_key_env = "ANTHROPIC_API_KEY"
-# timeout_s = 60
-# max_tokens = 512
-# temperature = 0.2
+# timeout_s = 120
+# max_tokens = 4096
 
 # Scripted replies, no server (tests and demos).
 [providers.fake]

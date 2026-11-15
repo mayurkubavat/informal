@@ -39,7 +39,7 @@ pub struct DefaultSection {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
-    /// `openai-compat` or `fake`.
+    /// `openai-compat`, `anthropic` or `fake`.
     pub kind: String,
     /// API root ending in `/v1` (requests go to `{base_url}/chat/completions`).
     #[serde(default)]
@@ -57,6 +57,12 @@ pub struct ProviderConfig {
     /// Extra HTTP headers sent with every request.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    /// How the model is given tools ([`crate::agent`]): `native` (the
+    /// API's own tool calling), `text` (the tools are described in the
+    /// prompt and the model answers a call as JSON; for models served
+    /// without tool calling, such as Gemma on Ollama) or `off`. Default:
+    /// `native` for `anthropic`, `text` otherwise.
+    pub tools: Option<String>,
     /// `fake` only: replies given in turn (cycling).
     #[serde(default)]
     pub replies: Vec<String>,
@@ -74,6 +80,14 @@ impl LlmConfig {
         for (name, p) in &c.providers {
             if p.kind == "openai-compat" && (p.base_url.is_empty() || p.model.is_empty()) {
                 bail!("provider {name}: openai-compat needs base_url and model");
+            }
+            if p.kind == "anthropic" && p.model.is_empty() {
+                bail!("provider {name}: anthropic needs model");
+            }
+            if let Some(t) = &p.tools {
+                if !["native", "text", "off"].contains(&t.as_str()) {
+                    bail!("provider {name}: tools = {t:?} (expected native, text or off)");
+                }
             }
         }
         if let Some(d) = &c.default.provider {

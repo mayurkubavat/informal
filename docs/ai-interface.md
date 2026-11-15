@@ -215,4 +215,5 @@ frames come in one reply.
   the protocol's cancellation and progress notifications work meanwhile.
 - No check yet that an AI-added assumption over-constrains the design or
   makes a proof vacuous (planned).
-- The app's own Ask mode does not use the tools yet (planned).
+- The app's own Ask mode uses the tools that read (`docs/ui/ask-mode.md`);
+  it does not prove or propose.

@@ -110,6 +110,8 @@ impl LlmProvider for Fake {
             finish_reason: Some("stop".into()),
             first_token_ms: Some(0),
             total_ms: t.elapsed().as_millis() as u64,
+            tool_calls: Vec::new(),
+            raw: None,
         })
     }
 

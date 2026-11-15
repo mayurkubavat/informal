@@ -198,12 +198,13 @@ if (typeof location !== "undefined") {
   if (extra) mockSession.props.push(...generatedProps(extra));
 }
 
-type Ev = "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity" | "ai-gui";
+type Ev = "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-step" | "ask-done" | "ai-activity" | "ai-gui";
 const listeners: Record<Ev, Set<(p: unknown) => void>> = {
   "prove-progress": new Set(),
   "console-line": new Set(),
   "engine-log": new Set(),
   "ask-delta": new Set(),
+  "ask-step": new Set(),
   "ask-done": new Set(),
   "ai-activity": new Set(),
   "ai-gui": new Set(),
@@ -426,11 +427,26 @@ function mockAnswer(prompt: string): string {
 export function mockAsk(id: number, prompt: string): number {
   const st = mockLlmStatus();
   if (!st.ok) throw new Error(st.error);
-  const text = mockAnswer(prompt);
+  // A "why" question is looked up first, as a model with tools would:
+  // the failing property, then its trace.
+  const why = /^\s*why\b/i.test(prompt);
+  const failed = mockSession.props.find((p) => p.status.status === "cex");
+  const lookups = why ? ["property_list status=cex", ...(failed ? [`trace_get name=${failed.name}`] : [])] : [];
+  const text = why
+    ? failed
+      ? `${failed.name} fails: q reaches 9 in cycle ${failed.status.depth ?? 11}, which the assertion forbids.`
+      : "No assertion has failed."
+    : mockAnswer(prompt);
   const words = text.match(/\S+\s*/g) ?? [];
   const step = mockOptions.tick ? 30 : 0;
   let i = 0;
   const next = () => {
+    const lookup = lookups.shift();
+    if (lookup) {
+      mockEvents.emit("ask-step", { id, text: lookup });
+      mockAsks.set(id, setTimeout(next, step));
+      return;
+    }
     if (i < words.length) {
       mockEvents.emit("ask-delta", { id, text: words[i++] });
       mockAsks.set(id, setTimeout(next, step));

@@ -15,7 +15,9 @@
 //! Ask mode (docs/ui/ask-mode.md): `ask` streams an LLM's answer as
 //! "ask-delta" events and ends with "ask-done", which may carry one
 //! suggested Tcl command. Nothing the model says is run here; the UI puts
-//! the command on the prompt and the user presses Enter (or Esc).
+//! the command on the prompt and the user presses Enter (or Esc). Before it
+//! answers, the model may read the session with tools (`ask.rs` TOOLS);
+//! each call is shown as an "ask-step" event.
 //!
 //! The AI interface (decision D17, docs/ai-interface.md): the same session
 //! is served to an outside agent on a local socket (`ai.rs`). What the
@@ -369,6 +371,18 @@ impl Llm {
         }
     }
 
+    /// How the provider in use is given tools (its `tools` setting).
+    fn tool_mode(&self) -> informal_llm::agent::ToolMode {
+        let current = self.current.lock().unwrap();
+        let cfg = current
+            .as_ref()
+            .and_then(|(name, _)| self.config.as_ref().ok()?.providers.get(name));
+        cfg.map_or(
+            informal_llm::agent::ToolMode::Off,
+            informal_llm::agent::ToolMode::of,
+        )
+    }
+
     fn provider(&self) -> Result<Arc<dyn informal_llm::LlmProvider>, String> {
         if let Some((_, p)) = self.current.lock().unwrap().as_ref() {
             return Ok(p.clone());
@@ -497,21 +511,59 @@ fn ask(
         Some(c) => format!("{prompt}\n\n(Context from the UI: {c})"),
         None => prompt,
     };
-    let req = informal_llm::ChatRequest::new(vec![
+    // With tools, the model may read the session before it answers
+    // (ask.rs TOOLS: nothing that proves or changes anything).
+    let mode = llm.tool_mode();
+    let tools = match (mode, APP.get().and_then(|a| a.try_state::<ai::Ai>())) {
+        (informal_llm::agent::ToolMode::Off, _) | (_, None) => None,
+        (_, Some(ai)) => Some(ask::Host(ai.api.clone())),
+    };
+    let system = match tools {
+        Some(_) => format!("{system}\n\n{}", ask::TOOLS_NOTE),
+        None => system,
+    };
+    let messages = vec![
         informal_llm::Message::system(system),
         informal_llm::Message::user(user),
-    ]);
+    ];
     // Held across the spawn, so a very quick answer cannot remove its
     // entry before it is inserted.
     let mut running = llm.running.lock().unwrap();
     let task = tauri::async_runtime::spawn(async move {
-        let emit_delta = |text: &str| {
-            if let Some(app) = APP.get() {
-                let _ = app.emit("ask-delta", AskDelta { id, text });
+        let mut on_event = |e: informal_llm::agent::Event| {
+            let Some(app) = APP.get() else { return };
+            match e {
+                informal_llm::agent::Event::Text(text) => {
+                    let _ = app.emit("ask-delta", AskDelta { id, text });
+                }
+                informal_llm::agent::Event::Call { name, arguments } => {
+                    let text = &ask::step_text(name, arguments);
+                    let _ = app.emit("ask-step", AskDelta { id, text });
+                }
+                informal_llm::agent::Event::Result { .. } => {}
             }
         };
-        let mut on_delta = emit_delta;
-        let done = match p.chat(req, &mut on_delta).await {
+        let (specs, host): (_, &dyn informal_llm::agent::ToolHost) = match &tools {
+            Some(h) => (ask::tool_specs(), h),
+            None => (Vec::new(), &ask::NoTools),
+        };
+        let limits = match mode {
+            informal_llm::agent::ToolMode::Native => informal_llm::agent::Limits {
+                max_steps: 12,
+                max_result_chars: 20_000,
+            },
+            _ => informal_llm::agent::Limits::default(),
+        };
+        let run = informal_llm::agent::run(
+            p.as_ref(),
+            mode,
+            &specs,
+            host,
+            messages,
+            limits,
+            &mut on_event,
+        );
+        let done = match run.await {
             Ok(r) => {
                 let (explanation, command) = ask::split_answer(&r.text);
                 AskDone {

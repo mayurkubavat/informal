@@ -2,8 +2,8 @@
 //! (`http://localhost:11434/v1`), llama-server (`http://localhost:8080/v1`),
 //! vLLM (`http://localhost:8000/v1`) and OpenAI itself.
 
-use crate::sse::{clip, parse_chunk, SseParser};
-use crate::{ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderConfig};
+use crate::sse::{clip, parse_chunk, SseParser, ToolCalls};
+use crate::{ChatRequest, ChatResponse, LlmProvider, Message, ModelInfo, ProviderConfig, Role};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -22,7 +22,7 @@ pub struct OpenAiCompat {
 }
 
 /// A client with rustls on ring and the given whole-request timeout.
-fn http_client(timeout: Duration) -> Result<reqwest::Client> {
+pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::Client> {
     // Ignore the error: another part of the process installed one first.
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
@@ -79,7 +79,19 @@ impl OpenAiCompat {
 
     /// The JSON body for `req`.
     pub fn body(&self, req: &ChatRequest) -> Value {
-        let mut b = json!({ "model": self.model, "messages": req.messages, "stream": true });
+        let messages: Vec<Value> = req.messages.iter().map(message).collect();
+        let mut b = json!({ "model": self.model, "messages": messages, "stream": true });
+        if !req.tools.is_empty() {
+            b["tools"] = req
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({"type": "function", "function": {
+                        "name": t.name, "description": t.description, "parameters": t.parameters,
+                    }})
+                })
+                .collect();
+        }
         if let Some(n) = req.max_tokens.or(self.max_tokens) {
             b["max_tokens"] = n.into();
         }
@@ -90,7 +102,30 @@ impl OpenAiCompat {
     }
 }
 
-async fn http_error(resp: reqwest::Response) -> anyhow::Error {
+/// A message as the chat-completions API wants it: tool calls as
+/// functions with their arguments as JSON text, a tool's result under the
+/// call's id.
+fn message(m: &Message) -> Value {
+    match m.role {
+        Role::Tool => json!({
+            "role": "tool",
+            "tool_call_id": m.tool_call_id,
+            "content": m.content,
+        }),
+        Role::Assistant if !m.tool_calls.is_empty() => json!({
+            "role": "assistant",
+            "content": m.content,
+            "tool_calls": m.tool_calls.iter().map(|c| json!({
+                "id": c.id,
+                "type": "function",
+                "function": {"name": c.name, "arguments": c.arguments.to_string()},
+            })).collect::<Vec<_>>(),
+        }),
+        _ => json!({"role": m.role, "content": m.content}),
+    }
+}
+
+pub(crate) async fn http_error(resp: reqwest::Response) -> anyhow::Error {
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     let msg = serde_json::from_str::<Value>(&text)
@@ -152,6 +187,21 @@ impl LlmProvider for OpenAiCompat {
                 .unwrap_or_default()
                 .to_string();
             out.finish_reason = v["choices"][0]["finish_reason"].as_str().map(String::from);
+            let mut calls = ToolCalls::default();
+            for (i, c) in v["choices"][0]["message"]["tool_calls"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                calls.start(
+                    i,
+                    c["id"].as_str().unwrap_or_default(),
+                    c["function"]["name"].as_str().unwrap_or_default(),
+                );
+                calls.arguments(i, c["function"]["arguments"].as_str().unwrap_or_default());
+            }
+            out.tool_calls = calls.finish()?;
             if let Some(m) = v["model"].as_str() {
                 out.model = m.to_string();
             }
@@ -162,10 +212,14 @@ impl LlmProvider for OpenAiCompat {
         }
         let mut parser = SseParser::new();
         let mut stream = resp.bytes_stream();
+        let mut calls = ToolCalls::default();
         let mut handle = |data: String, out: &mut ChatResponse| -> Result<bool> {
             let c = parse_chunk(&data)?;
             if c.done {
                 return Ok(true);
+            }
+            for d in c.tool_calls {
+                calls.add(d);
             }
             if let Some(m) = c.model {
                 out.model = m;
@@ -202,6 +256,7 @@ impl LlmProvider for OpenAiCompat {
         if let Some(data) = parser.finish() {
             handle(data, &mut out)?;
         }
+        out.tool_calls = calls.finish()?;
         out.total_ms = t.elapsed().as_millis() as u64;
         Ok(out)
     }
@@ -244,7 +299,7 @@ impl LlmProvider for OpenAiCompat {
 
 /// The innermost cause of a reqwest error ("Connection refused" rather
 /// than "error sending request for url ...").
-fn short(e: &reqwest::Error) -> String {
+pub(crate) fn short(e: &reqwest::Error) -> String {
     let mut s: &dyn std::error::Error = e;
     while let Some(inner) = s.source() {
         s = inner;

@@ -211,11 +211,16 @@ the single-developer setup of that time.
 ## D11. AI is advisory only
 
 - **Chosen:** local Ollama gemma3:12b; Ask mode streams text; the first Tcl
-  block is placed on the prompt; Enter runs it. No tools, files or shell.
+  block is placed on the prompt; Enter runs it. No files or shell.
+  **Since 2026-11-15** the model may read the session with tools before it
+  answers (D17's read tools only, `docs/ui/ask-mode.md`): natively where
+  the API has tool calling, as JSON in the text for models served without
+  it.
 - **Open issues**
   - 12B local model quality is modest for formal questions; there is no
     evaluation of how often suggested commands are right.
-  - The native Messages-API adapter is still a TODO (`config/llm.toml`).
+  - The native Messages API adapter (`kind = "anthropic"`) is tested
+    against a stand-in server only: no hosted model has been called.
 - **Ideas:** use AI where it is checkable: engine/strategy selection
   (decision tree or learned model over the structural features already in
   the run database), property and invariant suggestion where the proof

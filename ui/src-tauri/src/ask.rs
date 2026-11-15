@@ -2,7 +2,86 @@
 //! read. The app never runs a command from here; `ask-done` hands the UI an
 //! optional Tcl command and the UI waits for the user to press Enter.
 
+use informal_llm::agent::ToolHost;
+use informal_llm::ToolSpec;
+use informal_mcp::Api;
 use serde_json::Value;
+use std::sync::Arc;
+
+/// The tools Ask may use: those that read the session or the window.
+/// Nothing that proves, proposes or evaluates Tcl; a command is still only
+/// suggested, and the user presses Enter.
+pub const TOOLS: &[&str] = &[
+    "session_summary",
+    "property_list",
+    "property_get",
+    "property_cone",
+    "design_hierarchy",
+    "design_source",
+    "trace_get",
+    "session_log",
+    "gui_state",
+];
+
+/// Added to the system prompt when the model has the tools.
+pub const TOOLS_NOTE: &str = "You can look up what the session summary below does not show: a failing property's trace (trace_get), the design's source (design_source), a property's details and the signals it depends on, and what the user has selected (gui_state). Look before you explain a failure; say what the values show.";
+
+/// [`TOOLS`] as the model is given them, from the AI interface's own
+/// definitions.
+pub fn tool_specs() -> Vec<ToolSpec> {
+    let all = informal_mcp::tools::all()
+        .into_iter()
+        .chain(informal_mcp::tools::gui());
+    all.filter(|t| TOOLS.contains(&t.name))
+        .map(|t| ToolSpec {
+            name: t.name.to_string(),
+            description: t.description.to_string(),
+            parameters: t.input,
+        })
+        .collect()
+}
+
+/// Runs Ask's tools on the app's session.
+pub struct Host(pub Arc<Api>);
+
+impl ToolHost for Host {
+    fn call(&self, name: &str, arguments: &Value) -> Result<String, String> {
+        if !TOOLS.contains(&name) {
+            return Err(format!("{name} is not a tool Ask may use"));
+        }
+        match self.0.call(name, arguments) {
+            Ok(reply) => Ok(reply.to_string()),
+            Err(e) => Err(serde_json::json!({"code": e.code, "message": e.message}).to_string()),
+        }
+    }
+}
+
+/// For a model without tools: there is nothing to call.
+pub struct NoTools;
+
+impl ToolHost for NoTools {
+    fn call(&self, name: &str, _arguments: &Value) -> Result<String, String> {
+        Err(format!("no tool named {name}"))
+    }
+}
+
+/// A tool call as one console line: `trace_get name=a_wrong signals=count,push`.
+pub fn step_text(name: &str, arguments: &Value) -> String {
+    let mut out = name.to_string();
+    for (k, v) in arguments.as_object().into_iter().flatten() {
+        let v = match v {
+            Value::String(s) => s.clone(),
+            Value::Array(a) => a
+                .iter()
+                .map(|x| x.as_str().map_or(x.to_string(), String::from))
+                .collect::<Vec<_>>()
+                .join(","),
+            other => other.to_string(),
+        };
+        out += &format!(" {k}={v}");
+    }
+    out
+}
 
 /// At most this many properties are listed in the prompt.
 pub const MAX_PROPS: usize = 200;
@@ -188,6 +267,94 @@ fn find_fence(text: &str) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    /// The whole of Ask with tools against the configured model server:
+    /// `cargo test -- --ignored live_ask --nocapture` (needs the server and
+    /// CaDiCaL). Prints what the model looked up and what it answered.
+    #[test]
+    #[ignore = "needs a running model server"]
+    fn live_ask_with_tools_on_the_fifo() {
+        use informal_llm::agent::{run, Event, Limits, ToolMode};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let cfg = informal_llm::LlmConfig::load(&root.join("config/llm.toml")).unwrap();
+        let name = cfg
+            .selected(std::env::var("INFORMAL_LLM_PROVIDER").ok().as_deref())
+            .unwrap();
+        let provider = informal_llm::build(&name, &cfg.providers[&name]).unwrap();
+        let work = std::env::temp_dir().join(format!("informal-live-ask-{}", std::process::id()));
+        let api = std::sync::Arc::new(informal_mcp::Api::spawn(
+            informal_bmc::engines(),
+            work.clone(),
+            informal_mcp::Options {
+                mode: informal_mcp::Mode::ReadOnly,
+                root: root.clone(),
+                workdir: work,
+                max_time: std::time::Duration::from_secs(60),
+            },
+        ));
+        let open = api.call(
+            "session_open",
+            &serde_json::json!({"script": "tests/fpv/fifo/fifo.jg.tcl"}),
+        );
+        let session = open.unwrap()["summary"].clone();
+        let system = format!(
+            "You are the Ask assistant of InFormal, a formal property verification shell. \
+             Answer briefly, in plain text.\n\n{}\n\nSession: {session}",
+            super::TOOLS_NOTE
+        );
+        let messages = vec![
+            informal_llm::Message::system(system),
+            informal_llm::Message::user("Why does a_wrong fail? Use the trace."),
+        ];
+        let host = super::Host(api);
+        let out = tauri::async_runtime::block_on(run(
+            provider.as_ref(),
+            ToolMode::of(&cfg.providers[&name]),
+            &super::tool_specs(),
+            &host,
+            messages,
+            Limits::default(),
+            &mut |e| match e {
+                Event::Call { name, arguments } => {
+                    eprintln!("looked up {}", super::step_text(name, arguments))
+                }
+                Event::Result { name, ok } => eprintln!("  {name} -> {ok}"),
+                Event::Text(_) => {}
+            },
+        ))
+        .unwrap();
+        eprintln!("{} steps, {} ms\n{}", out.steps, out.total_ms, out.text);
+        assert!(!out.text.trim().is_empty());
+    }
+
+    #[test]
+    fn ask_gets_only_tools_that_read() {
+        let specs = super::tool_specs();
+        let names: Vec<&str> = specs.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names.len(), super::TOOLS.len(), "{names:?}");
+        for forbidden in [
+            "prove",
+            "proposal_add",
+            "tcl_eval",
+            "session_open",
+            "gui_open_trace",
+        ] {
+            assert!(!names.contains(&forbidden));
+        }
+        let changing: Vec<&str> = informal_mcp::tools::all()
+            .iter()
+            .filter(|t| t.changes)
+            .map(|t| t.name)
+            .collect();
+        assert!(names.iter().all(|n| !changing.contains(n)));
+        assert_eq!(
+            super::step_text(
+                "trace_get",
+                &serde_json::json!({"name": "a_wrong", "signals": ["count", "push"], "first": 2})
+            ),
+            "trace_get first=2 name=a_wrong signals=count,push"
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

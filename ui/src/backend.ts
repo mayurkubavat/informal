@@ -198,7 +198,7 @@ async function call(cmd: string, args: Record<string, unknown> = {}): Promise<Re
 
 // Subscribe to a backend event; returns an unsubscribe function that is safe
 // to call before the Tauri listener has finished registering.
-function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity" | "ai-gui", cb: (payload: T) => void): () => void {
+function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-step" | "ask-done" | "ai-activity" | "ai-gui", cb: (payload: T) => void): () => void {
   if (!inTauri) return mockEvents.on(event, cb as (p: unknown) => void);
   let off: (() => void) | null = null;
   let dead = false;
@@ -248,6 +248,9 @@ export const backend = {
     invokeOr<number>("ask", { id, prompt, context: context ?? null }, () => mockAsk(id, prompt)),
   askCancel: (id: number) => invokeOr<boolean>("ask_cancel", { id }, () => mockAskCancel(id)),
   onAskDelta: (cb: (d: AskDelta) => void) => subscribe("ask-delta", cb),
+  // A tool the model used before answering (it only reads the session):
+  // `text` is the call on one line, such as "trace_get name=a_never9".
+  onAskStep: (cb: (d: AskDelta) => void) => subscribe("ask-step", cb),
   onAskDone: (cb: (d: AskDone) => void) => subscribe("ask-done", cb),
   // ---- AI interface (docs/ai-interface.md) ----
   // The mode, the socket and every proposal with its state.

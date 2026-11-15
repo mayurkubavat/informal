@@ -14,7 +14,8 @@ export type ViewProp = Omit<Property, "status"> & {
 };
 
 // "ask-in": a question typed in Ask mode; "ask": the streamed answer so far.
-export type LogLine = { kind: "in" | "out" | "err" | "ask-in" | "ask"; text: string };
+// "ask-step": a tool the model used to look something up before answering.
+export type LogLine = { kind: "in" | "out" | "err" | "ask-in" | "ask" | "ask-step"; text: string };
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
 export type Theme = "system" | "light" | "dark";
 export type Center = "table" | "source" | "trace";

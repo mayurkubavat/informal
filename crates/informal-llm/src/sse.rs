@@ -68,6 +68,87 @@ pub struct Chunk {
     pub finish_reason: Option<String>,
     /// `data: [DONE]`.
     pub done: bool,
+    /// Pieces of tool calls: a call's id and name come once, its arguments
+    /// as fragments of JSON text, all keyed by the call's index.
+    pub tool_calls: Vec<ToolDelta>,
+}
+
+/// One piece of a streamed tool call.
+#[derive(Debug, Default, PartialEq)]
+pub struct ToolDelta {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub arguments: String,
+}
+
+/// Tool calls put together from their streamed pieces.
+#[derive(Default)]
+pub struct ToolCalls(Vec<(String, String, String)>);
+
+impl ToolCalls {
+    pub fn add(&mut self, d: ToolDelta) {
+        if self.0.len() <= d.index {
+            self.0.resize(d.index + 1, Default::default());
+        }
+        let (id, name, args) = &mut self.0[d.index];
+        if let Some(i) = d.id {
+            *id = i;
+        }
+        if let Some(n) = d.name {
+            *name = n;
+        }
+        args.push_str(&d.arguments);
+    }
+
+    /// Start call `index` with its id and name (arguments follow).
+    pub fn start(&mut self, index: usize, id: &str, name: &str) {
+        self.add(ToolDelta {
+            index,
+            id: Some(id.to_string()),
+            name: Some(name.to_string()),
+            arguments: String::new(),
+        });
+    }
+
+    /// More of call `index`'s arguments.
+    pub fn arguments(&mut self, index: usize, text: &str) {
+        self.add(ToolDelta {
+            index,
+            arguments: text.to_string(),
+            ..Default::default()
+        });
+    }
+
+    /// The calls, in order. Arguments that are not JSON are an error: the
+    /// call cannot be made.
+    pub fn finish(self) -> Result<Vec<crate::ToolCall>> {
+        self.0
+            .into_iter()
+            .filter(|(_, name, _)| !name.is_empty())
+            .enumerate()
+            .map(|(i, (id, name, args))| {
+                let arguments = match args.trim() {
+                    "" => serde_json::json!({}),
+                    a => serde_json::from_str(a).map_err(|e| {
+                        anyhow!(
+                            "the model's arguments for {name} are not JSON ({e}): {}",
+                            clip(a)
+                        )
+                    })?,
+                };
+                Ok(crate::ToolCall {
+                    id: if id.is_empty() {
+                        format!("call_{i}")
+                    } else {
+                        id
+                    },
+                    name,
+                    arguments,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Parse one event's data. An `{"error": ...}` object is an error.
@@ -98,6 +179,23 @@ pub fn parse_chunk(data: &str) -> Result<Chunk> {
         model: v["model"].as_str().map(String::from),
         finish_reason: choice["finish_reason"].as_str().map(String::from),
         done: false,
+        tool_calls: choice["delta"]["tool_calls"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .enumerate()
+                    .map(|(i, c)| ToolDelta {
+                        index: c["index"].as_u64().map_or(i, |n| n as usize),
+                        id: c["id"].as_str().map(String::from),
+                        name: c["function"]["name"].as_str().map(String::from),
+                        arguments: c["function"]["arguments"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 

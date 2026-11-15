@@ -24,8 +24,33 @@ the far right of the bottom-dock tabs, View > Input mode, or Ctrl+Shift+A.
 **Nothing the model says is ever run by itself.** The backend
 (`ui/src-tauri/src/main.rs` `ask`) only streams text and returns the first
 fenced ```` ```tcl ```` block as `command`. The UI puts that command on the
-prompt, and it runs only when the user presses Enter. The model has no tools.
-It gets no file access and no shell, only the prompt below.
+prompt, and it runs only when the user presses Enter. The model gets no file
+access and no shell.
+
+## Tools: the model looks before it answers
+
+Before it answers, the model may read the session with tools of the AI
+interface (`docs/ai-interface.md`), and only those that read
+(`ui/src-tauri/src/ask.rs` `TOOLS`): the summary, properties and their
+details, a property's cone, the hierarchy, source lines, a counterexample
+trace as values per signal and cycle, the log, and what the user has selected
+(`gui_state`). It cannot prove, propose, evaluate Tcl or move the window. Each
+lookup shows in the console above the answer as `ask: looked up trace_get
+name=a_never9`.
+
+How a model is given the tools is the provider's `tools` setting in
+`config/llm.toml`:
+
+| `tools` | What happens |
+|---|---|
+| `native` | The API's own tool calling (default for `kind = "anthropic"`) |
+| `text` | The tools are described in the system prompt, the model answers a call as one JSON object, and the reply goes back as the next message (default otherwise: Gemma on Ollama has no tool calling) |
+| `off` | No tools: the prompt below is all the model has |
+
+The loop is `informal_llm::agent::run`: at most 8 model calls in text mode
+(12 native), a tool's reply cut to 6,000 characters (20,000 native), and the
+last call must answer. A request the model's safeguards decline ends as an
+error, not as an answer.
 
 ## What the model is told
 
@@ -91,7 +116,16 @@ API adapter is still a TODO in the file.
 Implement `informal_llm::LlmProvider` (`crates/informal-llm/src/lib.rs`): `name`,
 `model`, a streaming `chat(req, on_delta)`, and `health`. Then add a `kind` arm
 in `informal_llm::build`. The app holds providers as `Arc<dyn LlmProvider>`, so
-nothing else changes.
+nothing else changes. A provider with tool calling of its own passes
+`ChatRequest::tools` on and returns `ChatResponse::tool_calls`; one whose
+assistant turn must go back unchanged keeps it in `ChatResponse::raw` (the
+Messages API adapter does, for thinking blocks).
+
+`kind = "anthropic"` (`crates/informal-llm/src/anthropic.rs`) speaks the
+Messages API directly, at API version `2026-10-21`: `temperature` is never
+sent (that version rejects it), and `base_url` defaults to the public
+endpoint. It is tested against a stand-in server only; no hosted model has
+been called.
 
 ## Events (backend ↔ UI)
 
@@ -102,6 +136,7 @@ nothing else changes.
 | `llm_select(name)` | switches provider; returns `llm_status` |
 | `ask(id, prompt, context?)` | returns at once; `id` is chosen by the UI |
 | `"ask-delta"` | `{id, text}` per streamed piece |
+| `"ask-step"` | `{id, text}`: a tool the model used, on one line |
 | `"ask-done"` | `{id, command?, explanation, error?, model, first_token_ms, total_ms}` |
 | `ask_cancel(id)` | aborts the stream; `"ask-done"` follows with `error: "cancelled"` |
 

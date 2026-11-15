@@ -173,7 +173,7 @@ every engine change. To reproduce, download the models to
 | `informal-bitwuzla` | Word-level engines on Bitwuzla (C++ shim through FFI): BMC over Btor2 with arrays. |
 | `informal-tcl` | Embedded Tcl 8.6 (the C library through FFI) for informal scripts. |
 | `informal-fpv` | FPV sessions: design setup, properties, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
-| `informal-llm` | Swappable LLM providers (OpenAI-compatible streaming client, scripted fake) for the app's Ask mode; defaults to local Gemma on Ollama (`config/llm.toml`). |
+| `informal-llm` | Swappable LLM providers (OpenAI-compatible streaming client, the Messages API, a scripted fake) and the tool loop for the app's Ask mode; defaults to local Gemma on Ollama (`config/llm.toml`). |
 | `informal-mcp` | The AI interface: the FPV session as Model Context Protocol tools with versioned JSON replies, modes and tagged proposals (`docs/ai-interface.md`). |
 | `informal-cli` | The `informal` command. |
 

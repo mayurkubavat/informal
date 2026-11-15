@@ -139,3 +139,23 @@ test("Ask mode passes an accessibility scan", async ({ page }) => {
   const r = await new AxeBuilder({ page }).include(".bottom").include("footer.statusbar").analyze();
   expect(r.violations.map((v) => v.id)).toEqual([]);
 });
+
+test("a why question shows what the model looked up, above its answer", async ({ page }) => {
+  await open(page);
+  await page.getByRole("button", { name: "Prove all" }).click();
+  await expect(page.locator(".strip-summary")).toContainText("2 proven");
+  await ask(page, "why does a_never9 fail?");
+  const lines = consoleLog(page).locator(".line");
+  await expect(consoleLog(page).locator(".line.ask")).toContainText("a_never9 fails: q reaches 9");
+  await expect(consoleLog(page).locator(".line.ask-step")).toHaveText([
+    "ask: looked up property_list status=cex",
+    "ask: looked up trace_get name=a_never9",
+  ]);
+  // Question, lookups, answer: in that order, at the end of the log.
+  const tail = (await lines.allTextContents()).slice(-4);
+  expect(tail[0]).toBe("ask> why does a_never9 fail?");
+  expect(tail[1]).toContain("property_list");
+  expect(tail[3]).toContain("a_never9 fails");
+  // Looking up is not doing: no command is suggested, the prompt stays in Ask.
+  await expect(page.locator(".prompt")).toHaveText("ask>");
+});

@@ -266,6 +266,29 @@ describe("browser mock: Ask mode (Fake provider)", () => {
   });
 });
 
+describe("browser mock: Ask looks things up", () => {
+  beforeEach(() => resetMock());
+
+  it("a why question shows its lookups before the answer, and suggests no command", async () => {
+    mockOptions.tick = 0;
+    await mock("shell_eval", { script: "prove -all" });
+    const steps: string[] = [];
+    const off = mockEvents.on("ask-step", (d) => steps.push((d as import("./ask").AskDelta).text));
+    const done = new Promise<import("./ask").AskDone>((resolve) => {
+      const offDone = mockEvents.on("ask-done", (d) => {
+        offDone();
+        resolve(d as import("./ask").AskDone);
+      });
+    });
+    mockAsk(7, "why does it fail?");
+    const d = await done;
+    off();
+    expect(steps).toEqual(["property_list status=cex", "trace_get name=a_never9"]);
+    expect(d.explanation).toContain("a_never9 fails: q reaches 9");
+    expect(d.command).toBeNull();
+  });
+});
+
 describe("browser mock: AI interface", () => {
   beforeEach(() => resetMock());
 

@@ -184,6 +184,15 @@ export default function App() {
         return next;
       });
     });
+    // A lookup goes above the answer it leads to.
+    const offStep = backend.onAskStep((d) => {
+      if (askRef.current?.id !== d.id) return;
+      setLog((log) => {
+        const i = log.map((l) => l.kind).lastIndexOf("ask");
+        if (i < 0) return log;
+        return [...log.slice(0, i), { kind: "ask-step", text: d.text }, ...log.slice(i)];
+      });
+    });
     const offDone = backend.onAskDone((d) => {
       const a = askRef.current;
       if (a?.id !== d.id) return;
@@ -204,6 +213,7 @@ export default function App() {
     });
     return () => {
       offDelta();
+      offStep();
       offDone();
     };
   }, []);
