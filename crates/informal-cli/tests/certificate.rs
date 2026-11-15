@@ -154,6 +154,11 @@ fn every_kind_of_certificate_is_written_and_holds() {
             "{name}"
         );
         assert_eq!(s.checker.as_deref(), Some("certifaiger"));
+        // Only a k-induction proof has a depth; the delay line needs 3.
+        assert_eq!(s.k.is_some(), kind == "k-induction", "{name}");
+        if (name, engine) == ("delay_safe.aag", "informal-kind") {
+            assert_eq!(s.k, Some(3));
+        }
         let file = s.file.unwrap();
         assert_eq!(file, format!("{name}.cert.aig"));
         assert!(

@@ -18,7 +18,7 @@ into `certs/`:
 | `<model>.trace` | UNSAFE | AIGER witness (`1`, `b<k>`, initial latch values, one line of input values per step, `.`) | `aigsim` of the AIGER tools: it simulates the trace on the model and must reach the bad output |
 | `<model>.cert.aig` | SAFE | witness circuit, binary AIGER | Certifaiger: it writes its conditions as circuits, and a SAT solver must find each one unsatisfiable |
 | `<model>.model.aig` | Btor2 models | the model bit-blasted, binary AIGER | the model the two checkers above read |
-| `<model>.cert.json` | always | summary: model, verdict, engine, kind of evidence, file and checker, or the reason there is no file | `scripts/certificate_check.py` |
+| `<model>.cert.json` | always | summary: model, verdict, engine, kind of evidence (with the depth `k` of a k-induction proof), file and checker, or the reason there is no file | `scripts/certificate_check.py` |
 
 `<model>` is the model's file name with its extension. The second command
 runs the checkers on every summary in the directory and prints how many

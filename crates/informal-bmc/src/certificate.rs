@@ -396,6 +396,10 @@ pub struct Summary {
     pub engine: String,
     /// `invariant`, `k-induction`, `two-step`, `trace`, or `none`.
     pub evidence: String,
+    /// The depth of a k-induction proof: `k` good states in a row are
+    /// followed by a good one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<u32>,
     /// The file to give the checker, in the same directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
@@ -447,6 +451,10 @@ pub fn write(
         verdict: verdict.label().into(),
         engine: engine.into(),
         evidence: cert.map_or("none", |c| c.kind()).into(),
+        k: match cert {
+            Some(Certificate::KInduction { k, .. }) => Some(*k),
+            _ => None,
+        },
         file: None,
         checker: None,
         bit_level_model: None,
@@ -811,6 +819,7 @@ mod tests {
         };
         let s = write(&dir, &model, "informal-kind", &Verdict::Safe, Some(&cert)).unwrap();
         assert_eq!(s.file.as_deref(), Some("delay_safe.aag.cert.aig"));
+        assert_eq!(s.k, Some(3));
         assert!(dir.join("delay_safe.aag.cert.aig").is_file());
         assert_eq!(s.note, None);
         let _ = std::fs::remove_dir_all(&dir);
