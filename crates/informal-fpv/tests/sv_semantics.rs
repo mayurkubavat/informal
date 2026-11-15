@@ -265,3 +265,123 @@ fn lowering_lock_has_no_stale_design() {
         "tests/sv/lowering.lock has lines for designs that are gone: {stale:?}\n{BLESS}"
     );
 }
+
+/// The design with its command properties written in the RTL instead: the
+/// same text as `rf_<name>: assert property (...)` inside the top module,
+/// under a default clocking and a default disable for the script's clock
+/// and reset. `None` when the script has more than a plain clock, a reset
+/// and assert/cover commands, or expects an error.
+fn rtl_form(c: &Case) -> Option<(String, Vec<(String, String)>)> {
+    let text = std::fs::read_to_string(&c.path).unwrap();
+    let mut clock = None;
+    let mut reset = None;
+    let mut props = Vec::new();
+    for cmd in &c.commands {
+        let (word, rest) = cmd.split_once(' ').unwrap_or((cmd.as_str(), ""));
+        match word {
+            "clock" if clock.is_none() && !rest.contains(' ') => clock = Some(rest.to_string()),
+            "reset" if reset.is_none() => {
+                let e = rest.strip_prefix("-expression {")?.strip_suffix('}')?;
+                reset = Some(e.to_string());
+            }
+            "assert" | "cover" => {
+                let rest = rest.strip_prefix("-name ")?;
+                let (name, expr) = rest.split_once(' ')?;
+                let expr = expr.strip_prefix('{')?.strip_suffix('}')?;
+                props.push((word, name.to_string(), expr.to_string()));
+            }
+            _ => return None,
+        }
+    }
+    let clock = clock?;
+    if c.error.is_some() || props.is_empty() {
+        return None;
+    }
+    // Every command property must have a plain expected status.
+    let mut expect = Vec::new();
+    for (_, name, _) in &props {
+        let (_, want) = c.expect.iter().find(|(n, _)| n == name)?;
+        if want == "error" {
+            return None;
+        }
+        expect.push((format!("{}.rf_{name}", c.top), want.clone()));
+    }
+    // The top module's own header, not a module whose name starts the same.
+    let header = format!("module {}", c.top);
+    let start = text.match_indices(&header).map(|(i, _)| i).find(|i| {
+        let after = text[i + header.len()..].chars().next();
+        !after.is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+    })?;
+    let end = start + text[start..].find("endmodule")?;
+    let mut add = String::new();
+    if !text.contains("default clocking") {
+        add += &format!("  default clocking @(posedge {clock}); endclocking\n");
+    }
+    if let (Some(r), false) = (&reset, text.contains("default disable")) {
+        add += &format!("  default disable iff ({r});\n");
+    }
+    for (kind, name, expr) in &props {
+        add += &format!("  rf_{name}: {kind} property ({expr});\n");
+    }
+    Some((format!("{}{add}{}", &text[..end], &text[end..]), expect))
+}
+
+/// A property means the same written in the RTL as given by command: the
+/// two forms take different paths into the model (the first is lowered with
+/// the design, the second is bound to it afterwards), so each design that
+/// can be rewritten is run in its RTL form and must give the same answers.
+#[test]
+fn rtl_form_gives_the_same_answers() {
+    if informal_bmc::engines().is_empty() {
+        informal_engine::tool_missing("needs CaDiCaL");
+        return;
+    }
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("tests/sv"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "sv"))
+        .collect();
+    files.sort();
+    let mut ran = 0;
+    let mut wrong = Vec::new();
+    for f in &files {
+        let c = parse(f);
+        let Some((text, expect)) = rtl_form(&c) else {
+            continue;
+        };
+        let dir = work_dir(&format!("rtlform-{}", c.top));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.sv", c.top));
+        std::fs::write(&path, text).unwrap();
+        // The commands stay (the script's own properties run again beside
+        // the RTL ones); the expectations are those of the RTL names.
+        let variant = Case {
+            path,
+            top: c.top.clone(),
+            commands: c.commands.clone(),
+            expect,
+            error: None,
+        };
+        ran += 1;
+        match run(&variant) {
+            Ok(_) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                let _ = std::fs::remove_dir_all(work_dir(&c.top));
+            }
+            Err(e) => wrong.push(format!("{}: {e}", c.top)),
+        }
+    }
+    // The rewrite must keep covering the designs it covers today: a design
+    // dropping out silently would be a test that no longer runs.
+    assert!(
+        ran >= 26,
+        "only {ran} designs could be put in RTL form, 26 before"
+    );
+    assert!(
+        wrong.is_empty(),
+        "{} of {ran} designs answer differently in RTL form:\n  {}",
+        wrong.len(),
+        wrong.join("\n  ")
+    );
+}

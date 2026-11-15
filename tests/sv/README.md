@@ -40,3 +40,14 @@ name, every next-state function, initial value, constraint and check
 compared), or shows that they differ. `scripts/repin.sh` runs it on every
 model a new svlang pin changes. `INFORMAL_KEEP_MODELS=<dir>` makes the test
 keep a copy of each model for it.
+
+## The same property in RTL form
+
+A property given by command and the same property written in the RTL take
+different paths into the model. `rtl_form_gives_the_same_answers` rewrites
+every design whose script is a plain clock, a reset and assert/cover
+commands (26 of them today): each command property is added to the top
+module as `rf_<name>: assert property (...)` under a default clocking and
+default disable for the script's clock and reset, and must get the answer
+the command form is expected to get. A new design of that shape is covered
+without writing anything.
