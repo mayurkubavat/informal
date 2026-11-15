@@ -69,7 +69,9 @@ fi
 . "$HOME/.cargo/env"
 rustup toolchain install   # the version and components of rust-toolchain.toml
 if ! cargo nextest --version >/dev/null 2>&1; then
-    curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
+    # The prebuilt binary, else from crates.io where get.nexte.st is blocked.
+    curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin" \
+        || cargo install --locked cargo-nextest
 fi
 rustc --version
 cargo nextest --version | head -1
@@ -93,8 +95,26 @@ scripts/tools.sh check
 
 step "UI packages"
 want=$(cat ui/.nvmrc)
-have=$(node --version | sed 's/^v\([0-9]*\).*/\1/')
-[ "$have" = "$want" ] || { echo "node is major $have, ui/.nvmrc pins $want (install Node $want, e.g. from nodejs.org or nvm)"; exit 1; }
+have=$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')
+if [ "$have" != "$want" ]; then
+    # The distribution's Node is often older (Ubuntu 24.04 has 18): take the
+    # newest Node $want from nodejs.org into ~/.local/node-$want.
+    nd="$HOME/.local/node-$want"
+    if [ ! -x "$nd/bin/node" ]; then
+        arch=$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')
+        os=$(uname -s | tr 'A-Z' 'a-z')
+        ver=$(curl -fsSL "https://nodejs.org/dist/latest-v$want.x/SHASUMS256.txt" 2>/dev/null \
+            | sed -n "s/.*node-\(v$want\.[0-9.]*\)-$os-$arch\.tar\.gz$/\1/p" | head -n 1)
+        if [ -n "$ver" ]; then
+            mkdir -p "$nd"
+            curl -fsSL "https://nodejs.org/dist/$ver/node-$ver-$os-$arch.tar.gz" | tar zxf - -C "$nd" --strip-components 1
+        fi
+    fi
+    [ -x "$nd/bin/node" ] && export PATH="$nd/bin:$PATH"
+    have=$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')
+    [ "$have" = "$want" ] || { echo "node is major ${have:-missing}, ui/.nvmrc pins $want and nodejs.org could not be reached: install Node $want and run again"; exit 1; }
+    echo "using Node from $nd: put $nd/bin on PATH for later runs of the gate"
+fi
 (cd ui && npm ci --no-audit --no-fund)
 
 if [ "$gate" = 1 ]; then
