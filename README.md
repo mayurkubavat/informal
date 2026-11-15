@@ -231,6 +231,14 @@ install the prebuilt binary with
 `scripts/check.sh --fast` is a quick check while working, and `--quiet`
 runs the gate at low priority on a busy machine.
 
+`scripts/land.sh` puts a branch on main: one landing at a time on the
+machine, it rebases the branch onto main in a separate landing clone, runs
+the gate on that result and pushes it only if the gate passed, so main is
+always a commit that was tested as it is (`--dry-run` does all but the
+push). `scripts/repin.sh` moves the svlang pin: `Cargo.toml`, both lock
+files and `tests/sv/lowering.lock` together, and lists the designs whose
+models changed.
+
 ## License
 
 Copyright 2026 Mayur Kubavat. Licensed under the Apache License,

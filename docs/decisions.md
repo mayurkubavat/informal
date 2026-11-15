@@ -226,6 +226,10 @@ the single-developer setup of that time.
   `INFORMAL_*` tuning variables, checks the pinned Rust and Node versions,
   builds with `--locked`, and ends with `GATE: PASS` or `GATE: FAIL`.
   `scripts/hwmcc_check.py` exits 1 on a verdict disagreement.
+- **Update 2026-11-15:** `scripts/land.sh` lands a branch on main (one at
+  a time, rebased, gate run on the result, fast-forward push), the local
+  form of a merge queue; `scripts/repin.sh` moves the svlang pin with both
+  lock files and the lowering record.
 - **Open issues:** benchmark runs compete with other work on the same
   machine (`scripts/check.sh --quiet` runs the gate at low priority).
 - **Ideas:** a nightly bare-repo backup and a scheduled regression run that
