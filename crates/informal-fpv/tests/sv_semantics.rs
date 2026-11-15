@@ -389,6 +389,19 @@ fn rtl_form_gives_the_same_answers() {
 /// Concurrent properties written in the design's source: `assert property`,
 /// `assume property` and `cover property` statements, comments left out.
 fn rtl_property_statements(text: &str) -> usize {
+    let code = without_comments(text);
+    let words: Vec<&str> = code
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    words
+        .windows(2)
+        .filter(|w| matches!(w[0], "assert" | "assume" | "cover") && w[1] == "property")
+        .count()
+}
+
+/// The source with its comments blanked out.
+fn without_comments(text: &str) -> String {
     let mut code = String::new();
     let mut rest = text;
     while !rest.is_empty() {
@@ -404,14 +417,45 @@ fn rtl_property_statements(text: &str) -> usize {
             rest = &rest[ch.len_utf8()..];
         }
     }
-    let words: Vec<&str> = code
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .filter(|w| !w.is_empty())
-        .collect();
-    words
-        .windows(2)
-        .filter(|w| matches!(w[0], "assert" | "assume" | "cover") && w[1] == "property")
-        .count()
+    code
+}
+
+/// Identifiers and single punctuation characters, in order.
+fn tokens(code: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for ch in code.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            word.push(ch);
+            continue;
+        }
+        if !word.is_empty() {
+            out.push(std::mem::take(&mut word));
+        }
+        if !ch.is_whitespace() {
+            out.push(ch.to_string());
+        }
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
+}
+
+/// The labels of the labelled immediate assertions and covers in the
+/// source (`a_le9: assert (q <= 9);`), outside `initial` blocks, whose
+/// time-zero checks have their own switch.
+fn labelled_immediates(text: &str) -> Vec<String> {
+    let t = tokens(&without_comments(text));
+    (0..t.len().saturating_sub(3))
+        .filter(|&i| {
+            t[i + 1] == ":"
+                && matches!(t[i + 2].as_str(), "assert" | "cover")
+                && t[i + 3] == "("
+                && (i == 0 || t[i - 1] != "initial")
+        })
+        .map(|i| t[i].clone())
+        .collect()
 }
 
 /// No property written in a design is dropped without a word: after
@@ -476,6 +520,69 @@ fn no_rtl_property_is_dropped() {
     assert!(
         wrong.is_empty(),
         "RTL properties went missing:\n  {}",
+        wrong.join("\n  ")
+    );
+}
+
+/// The same for immediate assertions: every labelled immediate assert or
+/// cover outside an `initial` block has a row under its own label after
+/// the script and a `prove -all` with no engines.
+#[test]
+fn no_labelled_immediate_assertion_is_dropped() {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("tests/sv"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "sv"))
+        .collect();
+    files.sort();
+    let mut checked = 0;
+    let mut wrong = Vec::new();
+    for f in &files {
+        let c = parse(f);
+        let labels = labelled_immediates(&std::fs::read_to_string(f).unwrap());
+        if labels.is_empty() || c.error.is_some() {
+            continue;
+        }
+        let work = work_dir(&format!("immediate-{}", c.top));
+        let sh = Shell::new(Session::new(Vec::new(), work.clone()), Flavor::Jg);
+        let mut script = vec![
+            format!("analyze -sv {{{}}}", c.path.display()),
+            format!("elaborate -top {}", c.top),
+        ];
+        script.extend(c.commands.iter().cloned());
+        script.push("prove -all".into());
+        if let Some(e) = script.iter().find_map(|cmd| sh.eval(cmd).err()) {
+            wrong.push(format!("{}: {e}", c.top));
+            continue;
+        }
+        checked += 1;
+        let names: Vec<String> = sh
+            .session
+            .borrow()
+            .props
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        for l in &labels {
+            if !names
+                .iter()
+                .any(|n| n == l || n.ends_with(&format!(".{l}")))
+            {
+                wrong.push(format!(
+                    "{}: immediate assertion {l} is not in the table",
+                    c.top
+                ));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    assert!(
+        checked >= 1,
+        "no design with labelled immediate assertions was checked"
+    );
+    assert!(
+        wrong.is_empty(),
+        "immediate assertions went missing:\n  {}",
         wrong.join("\n  ")
     );
 }

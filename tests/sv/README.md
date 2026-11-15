@@ -60,4 +60,6 @@ many properties under the top module's name in the table after the script
 and a `prove -all` (with no engines, so only the models are built). A
 property may end with any status, an error naming why included, but it may
 not vanish. So every module in a design here must be instantiated.
-Immediate assertions are not counted yet.
+`no_labelled_immediate_assertion_is_dropped` does the same for labelled
+immediate assertions and covers outside `initial` blocks (`a_le9: assert
+(q <= 9);`): each must have a row under its label.
