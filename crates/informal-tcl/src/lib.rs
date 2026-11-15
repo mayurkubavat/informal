@@ -508,6 +508,9 @@ mod tests {
     fn caller_location_from_sourced_files() {
         let dir = std::env::temp_dir().join(format!("informal-tcl-loc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // Tcl reports the resolved path: on macOS the temp dir under /var is
+        // a link to /private/var.
+        let dir = dir.canonicalize().unwrap();
         let f = dir.join("s.tcl");
         std::fs::write(
             &f,

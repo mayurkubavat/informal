@@ -114,7 +114,7 @@ failed=0
 
     echo; echo "== 4. fuzzing: random AIGER models, every engine, compared"
     if cargo build --locked --release -q -p informal-cli \
-        && line=$(python3 -I scripts/fuzz.py --count 200 --seed "$(date +%Y%m%d)000" | tail -n 1); then
+        && line=$(python3 -I scripts/fuzz.py --count 200 --seed "$(date +%y%j)000" | tail -n 1); then
         echo "$line"; results+=("${line,,}")
     else
         echo "$line"; results+=("fuzz FAIL (target/fuzz/failures in $land)"); failed=1

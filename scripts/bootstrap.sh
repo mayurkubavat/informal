@@ -125,7 +125,7 @@ fi
 if [ "$verify" = 1 ]; then
     step "verification that needs no quiet machine"
     cargo build --locked --release -q -p informal-cli
-    python3 -I scripts/fuzz.py --count 200 --seed "$(date +%Y%m%d)000"
+    python3 -I scripts/fuzz.py --count 200 --seed "$(date +%y%j)000"
     python3 -I scripts/hwmcc25_fetch.py
     db=target/verify-hwmcc25-$(date +%Y%m%d).jsonl
     rm -f "$db"
