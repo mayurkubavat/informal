@@ -6,7 +6,7 @@
 // as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, type AiStatus, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
+import { backend, type AiStatus, EngineLine, Flavor, type GuiRequest, type GuiState, ProveProgress, Reply, SessionView } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   bound, clock, designScopes, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
@@ -375,12 +375,17 @@ export default function App() {
   const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${tclWord(n)}` : `check_fv -property {${n}}`);
   // The source view follows the selected property's own file (its script
   // line, or RTL for SVA in the design); the top file otherwise.
-  const srcPath = sourceFile(current, topFile);
+  // Unless an agent pointed at other lines (gui_highlight_source): those
+  // stay until the person selects a property.
+  const [srcShow, setSrcShow] = useState<{ file: string; first: number; last: number } | null>(null);
+  useEffect(() => setSrcShow(null), [selected]);
+  const srcPath = srcShow?.file ?? sourceFile(current, topFile);
   useEffect(() => {
     if (srcPath !== topFile) loadText(srcPath);
   }, [srcPath, topFile, loadText]);
   const source = (srcPath && texts[srcPath]) || "";
-  const focusLine = sourceLine(current, srcPath, source);
+  const focusLine = srcShow ? srcShow.first : sourceLine(current, srcPath, source);
+  const focusEnd = srcShow?.last;
   const fileName = srcPath?.split("/").pop();
   const topText = (topFile && texts[topFile]) || "";
   const ports = useMemo(() => parsePorts(topText), [topText]);
@@ -443,10 +448,99 @@ export default function App() {
     );
   const surferTip = (path: string | null) =>
     !surfer ? SURFER_MISSING : path ? `surfer ${path}` : "Only a CEX or cover result has a trace";
+  // ---- An agent's window tools (docs/ai-interface.md) ----
+  // What the window shows, reported after every change for gui_state.
+  const [traceView, setTraceView] = useState<{ cursor: number; signals: string[] } | null>(null);
+  const [cursorReq, setCursorReq] = useState<{ cycle: number; n: number } | null>(null);
+  const guiState: GuiState = useMemo(
+    () => ({
+      selected_property: selected,
+      view: showTrace ? "trace" : center === "source" ? "source" : "table",
+      filter,
+      trace: traceName ? { property: traceName, cursor: traceView?.cursor ?? 0, signals: traceView?.signals ?? [] } : null,
+      source: srcPath ? { file: srcPath, first_line: focusLine, last_line: focusEnd ?? focusLine } : null,
+    }),
+    [selected, showTrace, center, filter, traceName, traceView, srcPath, focusLine, focusEnd],
+  );
+  const guiNow = useRef(guiState);
+  guiNow.current = guiState;
+  useEffect(() => {
+    backend.uiState(guiState).catch(() => {});
+  }, [guiState]);
+  // An action is answered with the window's state once the views have
+  // settled on it, or with the reason it could not be done. Each one is
+  // noted in Messages, so the person sees what moved their window.
+  const guiDone = useCallback((id: number, what: string, error?: string) => {
+    setEvents((e) => [...e, { at: new Date(), cmd: `AI window: ${what}`, ok: !error, ms: 0, summary: error ?? "" }]);
+    if (error) backend.aiGuiDone(id, null, error).catch(() => {});
+    else setTimeout(() => backend.aiGuiDone(id, guiNow.current).catch(() => {}), 60);
+  }, []);
+  // Waiting for a trace to load (open_trace), and signals still to add.
+  const guiTrace = useRef<{ id: number; path: string; what: string } | null>(null);
+  const guiAdd = useRef<{ id: number; left: string[]; missing: string[]; what: string } | null>(null);
+  useEffect(() => {
+    const w = guiTrace.current;
+    if (!w || trace?.path !== w.path || (trace.text === null && !trace.error)) return;
+    guiTrace.current = null;
+    guiDone(w.id, w.what, trace.error ?? undefined);
+  }, [trace, guiDone]);
+  const guiAct = useRef<(r: GuiRequest) => void>(() => {});
+  guiAct.current = ({ id, action: a }) => {
+    if (a.action === "select_property") {
+      const what = `select ${a.name}`;
+      if (!allProps.some((p) => p.name === a.name)) return guiDone(id, what, `no property named ${a.name}`);
+      setSelected(a.name);
+      return guiDone(id, what);
+    }
+    if (a.action === "open_trace") {
+      const what = `open the trace of ${a.name}${a.frame != null ? ` at cycle ${a.frame}` : ""}`;
+      const p = allProps.find((q) => q.name === a.name);
+      const path = traceOf(p ?? null);
+      if (!p) return guiDone(id, what, `no property named ${a.name}`);
+      if (!path) return guiDone(id, what, `${a.name} has no trace: its status is ${p.status.status}`);
+      openTrace(a.name);
+      if (a.frame != null) setCursorReq((r) => ({ cycle: a.frame as number, n: (r?.n ?? 0) + 1 }));
+      // Answered when the trace is loaded (the effect above); at once
+      // when it already is.
+      if (trace?.path === path && trace.text !== null) return guiDone(id, what);
+      guiTrace.current = { id, path, what };
+      return;
+    }
+    if (a.action === "add_signals") {
+      const what = `add ${a.signals.join(", ")} to the trace`;
+      if (!traceName || !trace?.text) return guiDone(id, what, "no trace is open: open one first (gui_open_trace)");
+      if (guiAdd.current) return guiDone(id, what, "signals are still being added: try again");
+      const [first, ...left] = a.signals;
+      guiAdd.current = { id, left, missing: [], what };
+      setCenter("trace");
+      setAddReq((r) => ({ path: first, n: (r?.n ?? 0) + 1 }));
+      return;
+    }
+    const what = `show ${a.file}:${a.first_line}${a.last_line > a.first_line ? `-${a.last_line}` : ""}`;
+    backend.readText(a.file).then(
+      (text) => {
+        setTexts((t) => ({ ...t, [a.file]: text }));
+        setSrcShow({ file: a.file, first: a.first_line, last: a.last_line });
+        setCenter("source");
+        guiDone(id, what);
+      },
+      (e) => guiDone(id, what, String(e)),
+    );
+  };
+  useEffect(() => backend.onAiGui((r) => guiAct.current(r)), []);
   const onAddResult = useCallback(
-    (path: string, r: "added" | "shown" | "missing") =>
-      note(r !== "missing", r === "added" ? `Added ${path} to the trace` : r === "shown" ? `${path} is already in the trace` : `${path} is not in this trace`),
-    [note],
+    (path: string, r: "added" | "shown" | "missing") => {
+      note(r !== "missing", r === "added" ? `Added ${path} to the trace` : r === "shown" ? `${path} is already in the trace` : `${path} is not in this trace`);
+      // One of an agent's signals: the next one, or the answer.
+      const g = guiAdd.current;
+      if (!g) return;
+      if (r === "missing") g.missing.push(path);
+      const next = g.left.shift();
+      if (next !== undefined) return setAddReq((q) => ({ path: next, n: (q?.n ?? 0) + 1 }));
+      guiAdd.current = null;
+      guiDone(g.id, g.what, g.missing.length ? `not in this trace: ${g.missing.join(", ")}` : undefined);
+    },
+    [note, guiDone],
   );
 
   const idle = !busy && !running;
@@ -837,6 +931,8 @@ export default function App() {
               error={trace?.error}
               addRequest={addReq}
               onAddResult={onAddResult}
+              cursorRequest={cursorReq}
+              onView={setTraceView}
               clock={session?.clocks[0] ?? null}
               actions={
                 // The title sits on a wrapper too: a disabled button shows none.
@@ -898,7 +994,7 @@ export default function App() {
               }}
             />
           ) : (
-            <SourceView text={source} focus={focusLine} />
+            <SourceView text={source} focus={focusLine} focusEnd={focusEnd} />
           )}
           </>
           )}
@@ -1040,7 +1136,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="details-right">
-                  <SourceView text={source} focus={focusLine} />
+                  <SourceView text={source} focus={focusLine} focusEnd={focusEnd} />
                 </div>
               </div>
             ) : (

@@ -94,7 +94,7 @@ impl Server {
             }
             "ping" => (self.out)(&result(id, json!({}))),
             "tools/list" => {
-                let list: Vec<Value> = tools::for_mode(self.api.mode())
+                let list: Vec<Value> = tools::for_mode(self.api.mode(), self.api.has_gui())
                     .iter()
                     .map(|t| {
                         json!({
@@ -117,7 +117,7 @@ impl Server {
     fn call(&self, id: Value, params: &Value) {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
-        if !tools::for_mode(self.api.mode())
+        if !tools::for_mode(self.api.mode(), self.api.has_gui())
             .iter()
             .any(|t| t.name == name)
         {

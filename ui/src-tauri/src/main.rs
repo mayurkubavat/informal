@@ -21,6 +21,9 @@
 //! is served to an outside agent on a local socket (`ai.rs`). What the
 //! agent proposes waits for the person (`ai_status`, `ai_decide`), and an
 //! "ai-activity" event tells the window to redraw after each of its calls.
+//! The agent's window tools (`gui_state`, `gui_open_trace`, ...) read what
+//! the views last reported with `ui_state`, and reach them as "ai-gui"
+//! events that the views answer with `ai_gui_done`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -590,6 +593,30 @@ async fn ai_decide(
         .map_err(|e| e.message)
 }
 
+/// The views say what the window shows (after every change), for an
+/// agent's `gui_state`.
+#[tauri::command]
+fn ui_state(ai: State<'_, ai::Ai>, state: serde_json::Value) {
+    ai.window.set_state(state);
+}
+
+/// The views say how an "ai-gui" action ended: the window's state after
+/// it, or why it could not be done.
+#[tauri::command]
+fn ai_gui_done(
+    ai: State<'_, ai::Ai>,
+    id: u64,
+    state: Option<serde_json::Value>,
+    error: Option<String>,
+) {
+    let result = match (state, error) {
+        (_, Some(e)) => Err(e),
+        (Some(s), None) => Ok(s),
+        (None, None) => Err("the window gave no state".into()),
+    };
+    ai.window.done(id, result);
+}
+
 fn main() {
     // Run from the repo root (the directory holding config/engines.toml), so
     // script paths read as they do for `informal shell` and generated models land
@@ -642,7 +669,13 @@ fn main() {
         Some(p) => Some(PathBuf::from(p)),
         None => Some(informal_mcp::socket::for_app(std::process::id())),
     };
-    let ai = ai::start(worker.clone(), ai_state, Path::new(WORKDIR), socket);
+    // An agent's window tools reach the views as "ai-gui" events.
+    let window = ai::Window::new(|id, action| {
+        if let Some(app) = APP.get() {
+            let _ = app.emit("ai-gui", serde_json::json!({"id": id, "action": action}));
+        }
+    });
+    let ai = ai::start(worker.clone(), ai_state, Path::new(WORKDIR), socket, window);
     if let Some(e) = &ai.error {
         eprintln!("informal: the AI interface socket could not be opened: {e}");
     }
@@ -678,7 +711,9 @@ fn main() {
             ask,
             ask_cancel,
             ai_status,
-            ai_decide
+            ai_decide,
+            ui_state,
+            ai_gui_done
         ])
         .run(tauri::generate_context!())
         .expect("error while running the InFormal app");

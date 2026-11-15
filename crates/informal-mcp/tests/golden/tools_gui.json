@@ -1,0 +1,389 @@
+[
+  {
+    "description": "The window of the person working on this session: the property they selected, the view that is open, the open trace with their cursor's frame and the signals in the waveform, and the source lines in view. Use it to answer about \"this property\" or \"this signal\".",
+    "input": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "gui_state",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Select a property in the person's property table, as a click would: its details and source line show.",
+    "input": {
+      "properties": {
+        "name": {
+          "description": "Property name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "gui_select_property",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Open the waveform of a property whose status is cex or covered in the person's window, with the cursor on `frame` (default: the frame where it fails or is hit). Use it to show the person the cycle you are talking about.",
+    "input": {
+      "properties": {
+        "frame": {
+          "description": "Frame for the cursor, from 0",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Property name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "gui_open_trace",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Add signals, by full name as trace_get gives them, to the waveform that is open in the person's window. Fails when no trace is open or a signal is not in that trace.",
+    "input": {
+      "properties": {
+        "signals": {
+          "description": "Full signal names, e.g. fifo.u_wp.p",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "signals"
+      ],
+      "type": "object"
+    },
+    "name": "gui_add_signals",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Open a design file or script in the person's source view and highlight a range of lines.",
+    "input": {
+      "properties": {
+        "file": {
+          "description": "Path, as a property's source or the summary's files give it",
+          "type": "string"
+        },
+        "first_line": {
+          "description": "From 1",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_line": {
+          "description": "Default: first_line",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file",
+        "first_line"
+      ],
+      "type": "object"
+    },
+    "name": "gui_highlight_source",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  }
+]

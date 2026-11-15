@@ -13,7 +13,8 @@ Code: crate `informal-mcp` (`api.rs` the tools, `tools.rs` their schemas,
 a scripted client that finds a failing assertion and proposes a fix) and
 `crates/informal-cli/tests/mcp.rs` (the process on standard input and
 output, and `--connect`). In the app: `ui/src-tauri/src/ai.rs` (the socket),
-`ui/src/components/Proposals.tsx` (the cards), `ui/tests/e2e/proposals.spec.ts`.
+`ui/src/components/Proposals.tsx` (the cards), `ui/tests/e2e/proposals.spec.ts`,
+`ui/tests/e2e/window-tools.spec.ts`.
 
 ## Start it
 
@@ -86,6 +87,12 @@ streams and the app's socket, so a client is configured as above with
   table; a result found with an AI-added change in the model is marked
   **under AI**, and the Details tab names what it stands on. Both answers
   are recorded in the console and in Messages.
+- The agent can see and drive the window (the window tools below): what
+  the person selected, the open trace and where their cursor is, and it can
+  select a property, open a trace at a cycle, add signals to the waveform
+  and highlight source lines. Each such action is noted in Messages, the
+  console keeps the dock, and the person's next selection takes the source
+  view back.
 - After each of the agent's calls that may have changed something, the app
   redraws from the session. A prove the agent starts shows its progress
   like any other, and Stop stops it.
@@ -120,10 +127,30 @@ reply (`tools/list`).
 | | `proposal_undo` | Withdraw or remove proposals, one or all; results that stood on them are reset | yes |
 | Escape hatch | `tcl_eval` | Evaluate a Tcl command in the session's shell | yes, by mode |
 
+### Window tools
+
+Offered only on a desktop app's session, in every mode: they change the
+window, never the session.
+
+| Tool | What it does |
+| --- | --- |
+| `gui_state` | What the person is looking at: the selected property, the view (table, source or trace), the table's filter, the open trace with the cursor's frame and the signals in the waveform, the source file and highlighted lines |
+| `gui_select_property` | Select a property in the table |
+| `gui_open_trace` | Open a cex or covered property's waveform, with the cursor on a frame |
+| `gui_add_signals` | Add signals, by full name, to the open waveform |
+| `gui_highlight_source` | Open a file in the source view and highlight a range of lines |
+
+Each returns the window's state after it (`informal.gui/1`), or the
+window's reason when it cannot be done ("a_max has no trace: its status is
+proven"). In a design on both clock edges or with several clocks the
+window counts clock cycles where `trace_get` counts model steps, so a
+frame number does not carry over there.
+
 A tool that fails answers with `isError` and
 `{"schema": "informal.error/1", "code": ..., "message": ...}`. Codes:
-`arguments`, `not_found`, `busy`, `mode`, `rejected` (the session refused
-it, with the session's reason), `no_trace`, `path`, `internal`.
+`arguments`, `not_found`, `busy`, `mode`, `rejected` (the session or the
+window refused it, with its reason), `no_trace`, `path`, `no_gui`,
+`internal`.
 
 ### A property in a reply
 
@@ -188,6 +215,4 @@ frames come in one reply.
   the protocol's cancellation and progress notifications work meanwhile.
 - No check yet that an AI-added assumption over-constrains the design or
   makes a proof vacuous (planned).
-- The agent cannot yet see or drive the window itself: what the person has
-  selected, which trace is open, signals in the waveform (planned).
 - The app's own Ask mode does not use the tools yet (planned).

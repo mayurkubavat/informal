@@ -100,4 +100,20 @@ describe("TraceView", () => {
     expect(results).toEqual([["informal.informal_cyc", "added"], ["counter.q", "shown"], ["counter.nosuch", "missing"]]);
     expect(names().filter((n) => n === "informal.informal_cyc")).toHaveLength(1);
   });
+
+  it("puts the cursor where asked from outside, once, and reports what it shows", () => {
+    const views: { cursor: number; signals: string[] }[] = [];
+    const onView = (v: { cursor: number; signals: string[] }) => views.push(v);
+    const { rerender } = view({ cursorRequest: { cycle: 4, n: 1 }, onView });
+    expect(screen.getByRole("status", { name: "Cursor" })).toHaveTextContent("cycle 4");
+    expect(views[views.length - 1]).toEqual({ cursor: 4, signals: ["counter.clk", "counter.rst_n", "counter.en", "counter.q", "counter.done"] });
+    // The person moves on; the same request again (a re-render) does not pull the cursor back.
+    fireEvent.keyDown(screen.getByLabelText(/^Trace of a_never9/), { key: "Home" });
+    rerender(<TraceView tabs={<div />} prop={cex} path="informal_work/a_never9.vcd" text={vcdText} cursorRequest={{ cycle: 4, n: 1 }} onView={onView} />);
+    expect(screen.getByRole("status", { name: "Cursor" })).toHaveTextContent("cycle 0");
+    expect(views[views.length - 1].cursor).toBe(0);
+    // A cycle past the end stops at the last one.
+    rerender(<TraceView tabs={<div />} prop={cex} path="informal_work/a_never9.vcd" text={vcdText} cursorRequest={{ cycle: 99, n: 2 }} onView={onView} />);
+    expect(screen.getByRole("status", { name: "Cursor" })).toHaveTextContent("cycle 11");
+  });
 });

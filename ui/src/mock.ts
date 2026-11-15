@@ -34,7 +34,7 @@
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { AiProposal, AiStatus, ConsoleLine, DesignScope, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { AiProposal, AiStatus, ConsoleLine, DesignScope, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 import { splitAnswer, type AskDelta, type AskDone, type LlmProviderEntry, type LlmStatus } from "./ask";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
@@ -198,7 +198,7 @@ if (typeof location !== "undefined") {
   if (extra) mockSession.props.push(...generatedProps(extra));
 }
 
-type Ev = "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity";
+type Ev = "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity" | "ai-gui";
 const listeners: Record<Ev, Set<(p: unknown) => void>> = {
   "prove-progress": new Set(),
   "console-line": new Set(),
@@ -206,13 +206,14 @@ const listeners: Record<Ev, Set<(p: unknown) => void>> = {
   "ask-delta": new Set(),
   "ask-done": new Set(),
   "ai-activity": new Set(),
+  "ai-gui": new Set(),
 };
 export const mockEvents = {
   on(ev: Ev, cb: (p: unknown) => void) {
     listeners[ev].add(cb);
     return () => void listeners[ev].delete(cb);
   },
-  emit(ev: Ev, payload: ProveProgress | ConsoleLine | EngineLine | AskDelta | AskDone | string) {
+  emit(ev: Ev, payload: ProveProgress | ConsoleLine | EngineLine | AskDelta | AskDone | GuiRequest | string) {
     for (const cb of [...listeners[ev]]) cb(payload);
   },
 };
@@ -380,6 +381,8 @@ export function resetMock() {
   for (const t of mockAsks.values()) clearTimeout(t);
   mockAsks.clear();
   mockAi.proposals.length = 0;
+  mockUi = null;
+  guiWaiting.clear();
 }
 
 // ---- Ask mode: a scripted Fake provider ----
@@ -485,6 +488,36 @@ export function mockAiDecide(id: number, accept: boolean): AiProposal {
     p.state = "applied";
   }
   return { ...p };
+}
+
+// The window as an agent's tools see it: what the views last reported, and
+// actions sent to them. `mockAiGui` resolves with the window's state once
+// the views answer, as the agent's tool call would; it rejects with the
+// views' reason. In the browser both are on `window.__informalMock`, for
+// the Playwright suites to play the agent.
+let mockUi: GuiState | null = null;
+export const mockUiNow = () => mockUi;
+export function mockUiState(state: GuiState) {
+  mockUi = state;
+}
+const guiWaiting = new Map<number, { resolve: (s: GuiState) => void; reject: (e: Error) => void }>();
+let guiNext = 1;
+export function mockAiGui(action: GuiAction): Promise<GuiState> {
+  const id = guiNext++;
+  return new Promise((resolve, reject) => {
+    guiWaiting.set(id, { resolve, reject });
+    mockEvents.emit("ai-gui", { id, action });
+  });
+}
+export function mockAiGuiDone(id: number, state: GuiState | null, error?: string) {
+  const w = guiWaiting.get(id);
+  guiWaiting.delete(id);
+  if (state && !error) mockUi = state;
+  if (error || !state) w?.reject(new Error(error ?? "the window gave no state"));
+  else w?.resolve(state);
+}
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__informalMock = { aiGui: mockAiGui, aiPropose: mockAiPropose, uiState: mockUiNow };
 }
 
 let mockFlavor = "jg";

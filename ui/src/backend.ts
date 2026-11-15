@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockAiDecide, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace } from "./mock";
+import { mock, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace, mockUiState } from "./mock";
 import type { AskDelta, AskDone, LlmProviderEntry, LlmStatus } from "./ask";
 
 export type StatusWord =
@@ -54,6 +54,27 @@ export interface AiProposal {
   rationale: string;
   state: ProposalState;
   error?: string;
+}
+// What the window shows, as an agent's window tools read it (`gui_state`).
+export interface GuiState {
+  selected_property: string | null;
+  view: "table" | "source" | "trace";
+  filter: string;
+  // The open trace: its property, the cycle the cursor is on, the signals
+  // in the waveform (hierarchical paths).
+  trace: { property: string; cursor: number; signals: string[] } | null;
+  // The source in view and its highlighted lines.
+  source: { file: string; first_line: number; last_line: number } | null;
+}
+// One thing an agent asks the window to do (docs/ai-interface.md).
+export type GuiAction =
+  | { action: "select_property"; name: string }
+  | { action: "open_trace"; name: string; frame?: number | null }
+  | { action: "add_signals"; signals: string[] }
+  | { action: "highlight_source"; file: string; first_line: number; last_line: number };
+export interface GuiRequest {
+  id: number;
+  action: GuiAction;
 }
 export interface AiStatus {
   mode: "read-only" | "propose" | "auto";
@@ -177,7 +198,7 @@ async function call(cmd: string, args: Record<string, unknown> = {}): Promise<Re
 
 // Subscribe to a backend event; returns an unsubscribe function that is safe
 // to call before the Tauri listener has finished registering.
-function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity", cb: (payload: T) => void): () => void {
+function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity" | "ai-gui", cb: (payload: T) => void): () => void {
   if (!inTauri) return mockEvents.on(event, cb as (p: unknown) => void);
   let off: (() => void) | null = null;
   let dead = false;
@@ -237,6 +258,13 @@ export const backend = {
   // An agent's call may have changed the session or the proposals: the
   // payload is the tool's name. Redraw from a snapshot and aiStatus.
   onAiActivity: (cb: (tool: string) => void) => subscribe("ai-activity", cb),
+  // An agent's window tool asks the views to do something; answer each
+  // request with aiGuiDone: the window's state after it, or why not.
+  onAiGui: (cb: (r: GuiRequest) => void) => subscribe("ai-gui", cb),
+  aiGuiDone: (id: number, state: GuiState | null, error?: string) =>
+    invokeOr<void>("ai_gui_done", { id, state, error: error ?? null }, () => mockAiGuiDone(id, state, error)),
+  // What the window shows, reported after every change for `gui_state`.
+  uiState: (state: GuiState) => invokeOr<void>("ui_state", { state }, () => mockUiState(state)),
   // Tab completion: the active flavor's command names, then property names,
   // starting with `prefix`. Answered without the shell thread, so it works
   // while a prove runs.

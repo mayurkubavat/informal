@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MOCK_ASK_REPLY, MOCK_ENGINES, MOCK_PROPOSALS, mockAiDecide, mockAiPropose, mockAiStatus, mockAsk, mockAskCancel, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockSurferOpened, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
-import type { ConsoleLine, EngineLine, ProveProgress } from "./backend";
+import { MOCK_ASK_REPLY, MOCK_ENGINES, MOCK_PROPOSALS, mockAiDecide, mockAiGui, mockAiGuiDone, mockAiPropose, mockAiStatus, mockUiNow, mockAsk, mockAskCancel, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockSurferOpened, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
+import type { ConsoleLine, EngineLine, GuiRequest, GuiState, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
 // it found it where that matters.
@@ -295,5 +295,25 @@ describe("browser mock: AI interface", () => {
     resetMock();
     expect(mockAiStatus().proposals).toEqual([]);
     expect((await mock("snapshot", {})).session!.props.some((p) => p.ai)).toBe(false);
+  });
+});
+
+describe("browser mock: an agent's window tools", () => {
+  beforeEach(() => resetMock());
+
+  it("sends an action to the views and resolves with the state they answer, or their reason", async () => {
+    const state: GuiState = { selected_property: "a_max", view: "table", filter: "", trace: null, source: null };
+    const off = mockEvents.on("ai-gui", (r) => {
+      const { id, action } = r as GuiRequest;
+      if (action.action === "select_property" && action.name === "nope") mockAiGuiDone(id, null, "no property named nope");
+      else mockAiGuiDone(id, { ...state, selected_property: action.action === "select_property" ? action.name : null });
+    });
+    expect(mockUiNow()).toBeNull();
+    await expect(mockAiGui({ action: "select_property", name: "a_step" })).resolves.toMatchObject({ selected_property: "a_step" });
+    // The answered state is what gui_state reads next.
+    expect(mockUiNow()?.selected_property).toBe("a_step");
+    await expect(mockAiGui({ action: "select_property", name: "nope" })).rejects.toThrow("no property named nope");
+    expect(mockUiNow()?.selected_property).toBe("a_step");
+    off();
   });
 });

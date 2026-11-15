@@ -32,7 +32,10 @@ and call `resetMock()` instead.
 AI interface: `?ai=1` starts the mock as if an agent had proposed an
 assumption (`m_en_hold`) and a helper assertion (`a_q_bound`), both pending;
 `mockAiPropose` does the same from a unit test. `tests/e2e/proposals.spec.ts`
-and the `proposals` baselines cover the Proposals tab.
+and the `proposals` baselines cover the Proposals tab. The mock also plays
+an agent's window tools: `window.__informalMock.aiGui(action)` sends one
+action to the views and resolves with the window's state after it, and
+`uiState()` is what the views last reported (`tests/e2e/window-tools.spec.ts`).
 
 Traces: after a prove, the mock gives `a_never9` (cex) and `c_done` (covered)
 `trace` paths (`informal_work/<prop>.vcd`), and `readTrace` serves the hand-written

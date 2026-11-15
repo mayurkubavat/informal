@@ -23,5 +23,5 @@ pub mod socket;
 pub mod tools;
 pub mod vcd;
 
-pub use api::{Api, ApiError, Mode, Options, Proposal, State};
+pub use api::{Api, ApiError, Gui, Mode, Options, Proposal, State};
 pub use server::{serve, Server};

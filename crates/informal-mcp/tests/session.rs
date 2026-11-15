@@ -90,7 +90,7 @@ fn call(api: &Arc<Api>, tool: &str, args: Value) -> Value {
     let reply = api
         .call(tool, &args)
         .unwrap_or_else(|e| panic!("{tool} {args}: {e:?}"));
-    let all = tools::all();
+    let all: Vec<tools::Tool> = tools::all().into_iter().chain(tools::gui()).collect();
     let t = all.iter().find(|t| t.name == tool).unwrap();
     let mut bad = Vec::new();
     violations(&t.output, &reply, tool, &mut bad);
@@ -151,7 +151,7 @@ fn the_tool_list_is_the_golden_one() {
     golden("tools", &json!(list));
     // The document lists every tool.
     let doc = std::fs::read_to_string(root().join("docs/ai-interface.md")).unwrap();
-    for t in tools::all() {
+    for t in tools::all().into_iter().chain(tools::gui()) {
         assert!(
             doc.contains(&format!("`{}`", t.name)),
             "docs/ai-interface.md lacks {}",
@@ -159,7 +159,7 @@ fn the_tool_list_is_the_golden_one() {
         );
     }
     // A read-only server offers no tool that changes the session.
-    let read_only = tools::for_mode(Mode::ReadOnly);
+    let read_only = tools::for_mode(Mode::ReadOnly, false);
     assert!(read_only.iter().all(|t| !t.changes));
     assert!(!read_only
         .iter()
@@ -503,6 +503,102 @@ fn a_cut_point_is_tagged_and_a_prove_can_run_without_waiting() {
         lines.contains(&"AI-added cut point (stopat) count"),
         "{lines:#?}"
     );
+}
+
+/// A window that records what it is asked to do.
+struct FakeWindow(std::sync::Mutex<Vec<Value>>);
+
+impl informal_mcp::Gui for FakeWindow {
+    fn state(&self) -> Result<Value, String> {
+        Ok(
+            json!({"selected_property": "a_wrong", "view": "table", "filter": "", "trace": null, "source": null}),
+        )
+    }
+    fn act(&self, action: &Value) -> Result<Value, String> {
+        if action["name"] == "nope" {
+            return Err("no property named nope".into());
+        }
+        self.0.lock().unwrap().push(action.clone());
+        Ok(json!({"selected_property": action["name"], "view": "trace",
+                  "trace": {"property": action["name"], "cursor": action["frame"], "signals": []}}))
+    }
+}
+
+/// The window tools exist only with a window; they pass the action on and
+/// return what the window then shows.
+#[test]
+fn window_tools_need_a_window_and_drive_it() {
+    let work = std::env::temp_dir().join(format!("informal-mcp-gui-{}", std::process::id()));
+    let opts = Options {
+        mode: Mode::ReadOnly,
+        root: root(),
+        workdir: work.clone(),
+        max_time: Duration::from_secs(5),
+    };
+    let api = Arc::new(Api::spawn(Vec::new(), work, opts));
+    let names = |api: &Api| -> Vec<&'static str> {
+        tools::for_mode(api.mode(), api.has_gui())
+            .iter()
+            .map(|t| t.name)
+            .collect()
+    };
+    assert!(!names(&api).iter().any(|n| n.starts_with("gui_")));
+    let e = api.call("gui_state", &json!({})).unwrap_err();
+    assert_eq!(e.code, "no_gui");
+    let window = Arc::new(FakeWindow(Default::default()));
+    api.set_gui(window.clone());
+    assert_eq!(
+        names(&api).iter().filter(|n| n.starts_with("gui_")).count(),
+        5
+    );
+    golden(
+        "tools_gui",
+        &tools::gui()
+            .iter()
+            .map(|t| json!({"name": t.name, "description": t.description, "input": t.input, "output": t.output}))
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    let seen = call(&api, "gui_state", json!({}));
+    assert_eq!(seen["window"]["selected_property"], "a_wrong");
+    let shown = call(
+        &api,
+        "gui_open_trace",
+        json!({"name": "a_wrong", "frame": 4}),
+    );
+    assert_eq!(shown["done"], "open_trace");
+    assert_eq!(shown["window"]["trace"]["cursor"], 4);
+    call(
+        &api,
+        "gui_highlight_source",
+        json!({"file": "tests/fpv/fifo/fifo.sv", "first_line": 40}),
+    );
+    call(&api, "gui_add_signals", json!({"signals": ["fifo.count"]}));
+    call(&api, "gui_select_property", json!({"name": "a_data"}));
+    let actions = window.0.lock().unwrap().clone();
+    assert_eq!(
+        actions,
+        [
+            json!({"action": "open_trace", "name": "a_wrong", "frame": 4}),
+            json!({"action": "highlight_source", "file": "tests/fpv/fifo/fifo.sv", "first_line": 40, "last_line": 40}),
+            json!({"action": "add_signals", "signals": ["fifo.count"]}),
+            json!({"action": "select_property", "name": "a_data"}),
+        ]
+    );
+    // What the window refuses comes back as the tool's error.
+    let e = api
+        .call("gui_select_property", &json!({"name": "nope"}))
+        .unwrap_err();
+    assert_eq!(
+        (e.code, e.message.as_str()),
+        ("rejected", "no property named nope")
+    );
+    let e = api.call("gui_add_signals", &json!({})).unwrap_err();
+    assert_eq!(e.code, "arguments");
+    let e = api
+        .call("gui_highlight_source", &json!({"file": "x.sv"}))
+        .unwrap_err();
+    assert_eq!(e.code, "arguments");
 }
 
 /// A client on the protocol itself: JSON-RPC lines in, lines out.

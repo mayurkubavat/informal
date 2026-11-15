@@ -12,7 +12,7 @@ use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// What a client of the interface may do to the session.
@@ -45,8 +45,20 @@ impl Mode {
     }
 }
 
+/// The window of the front end a person works in, for the tools that
+/// show them something or read what they have selected (the `gui_` tools).
+/// The desktop app implements it; a server on its own has none.
+pub trait Gui: Send + Sync {
+    /// What the window shows: the selected property, the open view, the
+    /// open trace with its cursor and signals, the source lines in view.
+    fn state(&self) -> Result<Value, String>;
+    /// Do one thing in the window (`{"action": "open_trace", ...}`) and
+    /// return its state afterwards. `Err` says why it could not be done.
+    fn act(&self, action: &Value) -> Result<Value, String>;
+}
+
 /// Why a tool call gave no reply. `code` is one of `arguments`, `not_found`,
-/// `busy`, `mode`, `rejected`, `no_trace`, `path`, `internal`.
+/// `busy`, `mode`, `rejected`, `no_trace`, `path`, `no_gui`, `internal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiError {
     pub code: &'static str,
@@ -179,6 +191,7 @@ pub struct Api {
     worker: Worker,
     state: Arc<State>,
     opts: Options,
+    gui: OnceLock<Arc<dyn Gui>>,
 }
 
 /// The most of anything one reply carries.
@@ -208,7 +221,17 @@ impl Api {
             worker,
             state,
             opts,
+            gui: OnceLock::new(),
         }
+    }
+
+    /// Attach the window (once): the `gui_` tools are offered from then on.
+    pub fn set_gui(&self, gui: Arc<dyn Gui>) {
+        let _ = self.gui.set(gui);
+    }
+
+    pub fn has_gui(&self) -> bool {
+        self.gui.get().is_some()
     }
 
     pub fn mode(&self) -> Mode {
@@ -290,6 +313,7 @@ impl Api {
             "proposal_add" => self.proposal_add(args),
             "proposal_list" => self.proposal_list(args),
             "proposal_undo" => self.proposal_undo(args),
+            t if t.starts_with("gui_") => self.gui_tool(t, args),
             _ => Err(err("not_found", format!("no tool named {tool}"))),
         };
         if matches!(tool, "proposal_add" | "proposal_undo") {
@@ -1015,6 +1039,60 @@ impl Api {
         drop(i);
         self.changed("decide");
         Ok(json!({"schema": "informal.proposal/1", "proposal": p}))
+    }
+
+    // ---------------------------------------------------------------- gui
+
+    /// The tools that show the person something, or read what they see.
+    /// They change the window, never the session.
+    fn gui_tool(&self, tool: &str, args: &Value) -> Reply {
+        let gui = self.gui.get().ok_or_else(|| {
+            err(
+                "no_gui",
+                "no window is attached: these tools work on a desktop app's session",
+            )
+        })?;
+        let action = match tool {
+            "gui_state" => None,
+            "gui_select_property" => {
+                Some(json!({"action": "select_property", "name": req_str(args, "name")?}))
+            }
+            "gui_open_trace" => Some(json!({
+                "action": "open_trace",
+                "name": req_str(args, "name")?,
+                "frame": opt_u64(args, "frame")?,
+            })),
+            "gui_add_signals" => {
+                let signals = strings(args, "signals")?;
+                if signals.is_empty() {
+                    return Err(err("arguments", "`signals` is required"));
+                }
+                Some(json!({"action": "add_signals", "signals": signals}))
+            }
+            "gui_highlight_source" => {
+                let first = opt_u64(args, "first_line")?
+                    .filter(|l| *l > 0)
+                    .ok_or_else(|| err("arguments", "`first_line` is required, from 1"))?;
+                let last = opt_u64(args, "last_line")?.unwrap_or(first).max(first);
+                Some(json!({
+                    "action": "highlight_source",
+                    "file": req_str(args, "file")?,
+                    "first_line": first,
+                    "last_line": last,
+                }))
+            }
+            _ => return Err(err("not_found", format!("no tool named {tool}"))),
+        };
+        let state = match &action {
+            None => gui.state(),
+            Some(a) => gui.act(a),
+        }
+        .map_err(|e| err("rejected", e))?;
+        let mut reply = json!({"schema": "informal.gui/1", "window": state});
+        if let Some(a) = action {
+            reply["done"] = a["action"].clone();
+        }
+        Ok(reply)
     }
 
     // ---------------------------------------------------------------- tcl

@@ -4,18 +4,85 @@
 //! proposes waits for the person (`ai_decide`), and every call that may
 //! have changed the session reaches the window as an "ai-activity" event.
 
-use informal_mcp::{Api, Mode, Options, Proposal, State};
+use informal_mcp::{Api, Gui, Mode, Options, Proposal, State};
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
+
+/// The window as an agent's `gui_` tools reach it. The views keep `state`
+/// current (`ui_state`); an action goes to them as an event and comes back
+/// through `done` with what the window then shows, or why it was refused.
+pub struct Window {
+    state: Mutex<Value>,
+    waiting: Mutex<HashMap<u64, Answer>>,
+    next: AtomicU64,
+    /// Sends one action to the views: `(id, action)`.
+    send: ToViews,
+}
+
+/// Where the views' answer to one action goes.
+type Answer = mpsc::Sender<Result<Value, String>>;
+type ToViews = Box<dyn Fn(u64, &Value) + Send + Sync>;
+
+/// How long the views get to do what an agent asked.
+const WINDOW_WAIT: Duration = Duration::from_secs(5);
+
+impl Window {
+    pub fn new(send: impl Fn(u64, &Value) + Send + Sync + 'static) -> Window {
+        Window {
+            state: Mutex::new(Value::Null),
+            waiting: Mutex::default(),
+            next: AtomicU64::new(1),
+            send: Box::new(send),
+        }
+    }
+
+    /// The views report what they show.
+    pub fn set_state(&self, state: Value) {
+        *self.state.lock().unwrap() = state;
+    }
+
+    /// The views report how an action ended.
+    pub fn done(&self, id: u64, result: Result<Value, String>) {
+        if let Ok(state) = &result {
+            self.set_state(state.clone());
+        }
+        if let Some(tx) = self.waiting.lock().unwrap().remove(&id) {
+            let _ = tx.send(result);
+        }
+    }
+}
+
+impl Gui for Window {
+    fn state(&self) -> Result<Value, String> {
+        match self.state.lock().unwrap().clone() {
+            Value::Null => Err("the window is not up yet".into()),
+            s => Ok(s),
+        }
+    }
+
+    fn act(&self, action: &Value) -> Result<Value, String> {
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        self.waiting.lock().unwrap().insert(id, tx);
+        (self.send)(id, action);
+        let r = rx.recv_timeout(WINDOW_WAIT);
+        self.waiting.lock().unwrap().remove(&id);
+        r.unwrap_or_else(|_| Err("the window did not answer".into()))
+    }
+}
 
 /// The app's side of the interface.
 pub struct Ai {
     pub api: Arc<Api>,
+    pub window: Arc<Window>,
     /// Where agents connect; `None` when the socket is off or failed.
     pub socket: Option<PathBuf>,
     /// Why there is no socket, when one was wanted.
@@ -55,6 +122,7 @@ pub fn start(
     state: Arc<State>,
     workdir: &Path,
     socket: Option<PathBuf>,
+    window: Window,
 ) -> Ai {
     let opts = Options {
         mode: mode(),
@@ -63,12 +131,19 @@ pub fn start(
         max_time: Duration::from_secs(300),
     };
     let api = Arc::new(Api::attach(worker, state, opts));
+    let window = Arc::new(window);
+    api.set_gui(window.clone());
     let (socket, error) = match socket.map(|p| listen(api.clone(), &p).map(|()| p)) {
         None => (None, None),
         Some(Ok(p)) => (Some(p), None),
         Some(Err(e)) => (None, Some(e.to_string())),
     };
-    Ai { api, socket, error }
+    Ai {
+        api,
+        window,
+        socket,
+        error,
+    }
 }
 
 fn listen(api: Arc<Api>, path: &Path) -> std::io::Result<()> {
@@ -127,12 +202,25 @@ mod tests {
             s.sink = Some(sink);
             s
         });
+        // A window that answers each action at once with what it was asked.
+        let answer: Arc<Mutex<Option<Arc<Window>>>> = Arc::default();
+        let views = answer.clone();
+        let window = Window::new(move |id, action| {
+            if let Some(w) = views.lock().unwrap().as_ref() {
+                w.done(
+                    id,
+                    Ok(serde_json::json!({"view": "trace", "asked": action})),
+                );
+            }
+        });
         let ai = start(
             worker.clone(),
             state,
             &work,
             Some(base.join("run/app.sock")),
+            window,
         );
+        *answer.lock().unwrap() = Some(ai.window.clone());
         assert_eq!(ai.error, None);
         let path = ai.socket.clone().unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -178,6 +266,22 @@ mod tests {
         let list = call(3, "property_list", serde_json::json!({"origin": "ai"}));
         assert_eq!(list["properties"][0]["name"], "m_ai");
         assert_eq!(*changes.lock().unwrap(), ["proposal_add", "decide"]);
+        // The window: nothing to read before the views report, then their
+        // state; an action goes to the views and returns what they answer.
+        let none = call(4, "gui_state", serde_json::json!({}));
+        assert!(none.is_null(), "an error result has no structured content");
+        ai.window
+            .set_state(serde_json::json!({"selected_property": "a_person", "view": "table"}));
+        let seen = call(5, "gui_state", serde_json::json!({}));
+        assert_eq!(seen["window"]["selected_property"], "a_person");
+        let shown = call(
+            6,
+            "gui_open_trace",
+            serde_json::json!({"name": "a_person", "frame": 3}),
+        );
+        assert_eq!(shown["window"]["asked"]["action"], "open_trace");
+        assert_eq!(shown["window"]["asked"]["frame"], 3);
+        assert_eq!(ai.window.state().unwrap()["view"], "trace");
         // While a command of the person's has the shell, tools say busy.
         let held = ai.api.state().foreign();
         let busy = ai.api.call("session_summary", &serde_json::json!({}));

@@ -28,6 +28,8 @@ export function TraceView({
   error,
   addRequest,
   onAddResult,
+  cursorRequest,
+  onView,
   actions,
   clock,
 }: {
@@ -41,6 +43,10 @@ export function TraceView({
   addRequest?: { path: string; n: number } | null;
   /** How a request ended: added, already shown, or not in this trace. */
   onAddResult?: (path: string, result: "added" | "shown" | "missing") => void;
+  /** A cycle to put the cursor on (an agent showing where to look); `n` makes each request new. */
+  cursorRequest?: { cycle: number; n: number } | null;
+  /** The cursor's cycle and the signals shown, whenever either changes. */
+  onView?: (view: { cursor: number; signals: string[] }) => void;
   /** Extra buttons at the end of the trace bar. */
   actions?: React.ReactNode;
   /** The session's clock: its active edges are the cycles (a `clk` / `clock` signal otherwise). */
@@ -117,6 +123,18 @@ export function TraceView({
     reveal.current = false;
     scrollTo(cursor);
   });
+  // Put the cursor where asked from outside (once per request, once the
+  // VCD is in, after a new trace has set its own cursor).
+  const cursorHandled = useRef(0);
+  useEffect(() => {
+    if (!cursorRequest || !vcd || shownFor.current !== vcd || cursorHandled.current === cursorRequest.n) return;
+    cursorHandled.current = cursorRequest.n;
+    setCursor(Math.max(0, Math.min(n - 1, cursorRequest.cycle)));
+    reveal.current = true;
+  }, [cursorRequest, vcd, n]);
+  useEffect(() => {
+    if (vcd) onView?.({ cursor, signals: shown });
+  }, [vcd, cursor, shown, onView]);
   const onKey = (e: React.KeyboardEvent) => {
     const to =
       e.key === "ArrowLeft" ? cursor - 1 : e.key === "ArrowRight" ? cursor + 1 : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : null;

@@ -528,8 +528,9 @@ to try.
     other end, and proposals stay pending. The desktop app is where a
     person answers: it serves its own session on a local socket
     (`informal mcp --connect`) and shows each proposal as a card with
-    Accept and Reject. The agent cannot yet see or drive the window
-    (selection, open trace, waveform signals).
+    Accept and Reject. There the agent also reads what the person has
+    selected and can show them a trace, signals or source lines; those
+    tools move the window and never change the session.
   - A Tcl command run in `auto` mode is not undone by the one-step undo.
   - The session runs one request at a time (D9): while a prove runs, other
     tools answer `busy`, except progress and stop.

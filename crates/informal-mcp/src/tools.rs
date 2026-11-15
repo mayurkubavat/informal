@@ -413,11 +413,99 @@ pub fn all() -> Vec<Tool> {
     ]
 }
 
-/// The tools a server in `mode` offers.
-pub fn for_mode(mode: Mode) -> Vec<Tool> {
+/// What the window shows, as every `gui_` tool returns it.
+fn window() -> Value {
+    obj(
+        &[
+            schema("informal.gui/1"),
+            ("done", s("The action that was done")),
+            (
+                "window",
+                obj(
+                    &[
+                        ("selected_property", json!({"type": ["string", "null"]})),
+                        (
+                            "view",
+                            one_of(
+                                &["table", "source", "trace"],
+                                "What the centre of the window shows",
+                            ),
+                        ),
+                        ("filter", s("The property table's filter text")),
+                        (
+                            "trace",
+                            json!({"type": ["object", "null"], "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)"}),
+                        ),
+                        (
+                            "source",
+                            json!({"type": ["object", "null"], "description": "The source in view: file, first_line and last_line of the highlighted lines"}),
+                        ),
+                    ],
+                    &["selected_property", "view"],
+                ),
+            ),
+        ],
+        &["schema", "window"],
+    )
+}
+
+/// The tools that work on a person's window: offered only by a desktop
+/// app's session. They show the person something or read what they see;
+/// none changes the session.
+pub fn gui() -> Vec<Tool> {
+    vec![
+        Tool {
+            name: "gui_state",
+            title: "What the person is looking at",
+            description: "The window of the person working on this session: the property they selected, the view that is open, the open trace with their cursor's frame and the signals in the waveform, and the source lines in view. Use it to answer about \"this property\" or \"this signal\".",
+            input: obj(&[], &[]),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_select_property",
+            title: "Select a property in the window",
+            description: "Select a property in the person's property table, as a click would: its details and source line show.",
+            input: obj(&[("name", s("Property name"))], &["name"]),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_open_trace",
+            title: "Open a trace in the window",
+            description: "Open the waveform of a property whose status is cex or covered in the person's window, with the cursor on `frame` (default: the frame where it fails or is hit). Use it to show the person the cycle you are talking about.",
+            input: obj(&[("name", s("Property name")), ("frame", n("Frame for the cursor, from 0"))], &["name"]),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_add_signals",
+            title: "Add signals to the open waveform",
+            description: "Add signals, by full name as trace_get gives them, to the waveform that is open in the person's window. Fails when no trace is open or a signal is not in that trace.",
+            input: obj(&[("signals", list(s(""), "Full signal names, e.g. fifo.u_wp.p"))], &["signals"]),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_highlight_source",
+            title: "Show source lines in the window",
+            description: "Open a design file or script in the person's source view and highlight a range of lines.",
+            input: obj(&[("file", s("Path, as a property's source or the summary's files give it")), ("first_line", n("From 1")), ("last_line", n("Default: first_line"))], &["file", "first_line"]),
+            output: window(),
+            changes: false,
+        },
+    ]
+}
+
+/// The tools a server in `mode` offers, with the window's when there is
+/// one.
+pub fn for_mode(mode: Mode, with_gui: bool) -> Vec<Tool> {
     let mut t = all();
     if mode == Mode::ReadOnly {
         t.retain(|t| !t.changes);
+    }
+    if with_gui {
+        t.extend(gui());
     }
     t
 }
