@@ -248,7 +248,7 @@ def run(args):
 # table -------------------------------------------------------------------
 
 def model_key(path):
-    return re.sub(r"^.*?/(sample60|extracted)/", "", path)
+    return re.sub(r"^.*?/(sample60|extracted|bitlevel/safety)/", "", path)
 
 
 def summarize(run_dir, expected):

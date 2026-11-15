@@ -8,6 +8,7 @@
 
 # Benchmark data and results stay local (multi-GB; see bench/README.md)
 /bench/hwmcc*/
+/bench/hwmcc25
 /bench/bin/
 /bench/.work/
 /bench/runs*.jsonl

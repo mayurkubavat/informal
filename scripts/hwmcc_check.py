@@ -10,7 +10,7 @@ exp = json.load(open(sys.argv[1]))
 runs = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
 bad, agree, by_engine, times = [], 0, {}, []
 for r in runs:
-    key = re.sub(r'^.*?/(sample60|extracted)/', '', r['model'])
+    key = re.sub(r'^.*?/(sample60|extracted|bitlevel/safety)/', '', r['model'])
     e = exp.get(key)
     if e is None:
         continue
@@ -25,7 +25,7 @@ for r in runs:
             s['solved_on_unsolved'] += 1
     else:
         s['unknown/err'] += 1
-    if r['engine'].startswith('ric3') and r['verdict'] in ('safe', 'unsafe') and e['ric3_s']:
+    if r['engine'].startswith('ric3') and r['verdict'] in ('safe', 'unsafe') and e.get('ric3_s'):
         times.append((r['wall_ms'] / 1000, e['ric3_s'], key))
 for k, v in sorted(by_engine.items()):
     print(k, v)

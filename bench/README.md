@@ -6,6 +6,7 @@ models, frozen binaries and results stay local (see `.gitignore`).
 | File | What |
 | --- | --- |
 | `full319.txt` | All 319 HWMCC'24 bit-level models |
+| `hwmcc25-330.txt` | All 330 HWMCC'25 bit-level safety models (`scripts/hwmcc25_fetch.py` downloads them and their published answers) |
 | `sample60.csv` | The 60-model sample (`scripts/hwmcc_sample.py`) |
 | `genset.txt` | 75-model set for IC3 generalization experiments |
 | `hwmcc-unsolved61.txt` | Models no tool solved at HWMCC'24 |
@@ -15,6 +16,7 @@ models, frozen binaries and results stay local (see `.gitignore`).
 Local only (ignored):
 
 - `hwmcc24/` the extracted models (Zenodo 14775242) and `expected.json`
+- `hwmcc25/` a link to the HWMCC'25 models and `expected.json` (Zenodo 17428464, CC-BY-4.0), made by `scripts/hwmcc25_fetch.py`
 - `bin/` frozen `informal-<commit>` binaries used by long runs
 - `runs-*.jsonl` run databases, `*.log` run logs
 - `measure/` runs of `scripts/measure.py`
