@@ -259,6 +259,9 @@ gate at low priority on a busy machine. The external tools are pinned in
 `tools.lock` and checked by the gate (`scripts/tools.sh`). With
 [sccache](https://github.com/mozilla/sccache) installed, the gate shares
 one compile cache between all clones on the machine.
+Where the dvq job queue is installed (`~/.local/bin/dvq`), the gate runs as
+one job of its build class and waits for CPUs and memory; `DVQ=` runs it
+directly.
 
 `scripts/land.sh` puts a branch on main: one landing at a time on the
 machine, it rebases the branch onto main in a separate landing clone, runs

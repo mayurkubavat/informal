@@ -23,6 +23,26 @@ coverage, and engine work are all welcome.
 3. Keep commits focused, with messages that say what changed and why.
 4. Open a pull request against `main` and describe how you tested it.
 
+## Heavy jobs on the build box (job queue)
+
+On the build box, heavy work (benches and proofs, sims, the gate and other big
+builds, batch runs of the local model) goes through its one scheduler and is
+never started bare from a shell:
+
+- `dvq run <class> -- cmd` waits for a slot, streams the output and returns the
+  exit status; `dvq <class> -- cmd` only queues it (then `dvq status`). Same as
+  `rdev queue run|submit --class <class> -- cmd`.
+- Classes (`rdev queue classes`): `formal` (proofs, benches), `sim` (simulations,
+  regressions), `build` (compiles, `scripts/check.sh`), `llm` (local-model work).
+  One job per class runs at a time.
+- More than the preset: `DVQ_CPU=1200%` / `DVQ_MEM=12G` for that call. Timing
+  benches keep the CPUs their timeouts were measured with (1200%).
+- A job that calls the local model: `DVQ_LLM=1` (or `rdev queue ... --llm`).
+- The bench scripts, `scripts/check.sh`, `scripts/repin.sh` and
+  `scripts/ic3_seeds.py` queue their heavy steps already; `DVQ=` runs them
+  directly. Do not write your own `systemd-run --scope` or `nohup` launchers.
+- Light work stays direct: edits, `cargo fmt`, single tests under a minute.
+
 ## Reporting a wrong verdict or a security problem
 
 A wrong SAFE or UNSAFE verdict is the most serious kind of bug here. Open
