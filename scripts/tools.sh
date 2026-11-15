@@ -47,7 +47,7 @@ check() {
             "$commit"*) ;;
             *) echo "tools: $name is at ${have:0:9}, tools.lock pins $commit (scripts/tools.sh build $name)"; bad=1; continue ;;
         esac
-        [ -e "$dir/$artifact" ] || { echo "tools: $name is not built: no $dir/$artifact (scripts/tools.sh build $name)"; bad=1; continue; }
+        [ -n "$(built "$dir" "$artifact")" ] || { echo "tools: $name is not built: no $dir/$artifact (scripts/tools.sh build $name)"; bad=1; continue; }
         case "$name" in
             rIC3|abc)
                 local prog=ric3; [ "$name" = abc ] && prog=abc
