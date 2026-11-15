@@ -6,8 +6,11 @@
 #   scripts/check.sh                        all of it
 #   scripts/check.sh --fast                 a quick check while working: hygiene,
 #                                           fmt, clippy, the Rust tests that do
-#                                           not start the engines, and the UI
-#                                           type check (not a valid gate run)
+#                                           not start the engines in the crates
+#                                           the change touches and those that
+#                                           depend on them (scripts/affected.sh),
+#                                           and the UI type check (not a valid
+#                                           gate run)
 #   scripts/check.sh --e2e                  also the Playwright e2e and visual suites
 #   scripts/check.sh --allow-missing-tools  let tests skip when CaDiCaL, Bitwuzla
 #                                           or rIC3 is missing (not a valid gate run)
@@ -75,7 +78,7 @@ step() { current="$*"; printf '\n== %s\n' "$*"; }
 # INFORMAL_* environment.
 for v in $(compgen -e | grep '^INFORMAL_' || true); do
     case "$v" in
-        INFORMAL_TOOLS_DIR|INFORMAL_CADICAL_DIR|INFORMAL_BITWUZLA_DIR|INFORMAL_TCL_LIB|INFORMAL_TCL_LIB_DIR) ;;
+        INFORMAL_TOOLS_DIR|INFORMAL_CADICAL_DIR|INFORMAL_BITWUZLA_DIR|INFORMAL_TCL_LIB|INFORMAL_TCL_LIB_DIR|INFORMAL_NO_SCCACHE) ;;
         *) echo "check.sh: clearing $v"; unset "$v" ;;
     esac
 done
@@ -91,6 +94,33 @@ have_node=$(node --version | sed 's/^v\([0-9]*\).*/\1/')
 [ -d ui/node_modules ] || { echo "ui/node_modules is missing: run 'npm ci' in ui/"; exit 1; }
 cargo nextest --version >/dev/null 2>&1 || { echo "cargo-nextest is missing: see README (Build and test)"; exit 1; }
 echo "rustc $have_rust, node $have_node, $(cargo nextest --version | head -1)"
+if [ "$strict" = 1 ]; then
+    scripts/tools.sh check
+else
+    scripts/tools.sh check || echo "(--allow-missing-tools: going on)"
+fi
+
+# A compile cache shared by every clone on the machine, when sccache is
+# installed: a fresh clone, or the landing clone after a dependency change,
+# gets the dependencies from the cache instead of compiling them again.
+# Cache keys hold absolute paths, so every InFormal clone's root is listed
+# in SCCACHE_BASEDIRS and stripped from them. The sccache server reads that
+# list when it starts (it stops after 10 idle minutes): a clone made while
+# it runs only misses until then. A cache hit is only ever the same input,
+# so the cache can make a build faster, never different.
+# INFORMAL_NO_SCCACHE=1 turns it off.
+if [ -z "${INFORMAL_NO_SCCACHE:-}" ] && [ -z "${RUSTC_WRAPPER:-}" ] && command -v sccache >/dev/null; then
+    roots="${SCCACHE_BASEDIRS:+$SCCACHE_BASEDIRS:}$PWD"
+    for d in "$HOME"/Silicon/DV/git/*/ "${INFORMAL_LAND_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/informal/land}/"; do
+        d=${d%/}
+        [ -f "$d/scripts/check.sh" ] && [ -d "$d/crates/informal-fpv" ] && [ "$d" != "$PWD" ] && roots="$roots:$d"
+    done
+    export RUSTC_WRAPPER=sccache
+    export SCCACHE_DIR="${SCCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/sccache}"
+    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-30G}"
+    export SCCACHE_BASEDIRS="$roots"
+    echo "compile cache: sccache in $SCCACHE_DIR"
+fi
 
 step "hygiene (no assistant state, keys or attribution)"
 scripts/hygiene.sh
@@ -104,8 +134,17 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 (cd ui/src-tauri && cargo clippy --locked --all-targets -- -D warnings)
 
 if [ "$fast" = 1 ]; then
-    step "rust tests without the engine tests (nextest, profile fast)"
-    cargo nextest run --locked --workspace --profile fast
+    # Only the crates the change touches and the crates that depend on them
+    # (scripts/affected.sh); the full gate runs everything.
+    affected=$(scripts/affected.sh)
+    step "rust tests of the changed crates, without the engine tests (nextest, profile fast)"
+    case "$affected" in
+        none) echo "no change reaches a Rust test" ;;
+        all) echo "the change can reach every crate: all of them"
+             cargo nextest run --locked --workspace --profile fast ;;
+        *) echo "selected: $affected"
+           cargo nextest run --locked --workspace --profile fast -E "$affected" ;;
+    esac
     step "ui: tsc"
     (cd ui && npx --no-install tsc --noEmit)
     exit 0

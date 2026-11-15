@@ -230,8 +230,12 @@ with `--locked`. The UI steps need `npm ci` in `ui/` first, and the Rust
 tests run under [cargo-nextest](https://nexte.st) (one process per test;
 install the prebuilt binary with
 `curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin`).
-`scripts/check.sh --fast` is a quick check while working, and `--quiet`
-runs the gate at low priority on a busy machine.
+`scripts/check.sh --fast` is a quick check while working (only the tests of
+the crates a change touches, `scripts/affected.sh`), and `--quiet` runs the
+gate at low priority on a busy machine. The external tools are pinned in
+`tools.lock` and checked by the gate (`scripts/tools.sh`). With
+[sccache](https://github.com/mozilla/sccache) installed, the gate shares
+one compile cache between all clones on the machine.
 
 `scripts/land.sh` puts a branch on main: one landing at a time on the
 machine, it rebases the branch onto main in a separate landing clone, runs

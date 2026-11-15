@@ -1,0 +1,13 @@
+# The external tools InFormal is built and tested with, one per line:
+#   name  commit  upstream  artifact (relative to the tool's directory)
+# Each tool is a git checkout in $INFORMAL_TOOLS_DIR/<name> (default
+# ~/Silicon/DV/tools). scripts/tools.sh checks that every checkout is at its
+# commit and built, and builds one that is missing or behind; scripts/check.sh
+# runs the check, so a tool at another version fails the gate.
+# Policy (docs/third-party.md): upstream as it is, no patches; a pin moves
+# only with the checks listed there. Licenses and roles: docs/third-party.md.
+bitwuzla    9d391d18  https://github.com/bitwuzla/bitwuzla       install/lib/x86_64-linux-gnu/libbitwuzla.a
+cadical     c607304   https://github.com/arminbiere/cadical      build/libcadical.a
+rIC3        4d63899   https://github.com/gipsyh/rIC3             target/release/ric3
+abc         77875a3b6 https://github.com/berkeley-abc/abc        abc
+btor2tools  e6941e3   https://github.com/Boolector/btor2tools    build/bin/btorsim

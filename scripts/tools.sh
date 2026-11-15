@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# The external tools of tools.lock: check them, or build one.
+#
+#   scripts/tools.sh check          every tool at its commit and built (the
+#                                   gate runs this); also that `ric3` and
+#                                   `abc` on PATH are these builds
+#   scripts/tools.sh build <name>   check out the pinned commit in
+#                                   $INFORMAL_TOOLS_DIR/<name> (cloning it
+#                                   first if needed) and build it
+#   scripts/tools.sh list           the manifest, with what is installed
+#
+# Builds use the steps in docs/third-party.md; rebuild informal afterwards
+# (`cargo build`), since its build scripts link whatever they find.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+tools=${INFORMAL_TOOLS_DIR:-$HOME/Silicon/DV/tools}
+jobs=${CARGO_BUILD_JOBS:-$(nproc)}
+
+manifest() { grep -v '^\s*\(#\|$\)' tools.lock; }
+
+# The commit the checkout is at, or a word saying why there is none.
+at() {
+    if [ ! -d "$tools/$1/.git" ]; then echo "missing"; return; fi
+    git -C "$tools/$1" rev-parse --short=12 HEAD
+}
+
+check() {
+    local bad=0
+    while read -r name commit _ artifact; do
+        local dir=$tools/$name have
+        have=$(at "$name")
+        if [ "$have" = missing ]; then
+            echo "tools: $name is not in $tools (scripts/tools.sh build $name)"; bad=1; continue
+        fi
+        case "$have" in
+            "$commit"*) ;;
+            *) echo "tools: $name is at ${have:0:9}, tools.lock pins $commit (scripts/tools.sh build $name)"; bad=1; continue ;;
+        esac
+        [ -e "$dir/$artifact" ] || { echo "tools: $name is not built: no $dir/$artifact (scripts/tools.sh build $name)"; bad=1; continue; }
+        case "$name" in
+            rIC3|abc)
+                local prog=ric3; [ "$name" = abc ] && prog=abc
+                local found; found=$(command -v "$prog" || true)
+                if [ -z "$found" ] || [ "$(readlink -f "$found")" != "$(readlink -f "$dir/$artifact")" ]; then
+                    echo "tools: '$prog' on PATH is ${found:-missing}, not $dir/$artifact (ln -sf $dir/$artifact ~/.local/bin/$prog)"; bad=1
+                fi ;;
+        esac
+    done < <(manifest)
+    [ "$bad" = 0 ] && echo "tools: all $(manifest | wc -l) at their tools.lock commits"
+    return "$bad"
+}
+
+build() {
+    local want=$1 line
+    line=$(manifest | awk -v n="$want" '$1 == n') || true
+    [ -n "$line" ] || { echo "tools: no $want in tools.lock" >&2; exit 2; }
+    read -r name commit url artifact <<<"$line"
+    local dir=$tools/$name
+    mkdir -p "$tools"
+    [ -d "$dir/.git" ] || git clone -q "$url" "$dir"
+    git -C "$dir" fetch -q origin
+    git -C "$dir" -c advice.detachedHead=false checkout -q "$commit"
+    echo "tools: building $name at $commit in $dir"
+    case "$name" in
+        bitwuzla) (cd "$dir" && ./configure.py --static --prefix "$dir/install" && cd build && meson compile -j "$jobs" && meson install) ;;
+        cadical) (cd "$dir" && ./configure -fPIC && make -j "$jobs") ;;
+        rIC3) (cd "$dir" && cargo build --release -j "$jobs") && ln -sf "$dir/$artifact" "$HOME/.local/bin/ric3" ;;
+        abc) make -C "$dir" -j "$jobs" ABC_USE_NO_READLINE=1 abc && ln -sf "$dir/$artifact" "$HOME/.local/bin/abc" ;;
+        btor2tools) (cd "$dir" && ./configure.sh && cd build && make -j "$jobs") ;;
+        *) echo "tools: no build steps for $name" >&2; exit 2 ;;
+    esac
+    [ -e "$dir/$artifact" ] || { echo "tools: built $name but $dir/$artifact is missing" >&2; exit 1; }
+    echo "tools: $name built; rebuild informal (cargo build) if it links it"
+}
+
+case "${1:-}" in
+    check) check ;;
+    build) [ -n "${2:-}" ] || { echo "usage: scripts/tools.sh build <name>" >&2; exit 2; }; build "$2" ;;
+    list) while read -r name commit url artifact; do printf '%-11s %-10s %-10s %s\n' "$name" "$commit" "$(at "$name" | cut -c1-9)" "$url"; done < <(manifest) ;;
+    *) echo "usage: scripts/tools.sh check | build <name> | list" >&2; exit 2 ;;
+esac

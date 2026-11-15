@@ -13,6 +13,13 @@ branch named `informal` in that checkout and list it in the table at the end.
 
 ## Pinned versions
 
+The commits of the external tools are in `tools.lock` at the top of the
+repository, which `scripts/check.sh` checks (`scripts/tools.sh check`): a
+tool at another commit, not built, or not the `ric3` / `abc` on `PATH`
+fails the gate. `scripts/tools.sh build <name>` checks out the pinned commit
+and builds it with the steps below. The table repeats the commits for
+reading; when a pin moves, change both.
+
 | Tool | License | Commit | Upstream | Used for | Found through |
 | --- | --- | --- | --- | --- | --- |
 | svlang | Apache-2.0 | pinned in the root `Cargo.toml` (`rev`) | github.com/mayurkubavat/svlang | SystemVerilog front end (crate `informal-svlang`, D14) | Cargo git dependency |
@@ -67,8 +74,8 @@ ln -sf "$PWD/abc/abc" ~/.local/bin/abc
 
 ## Updating a pin
 
-1. `git -C <tool> fetch && git -C <tool> checkout <new commit>`, rebuild
-   it with the steps above, then rebuild informal.
+1. Put the new commit in `tools.lock`, run `scripts/tools.sh build <name>`,
+   then rebuild informal.
 2. Run `scripts/check.sh`, then the HWMCC'24 sample
    (`scripts/inhouse_sample.sh`) and `scripts/hwmcc_check.py`: an engine
    or SAT update must show 0 disagreements before it is kept.
