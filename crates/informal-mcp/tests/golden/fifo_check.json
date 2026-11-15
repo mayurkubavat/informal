@@ -1,0 +1,44 @@
+{
+  "clean": true,
+  "commands": {
+    "analyze": {
+      "honoured": 1,
+      "rejected": 0
+    },
+    "assert": {
+      "honoured": 8,
+      "rejected": 0
+    },
+    "clear": {
+      "honoured": 1,
+      "rejected": 0
+    },
+    "clock_cmd": {
+      "honoured": 1,
+      "rejected": 0
+    },
+    "cover": {
+      "honoured": 3,
+      "rejected": 0
+    },
+    "elaborate": {
+      "honoured": 1,
+      "rejected": 0
+    },
+    "prove": {
+      "honoured": 1,
+      "rejected": 0
+    },
+    "reset": {
+      "honoured": 1,
+      "rejected": 0
+    },
+    "set_prove_time_limit": {
+      "honoured": 1,
+      "rejected": 0
+    }
+  },
+  "findings": [],
+  "schema": "informal.check/1",
+  "script": "<root>/tests/fpv/fifo/fifo.jg.tcl"
+}

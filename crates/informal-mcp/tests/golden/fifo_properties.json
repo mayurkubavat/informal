@@ -1,0 +1,174 @@
+{
+  "properties": [
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "count <= 3'd4",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_count_max",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 9
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "!(full && empty)",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_full_empty",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 10
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "(wp - rp) == count[1:0]",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_ptr_diff",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 11
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "full && push && !pop |=> full",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_no_overflow",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 12
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "status == 2'd2 |-> full",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_status",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 13
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "push && empty && !pop ##1 !pop |-> dout == $past(din)",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_data",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 14
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "depth": 0,
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "count != 3'd3",
+      "has_trace": true,
+      "kind": "assert",
+      "name": "a_wrong",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 15
+      },
+      "status": "cex",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "u_wp.p == wp",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_sub_ptr",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 17
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "depth": 0,
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "full",
+      "has_trace": true,
+      "kind": "cover",
+      "name": "c_full",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 18
+      },
+      "status": "covered",
+      "time_ms": 0
+    },
+    {
+      "depth": 0,
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "status == 2'd3",
+      "has_trace": true,
+      "kind": "cover",
+      "name": "c_status3",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 19
+      },
+      "status": "covered",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "count == 3'd5",
+      "has_trace": false,
+      "kind": "cover",
+      "name": "c_count5",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+        "line": 20
+      },
+      "status": "unreachable",
+      "time_ms": 0
+    }
+  ],
+  "schema": "informal.properties/1",
+  "total": 11
+}

@@ -8,6 +8,7 @@
 //!   informal lower <files.sv> [--top T] [-D X]     SystemVerilog to Btor2 (svlang)
 //!   informal shell [script.tcl] [--flavor jg|vcf]     JasperGold / VC Formal style Tcl
 //!                  [--certificate DIR]                   and a certificate per property
+//!   informal mcp [--mode M] [--root DIR]              serve one FPV session to an AI model
 //!   informal reduce <model.aig> (--disagree A,B | --test CMD) [-o small.aag]
 //!   informal split <model.aig> [--timeout S] [--jobs N]   prove a wide property term by term
 //!   informal bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
@@ -131,6 +132,27 @@ enum Cmd {
         #[arg(long, value_name = "DIR", conflicts_with = "check")]
         certificate: Option<PathBuf>,
     },
+    /// Serve one FPV session to an AI model as Model Context Protocol
+    /// tools on standard input and output (docs/ai-interface.md). Replies
+    /// are JSON; what the session prints goes to standard error.
+    Mcp {
+        /// What the model may do: read-only (read and prove), propose
+        /// (changes wait for a person) or auto (changes apply at once,
+        /// tagged AI-added; for an evaluation sandbox).
+        #[arg(long, default_value = "propose")]
+        mode: String,
+        /// Scripts and design files are only opened below this directory.
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long, default_value = "config/engines.toml")]
+        engines: PathBuf,
+        /// Scratch directory for generated models and traces.
+        #[arg(long, default_value = "informal_work")]
+        workdir: PathBuf,
+        /// The longest time limit, in seconds, a prove call may ask for.
+        #[arg(long, default_value_t = 300)]
+        max_time: u64,
+    },
     /// Shrink an AIGER model while two engines keep disagreeing on it, or
     /// while a test command keeps exiting 0 (delta debugging).
     Reduce {
@@ -227,6 +249,29 @@ fn load_engines(
         }
     }
     Ok(engines)
+}
+
+/// Where the protocol's messages go: the process's standard output, which
+/// from here on is no longer file descriptor 1. Tcl's `puts`, the report
+/// tables and anything an engine prints write there, and would corrupt the
+/// message stream, so descriptor 1 now leads to standard error.
+#[cfg(unix)]
+fn protocol_output() -> anyhow::Result<std::fs::File> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: plain descriptor calls; `saved` is a fresh descriptor that
+    // nothing else owns, so the File may own it.
+    unsafe {
+        let saved = libc::dup(1);
+        if saved < 0 || libc::dup2(2, 1) < 0 {
+            bail!("cannot redirect standard output");
+        }
+        Ok(std::fs::File::from_raw_fd(saved))
+    }
+}
+
+#[cfg(not(unix))]
+fn protocol_output() -> anyhow::Result<std::io::Stdout> {
+    Ok(std::io::stdout())
 }
 
 fn read_btor2(path: &Path) -> anyhow::Result<informal_ir::Model> {
@@ -515,6 +560,41 @@ fn main() -> anyhow::Result<()> {
                 None if commands.is_empty() => repl(&shell)?,
                 None => {}
             }
+        }
+        Cmd::Mcp {
+            mode,
+            root,
+            engines,
+            workdir,
+            max_time,
+        } => {
+            let mode = informal_mcp::Mode::parse(&mode)
+                .with_context(|| format!("unknown mode {mode} (read-only, propose or auto)"))?;
+            // The external engines are optional here: without their
+            // configuration the in-house ones serve.
+            let mut all = match engines.is_file() {
+                true => informal_engines_ext::load(&engines)?,
+                false => {
+                    eprintln!(
+                        "informal: no {}: using the in-house engines only",
+                        engines.display()
+                    );
+                    Vec::new()
+                }
+            };
+            all.extend(in_house(isolate)?);
+            let out = protocol_output()?;
+            let api = informal_mcp::Api::spawn(
+                all,
+                workdir.clone(),
+                informal_mcp::Options {
+                    mode,
+                    root,
+                    workdir,
+                    max_time: Duration::from_secs(max_time.max(1)),
+                },
+            );
+            informal_mcp::serve(std::sync::Arc::new(api), std::io::stdin().lock(), out)?;
         }
         Cmd::Bench {
             dir,

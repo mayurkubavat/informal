@@ -24,6 +24,10 @@ informal-bmc.workspace = true
 informal-svlang.workspace = true
 informal-aig.workspace = true
 informal-bitwuzla.workspace = true
+informal-mcp.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 informal-sat.workspace = true

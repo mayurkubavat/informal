@@ -38,7 +38,11 @@ pub struct Reply {
     pub session: serde_json::Value,
 }
 
-type Job = (Request, mpsc::Sender<Reply>);
+enum Job {
+    Call(Request, mpsc::Sender<Reply>),
+    /// A closure to run on the shell thread ([`Worker::with`]).
+    Run(Box<dyn FnOnce(&Shell) + Send>),
+}
 
 /// Handle to the shell thread. Cheap to clone; `Send + Sync`.
 #[derive(Clone)]
@@ -60,7 +64,14 @@ impl Worker {
                 let mut session = make();
                 session.stop = shared;
                 let shell = Shell::new(session, flavor);
-                for (req, back) in rx {
+                for job in rx {
+                    let (req, back) = match job {
+                        Job::Call(req, back) => (req, back),
+                        Job::Run(f) => {
+                            f(&shell);
+                            continue;
+                        }
+                    };
                     // A Stop pressed while nothing ran must not cancel this
                     // command; one pressed from here on (during elaboration
                     // too) stops its prove.
@@ -100,10 +111,27 @@ impl Worker {
     /// Send a request and wait for its reply.
     pub fn call(&self, req: Request) -> Reply {
         let (tx, rx) = mpsc::channel();
-        if self.tx.send((req, tx)).is_err() {
+        if self.tx.send(Job::Call(req, tx)).is_err() {
             return dead();
         }
         rx.recv().unwrap_or_else(|_| dead())
+    }
+
+    /// Run `f` on the shell thread, with the shell, and wait for what it
+    /// returns: for front ends that need more of the session than a Tcl
+    /// result (the AI interface). `None` when the shell thread has
+    /// stopped. Like every request it waits behind a running prove. The
+    /// stop flag is left as it is: a closure that proves clears it first.
+    pub fn with<R: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Shell) -> R + Send + 'static,
+    ) -> Option<R> {
+        let (tx, rx) = mpsc::channel();
+        let job = Job::Run(Box::new(move |shell| {
+            let _ = tx.send(f(shell));
+        }));
+        self.tx.send(job).ok()?;
+        rx.recv().ok()
     }
 }
 
@@ -146,5 +174,11 @@ mod tests {
         // Stop while idle is a no-op for later requests.
         w.stop();
         assert!(w.call(Request::Snapshot).ok);
+        // A closure sees the same session.
+        let names = w.with(|sh| {
+            let s = sh.session.borrow();
+            s.props.iter().map(|p| p.name.clone()).collect::<Vec<_>>()
+        });
+        assert_eq!(names, Some(vec!["a".to_string(), "c".to_string()]));
     }
 }

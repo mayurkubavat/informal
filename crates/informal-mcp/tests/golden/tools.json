@@ -1,0 +1,1628 @@
+[
+  {
+    "changes": false,
+    "description": "Start the session over from a JasperGold or VC Formal Tcl script (`script`), or from SystemVerilog files with a top module, clock and reset (`files`). A script runs as written, including any prove in it. Returns the session summary; a script that stops with an error gives ok=false and the error, with the session as far as it got.",
+    "input": {
+      "properties": {
+        "clock": {
+          "description": "Clock signal (with files)",
+          "type": "string"
+        },
+        "files": {
+          "description": "SystemVerilog files, instead of a script",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "flavor": {
+          "description": "Command set of the script; detected when left out",
+          "enum": [
+            "jg",
+            "vcf"
+          ],
+          "type": "string"
+        },
+        "reset": {
+          "description": "Condition that holds during reset, e.g. !rst_n (with files)",
+          "type": "string"
+        },
+        "script": {
+          "description": "Tcl script path",
+          "type": "string"
+        },
+        "top": {
+          "description": "Top module (with files)",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "session_open",
+    "output": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "schema": {
+          "const": "informal.open/1",
+          "type": "string"
+        },
+        "summary": {
+          "properties": {
+            "ai": {
+              "properties": {
+                "cut_points": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pending_proposals": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "properties": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "properties",
+                "cut_points",
+                "pending_proposals"
+              ],
+              "type": "object"
+            },
+            "black_boxes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "clocks": {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "cut_points": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "elaborated": {
+              "type": "boolean"
+            },
+            "engines": "<engines>",
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "enum": [
+                "read-only",
+                "propose",
+                "auto"
+              ],
+              "type": "string"
+            },
+            "properties": {
+              "properties": {
+                "assert": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "assume": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "by_status": {
+                  "type": "object"
+                },
+                "cover": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "assert",
+                "assume",
+                "cover",
+                "by_status"
+              ],
+              "type": "object"
+            },
+            "reset": {
+              "description": "The condition that holds during reset",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schema": {
+              "const": "informal.summary/1",
+              "type": "string"
+            },
+            "time_limit_s": {
+              "type": "number"
+            },
+            "top": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "mode",
+            "elaborated",
+            "properties",
+            "ai"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "ok",
+        "summary"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Report, per line, every command or option of a Tcl script that the tool would reject, ignore or does not know. Nothing is elaborated or proved and the open session is not touched.",
+    "input": {
+      "properties": {
+        "flavor": {
+          "enum": [
+            "jg",
+            "vcf"
+          ],
+          "type": "string"
+        },
+        "script": {
+          "description": "Tcl script path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "script"
+      ],
+      "type": "object"
+    },
+    "name": "script_check",
+    "output": {
+      "properties": {
+        "clean": {
+          "description": "True when the script would run to its end",
+          "type": "boolean"
+        },
+        "commands": {
+          "type": "object"
+        },
+        "findings": {
+          "items": {
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "error, unknown, ignored or tcl",
+                "type": "string"
+              },
+              "line": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "file",
+              "line",
+              "command",
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.check/1",
+          "type": "string"
+        },
+        "script": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "clean",
+        "findings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "The design setup (top, files, clocks, reset, cut points), the engines, property counts by kind and status, and what an AI has added or proposed.",
+    "input": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "session_summary",
+    "output": {
+      "properties": {
+        "ai": {
+          "properties": {
+            "cut_points": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pending_proposals": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "properties": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "properties",
+            "cut_points",
+            "pending_proposals"
+          ],
+          "type": "object"
+        },
+        "black_boxes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "clocks": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "cut_points": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "elaborated": {
+          "type": "boolean"
+        },
+        "engines": "<engines>",
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "read-only",
+            "propose",
+            "auto"
+          ],
+          "type": "string"
+        },
+        "properties": {
+          "properties": {
+            "assert": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "assume": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "by_status": {
+              "type": "object"
+            },
+            "cover": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "assert",
+            "assume",
+            "cover",
+            "by_status"
+          ],
+          "type": "object"
+        },
+        "reset": {
+          "description": "The condition that holds during reset",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "const": "informal.summary/1",
+          "type": "string"
+        },
+        "time_limit_s": {
+          "type": "number"
+        },
+        "top": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "mode",
+        "elaborated",
+        "properties",
+        "ai"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "The session's last console lines: notes and warnings from elaboration and proving, and every AI-added change.",
+    "input": {
+      "properties": {
+        "last": {
+          "description": "How many lines (default 50)",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "session_log",
+    "output": {
+      "properties": {
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.log/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "lines"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "The assertions, assumptions and covers of the session with their status, optionally filtered.",
+    "input": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "assert",
+            "assume",
+            "cover"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Glob on the name (* and ?)",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "user",
+            "rtl",
+            "ai"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "unprocessed",
+            "proven",
+            "cex",
+            "covered",
+            "unreachable",
+            "undetermined",
+            "error"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "property_list",
+    "output": {
+      "properties": {
+        "properties": {
+          "items": {
+            "properties": {
+              "depth": 0,
+              "detail": {
+                "description": "Why it is undetermined or in error",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "engine": "<engine>",
+              "engines": "<engines>",
+              "expr": {
+                "description": "The property as written (SystemVerilog)",
+                "type": "string"
+              },
+              "has_trace": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "assert",
+                  "assume",
+                  "cover"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "origin": {
+                "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+                "enum": [
+                  "user",
+                  "rtl",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "file",
+                  "line"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "description": "proven and unreachable are proofs; cex and covered come with a trace",
+                "enum": [
+                  "unprocessed",
+                  "proven",
+                  "cex",
+                  "covered",
+                  "unreachable",
+                  "undetermined",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "time_ms": 0,
+              "under_ai": {
+                "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "status",
+              "origin",
+              "has_trace"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.properties/1",
+          "type": "string"
+        },
+        "total": {
+          "description": "Properties in the session, before filtering",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "total",
+        "properties"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "One property with its status, the engine and time that settled it, its source location and every engine's run.",
+    "input": {
+      "properties": {
+        "name": {
+          "description": "Property name, exactly as property_list gives it",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "property_get",
+    "output": {
+      "properties": {
+        "property": {
+          "properties": {
+            "depth": 0,
+            "detail": {
+              "description": "Why it is undetermined or in error",
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "engine": "<engine>",
+            "engines": "<engines>",
+            "expr": {
+              "description": "The property as written (SystemVerilog)",
+              "type": "string"
+            },
+            "has_trace": {
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "assert",
+                "assume",
+                "cover"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+              "enum": [
+                "user",
+                "rtl",
+                "ai"
+              ],
+              "type": "string"
+            },
+            "source": {
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file",
+                "line"
+              ],
+              "type": "object"
+            },
+            "status": {
+              "description": "proven and unreachable are proofs; cex and covered come with a trace",
+              "enum": [
+                "unprocessed",
+                "proven",
+                "cex",
+                "covered",
+                "unreachable",
+                "undetermined",
+                "error"
+              ],
+              "type": "string"
+            },
+            "time_ms": 0,
+            "under_ai": {
+              "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "status",
+            "origin",
+            "has_trace"
+          ],
+          "type": "object"
+        },
+        "schema": {
+          "const": "informal.property/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "property"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "The inputs and registers in a property's cone of influence, nearest first: distance is the number of register stages between the signal and the property.",
+    "input": {
+      "properties": {
+        "helpers": {
+          "description": "Also list state the tool added to check the property",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Property name, exactly as property_list gives it",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "property_cone",
+    "output": {
+      "properties": {
+        "property": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.cone/1",
+          "type": "string"
+        },
+        "signals": {
+          "items": {
+            "properties": {
+              "distance": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "helper": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "input",
+                  "register",
+                  "memory"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "width": {
+                "description": "Bits; 0 for a memory",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "width",
+              "kind",
+              "distance",
+              "helper"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "property",
+        "signals"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "The instance tree of the elaborated design: each scope's module, ports and signals with widths.",
+    "input": {
+      "properties": {
+        "depth": 0,
+        "scope": {
+          "description": "Start at this instance path (default: the top)",
+          "type": "string"
+        },
+        "signals": {
+          "description": "Include each scope's signals (default true)",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "design_hierarchy",
+    "output": {
+      "properties": {
+        "schema": {
+          "const": "informal.hierarchy/1",
+          "type": "string"
+        },
+        "scopes": {
+          "description": "Each: path, instance, module, signals (name, width, kind, dir), children",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "top": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "scopes"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Lines of a design file or script, by line range (at most 400 lines a call).",
+    "input": {
+      "properties": {
+        "file": {
+          "description": "Path, as a property's source or the summary's files give it",
+          "type": "string"
+        },
+        "first_line": {
+          "description": "From 1 (default 1)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_line": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    },
+    "name": "design_source",
+    "output": {
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "first_line": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_line": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.source/1",
+          "type": "string"
+        },
+        "total_lines": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "file",
+        "first_line",
+        "last_line",
+        "total_lines",
+        "lines"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "The trace of a property whose status is cex or covered: one value per signal and frame (a frame is a clock cycle; frame 0 is the reset cycle). Words are in hex, single bits 0 or 1. hit_at lists the frames in which the assertion fails or the cover is hit. Without `signals`, the signals the property names come first, then the rest of its cone.",
+    "input": {
+      "properties": {
+        "first": {
+          "description": "First frame (default 0)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "helpers": {
+          "description": "Also give state the tool added to check the property",
+          "type": "boolean"
+        },
+        "last": {
+          "description": "Last frame (default: the last of the trace)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Property name, exactly as property_list gives it",
+          "type": "string"
+        },
+        "signals": {
+          "description": "Globs on signal names (full path, path below the top, or last part)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "trace_get",
+    "output": {
+      "properties": {
+        "first": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frames": {
+          "description": "Frames in the whole trace",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hit_at": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "last": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "property": {
+          "properties": {
+            "depth": 0,
+            "detail": {
+              "description": "Why it is undetermined or in error",
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "engine": "<engine>",
+            "engines": "<engines>",
+            "expr": {
+              "description": "The property as written (SystemVerilog)",
+              "type": "string"
+            },
+            "has_trace": {
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "assert",
+                "assume",
+                "cover"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+              "enum": [
+                "user",
+                "rtl",
+                "ai"
+              ],
+              "type": "string"
+            },
+            "source": {
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file",
+                "line"
+              ],
+              "type": "object"
+            },
+            "status": {
+              "description": "proven and unreachable are proofs; cex and covered come with a trace",
+              "enum": [
+                "unprocessed",
+                "proven",
+                "cex",
+                "covered",
+                "unreachable",
+                "undetermined",
+                "error"
+              ],
+              "type": "string"
+            },
+            "time_ms": 0,
+            "under_ai": {
+              "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "status",
+            "origin",
+            "has_trace"
+          ],
+          "type": "object"
+        },
+        "schema": {
+          "const": "informal.trace/1",
+          "type": "string"
+        },
+        "signals": {
+          "items": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "values": {
+                "description": "One per frame from first to last",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "width": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "width",
+              "values"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "signals_omitted": {
+          "description": "Matching signals left out of this reply (64 at most are given)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unit": {
+          "description": "What a frame is; model_step is half a period of the fastest clock",
+          "enum": [
+            "cycle",
+            "model_step"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "property",
+        "unit",
+        "frames",
+        "first",
+        "last",
+        "hit_at",
+        "signals",
+        "signals_omitted"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Run the engines on the named assertions and covers (all enabled ones when none is named) and return each one's result. Only this gives a verdict. With wait=false it returns at once: follow with prove_status, end with prove_stop.",
+    "input": {
+      "properties": {
+        "properties": {
+          "description": "Names or globs",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "time_limit_s": {
+          "description": "Per property; the session's limit when left out, and never above the server's",
+          "type": "number"
+        },
+        "wait": {
+          "description": "Default true",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "prove",
+    "output": {
+      "properties": {
+        "counts": {
+          "description": "Number of results per status",
+          "type": "object"
+        },
+        "results": {
+          "items": {
+            "properties": {
+              "depth": 0,
+              "detail": {
+                "description": "Why it is undetermined or in error",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "engine": "<engine>",
+              "engines": "<engines>",
+              "expr": {
+                "description": "The property as written (SystemVerilog)",
+                "type": "string"
+              },
+              "has_trace": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "assert",
+                  "assume",
+                  "cover"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "origin": {
+                "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+                "enum": [
+                  "user",
+                  "rtl",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "file",
+                  "line"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "description": "proven and unreachable are proofs; cex and covered come with a trace",
+                "enum": [
+                  "unprocessed",
+                  "proven",
+                  "cex",
+                  "covered",
+                  "unreachable",
+                  "undetermined",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "time_ms": 0,
+              "under_ai": {
+                "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "status",
+              "origin",
+              "has_trace"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.prove/1",
+          "type": "string"
+        },
+        "started": {
+          "description": "With wait=false",
+          "type": "boolean"
+        },
+        "stopped": {
+          "type": "boolean"
+        },
+        "time_limit_s": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Whether a prove is running, each property's state so far, and the result of the last prove started with wait=false once it has ended.",
+    "input": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "prove_status",
+    "output": {
+      "properties": {
+        "done": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "elapsed_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "type": "object"
+        },
+        "properties": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "result": {
+          "type": "object"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "schema": {
+          "const": "informal.progress/1",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "running"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Ask a running prove to stop. Properties not settled yet become undetermined (stopped).",
+    "input": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "prove_stop",
+    "output": {
+      "properties": {
+        "requested": {
+          "type": "boolean"
+        },
+        "schema": {
+          "const": "informal.stop/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "requested"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Propose an assumption, a helper assertion, a cover (`expr`, SystemVerilog in the top module's scope) or a cut point (`signal`). In propose mode it waits for a person (state pending); in automatic mode it is applied at once, tagged AI-added. A proposal is not a result: prove afterwards, and note that a proof under an AI-added assumption stands on that assumption.",
+    "input": {
+      "properties": {
+        "expr": {
+          "description": "Property expression, e.g. req |=> gnt",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "assume",
+            "assert",
+            "cover",
+            "cut_point"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Name for the new property",
+          "type": "string"
+        },
+        "rationale": {
+          "description": "Why: shown to the person who decides",
+          "type": "string"
+        },
+        "signal": {
+          "description": "Signal to cut from its drivers (cut_point)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "rationale"
+      ],
+      "type": "object"
+    },
+    "name": "proposal_add",
+    "output": {
+      "properties": {
+        "proposal": {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "id": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "assume",
+                "assert",
+                "cover",
+                "cut_point",
+                "command"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "state": {
+              "description": "pending waits for a person; applied is in the session, tagged AI-added",
+              "enum": [
+                "pending",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "undone",
+                "failed",
+                "gone"
+              ],
+              "type": "string"
+            },
+            "text": {
+              "description": "The expression, the signal, or the Tcl command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "text",
+            "rationale",
+            "state"
+          ],
+          "type": "object"
+        },
+        "schema": {
+          "const": "informal.proposal/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "proposal"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Every change proposed through this interface since the design was opened, with its state.",
+    "input": {
+      "properties": {
+        "state": {
+          "description": "Only proposals in this state",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "proposal_list",
+    "output": {
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "proposals": {
+          "items": {
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "id": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "assume",
+                  "assert",
+                  "cover",
+                  "cut_point",
+                  "command"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "state": {
+                "description": "pending waits for a person; applied is in the session, tagged AI-added",
+                "enum": [
+                  "pending",
+                  "applied",
+                  "rejected",
+                  "withdrawn",
+                  "undone",
+                  "failed",
+                  "gone"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "description": "The expression, the signal, or the Tcl command",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "text",
+              "rationale",
+              "state"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.proposals/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "proposals"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Take back one proposal (`id`) or all of them: a pending one is withdrawn, an applied one is removed from the session, and every result that was found with it in the model goes back to unprocessed (`reset`).",
+    "input": {
+      "properties": {
+        "id": {
+          "description": "Left out: every pending and applied proposal",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "proposal_undo",
+    "output": {
+      "properties": {
+        "reset": {
+          "description": "Properties to prove again",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.undo/1",
+          "type": "string"
+        },
+        "undone": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "undone",
+        "reset"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
+    "input": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "rationale": {
+          "description": "Why (required in propose mode)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "tcl_eval",
+    "output": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "proposal": {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "id": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "assume",
+                "assert",
+                "cover",
+                "cut_point",
+                "command"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "state": {
+              "description": "pending waits for a person; applied is in the session, tagged AI-added",
+              "enum": [
+                "pending",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "undone",
+                "failed",
+                "gone"
+              ],
+              "type": "string"
+            },
+            "text": {
+              "description": "The expression, the signal, or the Tcl command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "text",
+            "rationale",
+            "state"
+          ],
+          "type": "object"
+        },
+        "result": {
+          "type": "string"
+        },
+        "schema": {
+          "description": "informal.tcl/1, or informal.proposal/1 in propose mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "type": "object"
+    }
+  }
+]

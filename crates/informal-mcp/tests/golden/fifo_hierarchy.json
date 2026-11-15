@@ -1,0 +1,188 @@
+{
+  "schema": "informal.hierarchy/1",
+  "scopes": [
+    {
+      "children": [
+        {
+          "children": [],
+          "instance": "u_wp",
+          "module": "ptr",
+          "path": "fifo.u_wp",
+          "signals": [
+            {
+              "dir": "input",
+              "kind": "port",
+              "name": "clk",
+              "width": 1
+            },
+            {
+              "dir": "input",
+              "kind": "port",
+              "name": "rst_n",
+              "width": 1
+            },
+            {
+              "dir": "input",
+              "kind": "port",
+              "name": "inc",
+              "width": 1
+            },
+            {
+              "dir": "output",
+              "kind": "port",
+              "name": "p",
+              "width": 2
+            },
+            {
+              "kind": "parameter",
+              "name": "W",
+              "width": 32
+            }
+          ]
+        },
+        {
+          "children": [],
+          "instance": "u_rp",
+          "module": "ptr",
+          "path": "fifo.u_rp",
+          "signals": [
+            {
+              "dir": "input",
+              "kind": "port",
+              "name": "clk",
+              "width": 1
+            },
+            {
+              "dir": "input",
+              "kind": "port",
+              "name": "rst_n",
+              "width": 1
+            },
+            {
+              "dir": "input",
+              "kind": "port",
+              "name": "inc",
+              "width": 1
+            },
+            {
+              "dir": "output",
+              "kind": "port",
+              "name": "p",
+              "width": 2
+            },
+            {
+              "kind": "parameter",
+              "name": "W",
+              "width": 32
+            }
+          ]
+        }
+      ],
+      "instance": "fifo",
+      "module": "fifo",
+      "path": "fifo",
+      "signals": [
+        {
+          "dir": "input",
+          "kind": "port",
+          "name": "clk",
+          "width": 1
+        },
+        {
+          "dir": "input",
+          "kind": "port",
+          "name": "rst_n",
+          "width": 1
+        },
+        {
+          "dir": "input",
+          "kind": "port",
+          "name": "push",
+          "width": 1
+        },
+        {
+          "dir": "input",
+          "kind": "port",
+          "name": "pop",
+          "width": 1
+        },
+        {
+          "dir": "input",
+          "kind": "port",
+          "name": "din",
+          "width": 8
+        },
+        {
+          "dir": "output",
+          "kind": "port",
+          "name": "dout",
+          "width": 8
+        },
+        {
+          "dir": "output",
+          "kind": "port",
+          "name": "full",
+          "width": 1
+        },
+        {
+          "dir": "output",
+          "kind": "port",
+          "name": "empty",
+          "width": 1
+        },
+        {
+          "dir": "output",
+          "kind": "port",
+          "name": "status",
+          "width": 2
+        },
+        {
+          "kind": "parameter",
+          "name": "DEPTH_LOG2",
+          "width": 32
+        },
+        {
+          "kind": "parameter",
+          "name": "DW",
+          "width": 32
+        },
+        {
+          "kind": "parameter",
+          "name": "DEPTH",
+          "width": 32
+        },
+        {
+          "kind": "variable",
+          "name": "wp",
+          "width": 2
+        },
+        {
+          "kind": "variable",
+          "name": "rp",
+          "width": 2
+        },
+        {
+          "kind": "variable",
+          "name": "count",
+          "width": 3
+        },
+        {
+          "kind": "variable",
+          "name": "mem",
+          "width": 32
+        },
+        {
+          "kind": "variable",
+          "name": "do_push",
+          "width": 1
+        },
+        {
+          "kind": "variable",
+          "name": "do_pop",
+          "width": 1
+        }
+      ]
+    }
+  ],
+  "top": "fifo"
+}

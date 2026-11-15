@@ -17,9 +17,9 @@ final-status-level = "slow"
 engines = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate)'
+filter = 'binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate) | binary(session) | binary(mcp)'
 test-group = 'engines'
 
 # scripts/check.sh --fast: everything except the engine tests above.
 [profile.fast]
-default-filter = 'not (binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate))'
+default-filter = 'not (binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate) | binary(session) | binary(mcp))'

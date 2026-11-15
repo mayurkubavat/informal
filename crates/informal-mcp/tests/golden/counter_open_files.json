@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "schema": "informal.open/1",
+  "summary": {
+    "ai": {
+      "cut_points": 0,
+      "pending_proposals": 0,
+      "properties": 0
+    },
+    "black_boxes": [],
+    "clocks": [
+      {
+        "edge": "posedge",
+        "factor": 1,
+        "phase": 0,
+        "signal": "clk"
+      }
+    ],
+    "cut_points": [],
+    "elaborated": true,
+    "engines": "<engines>",
+    "files": [
+      "<root>/tests/fpv/counter/counter.sv"
+    ],
+    "mode": "read-only",
+    "properties": {
+      "assert": 0,
+      "assume": 0,
+      "by_status": {},
+      "cover": 0
+    },
+    "reset": "!rst_n",
+    "schema": "informal.summary/1",
+    "time_limit_s": 3600.0,
+    "top": "counter"
+  }
+}

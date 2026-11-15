@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm"]
+members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm", "crates/informal-mcp"]
 
 [workspace.package]
 version = "0.1.0"
@@ -32,6 +32,7 @@ informal-svlang = { path = "crates/informal-svlang" }
 svlang = { git = "https://github.com/mayurkubavat/svlang", rev = "4b5d424bae61e87e01bcacb8d5641e6975922dd8" }
 informal-bitwuzla = { path = "crates/informal-bitwuzla" }
 informal-llm = { path = "crates/informal-llm" }
+informal-mcp = { path = "crates/informal-mcp" }
 
 [profile.release]
 lto = "thin"

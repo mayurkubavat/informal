@@ -1,0 +1,83 @@
+{
+  "properties": [
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "q <= 4'd9",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_max",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/counter/counter.vcf.tcl",
+        "line": 10
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "@(posedge clk) disable iff (!rst_n) en && !done |-> ##1 q == $past(q) + 4'd1",
+      "has_trace": false,
+      "kind": "assert",
+      "name": "a_step",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/counter/counter.vcf.tcl",
+        "line": 11
+      },
+      "status": "proven",
+      "time_ms": 0
+    },
+    {
+      "depth": 0,
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "q != 4'd9",
+      "has_trace": true,
+      "kind": "assert",
+      "name": "a_never9",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/counter/counter.vcf.tcl",
+        "line": 12
+      },
+      "status": "cex",
+      "time_ms": 0
+    },
+    {
+      "depth": 0,
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "$rose(done)",
+      "has_trace": true,
+      "kind": "cover",
+      "name": "c_done",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/counter/counter.vcf.tcl",
+        "line": 13
+      },
+      "status": "covered",
+      "time_ms": 0
+    },
+    {
+      "enabled": true,
+      "engine": "<engine>",
+      "expr": "q == 4'd10",
+      "has_trace": false,
+      "kind": "cover",
+      "name": "c_10",
+      "origin": "user",
+      "source": {
+        "file": "<root>/tests/fpv/counter/counter.vcf.tcl",
+        "line": 14
+      },
+      "status": "unreachable",
+      "time_ms": 0
+    }
+  ],
+  "schema": "informal.properties/1",
+  "total": 5
+}

@@ -1,0 +1,19 @@
+{
+  "property": {
+    "enabled": true,
+    "engine": "<engine>",
+    "engines": "<engines>",
+    "expr": "push && empty && !pop ##1 !pop |-> dout == $past(din)",
+    "has_trace": false,
+    "kind": "assert",
+    "name": "a_data",
+    "origin": "user",
+    "source": {
+      "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
+      "line": 14
+    },
+    "status": "proven",
+    "time_ms": 0
+  },
+  "schema": "informal.property/1"
+}

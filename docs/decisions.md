@@ -485,6 +485,55 @@ to try.
     dependency licenses, e.g. from `cargo about`).
   - Signing the CLA is manual until a CLA bot is set up on GitHub.
 
+## D17. An AI can read and propose; only an engine result is a verdict
+
+- **Chosen (2026-11-15):** the tool has an interface made for AI models:
+  `informal mcp` serves one FPV session, the same one the shell and the app
+  use, as Model Context Protocol tools (crate `informal-mcp`,
+  `docs/ai-interface.md`). It extends D8 and D11 with one rule: an AI can
+  read anything and propose anything, but only a checked engine result is a
+  verdict. In practice:
+  - No tool sets a property's status. A status comes from a prove, whose
+    proofs are certified and whose counterexamples are replayed (D8).
+  - Every reply is JSON with a `schema` field (`informal.trace/1`), and a
+    counterexample is values per signal and cycle, so a model never has to
+    parse console text.
+  - Three modes. `read-only`: read and prove. `propose` (the default): an
+    assumption, helper assertion, cover, cut point or Tcl command is
+    recorded and waits for a person. `auto`: it is applied at once, for an
+    evaluation sandbox.
+  - What an AI adds is tagged AI-added in the property table, the log and
+    every reply, and is removed in one step. A result found with an
+    AI-added assumption or cut point in the model lists it (`under_ai`),
+    and goes back to unprocessed when that change is removed.
+  - Scripts and design files are only opened below the server's root
+    directory.
+- **Alternatives:** let the model type into the Tcl console and read its
+  text (what Ask mode's suggestions amount to; nothing to check a reply
+  against, and a table's layout becomes an interface); a Python API (a
+  second scripting surface beside Tcl, and still no protocol a model's
+  client speaks); an MCP library (an async runtime and a new dependency for
+  a protocol whose used part is a few JSON-RPC methods; dependency changes
+  are deferred).
+- **Why:** an AI's suggestion is useful exactly when the engines can check
+  it, and dangerous when it changes what a proof means without saying so:
+  an assumption that is too strong proves everything. Tagging, `under_ai`
+  and the one-step undo keep that visible and reversible; the modes let a
+  person stay in the loop or step out of it on purpose.
+- **Open issues**
+  - Nothing detects an over-constraining or vacuous AI-added assumption
+    yet; the checks for that are planned (assumption conflict, vacuity,
+    dead ends), and until then `under_ai` is a warning, not a judgement.
+  - In `propose` mode over standard input and output there is no person on
+    the other end: proposals stay pending until the desktop app shows them
+    as cards with accept and reject (planned), which is also where an
+    outside agent will share the session a person is looking at.
+  - A Tcl command run in `auto` mode is not undone by the one-step undo.
+  - The session runs one request at a time (D9): while a prove runs, other
+    tools answer `busy`, except progress and stop.
+  - No measurement yet of how well models use the interface; a task set
+    with checkable answers is planned.
+
 ## D18. Certificates in the competition's formats, checked by its checkers
 
 - **Chosen (2026-11-15):** `informal check --certificate <dir>` (and

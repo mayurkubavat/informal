@@ -113,6 +113,17 @@ pub struct Property {
     /// (won/lost/timeout/killed/error), time and depth reached. Empty
     /// before a prove, or when no engine ran (elaboration, errors).
     pub engines: Vec<EngineRun>,
+    /// Added through the AI interface (decision D17), not by the user's
+    /// script or console: tagged in every listing, and removable in one
+    /// step ([`Session::remove_ai_property`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ai: bool,
+    /// The AI-added changes that were in the model of the last prove:
+    /// names of AI-added assumptions, and AI-added cut points as
+    /// `stopat <signal>`. A status found under them is reset when one of
+    /// them is removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub under_ai: Vec<String>,
 }
 
 /// A file and 1-based line (absolute path).
@@ -177,6 +188,10 @@ pub struct Design {
     /// Cut points (`stopat`), as paths from the top module (`u_core.sig`):
     /// each is cut from its drivers and free on every step.
     pub stopats: Vec<String>,
+    /// The cut points among `stopats` that were added through the AI
+    /// interface (decision D17).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_stopats: Vec<String>,
     /// `set_lowering skip_initial_checks on`: time-zero checks of signals in
     /// `initial` blocks are left out of the model, not reported as
     /// unsupported.
@@ -301,8 +316,116 @@ impl Session {
             source: None,
             rtl: false,
             engines: Vec::new(),
+            ai: false,
+            under_ai: Vec::new(),
         });
         Ok(name)
+    }
+
+    /// What [`Self::add_property`] would reject, without adding anything.
+    pub fn check_property(&self, name: Option<&str>, expr: &str) -> Result<(), String> {
+        check_operators(expr)?;
+        self.check_names(expr)?;
+        match name {
+            Some(n) if self.props.iter().any(|p| p.name == n) => {
+                Err(format!("property `{n}` already exists"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Add a property through the AI interface: as [`Self::add_property`],
+    /// tagged AI-added and written to the log.
+    pub fn add_ai_property(
+        &mut self,
+        kind: Kind,
+        name: Option<String>,
+        expr: &str,
+    ) -> Result<String, String> {
+        let name = self.add_property(kind, name, expr)?;
+        if let Some(p) = self.props.iter_mut().find(|p| p.name == name) {
+            p.ai = true;
+        }
+        self.log(&format!("AI-added {} {name}: {expr}", kind.label()));
+        Ok(name)
+    }
+
+    /// Remove an AI-added property. Returns the properties whose status
+    /// was found with it in the model (an assumption) and is now reset.
+    pub fn remove_ai_property(&mut self, name: &str) -> Result<Vec<String>, String> {
+        let at = self
+            .props
+            .iter()
+            .position(|p| p.name == name && p.ai)
+            .ok_or_else(|| format!("no AI-added property `{name}`"))?;
+        self.props.remove(at);
+        self.log(&format!("AI-added property {name} removed"));
+        Ok(self.reset_under(name))
+    }
+
+    /// Cut a signal from its drivers through the AI interface: as
+    /// `stopat`, tagged AI-added and written to the log. Returns the cut
+    /// point as the session lists it.
+    pub fn add_ai_cut_point(&mut self, signal: &str) -> Result<String, String> {
+        let cut = self.cut_point(signal)?;
+        if self.design.stopats.contains(&cut) {
+            return Err(format!("`{cut}` is already a cut point"));
+        }
+        self.design.stopats.push(cut.clone());
+        self.design.ai_stopats.push(cut.clone());
+        self.log(&format!("AI-added cut point (stopat) {cut}"));
+        Ok(cut)
+    }
+
+    /// Remove an AI-added cut point. Returns the properties whose status
+    /// was found with it in the model and is now reset.
+    pub fn remove_ai_cut_point(&mut self, cut: &str) -> Result<Vec<String>, String> {
+        if !self.design.ai_stopats.iter().any(|c| c == cut) {
+            return Err(format!("no AI-added cut point `{cut}`"));
+        }
+        self.design.ai_stopats.retain(|c| c != cut);
+        self.design.stopats.retain(|c| c != cut);
+        self.log(&format!("AI-added cut point {cut} removed"));
+        Ok(self.reset_under(&format!("stopat {cut}")))
+    }
+
+    /// Back to unprocessed: every property whose last prove had the
+    /// AI-added change `item` in its model.
+    fn reset_under(&mut self, item: &str) -> Vec<String> {
+        let mut reset = Vec::new();
+        for p in &mut self.props {
+            if p.under_ai.iter().any(|u| u == item) {
+                p.status = Status::Unprocessed;
+                p.trace = None;
+                p.engines.clear();
+                p.under_ai.clear();
+                reset.push(p.name.clone());
+            }
+        }
+        reset
+    }
+
+    /// The AI-added changes a prove started now would have in its model
+    /// (see [`Property::under_ai`]).
+    pub fn ai_in_force(&self) -> Vec<String> {
+        self.props
+            .iter()
+            .filter(|p| p.ai && p.enabled && p.kind == Kind::Assume)
+            .map(|p| p.name.clone())
+            .chain(self.design.ai_stopats.iter().map(|c| format!("stopat {c}")))
+            .collect()
+    }
+
+    /// The Btor2 model property `i` is proved on: the whole design with
+    /// every assumption and this one target. Lowers the design.
+    pub fn model_for(&self, i: usize) -> Result<String, String> {
+        let (btor, _) = self.lower()?;
+        let keep = target_name(&self.props[i].name);
+        if !has_target(&btor, &keep) {
+            return Err(format!("no check named {keep} in the model"));
+        }
+        let (model, _) = informal_svlang::split_trace(&btor);
+        Ok(only_target(model, &keep))
     }
 
     /// With slang's view of the design, reject names the top module does
@@ -462,6 +585,8 @@ impl Session {
                 }),
                 rtl: true,
                 engines: Vec::new(),
+                ai: false,
+                under_ai: Vec::new(),
             });
         }
     }
@@ -619,6 +744,10 @@ impl Session {
         });
         let engines = self.engines();
         let lowered = self.lower();
+        let under_ai = self.ai_in_force();
+        for &i in &targets {
+            self.props[i].under_ai = under_ai.clone();
+        }
         self.frontend = "svlang".into();
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
@@ -1146,6 +1275,13 @@ impl Session {
                 p.status.word()
             } else {
                 "disabled"
+            };
+            // Said in the table: what an AI added, and which results
+            // stand on an AI-added assumption or cut point.
+            let detail = match (p.ai, p.under_ai.is_empty()) {
+                (true, _) => format!("{detail} [AI-added]").trim_start().to_string(),
+                (false, false) => format!("{detail} [under AI-added: {}]", p.under_ai.join(", ")),
+                (false, true) => detail,
             };
             s += &format!(
                 "{:<28} {:<7} {:<13} {:<10} {}\n",

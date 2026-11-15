@@ -29,6 +29,10 @@ sign-off.
   `elaborate`, `clock`, `reset`, `assert`, `assume`, `cover`, `prove`,
   `stopat` and related commands in a real Tcl 8.6 interpreter
   (`docs/fpv-shell.md` lists what is and is not accepted).
+- **AI interface.** `informal mcp` serves the session to an AI model as
+  Model Context Protocol tools with JSON replies: properties, source,
+  counterexample traces as data, prove, and proposals that are tagged and
+  wait for a person (`docs/ai-interface.md`, decision D17).
 - **Debugging aids.** `informal reduce` shrinks a model on which two engines
   disagree; `informal simp`, `info`, `fmt` and `lower` inspect models.
 - **Desktop app.** A Tauri 2 + React workbench in `ui/`: property table,
@@ -111,6 +115,9 @@ target/release/informal shell --flavor vcf
 # List what a script uses that informal does not accept, without running it
 target/release/informal shell --check path/to/setup.tcl
 
+# Serve a session to an AI model (Model Context Protocol on stdin/stdout)
+target/release/informal mcp --mode propose --root path/to/project
+
 # Check one Btor2 or AIGER model (exit 10 unsafe, 20 safe, 0 unknown)
 target/release/informal check tests/models/toggle_unsafe.aag --timeout 60
 
@@ -167,6 +174,7 @@ every engine change. To reproduce, download the models to
 | `informal-tcl` | Embedded Tcl 8.6 (the C library through FFI) for informal scripts. |
 | `informal-fpv` | FPV sessions: design setup, properties, prove over the portfolio, and the JasperGold / VC Formal Tcl compatibility layer (`docs/fpv-shell.md`). |
 | `informal-llm` | Swappable LLM providers (OpenAI-compatible streaming client, scripted fake) for the app's Ask mode; defaults to local Gemma on Ollama (`config/llm.toml`). |
+| `informal-mcp` | The AI interface: the FPV session as Model Context Protocol tools with versioned JSON replies, modes and tagged proposals (`docs/ai-interface.md`). |
 | `informal-cli` | The `informal` command. |
 
 The desktop app lives in `ui/`, outside the Cargo workspace.
@@ -210,6 +218,7 @@ Model lists such as `bench/*.txt` and `bench/sample60.csv` are tracked.
 | File | What |
 | --- | --- |
 | `docs/fpv-shell.md` | The FPV shell: commands, the SVA subset, how a prove runs |
+| `docs/ai-interface.md` | The AI interface: `informal mcp`, its tools, modes and reply formats |
 | `docs/engines.md` | Engines, memory limits, result checking |
 | `docs/third-party.md` | Third-party tools: licenses, versions, build steps |
 | `docs/decisions.md` | Design decisions, with reasons and open issues |

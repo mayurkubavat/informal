@@ -1,0 +1,90 @@
+{
+  "property": "a_data",
+  "schema": "informal.cone/1",
+  "signals": [
+    {
+      "distance": 0,
+      "helper": true,
+      "kind": "register",
+      "name": "fifo._sva_tick",
+      "width": 2
+    },
+    {
+      "distance": 0,
+      "helper": false,
+      "kind": "register",
+      "name": "fifo.mem",
+      "width": 32
+    },
+    {
+      "distance": 0,
+      "helper": false,
+      "kind": "input",
+      "name": "fifo.pop",
+      "width": 1
+    },
+    {
+      "distance": 0,
+      "helper": false,
+      "kind": "register",
+      "name": "fifo.u_rp.p",
+      "width": 2
+    },
+    {
+      "distance": 0,
+      "helper": true,
+      "kind": "register",
+      "name": "informal_past_0",
+      "width": 8
+    },
+    {
+      "distance": 0,
+      "helper": true,
+      "kind": "register",
+      "name": "informal_past_2",
+      "width": 1
+    },
+    {
+      "distance": 0,
+      "helper": true,
+      "kind": "input",
+      "name": "informal_x_0",
+      "width": 8
+    },
+    {
+      "distance": 1,
+      "helper": false,
+      "kind": "register",
+      "name": "fifo.count",
+      "width": 3
+    },
+    {
+      "distance": 1,
+      "helper": false,
+      "kind": "input",
+      "name": "fifo.din",
+      "width": 8
+    },
+    {
+      "distance": 1,
+      "helper": false,
+      "kind": "input",
+      "name": "fifo.push",
+      "width": 1
+    },
+    {
+      "distance": 1,
+      "helper": false,
+      "kind": "input",
+      "name": "fifo.rst_n",
+      "width": 1
+    },
+    {
+      "distance": 1,
+      "helper": false,
+      "kind": "register",
+      "name": "fifo.u_wp.p",
+      "width": 2
+    }
+  ]
+}
