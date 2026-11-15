@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace } from "./mock";
+import { mock, mockAiDecide, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace } from "./mock";
 import type { AskDelta, AskDone, LlmProviderEntry, LlmStatus } from "./ask";
 
 export type StatusWord =
@@ -35,6 +35,32 @@ export interface Property {
   // The last prove's portfolio record, one entry per engine that ran (the
   // proof profiler). Absent or empty before a prove.
   engines?: EngineRun[];
+  // Added through the AI interface (decision D17), not by the user.
+  ai?: boolean;
+  // The AI-added assumptions (by name) and cut points ("stopat <signal>")
+  // that were in the model of the last prove: the result stands on them.
+  under_ai?: string[];
+}
+
+// A change an agent asked for through the AI interface
+// (docs/ai-interface.md). "pending" waits for the person's answer.
+export type ProposalState = "pending" | "applied" | "rejected" | "withdrawn" | "undone" | "failed" | "gone";
+export interface AiProposal {
+  id: number;
+  kind: "assume" | "assert" | "cover" | "cut_point" | "command";
+  name?: string;
+  // The property expression, the signal to cut, or the Tcl command.
+  text: string;
+  rationale: string;
+  state: ProposalState;
+  error?: string;
+}
+export interface AiStatus {
+  mode: "read-only" | "propose" | "auto";
+  // Where agents connect (`informal mcp --connect`); null when it is off.
+  socket: string | null;
+  error: string | null;
+  proposals: AiProposal[];
 }
 
 // How one portfolio engine's run on a property ended (informal-engine
@@ -151,7 +177,7 @@ async function call(cmd: string, args: Record<string, unknown> = {}): Promise<Re
 
 // Subscribe to a backend event; returns an unsubscribe function that is safe
 // to call before the Tauri listener has finished registering.
-function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done", cb: (payload: T) => void): () => void {
+function subscribe<T>(event: "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity", cb: (payload: T) => void): () => void {
   if (!inTauri) return mockEvents.on(event, cb as (p: unknown) => void);
   let off: (() => void) | null = null;
   let dead = false;
@@ -202,6 +228,15 @@ export const backend = {
   askCancel: (id: number) => invokeOr<boolean>("ask_cancel", { id }, () => mockAskCancel(id)),
   onAskDelta: (cb: (d: AskDelta) => void) => subscribe("ask-delta", cb),
   onAskDone: (cb: (d: AskDone) => void) => subscribe("ask-done", cb),
+  // ---- AI interface (docs/ai-interface.md) ----
+  // The mode, the socket and every proposal with its state.
+  aiStatus: () => invokeOr<AiStatus>("ai_status", {}, () => mockAiStatus()),
+  // The person's answer to a pending proposal; resolves with the proposal
+  // as it then stands (accepting can fail: state "failed", with `error`).
+  aiDecide: (id: number, accept: boolean) => invokeOr<AiProposal>("ai_decide", { id, accept }, () => mockAiDecide(id, accept)),
+  // An agent's call may have changed the session or the proposals: the
+  // payload is the tool's name. Redraw from a snapshot and aiStatus.
+  onAiActivity: (cb: (tool: string) => void) => subscribe("ai-activity", cb),
   // Tab completion: the active flavor's command names, then property names,
   // starting with `prefix`. Answered without the shell thread, so it works
   // while a prove runs.

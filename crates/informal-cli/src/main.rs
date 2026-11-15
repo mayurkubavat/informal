@@ -152,6 +152,13 @@ enum Cmd {
         /// The longest time limit, in seconds, a prove call may ask for.
         #[arg(long, default_value_t = 300)]
         max_time: u64,
+        /// Do not start a session: connect to the one a running desktop
+        /// app serves and pass the messages through, so the model works
+        /// on the session a person is looking at. Without a socket path,
+        /// the most recently started app's. The app sets the mode; the
+        /// other options are not used.
+        #[arg(long, value_name = "SOCKET", num_args = 0..=1, default_missing_value = "")]
+        connect: Option<PathBuf>,
     },
     /// Shrink an AIGER model while two engines keep disagreeing on it, or
     /// while a test command keeps exiting 0 (delta debugging).
@@ -267,6 +274,43 @@ fn protocol_output() -> anyhow::Result<std::fs::File> {
         }
         Ok(std::fs::File::from_raw_fd(saved))
     }
+}
+
+/// `informal mcp --connect`: standard input to the socket, the socket to
+/// standard output, until either side ends.
+#[cfg(unix)]
+fn relay(socket: &Path) -> anyhow::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    /// Plain reads and writes, each piece passed on at once (the messages
+    /// are lines, and the other side waits for each).
+    fn pass(mut from: impl Read, mut to: impl Write) -> std::io::Result<()> {
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            match from.read(&mut buf)? {
+                0 => return Ok(()),
+                n => {
+                    to.write_all(&buf[..n])?;
+                    to.flush()?;
+                }
+            }
+        }
+    }
+    let stream = UnixStream::connect(socket)
+        .with_context(|| format!("connecting to {}", socket.display()))?;
+    let to_app = stream.try_clone()?;
+    std::thread::spawn(move || {
+        let _ = pass(std::io::stdin().lock(), &to_app);
+        // End of input: tell the app, which then ends its side.
+        let _ = to_app.shutdown(std::net::Shutdown::Write);
+    });
+    pass(stream, std::io::stdout().lock())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn relay(_socket: &Path) -> anyhow::Result<()> {
+    bail!("--connect needs a Unix socket")
 }
 
 #[cfg(not(unix))]
@@ -567,7 +611,20 @@ fn main() -> anyhow::Result<()> {
             engines,
             workdir,
             max_time,
+            connect,
         } => {
+            if let Some(socket) = connect {
+                let socket = match socket.as_os_str().is_empty() {
+                    false => socket,
+                    true => informal_mcp::socket::newest().with_context(|| {
+                        format!(
+                            "no desktop app is serving a session (no socket in {})",
+                            informal_mcp::socket::dir().display()
+                        )
+                    })?,
+                };
+                return relay(&socket);
+            }
             let mode = informal_mcp::Mode::parse(&mode)
                 .with_context(|| format!("unknown mode {mode} (read-only, propose or auto)"))?;
             // The external engines are optional here: without their

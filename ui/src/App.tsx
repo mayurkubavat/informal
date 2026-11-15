@@ -6,7 +6,7 @@
 // as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
+import { backend, type AiStatus, EngineLine, Flavor, ProveProgress, Reply, SessionView } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   bound, clock, designScopes, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
@@ -28,6 +28,7 @@ import { EngineLog } from "./components/EngineLog";
 import { SourceView } from "./components/SourceView";
 import { TraceView } from "./components/TraceView";
 import { Profiler } from "./components/Profiler";
+import { KIND_LABEL, Proposals } from "./components/Proposals";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
 // Lines the Log tab keeps; older ones are dropped (and counted).
@@ -290,6 +291,51 @@ export default function App() {
     // A script given on the command line may have started the shell in VC Formal flavor.
     backend.flavor().then(setFlavor, () => {});
   }, [run]);
+  // The AI interface (docs/ai-interface.md): an agent on the app's socket
+  // works on this session. After each of its calls the backend says so,
+  // and the session and the proposals are read again.
+  const [ai, setAi] = useState<AiStatus | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  const refreshAi = useCallback(() => backend.aiStatus().then(setAi, () => {}), []);
+  useEffect(() => {
+    refreshAi();
+    return backend.onAiActivity(() => {
+      refreshAi();
+      run(() => backend.snapshot());
+    });
+  }, [refreshAi, run]);
+  const waiting = ai?.proposals.filter((p) => p.state === "pending").length ?? 0;
+  // The person's answer to a proposal. An accepted one is in the session
+  // when this returns; both answers are noted in the console and Messages.
+  const decide = useCallback(
+    (id: number, accept: boolean) => {
+      const p = ai?.proposals.find((q) => q.id === id);
+      const what = p ? `${KIND_LABEL[p.kind].toLowerCase()}${p.name ? ` ${p.name}` : ""}` : `proposal ${id}`;
+      const cmd = `${accept ? "accept" : "reject"} AI proposal: ${what}`;
+      const t0 = performance.now();
+      const done = (ok: boolean, summary: string) => {
+        setLog((l) => [...l, { kind: ok ? "out" : "err", text: `${cmd}${summary ? `: ${summary}` : ""}` }]);
+        setEvents((e) => [...e, { at: new Date(), cmd, ok, ms: performance.now() - t0, summary }]);
+      };
+      setDeciding(true);
+      backend
+        .aiDecide(id, accept)
+        .then(
+          (r) => done(r.state !== "failed", r.error ?? ""),
+          (e) => done(false, String(e)),
+        )
+        .finally(() => {
+          setDeciding(false);
+          refreshAi();
+          run(() => backend.snapshot());
+        });
+    },
+    [ai, refreshAi, run],
+  );
+  // The Proposals tab exists while there is something to show in it.
+  useEffect(() => {
+    if (ai && !ai.proposals.length) setBottomTab((t) => (t === "proposals" ? "console" : t));
+  }, [ai, setBottomTab]);
   // Surfer on PATH enables the external-viewer hand-off.
   const [surfer, setSurfer] = useState(false);
   useEffect(() => {
@@ -879,6 +925,7 @@ export default function App() {
               ["messages", `Messages${events.some((e) => !e.ok) ? ` (${events.filter((e) => !e.ok).length})` : ""}`],
               ["log", "Log"],
               ...(profiler ? ([["profiler", "Profiler", closeProfiler]] as [string, string, () => void][]) : []),
+              ...(ai?.proposals.length ? ([["proposals", `Proposals${waiting ? ` (${waiting})` : ""}`]] as [string, string][]) : []),
             ]}
             value={bottomTab}
             onChange={(t) => setBottomTab(t as BottomTab)}
@@ -941,6 +988,18 @@ export default function App() {
                     <dd className="mono">{time(current) || "—"}</dd>
                     <dt>Task</dt>
                     <dd className="mono">{TASK}</dd>
+                    {current.ai && (
+                      <>
+                        <dt>Origin</dt>
+                        <dd>Added through the AI interface</dd>
+                      </>
+                    )}
+                    {!!current.under_ai?.length && (
+                      <>
+                        <dt title="AI-added assumptions and cut points that were in the model when this result was found">Under</dt>
+                        <dd className="mono" title={current.under_ai.join(", ")}>{current.under_ai.join(", ")} (AI-added)</dd>
+                      </>
+                    )}
                     <dt>Trace</dt>
                     <dd>
                       {currentTrace ? (
@@ -988,6 +1047,7 @@ export default function App() {
               <p className="empty">Select a property to see its expression, result and source.</p>
             ))}
           {bottomTab === "messages" && <Messages events={events} />}
+          {bottomTab === "proposals" && ai && <Proposals ai={ai} busy={deciding || !idle} onDecide={decide} />}
           {bottomTab === "profiler" && profiler && <Profiler prop={current} props={allProps} />}
         </section>
       </div>
@@ -999,6 +1059,11 @@ export default function App() {
         <span>reset: <span className="mono">{session?.reset ?? "—"}</span></span>
         <span>{flavor === "jg" ? "JasperGold" : "VC Formal"} flavor</span>
         <span className="spacer" />
+        {waiting > 0 && (
+          <button className="statusbar-btn" title="An agent on the AI interface proposed a change; nothing is applied until you accept" onClick={() => setBottomTab("proposals")}>
+            AI: {waiting} proposal{waiting === 1 ? "" : "s"} waiting
+          </button>
+        )}
         <button className="statusbar-btn" title={llmTip(llm)} aria-haspopup="menu" onClick={openLlmMenu}>
           {llmLabel(llm)}
         </button>

@@ -19,6 +19,7 @@
 pub mod api;
 pub mod cone;
 pub mod server;
+pub mod socket;
 pub mod tools;
 pub mod vcd;
 

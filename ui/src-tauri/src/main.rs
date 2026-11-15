@@ -16,9 +16,15 @@
 //! "ask-delta" events and ends with "ask-done", which may carry one
 //! suggested Tcl command. Nothing the model says is run here; the UI puts
 //! the command on the prompt and the user presses Enter (or Esc).
+//!
+//! The AI interface (decision D17, docs/ai-interface.md): the same session
+//! is served to an outside agent on a local socket (`ai.rs`). What the
+//! agent proposes waits for the person (`ai_status`, `ai_decide`), and an
+//! "ai-activity" event tells the window to redraw after each of its calls.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai;
 mod ask;
 
 use informal_fpv::{EngineLine, Flavor, ProveProgress, ProveSink, Reply, Request, Session, Worker};
@@ -38,16 +44,19 @@ struct ConsoleLine<'a> {
     kind: &'static str,
 }
 
-/// Forwards prove progress from the shell to the window as Tauri events.
-struct EventSink;
+/// Forwards prove progress from the shell to the window as Tauri events,
+/// and to the AI interface, whose agents ask for progress and the log.
+struct EventSink(Arc<informal_mcp::State>);
 
 impl ProveSink for EventSink {
     fn progress(&self, p: &ProveProgress) {
+        self.0.progress(p);
         if let Some(app) = APP.get() {
             let _ = app.emit("prove-progress", p);
         }
     }
     fn line(&self, text: &str, err: bool) {
+        self.0.line(text, err);
         if let Some(app) = APP.get() {
             let kind = if err { "err" } else { "out" };
             let _ = app.emit("console-line", ConsoleLine { text, kind });
@@ -89,13 +98,24 @@ static LAST_SESSION: Mutex<serde_json::Value> = Mutex::new(serde_json::Value::Nu
 
 async fn call(w: &Worker, req: Request) -> Reply {
     let w = w.clone();
-    let r = tauri::async_runtime::spawn_blocking(move || w.call(req))
-        .await
-        .unwrap_or_else(|e| Reply {
-            ok: false,
-            result: e.to_string(),
-            session: serde_json::Value::Null,
-        });
+    // While a command of the person's runs or waits, an agent's tools
+    // answer "busy" at once.
+    let held = matches!(req, Request::Eval(_) | Request::Source(_))
+        .then(|| {
+            APP.get()
+                .and_then(|a| a.try_state::<ai::Ai>().map(|ai| ai.api.state().foreign()))
+        })
+        .flatten();
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        let _held = held;
+        w.call(req)
+    })
+    .await
+    .unwrap_or_else(|e| Reply {
+        ok: false,
+        result: e.to_string(),
+        session: serde_json::Value::Null,
+    });
     if let Some(a) = r.session["design"]["files"].as_array() {
         let files = a
             .iter()
@@ -547,6 +567,29 @@ fn ask_cancel(llm: State<'_, Llm>, id: u64) -> bool {
     true
 }
 
+/// The AI interface as the window shows it: the mode, where agents
+/// connect, and every proposal with its state.
+#[tauri::command]
+fn ai_status(ai: State<'_, ai::Ai>) -> ai::AiStatus {
+    ai.status()
+}
+
+/// The person's answer to a pending proposal. Accepting applies it to the
+/// session, tagged AI-added; the reply is the proposal as it now stands.
+#[tauri::command]
+async fn ai_decide(
+    ai: State<'_, ai::Ai>,
+    id: u32,
+    accept: bool,
+) -> Result<serde_json::Value, String> {
+    let api = ai.api.clone();
+    tauri::async_runtime::spawn_blocking(move || api.decide(id, accept))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|r| r["proposal"].clone())
+        .map_err(|e| e.message)
+}
+
 fn main() {
     // Run from the repo root (the directory holding config/engines.toml), so
     // script paths read as they do for `informal shell` and generated models land
@@ -566,6 +609,8 @@ fn main() {
     if let Ok(mut g) = FLAVOR.lock() {
         *g = flavor;
     }
+    let ai_state = Arc::new(informal_mcp::State::default());
+    let sink = Arc::new(EventSink(ai_state.clone()));
     let worker = Worker::spawn(flavor, move || {
         let engines = config
             .and_then(|c| {
@@ -578,7 +623,7 @@ fn main() {
             .chain(informal_bmc::engines())
             .collect();
         let mut session = Session::new(engines, PathBuf::from(WORKDIR));
-        session.sink = Some(Arc::new(EventSink));
+        session.sink = Some(sink);
         session
     });
     if let Some(p) = script {
@@ -590,6 +635,22 @@ fn main() {
             }
         });
     }
+    // Agents connect to a socket only this user can reach; INFORMAL_AI_SOCKET
+    // moves it, or turns it off with `off`.
+    let socket = match std::env::var_os("INFORMAL_AI_SOCKET") {
+        Some(p) if p == "off" => None,
+        Some(p) => Some(PathBuf::from(p)),
+        None => Some(informal_mcp::socket::for_app(std::process::id())),
+    };
+    let ai = ai::start(worker.clone(), ai_state, Path::new(WORKDIR), socket);
+    if let Some(e) = &ai.error {
+        eprintln!("informal: the AI interface socket could not be opened: {e}");
+    }
+    ai.api.set_change_hook(Some(Arc::new(|tool: &str| {
+        if let Some(app) = APP.get() {
+            let _ = app.emit("ai-activity", tool);
+        }
+    })));
     let llm = Llm::load(&std::env::current_dir().unwrap_or_default());
     tauri::Builder::default()
         .setup(|app| {
@@ -598,6 +659,7 @@ fn main() {
         })
         .manage(worker)
         .manage(llm)
+        .manage(ai)
         .invoke_handler(tauri::generate_handler![
             snapshot,
             shell_eval,
@@ -614,7 +676,9 @@ fn main() {
             llm_providers,
             llm_select,
             ask,
-            ask_cancel
+            ask_cancel,
+            ai_status,
+            ai_decide
         ])
         .run(tauri::generate_context!())
         .expect("error while running the InFormal app");

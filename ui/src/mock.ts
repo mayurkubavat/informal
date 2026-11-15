@@ -19,6 +19,8 @@
 //   ?surfer=1    report the Surfer viewer as installed (tool_available);
 //                "Open in Surfer" then succeeds without opening anything
 //   ?llm=offline start with the LLM provider unreachable (Ask disabled)
+//   ?ai=1        an agent has proposed two changes through the AI interface
+//                (an assumption and a helper assertion), both pending
 //
 // Ask mode: a Fake provider ("fake/scripted") streams a scripted answer a
 // word at a time. A question about failures is answered from the session
@@ -32,7 +34,7 @@
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { ConsoleLine, DesignScope, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { AiProposal, AiStatus, ConsoleLine, DesignScope, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
 import { splitAnswer, type AskDelta, type AskDone, type LlmProviderEntry, type LlmStatus } from "./ask";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
@@ -196,20 +198,21 @@ if (typeof location !== "undefined") {
   if (extra) mockSession.props.push(...generatedProps(extra));
 }
 
-type Ev = "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done";
+type Ev = "prove-progress" | "console-line" | "engine-log" | "ask-delta" | "ask-done" | "ai-activity";
 const listeners: Record<Ev, Set<(p: unknown) => void>> = {
   "prove-progress": new Set(),
   "console-line": new Set(),
   "engine-log": new Set(),
   "ask-delta": new Set(),
   "ask-done": new Set(),
+  "ai-activity": new Set(),
 };
 export const mockEvents = {
   on(ev: Ev, cb: (p: unknown) => void) {
     listeners[ev].add(cb);
     return () => void listeners[ev].delete(cb);
   },
-  emit(ev: Ev, payload: ProveProgress | ConsoleLine | EngineLine | AskDelta | AskDone) {
+  emit(ev: Ev, payload: ProveProgress | ConsoleLine | EngineLine | AskDelta | AskDone | string) {
     for (const cb of [...listeners[ev]]) cb(payload);
   },
 };
@@ -376,6 +379,7 @@ export function resetMock() {
   mockLlm.selected = "fake";
   for (const t of mockAsks.values()) clearTimeout(t);
   mockAsks.clear();
+  mockAi.proposals.length = 0;
 }
 
 // ---- Ask mode: a scripted Fake provider ----
@@ -444,6 +448,43 @@ export function mockAskCancel(id: number): boolean {
   mockAsks.delete(id);
   mockEvents.emit("ask-done", { id, command: null, explanation: "", error: "cancelled", total_ms: 0 });
   return true;
+}
+
+// ---- AI interface: what an agent on the app's socket would have done ----
+export const MOCK_PROPOSALS: Omit<AiProposal, "id" | "state">[] = [
+  { kind: "assume", name: "m_en_hold", text: "en |=> en", rationale: "The counter is only specified while en stays high once raised; without it a_step has a counterexample." },
+  { kind: "assert", name: "a_q_bound", text: "q <= 4'd9", rationale: "Helper invariant: q never leaves 0..9, which makes a_never9's failure the only reachable one." },
+];
+const mockAi: AiStatus = { mode: "propose", socket: "/run/user/1000/informal/app-1.sock", error: null, proposals: [] };
+// An agent proposes a change: it is pending, and the window is told.
+export function mockAiPropose(p: Omit<AiProposal, "id" | "state">): AiProposal {
+  const made: AiProposal = { ...p, id: mockAi.proposals.length + 1, state: "pending" };
+  mockAi.proposals.push(made);
+  mockEvents.emit("ai-activity", "proposal_add");
+  return made;
+}
+if (typeof location !== "undefined" && new URLSearchParams(location.search).get("ai") === "1") {
+  MOCK_PROPOSALS.forEach((p, i) => mockAi.proposals.push({ ...p, id: i + 1, state: "pending" }));
+}
+export function mockAiStatus(): AiStatus {
+  return { ...mockAi, proposals: mockAi.proposals.map((p) => ({ ...p })) };
+}
+// The person's answer. Accepting adds the property, tagged AI-added; a
+// name the session already has fails, as the session would refuse it.
+export function mockAiDecide(id: number, accept: boolean): AiProposal {
+  const p = mockAi.proposals.find((q) => q.id === id);
+  if (!p) throw new Error(`no proposal ${id}`);
+  if (p.state !== "pending") throw new Error(`proposal ${id} is ${p.state}`);
+  if (!accept) p.state = "rejected";
+  else if (p.kind === "cut_point" || p.kind === "command") p.state = "applied";
+  else if (mockSession.props.some((q) => q.name === p.name)) {
+    p.state = "failed";
+    p.error = `property \`${p.name}\` already exists`;
+  } else {
+    mockSession.props.push({ name: p.name ?? `${p.kind}_ai_${id}`, kind: p.kind, expr: p.text, enabled: true, status: { status: "unprocessed" }, ai: true });
+    p.state = "applied";
+  }
+  return { ...p };
 }
 
 let mockFlavor = "jg";

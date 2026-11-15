@@ -12,6 +12,10 @@ ui/
   src-tauri/      the app crate: Tauri commands over informal_fpv::Worker
 ```
 
+The app also serves its session to an outside AI agent on a local socket;
+what the agent proposes waits in the Proposals tab for Accept or Reject
+(`../docs/ai-interface.md`).
+
 ## Run
 
 ```sh

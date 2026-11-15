@@ -105,3 +105,54 @@ fn serves_a_session_on_standard_input_and_output() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("PROVEN a_max"), "{err}");
 }
+
+/// `--connect`: the process only passes messages between its standard
+/// streams and the socket on which a desktop app serves its session.
+#[cfg(unix)]
+#[test]
+fn connect_relays_to_a_served_session() {
+    use std::os::unix::net::UnixListener;
+    let dir = std::env::temp_dir().join(format!("informal-mcp-relay-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket = dir.join("app.sock");
+    // The app's side: a session with no engines, served to one client.
+    let api = std::sync::Arc::new(informal_mcp::Api::spawn(
+        Vec::new(),
+        dir.join("work"),
+        informal_mcp::Options {
+            mode: informal_mcp::Mode::Propose,
+            root: root(),
+            workdir: dir.join("work"),
+            max_time: std::time::Duration::from_secs(5),
+        },
+    ));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let served = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let read = BufReader::new(stream.try_clone().unwrap());
+        informal_mcp::serve(api, read, stream).unwrap();
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_informal"))
+        .args(["mcp", "--connect"])
+        .arg(&socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "session_summary", "arguments": {}}})
+    )
+    .unwrap();
+    let reply: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(reply["result"]["structuredContent"]["mode"], "propose");
+    // End of input ends the relay and, through it, the served connection.
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    served.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

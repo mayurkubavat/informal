@@ -28,6 +28,19 @@ describe("PropTable", () => {
     expect(within(screen.getByRole("row", { name: /c_cov/ })).getByText("C")).toBeInTheDocument();
   });
 
+  it("tags what an AI added and results that stand on it", () => {
+    table({
+      props: [
+        prop("m_ai", { kind: "assume", ai: true }),
+        prop("a_dep", { under_ai: ["m_ai", "stopat count"] }, { status: "proven", engine: "ic3", ms: 5 }),
+        prop("a_plain", {}, { status: "proven", engine: "ic3", ms: 5 }),
+      ],
+    });
+    const [added, dep, plain] = screen.getAllByRole("row").slice(1);
+    expect(within(added).getByTitle("Added through the AI interface")).toHaveTextContent("AI");
+    expect(within(dep).getByTitle("Found with AI-added changes in the model: m_ai, stopat count")).toHaveTextContent("under AI");
+    expect(plain.querySelector(".tag")).toBeNull();
+  });
   it("cycles sort asc, desc, off and sets aria-sort", async () => {
     table();
     const th = screen.getByRole("columnheader", { name: "Name" });

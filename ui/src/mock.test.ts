@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MOCK_ASK_REPLY, MOCK_ENGINES, mockAsk, mockAskCancel, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockSurferOpened, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
+import { MOCK_ASK_REPLY, MOCK_ENGINES, MOCK_PROPOSALS, mockAiDecide, mockAiPropose, mockAiStatus, mockAsk, mockAskCancel, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockSurferOpened, mock, mockComplete, mockEvents, mockOptions, mockRunning, PROVE_ON_SOURCE, resetMock, TICK_MS } from "./mock";
 import type { ConsoleLine, EngineLine, ProveProgress } from "./backend";
 
 // The mock is module state shared across tests, so each test leaves it as
@@ -263,5 +263,37 @@ describe("browser mock: Ask mode (Fake provider)", () => {
     mockLlmSelect("fake");
     mockOptions.llmOffline = true;
     expect(mockLlmStatus().ok).toBe(false);
+  });
+});
+
+describe("browser mock: AI interface", () => {
+  beforeEach(() => resetMock());
+
+  it("a proposal waits, tells the window, and reaches the session only when accepted", async () => {
+    const seen: string[] = [];
+    const off = mockEvents.on("ai-activity", (t) => seen.push(t as string));
+    expect(mockAiStatus().proposals).toEqual([]);
+    const a = mockAiPropose(MOCK_PROPOSALS[0]);
+    const b = mockAiPropose(MOCK_PROPOSALS[1]);
+    off();
+    expect(seen).toEqual(["proposal_add", "proposal_add"]);
+    expect(mockAiStatus().proposals.map((p) => p.state)).toEqual(["pending", "pending"]);
+    const before = (await mock("snapshot", {})).session!.props.length;
+    // Rejected: nothing is added.
+    expect(mockAiDecide(b.id, false).state).toBe("rejected");
+    expect((await mock("snapshot", {})).session!.props).toHaveLength(before);
+    // Accepted: the property is in the session, tagged.
+    expect(mockAiDecide(a.id, true).state).toBe("applied");
+    const added = await status("m_en_hold");
+    expect(added).toMatchObject({ kind: "assume", expr: "en |=> en", ai: true });
+    // Decided once.
+    expect(() => mockAiDecide(a.id, true)).toThrow("proposal 1 is applied");
+    // A name the session has already is refused, as the session would.
+    const again = mockAiPropose(MOCK_PROPOSALS[0]);
+    expect(mockAiDecide(again.id, true)).toMatchObject({ state: "failed", error: "property `m_en_hold` already exists" });
+    // A reset forgets both the proposals and the property.
+    resetMock();
+    expect(mockAiStatus().proposals).toEqual([]);
+    expect((await mock("snapshot", {})).session!.props.some((p) => p.ai)).toBe(false);
   });
 });

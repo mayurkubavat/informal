@@ -29,6 +29,11 @@ adds two properties and proves them in the same call (the session only gets
 them with the reply), for the provisional-row path. Unit tests set `mockOptions`
 and call `resetMock()` instead.
 
+AI interface: `?ai=1` starts the mock as if an agent had proposed an
+assumption (`m_en_hold`) and a helper assertion (`a_q_bound`), both pending;
+`mockAiPropose` does the same from a unit test. `tests/e2e/proposals.spec.ts`
+and the `proposals` baselines cover the Proposals tab.
+
 Traces: after a prove, the mock gives `a_never9` (cex) and `c_done` (covered)
 `trace` paths (`informal_work/<prop>.vcd`), and `readTrace` serves the hand-written
 counter VCD `ui/tests/fixtures/a_never9.vcd` for both (12 cycles, `en` low in

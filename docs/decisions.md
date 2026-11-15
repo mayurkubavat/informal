@@ -524,10 +524,12 @@ to try.
   - Nothing detects an over-constraining or vacuous AI-added assumption
     yet; the checks for that are planned (assumption conflict, vacuity,
     dead ends), and until then `under_ai` is a warning, not a judgement.
-  - In `propose` mode over standard input and output there is no person on
-    the other end: proposals stay pending until the desktop app shows them
-    as cards with accept and reject (planned), which is also where an
-    outside agent will share the session a person is looking at.
+  - In `propose` mode a server started on its own has no person on the
+    other end, and proposals stay pending. The desktop app is where a
+    person answers: it serves its own session on a local socket
+    (`informal mcp --connect`) and shows each proposal as a card with
+    Accept and Reject. The agent cannot yet see or drive the window
+    (selection, open trace, waveform signals).
   - A Tcl command run in `auto` mode is not undone by the one-step undo.
   - The session runs one request at a time (D9): while a prove runs, other
     tools answer `busy`, except progress and stop.

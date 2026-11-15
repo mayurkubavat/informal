@@ -1538,6 +1538,7 @@ dependencies = [
  "informal-engines-ext",
  "informal-fpv",
  "informal-llm",
+ "informal-mcp",
  "serde",
  "serde_json",
  "tauri",
@@ -1616,6 +1617,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "informal-mcp"
+version = "0.1.0"
+dependencies = [
+ "informal-engine",
+ "informal-fpv",
+ "informal-ir",
+ "informal-svlang",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

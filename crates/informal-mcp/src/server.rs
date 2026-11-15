@@ -195,8 +195,9 @@ fn tool_result(reply: Reply) -> Value {
     }
 }
 
-/// Serve `api` to one client until `input` ends. A prove still running
-/// then is stopped.
+/// Serve `api` to one client until `input` ends. A long call of this
+/// client that is still running then is stopped; what another front end
+/// on the same session started is left alone.
 pub fn serve(
     api: Arc<Api>,
     input: impl BufRead,
@@ -214,6 +215,8 @@ pub fn serve(
             server.handle(&line);
         }
     }
-    api.stop();
+    if server.long.lock().unwrap().is_some() {
+        api.stop();
+    }
     Ok(())
 }

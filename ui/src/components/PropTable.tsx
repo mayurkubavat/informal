@@ -151,8 +151,18 @@ export function PropTable({
       }}
     >
       <td className="c-kind mono" title={p.kind}>{KIND_LETTER[p.kind]}</td>
-      <td className="mono" title={p.provisional ? "Added by the running script; details follow when it returns" : undefined}>{p.name}</td>
-      <td><Status p={p} /></td>
+      <td className="mono" title={p.provisional ? "Added by the running script; details follow when it returns" : undefined}>
+        {p.name}
+        {p.ai && <span className="tag" title="Added through the AI interface">AI</span>}
+      </td>
+      <td>
+        <Status p={p} />
+        {!!p.under_ai?.length && (
+          <span className="tag" title={`Found with AI-added changes in the model: ${p.under_ai.join(", ")}`} aria-label={`under AI-added ${p.under_ai.join(", ")}`}>
+            under AI
+          </span>
+        )}
+      </td>
       <td className="mono dim">{p.status.engine ?? ""}</td>
       <td className="mono num dim" title={bound(p)}>{bound(p)}</td>
       <td className="mono num dim">{time(p)}</td>

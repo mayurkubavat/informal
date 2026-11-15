@@ -11,7 +11,7 @@ use informal_fpv::{
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -82,6 +82,7 @@ pub struct Proposal {
 }
 
 type ProgressHook = Arc<dyn Fn(&ProveProgress) + Send + Sync>;
+type ChangeHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 #[derive(Default)]
 struct Inner {
@@ -90,6 +91,7 @@ struct Inner {
     log: VecDeque<String>,
     progress: Option<ProveProgress>,
     hook: Option<ProgressHook>,
+    changed: Option<ChangeHook>,
     /// The reply of the last prove started without waiting.
     last_prove: Option<Reply>,
 }
@@ -102,6 +104,32 @@ pub struct State {
     inner: Mutex<Inner>,
     /// A prove, a script or a Tcl command is running on the shell thread.
     busy: AtomicBool,
+    /// Commands of the session's other front end (a person at the app)
+    /// that are running or waiting on the shell thread.
+    foreign: AtomicUsize,
+}
+
+/// Held by the session's other front end while a command of its own has
+/// the shell thread ([`State::foreign`]).
+pub struct Foreign(Arc<State>);
+
+impl Drop for Foreign {
+    fn drop(&mut self) {
+        self.0.foreign.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl State {
+    /// Say that the other front end is running a command: until the guard
+    /// is dropped, tools answer `busy` at once, not after the command.
+    pub fn foreign(self: &Arc<Self>) -> Foreign {
+        self.foreign.fetch_add(1, Ordering::SeqCst);
+        Foreign(self.clone())
+    }
+
+    fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst) || self.foreign.load(Ordering::SeqCst) > 0
+    }
 }
 
 const LOG_LINES: usize = 500;
@@ -187,6 +215,11 @@ impl Api {
         self.opts.mode
     }
 
+    /// What the interface keeps beside the session.
+    pub fn state(&self) -> &Arc<State> {
+        &self.state
+    }
+
     /// Ask a running prove to stop.
     pub fn stop(&self) {
         self.worker.stop();
@@ -195,6 +228,20 @@ impl Api {
     /// Called with every progress event of a prove (`None` to end it).
     pub fn set_progress_hook(&self, hook: Option<ProgressHook>) {
         self.state.inner.lock().unwrap().hook = hook;
+    }
+
+    /// Called with the tool's name after every call that may have changed
+    /// the session or the proposals, so that another front end on the same
+    /// session can redraw.
+    pub fn set_change_hook(&self, hook: Option<ChangeHook>) {
+        self.state.inner.lock().unwrap().changed = hook;
+    }
+
+    fn changed(&self, tool: &str) {
+        let hook = self.state.inner.lock().unwrap().changed.clone();
+        if let Some(h) = hook {
+            h(tool);
+        }
     }
 
     /// True for the tools that hold the shell thread for long: a caller
@@ -210,7 +257,9 @@ impl Api {
 
     /// Reserve the shell thread for a long call, or say it is busy.
     pub fn begin_long(&self) -> Result<Long, ApiError> {
-        if self.state.busy.swap(true, Ordering::SeqCst) {
+        if self.state.foreign.load(Ordering::SeqCst) > 0
+            || self.state.busy.swap(true, Ordering::SeqCst)
+        {
             return Err(busy());
         }
         Ok(Long(self.state.clone()))
@@ -222,7 +271,7 @@ impl Api {
             let long = self.begin_long()?;
             return self.call_long(tool, args, long);
         }
-        match tool {
+        let reply = match tool {
             "script_check" => self.script_check(args),
             "session_summary" => self.session_summary(),
             "session_log" => self.session_log(args),
@@ -242,18 +291,24 @@ impl Api {
             "proposal_list" => self.proposal_list(args),
             "proposal_undo" => self.proposal_undo(args),
             _ => Err(err("not_found", format!("no tool named {tool}"))),
+        };
+        if matches!(tool, "proposal_add" | "proposal_undo") {
+            self.changed(tool);
         }
+        reply
     }
 
     /// A long tool, with the reservation from [`Api::begin_long`].
     pub fn call_long(&self, tool: &str, args: &Value, long: Long) -> Reply {
-        let _long = long;
-        match tool {
+        let reply = match tool {
             "session_open" => self.session_open(args),
             "tcl_eval" => self.tcl_eval(args),
             "prove" => self.prove(args),
             _ => Err(err("not_found", format!("no long tool named {tool}"))),
-        }
+        };
+        drop(long);
+        self.changed(tool);
+        reply
     }
 
     /// Run `f` on the shell thread. Without `long`, the call is a short
@@ -263,7 +318,7 @@ impl Api {
         long: bool,
         f: impl FnOnce(&Shell) -> R + Send + 'static,
     ) -> Result<R, ApiError> {
-        if !long && self.state.busy.load(Ordering::SeqCst) {
+        if !long && self.state.is_busy() {
             return Err(busy());
         }
         self.worker
@@ -298,6 +353,19 @@ impl Api {
             .iter()
             .map(|f| self.below_root(f))
             .collect::<Result<Vec<_>, _>>()?;
+        // A model's common slip, answered with what to do instead.
+        if let Some(f) = files
+            .iter()
+            .find(|f| f.extension().is_some_and(|e| e == "tcl"))
+        {
+            return Err(err(
+                "arguments",
+                format!(
+                    "{} is a Tcl script: pass it as `script`, not in `files`",
+                    f.display()
+                ),
+            ));
+        }
         let tcl = match (&script, files.is_empty()) {
             (Some(_), false) => return Err(err("arguments", "give `script` or `files`, not both")),
             (None, true) => return Err(err("arguments", "give `script` or `files`")),
@@ -692,16 +760,17 @@ impl Api {
         self.state.inner.lock().unwrap().last_prove = None;
         let (api, args) = (self.clone(), args.clone());
         std::thread::spawn(move || {
-            let _long = long;
             let r = api.prove(&args);
             api.state.inner.lock().unwrap().last_prove = Some(r);
+            drop(long);
+            api.changed("prove");
         });
         Ok(json!({"schema": "informal.prove/1", "started": true}))
     }
 
     fn prove_status(&self) -> Reply {
         let i = self.state.inner.lock().unwrap();
-        let running = self.state.busy.load(Ordering::SeqCst);
+        let running = self.state.is_busy();
         let mut reply = json!({"schema": "informal.progress/1", "running": running});
         if let Some(p) = &i.progress {
             reply["total"] = json!(p.total);
@@ -906,6 +975,11 @@ impl Api {
         Ok(json!({"schema": "informal.undo/1", "undone": undone, "reset": reset}))
     }
 
+    /// The proposals as recorded, for the front end that shows them.
+    pub fn proposals(&self) -> Vec<Proposal> {
+        self.state.inner.lock().unwrap().proposals.clone()
+    }
+
     /// A person's answer to a pending proposal: apply it, or reject it.
     /// Not a tool: only the front end a person works in calls it.
     pub fn decide(&self, id: u32, accept: bool) -> Reply {
@@ -938,6 +1012,8 @@ impl Api {
         if let Some(q) = i.proposals.iter_mut().find(|q| q.id == id) {
             *q = p.clone();
         }
+        drop(i);
+        self.changed("decide");
         Ok(json!({"schema": "informal.proposal/1", "proposal": p}))
     }
 

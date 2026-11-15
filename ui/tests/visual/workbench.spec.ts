@@ -71,6 +71,15 @@ for (const s of sizes)
         await shot(page, n("completion"));
       });
 
+      test("AI proposals", async ({ page }) => {
+        await ready(page, "fast=1&ai=1");
+        await page.locator(".bottom").getByRole("tab", { name: "Proposals (2)" }).click();
+        await page.getByRole("button", { name: "Accept Assumption m_en_hold" }).click();
+        await expect(page.locator(".table-wrap table.grid tbody tr").filter({ hasText: "m_en_hold" })).toHaveCount(1);
+        await expect(page.locator("footer.statusbar")).toContainText("Idle");
+        await shot(page, n("proposals"));
+      });
+
       test("profiler tab", async ({ page }) => {
         await ready(page);
         await proveAll(page);

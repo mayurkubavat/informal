@@ -309,12 +309,19 @@ fn counter_replies_match_the_goldens() {
         json!({"files": ["tests/fpv/counter/counter.sv"], "top": "counter", "clock": "clk", "reset": "!rst_n"}),
     );
     golden("counter_open_files", &open);
-    // A setup that fails says why, as data: this file is not SystemVerilog.
-    let open = call(
-        &api,
-        "session_open",
-        json!({"files": ["tests/fpv/counter/counter.jg.tcl"]}),
+    // A script given as a design file is pointed to the right argument.
+    let e = api
+        .call(
+            "session_open",
+            &json!({"files": ["tests/fpv/counter/counter.jg.tcl"]}),
+        )
+        .unwrap_err();
+    assert!(
+        e.code == "arguments" && e.message.contains("`script`"),
+        "{e:?}"
     );
+    // A setup that fails says why, as data: this file is not SystemVerilog.
+    let open = call(&api, "session_open", json!({"files": ["README.md"]}));
     assert_eq!(open["ok"], false);
     assert!(
         open["error"].as_str().is_some_and(|e| !e.is_empty()),

@@ -12,7 +12,8 @@ Code: crate `informal-mcp` (`api.rs` the tools, `tools.rs` their schemas,
 (golden replies in `tests/golden/`, every reply checked against its schema,
 a scripted client that finds a failing assertion and proposes a fix) and
 `crates/informal-cli/tests/mcp.rs` (the process on standard input and
-output).
+output, and `--connect`). In the app: `ui/src-tauri/src/ai.rs` (the socket),
+`ui/src/components/Proposals.tsx` (the cards), `ui/tests/e2e/proposals.spec.ts`.
 
 ## Start it
 
@@ -55,9 +56,41 @@ configuration looks like this:
 | `auto` | yes | applied at once, tagged AI-added | runs |
 
 `auto` is meant for an evaluation sandbox. In `propose` mode the person's
-answer comes from the front end they work in (`Api::decide`); the desktop
-app's proposal cards are planned, and until they exist a proposal made over
-standard input and output stays pending.
+answer comes from the front end they work in (`Api::decide`): the desktop
+app shows each proposal as a card with Accept and Reject (below). A server
+started on its own with `informal mcp` has no such front end, so a proposal
+made there stays pending.
+
+## The session a person is looking at
+
+The desktop app serves its own session, so an agent and a person work on
+the same design, properties and results:
+
+```sh
+informal mcp --connect            # the most recently started app
+informal mcp --connect SOCKET     # a particular app's socket
+```
+
+`--connect` starts no session; it passes the protocol between its standard
+streams and the app's socket, so a client is configured as above with
+`"args": ["mcp", "--connect"]`.
+
+- The app listens on a Unix socket in a directory only the user can enter
+  (`$XDG_RUNTIME_DIR/informal/app-<pid>.sock`). The environment variable
+  `INFORMAL_AI_SOCKET` moves it, or turns it off with `off`;
+  `INFORMAL_AI_MODE` sets the mode (default `propose`).
+- What the agent proposes appears in the app's **Proposals** tab as a card:
+  what it is, its text, the agent's reason, and Accept and Reject. The tab
+  and a note in the status bar appear when there is a proposal; nothing
+  else moves. Accepting applies the change, tagged **AI** in the property
+  table; a result found with an AI-added change in the model is marked
+  **under AI**, and the Details tab names what it stands on. Both answers
+  are recorded in the console and in Messages.
+- After each of the agent's calls that may have changed something, the app
+  redraws from the session. A prove the agent starts shows its progress
+  like any other, and Stop stops it.
+- While a command of the person's runs or waits, the agent's tools answer
+  `busy` at once. A client that hangs up stops only a prove it started.
 
 ## Tools
 
@@ -155,6 +188,6 @@ frames come in one reply.
   the protocol's cancellation and progress notifications work meanwhile.
 - No check yet that an AI-added assumption over-constrains the design or
   makes a proof vacuous (planned).
-- The desktop app does not serve the interface yet, so an outside agent
-  cannot share the session a person is looking at (planned, with proposal
-  cards).
+- The agent cannot yet see or drive the window itself: what the person has
+  selected, which trace is open, signals in the waveform (planned).
+- The app's own Ask mode does not use the tools yet (planned).
