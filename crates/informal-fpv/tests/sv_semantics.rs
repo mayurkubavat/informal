@@ -385,3 +385,97 @@ fn rtl_form_gives_the_same_answers() {
         wrong.join("\n  ")
     );
 }
+
+/// Concurrent properties written in the design's source: `assert property`,
+/// `assume property` and `cover property` statements, comments left out.
+fn rtl_property_statements(text: &str) -> usize {
+    let mut code = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix("//") {
+            rest = r.split_once('\n').map_or("", |(_, r)| r);
+            code.push('\n');
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.split_once("*/").map_or("", |(_, r)| r);
+            code.push(' ');
+        } else {
+            let ch = rest.chars().next().unwrap();
+            code.push(ch);
+            rest = &rest[ch.len_utf8()..];
+        }
+    }
+    let words: Vec<&str> = code
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    words
+        .windows(2)
+        .filter(|w| matches!(w[0], "assert" | "assume" | "cover") && w[1] == "property")
+        .count()
+}
+
+/// No property written in a design is dropped without a word: after
+/// `elaborate`, the script and a `prove -all` with no engines, every design that the script does not expect to fail has
+/// at least as many RTL properties in its table (names under the top
+/// module, any status, an error included) as its source has `assert`,
+/// `assume` and `cover property` statements. A front-end change that
+/// loses them, and a shell that then reports an empty table and exit 0,
+/// fail here.
+#[test]
+fn no_rtl_property_is_dropped() {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("tests/sv"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "sv"))
+        .collect();
+    files.sort();
+    let mut checked = 0;
+    let mut wrong = Vec::new();
+    for f in &files {
+        let c = parse(f);
+        let want = rtl_property_statements(&std::fs::read_to_string(f).unwrap());
+        if want == 0 || c.error.is_some() {
+            continue;
+        }
+        let work = work_dir(&format!("dropped-{}", c.top));
+        let sh = Shell::new(Session::new(Vec::new(), work.clone()), Flavor::Jg);
+        let mut script = vec![
+            format!("analyze -sv {{{}}}", c.path.display()),
+            format!("elaborate -top {}", c.top),
+        ];
+        script.extend(c.commands.iter().cloned());
+        // Some commands (set_lowering) take effect at the next prove, which
+        // also collects the RTL properties again; with no engines it only
+        // builds the models.
+        script.push("prove -all".into());
+        if let Some(e) = script.iter().find_map(|cmd| sh.eval(cmd).err()) {
+            wrong.push(format!("{}: {e}", c.top));
+            continue;
+        }
+        let prefix = format!("{}.", c.top);
+        let got = sh
+            .session
+            .borrow()
+            .props
+            .iter()
+            .filter(|p| p.name.starts_with(&prefix))
+            .count();
+        checked += 1;
+        if got < want {
+            wrong.push(format!(
+                "{}: {want} property statements in the source, {got} RTL properties in the table",
+                c.top
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    assert!(
+        checked >= 10,
+        "only {checked} designs with RTL properties were checked"
+    );
+    assert!(
+        wrong.is_empty(),
+        "RTL properties went missing:\n  {}",
+        wrong.join("\n  ")
+    );
+}

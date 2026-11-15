@@ -51,3 +51,13 @@ module as `rf_<name>: assert property (...)` under a default clocking and
 default disable for the script's clock and reset, and must get the answer
 the command form is expected to get. A new design of that shape is covered
 without writing anything.
+
+## No property is lost
+
+`no_rtl_property_is_dropped` counts the `assert`, `assume` and `cover
+property` statements in each design's source and requires at least that
+many properties under the top module's name in the table after the script
+and a `prove -all` (with no engines, so only the models are built). A
+property may end with any status, an error naming why included, but it may
+not vanish. So every module in a design here must be instantiated.
+Immediate assertions are not counted yet.
