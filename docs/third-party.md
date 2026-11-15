@@ -21,6 +21,7 @@ branch named `informal` in that checkout and list it in the table at the end.
 | CaDiCaL (standalone) | MIT | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
 | rIC3 | BSD-3-Clause (LICENSE file; its Cargo.toml says GPL-3.0) | `4d63899` (`v1.5.2-117`) | github.com/gipsyh/rIC3 | External engine and soundness oracle (`ric3`, `ric3-ic3`, `ric3-bmc`) | `~/.local/bin/ric3` symlink |
 | ABC | BSD-style (UC Berkeley) | `77875a3b6` (2026-11-01, master) | github.com/berkeley-abc/abc | External engines `abc-pdr`, `abc-pdr-pp`, `abc-bmc3` | `~/.local/bin/abc` symlink |
+| btor2tools (BtorSim) | MIT | `e6941e3` (2026-10-21, master) | github.com/Boolector/btor2tools | Tests only: `scripts/btorsim_replay.py` replays the counterexamples of `tests/sv` in the gate; never linked or shipped | `INFORMAL_TOOLS_DIR/btor2tools/build/bin/btorsim`, or `BTORSIM` |
 
 How each one reaches InFormal: CaDiCaL and Bitwuzla are linked
 statically; rIC3 and ABC run as separate programs; svlang is compiled in
@@ -51,6 +52,9 @@ cd bitwuzla && ./configure.py --static --prefix "$PWD/install" && \
 
 # CaDiCaL standalone (only needed without Bitwuzla)
 cd cadical && ./configure -fPIC && make -j16 && cd ..
+
+# btor2tools (BtorSim, for the gate's witness replay)
+git clone https://github.com/Boolector/btor2tools && (cd btor2tools && ./configure.sh && cd build && make)
 
 # rIC3 (stable Rust)
 cd rIC3 && cargo build --release && cd ..

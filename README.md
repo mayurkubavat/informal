@@ -219,7 +219,9 @@ scripts/check.sh        # hygiene, fmt, clippy, all Rust and UI tests: run befor
 
 `scripts/check.sh` does not need the benchmark models. Its exit status is
 the result, and its last line is `GATE: PASS` or `GATE: FAIL (<step>)`. It
-needs CaDiCaL, Bitwuzla and `ric3` on `PATH`: under the gate a test whose
+needs CaDiCaL, Bitwuzla, `ric3` on `PATH` and BtorSim (it replays every
+counterexample of the test designs; `scripts/btorsim_replay.py` says where
+it is looked for): under the gate a test whose
 tool is missing fails (plain `cargo test` prints why and skips it;
 `scripts/check.sh --allow-missing-tools` does the same, but is not a valid
 gate run). The gate clears `INFORMAL_*` tuning variables, checks the Rust

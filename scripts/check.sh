@@ -114,9 +114,25 @@ fi
 # One process per test, engine tests one at a time (.config/nextest.toml).
 # nextest does not run doc tests, hence the second command.
 step "rust tests (workspace: nextest and doc tests; app)"
+# The tests/sv run keeps its models for the witness replay below.
+rm -rf target/gate-models
+export INFORMAL_KEEP_MODELS="$PWD/target/gate-models"
 cargo nextest run --locked --workspace
+unset INFORMAL_KEEP_MODELS
 cargo test --locked --workspace --doc
 (cd ui/src-tauri && cargo test --locked)
+
+# Every counterexample and cover trace of tests/sv, replayed by BtorSim: a
+# reader and simulator of the model that shares no code with InFormal.
+step "witness replay (BtorSim)"
+cargo build --locked -q -p informal-cli
+replay=0
+python3 -I scripts/btorsim_replay.py --designs tests/sv --models target/gate-models || replay=$?
+if [ "$replay" = 2 ] && [ "$strict" = 0 ]; then
+    echo "skipped: no BtorSim"
+elif [ "$replay" != 0 ]; then
+    exit 1
+fi
 
 step "ui: tsc and vitest"
 (cd ui && npx --no-install tsc --noEmit && npx --no-install vitest run)
