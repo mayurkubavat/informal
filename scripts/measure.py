@@ -121,6 +121,8 @@ def freeze(_args):
         sys.exit("measure: this clone has uncommitted changes; a frozen binary must be a commit")
     commit = git("rev-parse", "--short=7", "HEAD")
     env = dict(os.environ)
+    # A queue job's PATH need not hold rustup's directory.
+    env["PATH"] = os.path.expanduser("~/.cargo/bin") + os.pathsep + env.get("PATH", "")
     subprocess.run(["cargo", "build", "--release", "--locked", "-p", "informal-cli"], cwd=REPO, check=True, env=env)
     os.makedirs(os.path.join(REPO, "bench/bin"), exist_ok=True)
     dest = os.path.join(REPO, "bench/bin", f"informal-{commit}")
