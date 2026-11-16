@@ -136,6 +136,10 @@ def git_head() -> str:
     """The commit of main that the InFormal binary was built from: the
     point where this checkout leaves origin/main, marked +local when the
     tool's own sources differ from it."""
+    if os.environ.get("INFORMAL_COMMIT"):
+        # The binary was built earlier and the checkout has moved on.
+        return os.environ["INFORMAL_COMMIT"][:9]
+
     def git(*a):
         return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True).stdout.strip()
     base = git("merge-base", "HEAD", "origin/main") or git("rev-parse", "HEAD")
@@ -683,6 +687,8 @@ def cmd_run(args) -> None:
                         got = ", ".join(f"{v} {k}" for k, v in sorted(tally(r["props"]).items())) or r["refusal"] \
                             or ", ".join(f"{v} {k}" for k, v in sorted(r.get("counts", {}).items())) or "no assertions"
                         print(f"{c['name']:36} {flow:8} {config:8} {r['wall_s']:8.2f}s  {got}", flush=True)
+                        if r["timeout"]:
+                            break  # a time limit is not a time: no point repeating it
     print(f"compare: results in {out_file}, logs in {run_dir}")
 
 
@@ -731,13 +737,18 @@ def read_results(path: Path) -> tuple[dict, list[dict]]:
         r = json.loads(line)
         if r["record"] == "run":
             meta = r
-        elif r.get("rep", 0) == 0:
+        else:
             recs.append(r)
     # A later record for the same case, flow and configuration replaces an
     # earlier one (a rerun of one case appended to the same file).
     last: dict = {}
     for r in recs:
-        last[(r["case"], r["flow"], r["config"])] = r
+        if r.get("rep", 0) == 0:
+            last[(r["case"], r["flow"], r["config"])] = dict(r, walls=[], cpus=[])
+        cur = last.get((r["case"], r["flow"], r["config"]))
+        if cur is not None:
+            cur["walls"].append(r["wall_s"])
+            cur["cpus"].append(r["cpu_s"])
     return meta, list(last.values())
 
 
@@ -942,16 +953,35 @@ def cmd_report(args) -> None:
         w(f"| {n} | {src} | {len(keys)} | " + " | ".join(cells) + " |")
     w("")
 
-    if meta.get("purpose") == "timing":
+    timing = Path(args.timing) if args.timing else None
+    if timing or meta.get("purpose") == "timing":
+        import statistics
+        tmeta, trecs = read_results(timing) if timing else (meta, recs)
         w("## Time\n")
-        w("Wall-clock seconds for a whole tool run on a design (all its properties), by configuration. "
-          "InFormal runs its engines in parallel on several cores; SymbiYosys and EBMC run one engine per "
-          "configuration, so CPU seconds are given too.\n")
-        w("| Design | Flow | Configuration | Wall s | CPU s |")
-        w("| --- | --- | --- | ---: | ---: |")
-        for r in recs:
-            if r["accepted"]:
-                w(f"| {r['case']} | {r['flow']} | {r['config']} | {r['wall_s']:.2f} | {r['cpu_s']:.2f} |")
+        w(f"From `bench/compare/results/{(timing or results).name}`: run `{tmeta.get('id')}`, started {tmeta.get('started')}, "
+          f"machine load at start {tmeta.get('load_at_start')} on {tmeta.get('cpus')} CPUs, InFormal `{tmeta.get('tools', {}).get('informal')}`, "
+          f"the same limits and tools as above.\n")
+        w("Seconds for one tool run on a design, all its properties: the median of the repeats, with the "
+          "lowest and highest wall time. InFormal runs its engines in parallel on several cores; SymbiYosys "
+          "and EBMC run one engine per configuration, so CPU seconds are given too. A run that reached the "
+          "time limit is shown as such and was not repeated. SymbiYosys and EBMC need all of their listed "
+          "configurations to give the verdicts of the tables above, so the last column adds them up; for "
+          "InFormal it is the `default` run alone (`inhouse` is the same run without the external engines).\n")
+        w("| Design | Flow | Configuration | Runs | Wall s (median) | Wall s (range) | CPU s (median) | Flow total, wall s |")
+        w("| --- | --- | --- | ---: | ---: | --- | ---: | ---: |")
+        for n in names:
+            for flow in FLOWS:
+                mine = [r for r in trecs if r["case"] == n and r["flow"] == flow and r["accepted"]]
+                total = sum(statistics.median(r["walls"]) for r in mine
+                            if not (flow == "informal" and r["config"] == "inhouse"))
+                for k, r in enumerate(mine):
+                    wall = statistics.median(r["walls"])
+                    limit = " (time limit)" if r["timeout"] else ""
+                    w(f"| {n} | {flow} | {r['config']} | {len(r['walls'])} | {wall:.2f}{limit} | "
+                      f"{min(r['walls']):.2f} to {max(r['walls']):.2f} | {statistics.median(r['cpus']):.2f} | "
+                      f"{total:.2f} |" if k == 0 else
+                      f"| | | {r['config']} | {len(r['walls'])} | {wall:.2f}{limit} | "
+                      f"{min(r['walls']):.2f} to {max(r['walls']):.2f} | {statistics.median(r['cpus']):.2f} | |")
         w("")
     dest = Path(args.out) if args.out else REPO / "docs/compare.md"
     dest.write_text("\n".join(out))
@@ -1005,6 +1035,7 @@ def main() -> None:
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("report")
     p.add_argument("--results")
+    p.add_argument("--timing", help="a run file made with --purpose timing, for the time table")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_report)
     args = ap.parse_args()
