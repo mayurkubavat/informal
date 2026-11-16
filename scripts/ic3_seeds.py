@@ -15,7 +15,8 @@ usage: python3 -I scripts/ic3_seeds.py --models DIR|LIST [--bin PATH]
 Run it on a quiet machine. Where the dvq job queue is installed
 (~/.local/bin/dvq), each seed's bench waits in its formal class with 12
 CPUs, the count the 300 s timeouts were measured with, and the --mem-gb cap
-plus 2G; DVQ= in the environment runs the benches directly, and
+plus 2G (default --mem-gb 10, so 12G: a request near the queue's budget
+would wait for ever, and one it can never start is refused); DVQ= in the environment runs the benches directly, and
 DVQ_CPU/DVQ_MEM change the reservation. Compare two builds or settings by running it
 twice with different --tag/--bin/--env and then --compare on the two
 summaries: a model counts as gained or lost only when its solve count
@@ -37,8 +38,28 @@ def dvq_prefix(env, mem_gb):
     if not dvq or env.get("DVQ_CLASS") or env.get("RDEV_JOB_ID"):
         return []
     env.setdefault("DVQ_CPU", "1200%")
-    env.setdefault("DVQ_MEM", f"{-int(-(mem_gb + 2) // 1)}G")
+    want = -int(-(mem_gb + 2) // 1)
+    # The queue hands out at most its budget (RDEV_QUEUE_BUDGET, 75% of RAM:
+    # about 20G on the 26G box) and also needs that much free at the start,
+    # so a request near the budget can wait for ever. Refuse one that
+    # cannot fit instead of waiting.
+    budget = queue_budget_gb()
+    if budget and want > budget * 0.65:
+        sys.exit(f"ic3_seeds: --mem-gb {mem_gb:g} asks the queue for {want}G, more than it can start "
+                 f"on this machine (budget {budget:.0f}G); use --mem-gb {max(1, int(budget * 0.65) - 2)} or less")
+    env.setdefault("DVQ_MEM", f"{want}G")
     return dvq.split()
+
+
+def queue_budget_gb():
+    """The job queue's memory budget in GB (rdev queue status --json), or None."""
+    try:
+        out = subprocess.run(["rdev", "queue", "status", "--json"], capture_output=True, text=True, timeout=20).stdout
+        d = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    v = d.get("memory", {}).get("budget") if isinstance(d, dict) else None
+    return v / (1 << 30) if isinstance(v, (int, float)) and v > 0 else None
 
 
 def run(args):
@@ -147,7 +168,7 @@ def main():
     p.add_argument("--timeout", type=int, default=300)
     p.add_argument("--jobs", type=int, default=3)
     p.add_argument("--seeds", type=int, default=3)
-    p.add_argument("--mem-gb", type=float, default=16)
+    p.add_argument("--mem-gb", type=float, default=10)
     p.add_argument("--env", action="append", default=[])
     p.add_argument("--tag", default="run")
     p.add_argument("--out", default="bench/seeds")
