@@ -33,8 +33,11 @@ python3 -I scripts/measure.py table bench/measure/<run> [<run> ...] \
     --expected bench/hwmcc24/expected.json --format md   # or csv, tex
 ```
 
-Each model runs in its own cgroup scope with a hard memory limit and no
-swap. Before each model the harness measures how much CPU is in use
+On the Linux box a run waits in the job queue (`dvq`, see
+`~/.claude/CLAUDE.md` there) as a `formal` job that reserves every CPU, so
+no other queued work starts beside it; `DVQ=` runs it directly. Each model
+runs in its own scope in `rdev.slice`, where the queue counts it, with a
+hard memory limit and no swap. Before each model the harness measures how much CPU is in use
 outside it and waits until that is under `--max-outside` (default 10% of
 the CPUs), and it refuses to start on a busy machine; each row records the
 value. `--config` is `portfolio` or one engine of `config/engines.toml`

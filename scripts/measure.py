@@ -47,7 +47,12 @@ import threading
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SLICE = "informal-measure.slice"
+# Each model runs in a scope of its own in rdev.slice, where the box's job
+# queue counts it (~/remote-development/doc/queue.md); the harness itself
+# waits in the queue as a formal job that reserves every CPU.
+SLICE = "rdev.slice"
+SCOPE_PREFIX = "informal-measure-"
+_seen = {}
 
 
 def sha256(path):
@@ -72,16 +77,22 @@ def busy_seconds():
 
 
 def own_seconds():
-    """CPU seconds the harness's scopes have used (their slice's cpu.stat)."""
+    """CPU seconds the harness's model scopes have used. A scope that has
+    ended keeps the last value read, so the sum only grows."""
     uid = os.getuid()
-    path = f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/{SLICE}/cpu.stat"
+    base = f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/{SLICE}"
     try:
-        for line in open(path):
-            if line.startswith("usage_usec "):
-                return int(line.split()[1]) / 1e6
+        names = [n for n in os.listdir(base) if n.startswith(SCOPE_PREFIX) and n.endswith(".scope")]
     except OSError:
-        pass
-    return 0.0
+        names = []
+    for n in names:
+        try:
+            for line in open(os.path.join(base, n, "cpu.stat")):
+                if line.startswith("usage_usec "):
+                    _seen[n] = int(line.split()[1]) / 1e6
+        except OSError:
+            pass
+    return sum(_seen.values())
 
 
 def outside(secs=3.0):
@@ -206,7 +217,8 @@ def run(args):
         os.makedirs(os.path.join(d, "m"))
         os.symlink(os.path.join(REPO, model), os.path.join(d, "m", os.path.basename(model)))
         load1 = os.getloadavg()[0]
-        cmd = ["systemd-run", "--user", "--scope", "-q", f"--slice={SLICE}",
+        unit = f"{SCOPE_PREFIX}{os.getpid()}-{os.path.basename(d)}-{rep}"
+        cmd = ["systemd-run", "--user", "--scope", "-q", f"--slice={SLICE}", f"--unit={unit}",
                "-p", f"MemoryMax={mem_bytes(args.mem)}", "-p", f"MemoryHigh={high}", "-p", "MemorySwapMax=0",
                binary, "--mem-gb", str(budget), "bench", os.path.join(d, "m"), *each,
                "--timeout", str(args.timeout), "--jobs", "1", "--db", os.path.join(d, "runs.jsonl")]
@@ -348,6 +360,17 @@ def main():
     t.add_argument("--format", choices=["md", "csv", "tex"], default="md")
     args = ap.parse_args()
     os.chdir(REPO)
+    # A run waits in the box's job queue (dvq) when it has one, as a formal
+    # job that reserves every CPU: other queued work does not start beside a
+    # timing run. The memory sits in the per-model scopes, which the queue
+    # counts on their own. DVQ= runs it directly.
+    dvq = os.environ.get("DVQ", os.path.expanduser("~/.local/bin/dvq") + " run formal --").split()
+    if (args.cmd == "run" and dvq and os.access(dvq[0], os.X_OK)
+            and not (os.environ.get("DVQ_CLASS") or os.environ.get("RDEV_JOB_ID"))):
+        env = dict(os.environ)
+        env.setdefault("DVQ_CPU", f"{os.cpu_count() * 100}%")
+        env.setdefault("DVQ_MEM", "1G")
+        os.execvpe(dvq[0], [*dvq, sys.executable, "-I", os.path.abspath(__file__), *sys.argv[1:]], env)
     return {"freeze": freeze, "run": run, "table": table}[args.cmd](args)
 
 
