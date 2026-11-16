@@ -258,6 +258,7 @@ impl Engine for Isolated {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        crate::die_with_parent(&mut cmd);
         let mut child = cmd
             .spawn()
             .with_context(|| format!("starting {} for {}", self.exe.display(), self.name))?;

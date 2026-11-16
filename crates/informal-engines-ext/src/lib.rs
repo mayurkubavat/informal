@@ -159,6 +159,34 @@ impl ExternalEngine {
     }
 }
 
+/// In the child before `exec`: die with the thread that started it. The
+/// process group kill covers a timeout, a cancel and a normal end, but not
+/// informal itself being killed (a queue or `timeout` killing it, a
+/// memout exit): an engine in its own process group then lived on, once
+/// an ABC 52 minutes past a 30 s limit at 10 GB. The starting thread waits
+/// for the engine, so it is alive exactly as long as the engine should be.
+#[cfg(target_os = "linux")]
+pub fn die_with_parent(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let parent = std::process::id() as libc::pid_t;
+    // SAFETY: only async-signal-safe calls between fork and exec.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // The parent may have died before the call above.
+            if libc::getppid() != parent {
+                libc::_exit(1);
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn die_with_parent(_cmd: &mut Command) {}
+
 /// Kill the engine's whole process group (the engine and its children).
 fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
@@ -350,6 +378,7 @@ impl Engine for ExternalEngine {
         // Own process group, so a timeout kills the engine and every child it started.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        die_with_parent(&mut cmd);
         let mut child = cmd.spawn().with_context(|| {
             format!(
                 "starting '{}' for engine '{}'",
