@@ -239,6 +239,12 @@ because of this comparison and is listed in the next section when it lands.
 - svlang accepts the `bind` of common_cells `cc_fifo`, which slang rejects
   when run to the letter of the standard.
 
+EBMC's `bdd-l2s` configuration ran out of memory on 52 cases under the
+2.5 GB cap of the run. Those 52 were run again with 8 GB (run id
+`verdicts-98b4b81-mem8` in the same file; its records replace the first
+ones): none gets a verdict, 38 reach the 120 s time limit and 14 still run
+out of memory.
+
 ## Machines
 
 The verdict run `verdicts-98b4b81` was shared between three machines to
