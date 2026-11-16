@@ -1103,6 +1103,9 @@ fn check_assumptions(s: &mut Session, a: &[String]) -> Result<Value, String> {
         .environment_now(depth)
         .map_err(|e| format!("check_assumptions: {e}"))?;
     match env.allowed {
+        // -conflict: the assumptions that conflict, as a list (empty when
+        // none do).
+        Some(_) if a.flag("-conflict") => Ok(Value::List(env.conflict_set)),
         Some(n) => Ok(Value::from(n.to_string())),
         None => Err("check_assumptions: could not decide (no in-house BMC, or out of time)".into()),
     }

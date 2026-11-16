@@ -313,6 +313,10 @@ pub struct Environment {
     pub allowed: Option<u32>,
     /// The assumptions in force when it ran.
     pub assumptions: Vec<String>,
+    /// On a conflict, a smallest set of them (and `reset`) that conflicts
+    /// on its own: dropping any one of these allows a longer trace. Empty
+    /// when there is no conflict or the model's constraints carry no names.
+    pub conflict_set: Vec<String>,
 }
 
 impl Environment {
@@ -811,6 +815,7 @@ impl Session {
             asked: depth,
             allowed: None,
             assumptions,
+            conflict_set: Vec::new(),
         };
         let (model, _) = informal_svlang::split_trace(btor);
         let probe = |n: u32| -> Option<bool> { self.trace_of_length(model, n) };
@@ -835,9 +840,86 @@ impl Session {
                     env.allowed = Some(0);
                     env.asked = env.asked.max(1);
                 }
+                env.conflict_set = self.conflict_set(model, (lo + 1) as u32);
             }
         }
         env
+    }
+
+    /// The assumptions (and the reset) that conflict within `n` steps: of
+    /// the named constraint lines, drop each owner in turn and keep it out
+    /// while the rest still allow no trace of `n` steps. What is left is a
+    /// smallest conflicting set in the sense that dropping any one member
+    /// allows a trace (not always the smallest of all such sets). A probe
+    /// that cannot decide keeps its owner in the set.
+    fn conflict_set(&self, model: &str, n: u32) -> Vec<String> {
+        let owners = self.constraint_owners(model);
+        let mut names: Vec<&str> = Vec::new();
+        for (_, o) in &owners {
+            if !names.contains(&o.as_str()) {
+                names.push(o);
+            }
+        }
+        // One probe each; past this many, list them all rather than wait.
+        if names.is_empty() || names.len() > 64 {
+            return names.into_iter().map(String::from).collect();
+        }
+        let mut dropped: Vec<&str> = Vec::new();
+        let mut kept = Vec::new();
+        for &name in &names {
+            dropped.push(name);
+            let without: String = model
+                .lines()
+                .enumerate()
+                .filter(|(i, _)| {
+                    !owners
+                        .iter()
+                        .any(|(j, o)| j == i && dropped.contains(&o.as_str()))
+                })
+                .flat_map(|(_, l)| [l, "\n"])
+                .collect();
+            if self.trace_of_length(&without, n) != Some(false) {
+                dropped.pop();
+                kept.push(name.to_string());
+            }
+        }
+        kept
+    }
+
+    /// The constraint lines of `model` that belong to an assumption or to
+    /// the reset, by line index, with the owner's name: the assumption's
+    /// property name, or `reset`. svlang names each constraint line after
+    /// its assumption's label (`top.m_x`, or `m_x` for a script
+    /// assumption); a clock's wave is the model's own and is never listed.
+    fn constraint_owners(&self, model: &str) -> Vec<(usize, String)> {
+        let assumes: Vec<&str> = self
+            .props
+            .iter()
+            .filter(|p| p.enabled && p.kind == Kind::Assume)
+            .map(|p| p.name.as_str())
+            .collect();
+        model
+            .lines()
+            .enumerate()
+            .filter_map(|(i, l)| {
+                let w: Vec<&str> = l.split_whitespace().collect();
+                if w.get(1) != Some(&"constraint") {
+                    return None;
+                }
+                let sym = *w.get(3)?;
+                if sym.ends_with("_reset") && sym.starts_with("svlang") {
+                    return Some((i, "reset".to_string()));
+                }
+                assumes
+                    .iter()
+                    .find(|&&a| {
+                        a == sym
+                            || a.ends_with(&format!(".{sym}"))
+                            || sym.ends_with(&format!(".{a}"))
+                    })
+                    .map(|a| (i, a.to_string()))
+            })
+            .collect()
     }
 
     /// Whether `model` (Btor2, its targets ignored) has a trace of `n`
@@ -896,9 +978,16 @@ impl Session {
                 env.asked
             )),
             Some(a) if a < env.asked => self.log(&format!(
-                "VACUOUS ENVIRONMENT: {named} allow no trace longer than {a} step(s) (asked for {}). Every assertion holds from step {} on whatever the design does, so its proof says nothing beyond that step; find the assumptions that conflict (informal::check_assumptions)",
+                "VACUOUS ENVIRONMENT: {named} allow no trace longer than {a} step(s) (asked for {}). Every assertion holds from step {} on whatever the design does, so its proof says nothing beyond that step; {}",
                 env.asked,
-                a + 1
+                a + 1,
+                match env.conflict_set.as_slice() {
+                    [] => "the constraints carry no names, so the conflict is not narrowed".to_string(),
+                    set => format!(
+                        "these conflict, and dropping any one of them allows a longer trace: {}",
+                        set.join(", ")
+                    ),
+                }
             )),
             Some(_) => self.note(&format!(
                 "environment check: {named} allow traces of {} steps",
