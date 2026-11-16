@@ -1,16 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { bound, KIND_LETTER, sortValue, TASK, time, type SortKey, type ViewProp as Property } from "../model";
+import { cell, KIND_LETTER, OPTIONAL_COLS, sortValue, type ColKey, type SortKey, type ViewProp as Property } from "../model";
 import { Status } from "./Glyph";
 
-export const COLS: { key: SortKey | null; label: string; cls?: string }[] = [
-  { key: "kind", label: "", cls: "c-kind" },
+type Col = { key: SortKey; label: string; cls?: string; title?: string; opt?: ColKey };
+// Every column in order; the optional ones show unless hidden.
+export const COLS: Col[] = [
+  { key: "kind", label: "", cls: "c-kind", title: "Type: A assert, C cover, M assume" },
   { key: "name", label: "Name" },
   { key: "status", label: "Status" },
-  { key: "engine", label: "Engine" },
-  { key: "bound", label: "Bound", cls: "num" },
-  { key: "time", label: "Time", cls: "num" },
-  { key: null, label: "Task" },
+  ...OPTIONAL_COLS.map((c) => ({ key: c.key as SortKey, label: c.label, cls: c.num ? "num" : undefined, title: c.title, opt: c.key })),
 ];
+export const shownCols = (hidden: readonly ColKey[] = []) => COLS.filter((c) => !c.opt || !hidden.includes(c.opt));
 
 // Fixed row height (px, border included; styles.css .grid td) and the header
 // height above the rows. Only the rows in view, plus OVERSCAN above and
@@ -46,6 +46,8 @@ export function PropTable({
   onSelect,
   onOpen,
   onContext,
+  hidden = [],
+  onHeaderContext,
 }: {
   props: Property[];
   total: number;
@@ -54,7 +56,12 @@ export function PropTable({
   onOpen: (p: Property) => void;
   /** Right-click, the Menu key or Shift+F10 on a row; x/y are viewport coordinates. */
   onContext?: (p: Property, x: number, y: number) => void;
+  /** Optional columns not shown. */
+  hidden?: readonly ColKey[];
+  /** Right-click on the header (the column chooser). */
+  onHeaderContext?: (x: number, y: number) => void;
 }) {
+  const cols = shownCols(hidden);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ top: 0, height: 0 });
@@ -163,10 +170,16 @@ export function PropTable({
           </span>
         )}
       </td>
-      <td className="mono dim">{p.status.engine ?? ""}</td>
-      <td className="mono num dim" title={bound(p)}>{bound(p)}</td>
-      <td className="mono num dim">{time(p)}</td>
-      <td className="mono dim">{TASK}</td>
+      {cols
+        .filter((c) => c.opt)
+        .map((c) => {
+          const text = cell(p, c.opt!);
+          return (
+            <td key={c.opt} className={`mono dim ${c.cls ?? ""}`} title={c.opt === "bound" || c.opt === "evidence" ? text : undefined}>
+              {text}
+            </td>
+          );
+        })}
     </tr>
   );
 
@@ -179,34 +192,37 @@ export function PropTable({
       aria-label="Property table (arrow keys, Page Up/Down and Home/End move the selection, Enter opens details)"
     >
       <table className="grid" aria-rowcount={rows.length + 1}>
-        <thead>
+        <thead
+          onContextMenu={(e) => {
+            if (!onHeaderContext) return;
+            e.preventDefault();
+            onHeaderContext(e.clientX, e.clientY);
+          }}
+        >
           <tr aria-rowindex={1}>
-            {COLS.map((c) => (
+            {cols.map((c) => (
               <th
                 key={c.label || "kind"}
                 className={c.cls}
-                aria-sort={c.key && sort?.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : undefined}
-                onClick={() =>
-                  c.key &&
-                  setSort((s) => (s?.key !== c.key ? { key: c.key!, dir: 1 } : s.dir === 1 ? { key: c.key!, dir: -1 } : null))
-                }
-                title={c.key === "kind" ? "Type: A assert, C cover, M assume" : undefined}
+                aria-sort={sort?.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : undefined}
+                onClick={() => setSort((s) => (s?.key !== c.key ? { key: c.key, dir: 1 } : s.dir === 1 ? { key: c.key, dir: -1 } : null))}
+                title={c.title}
               >
                 {c.label}
-                {c.key && sort?.key === c.key && <span className="sort">{sort.dir === 1 ? "▴" : "▾"}</span>}
+                {sort?.key === c.key && <span className="sort">{sort.dir === 1 ? "▴" : "▾"}</span>}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {start > 0 && <tr className="spacer" aria-hidden="true" style={{ height: start * ROW_H }}><td colSpan={COLS.length} /></tr>}
+          {start > 0 && <tr className="spacer" aria-hidden="true" style={{ height: start * ROW_H }}><td colSpan={cols.length} /></tr>}
           {rows.slice(start, end).map((p, k) => row(p, start + k))}
           {end < rows.length && (
-            <tr className="spacer" aria-hidden="true" style={{ height: (rows.length - end) * ROW_H }}><td colSpan={COLS.length} /></tr>
+            <tr className="spacer" aria-hidden="true" style={{ height: (rows.length - end) * ROW_H }}><td colSpan={cols.length} /></tr>
           )}
           {rows.length === 0 && (
             <tr className="empty-row">
-              <td colSpan={COLS.length} className="empty">
+              <td colSpan={cols.length} className="empty">
                 {total ? "No properties match the current filter." : "No properties. Source a JasperGold or VC Formal script, or type commands in the console."}
               </td>
             </tr>

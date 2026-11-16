@@ -34,7 +34,7 @@
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { AiProposal, AiStatus, ConsoleLine, DesignScope, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { AiProposal, AiStatus, ConsoleLine, DesignInfo, DesignScope, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProofStats, ProveProgress, Property, Reply, SessionView } from "./backend";
 import { splitAnswer, type AskDelta, type AskDone, type LlmProviderEntry, type LlmStatus } from "./ask";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
@@ -127,6 +127,42 @@ const mockResults: Record<string, PropStatus> = {
   c_src_hit: { status: "covered", engine: "ric3-bmc", depth: 4, ms: 22 },
 };
 
+// What each result's prove measured (stats.rs ProofStats), as the counter's
+// real run reports it.
+export const MOCK_STATS: Record<string, ProofStats> = {
+  a_max: { engine: "ric3-ic3", wall_ms: 41, cpu_ms: 101, depth: 3, depth_kind: "frames", max_bound: 24, invariant_clauses: 6, evidence: "invariant", peak_rss_kb: 38800 },
+  a_step: { engine: "ric3", wall_ms: 55, cpu_ms: 74, max_bound: 31 },
+  a_never9: { engine: "ric3-bmc", wall_ms: 30, cpu_ms: 87, depth: 11, depth_kind: "trace", max_bound: 11, evidence: "trace", peak_rss_kb: 42112 },
+  c_done: { engine: "ric3-bmc", wall_ms: 31, cpu_ms: 78, depth: 11, depth_kind: "trace", max_bound: 11, evidence: "trace" },
+  c_10: { engine: "ric3-ic3", wall_ms: 29, cpu_ms: 91, depth: 5, depth_kind: "frames", max_bound: 20, invariant_clauses: 3, evidence: "invariant", peak_rss_kb: 45312 },
+};
+
+// `get_design_info -json` for the counter (its real counts).
+export function mockDesignInfo(): DesignInfo {
+  const props = mockSession.props.filter((p) => (p.task ?? "<embedded>") === (mockSession.current_task ?? "<embedded>"));
+  return {
+    top: "counter",
+    files: 1,
+    elaborated: true,
+    design: {
+      instances: 1, modules: 1, inputs: 3, input_bits: 3, outputs: 2, output_bits: 5, flops: 1, flop_bits: 4, latches: 0, latch_bits: 0,
+      memories: [], clocks: [{ signal: "clk", edges: ["posedge"], registers: 1 }], resets: [{ signal: "rst_n", active_high: false, registers: 1 }], undriven: 0,
+    },
+    declared_clocks: ["clk"],
+    declared_reset: "!rst_n",
+    black_boxes: [],
+    task: mockSession.current_task ?? "<embedded>",
+    cut_points: mockSession.tasks?.find((t) => t.name === mockSession.current_task)?.stopats ?? [],
+    properties: {
+      asserts: props.filter((p) => p.kind === "assert").length,
+      covers: props.filter((p) => p.kind === "cover").length,
+      assumptions: props.filter((p) => p.kind === "assume" && p.enabled).length,
+      disabled: props.filter((p) => !p.enabled).length,
+    },
+    model: { nodes: 81, states: 7, state_bits: 14, array_states: 0, inputs: 3, input_bits: 3, constraints: 2, bad: 6, justice: 0, aig: { inputs: 3, latches: 14, ands: 84 } },
+  };
+}
+
 // The portfolio's per-engine record for each result (the proof profiler):
 // the winner first as in mockResults, the rest cancelled when it won.
 const run = (engine: string, outcome: EngineRun["outcome"], ms: number, depth?: number): EngineRun =>
@@ -194,6 +230,16 @@ if (typeof location !== "undefined") {
   if (q.get("llm") === "offline") mockOptions.llmOffline = true;
   if (q.get("design") === "fifo") mockSession.design.hierarchy = MOCK_FIFO;
   if (q.get("design") === "scan") mockSession.design.hierarchy = [];
+  // `?tasks=1`: a second task, FreeQ, with a copy of a_max and a cut point
+  // on q (as `task -create FreeQ -copy a_max; stopat -task FreeQ q`).
+  if (q.get("tasks") === "1") {
+    mockSession.tasks = [{ name: "<embedded>", stopats: [] }, { name: "FreeQ", stopats: ["q"] }];
+    mockSession.current_task = "<embedded>";
+    mockSession.props.push({ name: "FreeQ::a_max", task: "FreeQ", kind: "assert", expr: "q <= 4'd9", enabled: true, status: { status: "unprocessed" } });
+    mockResults["FreeQ::a_max"] = { status: "cex", engine: "ric3-bmc", depth: 1, ms: 18 };
+    MOCK_ENGINES["FreeQ::a_max"] = [run("ric3-bmc", "won", 18, 1), run("ric3-ic3", "killed", 19, 1)];
+    MOCK_STATS["FreeQ::a_max"] = { engine: "ric3-bmc", wall_ms: 18, cpu_ms: 40, depth: 1, depth_kind: "trace", max_bound: 1, evidence: "trace" };
+  }
   const extra = Math.min(100_000, Math.max(0, Number(q.get("props")) || 0));
   if (extra) mockSession.props.push(...generatedProps(extra));
 }
@@ -310,6 +356,7 @@ function step(run: Run) {
       prop.status = { ...final };
       prop.trace = MOCK_TRACES[p.name] ?? null;
       prop.engines = (MOCK_ENGINES[p.name] ?? []).map((e) => ({ ...e }));
+      prop.stats = MOCK_STATS[p.name] ?? null;
       reset(p, { ...final, engines: prop.engines.map((e) => ({ ...e })) });
       engineLine(p.name, final.engine ?? "ric3", final.status === "proven" || final.status === "unreachable" ? "unsat" : "sat", false);
       mockEvents.emit("console-line", { kind: "out", text: lineFor(p.name, final) });
@@ -345,7 +392,7 @@ function startProve(props: Property[], onEnd?: () => void): Promise<Reply> {
       timer: null,
       resolve,
     };
-    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null, engines: [] });
+    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null, engines: [], stats: null });
     active = run;
     if (!props.length) return finish(run, "done");
     fill(run);

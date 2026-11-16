@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace, mockUiState } from "./mock";
+import { mock, mockDesignInfo, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace, mockUiState } from "./mock";
 import type { AskDelta, AskDone, LlmProviderEntry, LlmStatus } from "./ask";
 
 export type StatusWord =
@@ -40,6 +40,82 @@ export interface Property {
   // The AI-added assumptions (by name) and cut points ("stopat <signal>")
   // that were in the model of the last prove: the result stands on them.
   under_ai?: string[];
+  // The task it belongs to (decision D20); absent from older backends,
+  // which have only "<embedded>". Outside it the name is "<task>::<name>".
+  task?: string;
+  // A copy of a property written in the RTL: the original's name.
+  copy_of?: string | null;
+  // What the last prove measured (informal-fpv stats.rs); absent before
+  // a prove and when no engine ran.
+  stats?: ProofStats | null;
+  // What the vacuity checks found for a proven assertion
+  // ("non-vacuous", "vacuous", ...); absent when they did not look.
+  vacuity?: string | null;
+}
+
+// Per property, what the last prove measured. Only measured values are
+// present: a field the engines did not report is absent.
+export interface ProofStats {
+  engine?: string;
+  wall_ms: number;
+  // Process CPU time, engine processes included; can exceed wall time.
+  cpu_ms?: number;
+  // Peak resident memory, only when the high-water mark rose during this
+  // property's run.
+  peak_rss_kb?: number;
+  depth?: number;
+  // What `depth` counts: trace length, k of k-induction, IC3 frames, or
+  // the BMC bound an undetermined run reached.
+  depth_kind?: "trace" | "k" | "frames" | "bound";
+  max_bound?: number;
+  invariant_clauses?: number;
+  evidence?: string;
+  certificate?: string;
+}
+
+// `get_design_info -json` (informal-fpv stats.rs DesignInfo).
+export interface DesignCounts {
+  instances: number;
+  modules: number;
+  inputs: number;
+  input_bits: number;
+  outputs: number;
+  output_bits: number;
+  flops: number;
+  flop_bits: number;
+  latches: number;
+  latch_bits: number;
+  memories: { name: string; words: number; width: number }[];
+  clocks: { signal: string; edges: string[]; registers: number }[];
+  resets: { signal: string; active_high: boolean; registers: number }[];
+  undriven: number;
+}
+export interface ModelCounts {
+  nodes: number;
+  states: number;
+  state_bits: number;
+  array_states: number;
+  inputs: number;
+  input_bits: number;
+  constraints: number;
+  bad: number;
+  justice: number;
+  aig?: { inputs: number; latches: number; ands: number };
+  aig_error?: string;
+}
+export interface DesignInfo {
+  top: string | null;
+  files: number;
+  elaborated: boolean;
+  design: DesignCounts | null;
+  declared_clocks: string[];
+  declared_reset: string | null;
+  black_boxes: string[];
+  task: string;
+  cut_points: string[];
+  properties: { asserts: number; covers: number; assumptions: number; disabled: number };
+  model: ModelCounts | null;
+  model_error?: string;
 }
 
 // A change an agent asked for through the AI interface
@@ -128,6 +204,10 @@ export interface SessionView {
   clocks: { signal: string; edge: string }[];
   reset: string | null;
   props: Property[];
+  // The tasks, "<embedded>" first, and the current one (absent from older
+  // backends: one task).
+  tasks?: { name: string; stopats: string[] }[];
+  current_task?: string;
   time_limit: { secs: number; nanos: number };
   workdir: string;
 }
@@ -227,6 +307,14 @@ export const backend = {
   // The flavor the shell started in (a startup script picks it).
   flavor: () => invokeOr<Flavor>("current_flavor", {}, () => "jg"),
   evalTcl: (script: string) => call("shell_eval", { script }),
+  // The Design Info panel: the design's counts and the current task's
+  // model size. Builds the model, so it is asked for, not polled.
+  designInfo: async (): Promise<DesignInfo> => {
+    if (!inTauri) return mockDesignInfo();
+    const r = await call("shell_eval", { script: "get_design_info -json" });
+    if (!r.ok) throw new Error(r.result);
+    return JSON.parse(r.result) as DesignInfo;
+  },
   source: (path: string) => call("shell_source", { path }),
   setFlavor: (flavor: Flavor) => call("shell_flavor", { flavor }),
   // Ask a running prove to stop. The prove's own call then resolves with the
