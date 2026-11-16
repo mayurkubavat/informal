@@ -567,6 +567,19 @@ eight models clearly gained (the seven above without p607, plus p514
 and veer_axi-p06) and none lost. Folding is now the default in the IC3
 engines; `INFORMAL_FOLD=0` turns it off.
 
+*Follow-up (2026-11-16).* The k-induction engines fold too (6d750c5),
+with their own check on the loaded model (`certify::check_kind_folded`).
+Hard set, informal-kind-ic3, 300 s, 2 seeds: 4, 6 solved (mean 5.0)
+against 2, 2 unfolded; cv32e40x-p299 and p607 gained on both seeds,
+nothing lost.
+
+*Note on the H16, H18 and H19 runs.* Those arms ran while other
+threads' jobs shared the machine. A later A/B on a quiet machine gave
+single IC3 with folding 14, 13, 13 (mean 13.3) on 04fdf49 and 14, 13,
+12 (13.0) on 5597fa0, so the build did not regress: their baseline of
+10.3 was load. Each of those arms is compared only with a baseline run
+under the same conditions.
+
 ### H18. The shared lemma pool is a trace: import it without asking (prediction, 2026-11-14)
 
 *Evidence.* The 4-worker IC3 re-proves every lemma it takes from another
