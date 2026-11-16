@@ -363,12 +363,9 @@ fn certified(
             let mut inv = certify::lift_folded(&orig, &p.latch_map, p, &lemmas, f.ok)?;
             inv.extend(certify::equalities(&p.merged));
             certify::check_folded(&orig, &inv, &|| solver(ctx))?;
-            // The check reads the fold's `ok` as true everywhere.
-            inv.retain(|c| !c.contains(&certify::OK));
-            for c in &mut inv {
-                c.retain(|&l| l != certify::OK ^ 1);
-            }
-            cert = Some(Certificate::TwoStep { clauses: inv });
+            cert = Some(Certificate::TwoStep {
+                clauses: without_ok(inv),
+            });
             return Ok(());
         }
         let mut inv = certify::lift(&orig, &p.latch_map, p, &lemmas)?;
@@ -381,6 +378,17 @@ fn certified(
         Ok(())
     })();
     Checked::new(report_certificate(req, r, t, ctx), cert)
+}
+
+/// The clauses of a folded model's invariant with the fold's `ok` latch
+/// ([`certify::OK`]) read as true, as the folded checks read it: a clause
+/// with `ok` holds, and `!ok` drops out of the clause it is in.
+fn without_ok(mut inv: Vec<certify::Clause>) -> Vec<certify::Clause> {
+    inv.retain(|c| !c.contains(&certify::OK));
+    for c in &mut inv {
+        c.retain(|&l| l != certify::OK ^ 1);
+    }
+    inv
 }
 
 /// H15: add a certified invariant (clauses over the loaded model's latch
@@ -637,12 +645,17 @@ fn kind_certified(
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
         if let Some(f) = &p.folded {
             // A proof on the clock-folded model: checked as one over pairs
-            // of loaded steps. No outside certificate kind covers it yet.
+            // of loaded steps.
+            let k = k.max(1);
             let mut inv = certify::lift_folded(&orig, &p.latch_map, p, strengthening, f.ok)?;
             inv.extend(certify::equalities(&p.merged));
-            certify::check_kind_folded(&orig, &inv, k.max(1), &|| solver(ctx), &|| {
-                ctx.should_stop()
-            })?;
+            let differ =
+                certify::check_kind_folded(&orig, &inv, k, &|| solver(ctx), &|| ctx.should_stop())?;
+            cert = Some(Certificate::TwoStepKInduction {
+                k: k as u32,
+                clauses: without_ok(inv),
+                simple_path: differ > 0,
+            });
             return Ok(());
         }
         let (mut inv, _) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;

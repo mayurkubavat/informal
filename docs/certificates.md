@@ -97,6 +97,15 @@ the constraints and leads to the present one. That is how
 initial phase and again two steps later, and neither that state nor the
 next one is bad.
 
+**Two-step k-induction** (`informal-kind` and `informal-kind-ic3` on a
+clock-folded model; summary `two-step-k-induction`, with `k`). The
+k-induction circuit above with both changes: it remembers `2k + 1` states
+and has the parity latch; the invariant is asked of the states on even
+steps only; and while the oldest remembered state is the initial one, it
+is on step 0. On an even step the last `2k + 1` states are the path of
+`certify::check_kind_folded`'s step condition, on an odd step all
+`2k + 2` are, and before that its base applies.
+
 ## What has no certificate outside yet
 
 | Verdict | Why | Summary says |

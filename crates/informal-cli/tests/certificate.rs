@@ -92,22 +92,35 @@ fn circuit_holds(file: &Path, g: &Aig) {
         file.display()
     );
     let text = String::from_utf8_lossy(&bytes);
+    // The symbol table is the run of `i<k> = <lit>` / `l<k> = <lit>` lines
+    // just before the comment; read it backwards from there, since the
+    // binary gates before it can hold any byte.
+    let end = text.rfind("\nc\nWITNESS b0 ").expect("no WITNESS comment");
     let mut mapped = 0;
-    for line in text.lines() {
+    for line in text[..end].rsplit('\n') {
         let Some((tag, lit)) = line.split_once(" = ") else {
-            continue;
+            break;
         };
-        let lit: u32 = lit.parse().unwrap();
         // The first symbol follows the binary gates on its line.
-        let tag = &tag[tag.rfind(['i', 'l']).unwrap()..];
+        let Some(at) = tag.rfind(['i', 'l']) else {
+            break;
+        };
+        let (tag, Ok(lit)) = (&tag[at..], lit.parse::<u32>()) else {
+            break;
+        };
+        if tag[1..].parse::<u32>().is_err() {
+            break;
+        }
         match tag.as_bytes()[0] {
             b'i' => assert!(g.inputs.contains(&lit), "{line}"),
-            b'l' => assert!(g.is_latch(lit), "{line}"),
-            _ => panic!("{line}"),
+            _ => assert!(g.is_latch(lit), "{line}"),
         }
         mapped += 1;
+        if line.len() > tag.len() + 3 + lit.to_string().len() {
+            break; // the first symbol, after the gates
+        }
     }
-    assert!(mapped > 0 && text.contains("\nc\nWITNESS b0 "));
+    assert!(mapped > 0, "{}: no symbol table", file.display());
 }
 
 /// The AIGER witness in `file` reaches a bad output of `g` when replayed.
@@ -136,20 +149,24 @@ fn every_kind_of_certificate_is_written_and_holds() {
         return;
     }
     let d = scratch("kinds");
-    // The k-induction engines fold a free-running clock too, and a
-    // folded k-induction proof has no outside certificate kind yet (it is
-    // certified in the tool only): clocked_safe is proved unfolded here,
-    // and folded below.
+    // The k-induction engines fold a free-running clock too:
+    // clocked_safe is proved by them unfolded and folded.
     let unfolded: &[(&str, &str)] = &[("INFORMAL_FOLD", "0")];
     for (name, engine, kind, env) in [
         ("stuck_latch_safe.aag", "informal-ic3", "invariant", &[][..]),
         ("delay_safe.aag", "informal-ic3-mt", "invariant", &[]),
         ("delay_safe.aag", "informal-kind", "k-induction", &[]),
         ("clocked_safe.aag", "informal-kind", "k-induction", unfolded),
+        (
+            "clocked_safe.aag",
+            "informal-kind",
+            "two-step-k-induction",
+            &[],
+        ),
         ("clocked_safe.aag", "informal-ic3", "two-step", &[]),
         ("split_safe.aag", "informal-kind-ic3", "invariant", &[]),
     ] {
-        let dir = d.join(format!("{engine}-{}", env.len()));
+        let dir = d.join(format!("{engine}-{}-{kind}", env.len()));
         let (code, out, s) = check(name, engine, &dir, &[], env);
         assert_eq!(code, Some(20), "{name} {engine}: {out}");
         let s = s.unwrap();
@@ -160,7 +177,7 @@ fn every_kind_of_certificate_is_written_and_holds() {
         );
         assert_eq!(s.checker.as_deref(), Some("certifaiger"));
         // Only a k-induction proof has a depth; the delay line needs 3.
-        assert_eq!(s.k.is_some(), kind == "k-induction", "{name}");
+        assert_eq!(s.k.is_some(), kind.contains("k-induction"), "{name}");
         if (name, engine) == ("delay_safe.aag", "informal-kind") {
             assert_eq!(s.k, Some(3));
         }
@@ -172,11 +189,6 @@ fn every_kind_of_certificate_is_written_and_holds() {
         );
         circuit_holds(&dir.join(file), &model(name));
     }
-    let dir = d.join("informal-kind-folded");
-    let (code, out, s) = check("clocked_safe.aag", "informal-kind", &dir, &[], &[]);
-    assert_eq!(code, Some(20), "{out}");
-    let s = s.unwrap();
-    assert_eq!((s.verdict.as_str(), s.evidence.as_str()), ("safe", "none"));
     for (name, engine, depth) in [
         ("counter2_unsafe.aag", "informal-bmc", 3),
         ("counter2_unsafe.aag", "informal-ic3", 3),

@@ -559,11 +559,12 @@ to try.
   as loaded (`informal-engine`): the clauses of the invariant, the depth of
   a k-induction proof, or the trace. It is what `certify.rs` has just
   checked, so nothing is searched again; `informal-bmc/src/certificate.rs`
-  writes the files. Three kinds of proof become witness circuits: an
+  writes the files. Four kinds of proof become witness circuits: an
   inductive invariant; k-induction, with the last `k - 1` states kept in
   the circuit so that its one inductive condition is the base and the step;
-  and the two-step invariant of a clock-folded model, with one remembered
-  state and a parity bit. The circuit holds only the cone the proof is
+  the two-step invariant of a clock-folded model, with one remembered
+  state and a parity bit; and k-induction on a clock-folded model, which
+  is the two together (`2k + 1` remembered states and the parity bit). The circuit holds only the cone the proof is
   about, mapped to the model through the symbol table.
 - **Alternatives:** a format of our own with our own checker (nobody else
   would trust or run it); proof logs of the three SAT answers of

@@ -35,6 +35,21 @@ pub enum Certificate {
     /// every two steps; such a state is not bad and neither is the one
     /// after it.
     TwoStep { clauses: Vec<Clause> },
+    /// SAFE by k-induction on a clock-folded model (one folded step is two
+    /// loaded steps; folded states are the loaded states of the clock's
+    /// initial phase): `clauses` is a two-step invariant as in
+    /// [`Certificate::TwoStep`] (but need not exclude the bad states); no
+    /// bad state is reachable in fewer than `2k` steps; and on a path of
+    /// `2k + 2` states that starts in that phase, meets the constraints
+    /// and the clauses on every other state and has no bad state in the
+    /// first `2k`, neither of the last two is bad (the last one while it
+    /// meets the constraints). `simple_path` as for
+    /// [`Certificate::KInduction`].
+    TwoStepKInduction {
+        k: u32,
+        clauses: Vec<Clause>,
+        simple_path: bool,
+    },
     /// UNSAFE: a path to a bad state. `init` has one character (`0` or
     /// `1`) per latch, used for the latches without a constant initial
     /// value; `inputs` has one string per step, one character per input.
@@ -49,6 +64,7 @@ impl Certificate {
             Certificate::Invariant { .. } => "invariant",
             Certificate::KInduction { .. } => "k-induction",
             Certificate::TwoStep { .. } => "two-step",
+            Certificate::TwoStepKInduction { .. } => "two-step-k-induction",
             Certificate::Trace { .. } => "trace",
         }
     }
@@ -78,6 +94,11 @@ mod tests {
                 simple_path: true,
             },
             Certificate::TwoStep { clauses: vec![] },
+            Certificate::TwoStepKInduction {
+                k: 2,
+                clauses: vec![vec![3]],
+                simple_path: false,
+            },
             Certificate::Trace {
                 init: bits([false, true]),
                 inputs: vec!["10".into(), "".into()],

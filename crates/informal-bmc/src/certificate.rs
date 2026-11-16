@@ -218,46 +218,96 @@ fn kind_circuit(g: &Aig, clauses: &[Vec<Lit>], k: usize) -> Result<Witness, Stri
     if k == 0 {
         return Err("k-induction at depth 0".into());
     }
+    history_circuit(g, clauses, k, false)
+}
+
+/// The witness circuit of a k-induction proof made on the clock-folded
+/// model at depth `k` ([`certify::check_kind_folded`]; `clauses` with the
+/// fold's `ok` already replaced by true). It keeps `2k + 2` loaded states:
+/// on an even step the last `2k + 1` of them are the step condition's
+/// path, on an odd step all of them, and before that the base applies.
+fn two_step_kind_circuit(g: &Aig, clauses: &[Vec<Lit>], k: usize) -> Result<Witness, String> {
+    if k == 0 {
+        return Err("k-induction at depth 0".into());
+    }
+    history_circuit(g, clauses, 2 * k + 2, true)
+}
+
+/// A witness circuit that keeps the last `n` states of the model (the
+/// present one included) and says, in `P'`: the present state is good,
+/// and meets the clauses; every remembered state is good, met the
+/// constraints and the clauses, and led to the state after it; and while
+/// fewer than `n` states are remembered, the oldest is an initial state.
+/// With `two_step`, a latch counts the steps modulo 2 and the clauses are
+/// only asked of the states on even steps (a two-step invariant); the
+/// oldest state, while it is the initial one, is on step 0.
+fn history_circuit(
+    g: &Aig,
+    clauses: &[Vec<Lit>],
+    n: usize,
+    two_step: bool,
+) -> Result<Witness, String> {
     latch_clauses(g, clauses)?;
     let cone = certify::cone(g, clauses);
     let (mut out, now) = base(g, &cone);
     let w = &mut out.circuit;
-    // States 0 (now) to k - 1 (the oldest remembered), with whether each
+    let odd = if two_step {
+        let odd = w.latch(Init::Zero);
+        w.latches.last_mut().expect("just added").next = neg(odd);
+        Some(odd)
+    } else {
+        None
+    };
+    // States 0 (now) to n - 1 (the oldest remembered), with whether each
     // is there yet.
     let mut leaf = vec![now.clone()];
     let mut state = vec![now];
     let mut valid = vec![TRUE];
-    for i in 1..k {
+    for i in 1..n {
         valid.push(latch(w, valid[i - 1]));
         let held = remember(w, g, &cone, &leaf[i - 1]);
         state.push(copy(w, g, &cone, &held));
         leaf.push(held);
     }
+    // The clauses where they are asked for: on every state, or on the
+    // states of even steps (state i is i steps back).
+    let invariant = |w: &mut Aig, i: usize, m: &[Lit]| {
+        let x = holds(w, clauses, m);
+        match odd {
+            None => x,
+            Some(odd) => or(w, if i.is_multiple_of(2) { odd } else { neg(odd) }, x),
+        }
+    };
     let mut p = good(w, g, &state[0]);
-    let inv = holds(w, clauses, &state[0]);
+    let inv = invariant(w, 0, &state[0]);
     p = w.and(p, inv);
-    for i in 1..k {
+    for i in 1..n {
         // A remembered state is good, meets the constraints and the
         // invariant, and leads to the one after it.
         let mut body = steps(w, g, &cone, &state[i], &state[i - 1]);
         for x in [
             good(w, g, &state[i]),
             constrained(w, g, &state[i]),
-            holds(w, clauses, &state[i]),
+            invariant(w, i, &state[i]),
         ] {
             body = w.and(body, x);
         }
         let x = or(w, neg(valid[i]), body);
         p = w.and(p, x);
-        if i + 1 < k {
+        if i + 1 < n {
             let x = or(w, neg(valid[i + 1]), valid[i]);
             p = w.and(p, x);
         }
     }
-    for i in 0..k - 1 {
-        // While fewer than k states are remembered, the oldest is initial.
+    for i in 0..n - 1 {
+        // While fewer than n states are remembered, the oldest is initial,
+        // and (counting steps) step 0, an even one.
         let oldest = w.and(valid[i], neg(valid[i + 1]));
-        let init = initial(w, g, &cone, &state[i]);
+        let mut init = initial(w, g, &cone, &state[i]);
+        if let Some(odd) = odd {
+            let even = if i.is_multiple_of(2) { neg(odd) } else { odd };
+            init = w.and(init, even);
+        }
         let x = or(w, neg(oldest), init);
         p = w.and(p, x);
     }
@@ -302,6 +352,14 @@ pub fn witness_circuit(g: &Aig, cert: &Certificate) -> Result<Witness, String> {
             .into()),
         Certificate::KInduction { k, clauses, .. } => kind_circuit(g, clauses, *k as usize),
         Certificate::TwoStep { clauses } => two_step_circuit(g, clauses),
+        Certificate::TwoStepKInduction {
+            simple_path: true, ..
+        } => Err("the k-induction proof needs the simple-path condition, \
+                  which has no witness circuit yet"
+            .into()),
+        Certificate::TwoStepKInduction { k, clauses, .. } => {
+            two_step_kind_circuit(g, clauses, *k as usize)
+        }
         Certificate::Trace { .. } => Err("a trace is not a proof".into()),
     }
 }
@@ -453,7 +511,9 @@ pub fn write(
         engine: engine.into(),
         evidence: cert.map_or("none", |c| c.kind()).into(),
         k: match cert {
-            Some(Certificate::KInduction { k, .. }) => Some(*k),
+            Some(Certificate::KInduction { k, .. } | Certificate::TwoStepKInduction { k, .. }) => {
+                Some(*k)
+            }
             _ => None,
         },
         file: None,
@@ -622,6 +682,10 @@ mod tests {
         accepted(g, &w, &w.circuit)
     }
 
+    fn check_cert(g: &Aig, cert: &Certificate) -> Result<(), String> {
+        check(g, cert)
+    }
+
     /// Two latches that toggle together from 0; bad = they differ.
     fn twins() -> Aig {
         let mut g = Aig::new();
@@ -776,6 +840,72 @@ mod tests {
             check(&g, &Certificate::TwoStep { clauses: vec![] }),
             Err("step fails".into())
         );
+    }
+
+    /// Whenever the tool's own check accepts a folded k-induction proof,
+    /// its witness circuit is accepted too, at every depth, on a model
+    /// where the proof needs depth and on one with constraints. (The
+    /// circuit can be accepted where the check is not: it is a proof of
+    /// its own, and on a safe model that is no error.) On an unsafe model
+    /// neither is.
+    #[test]
+    fn folded_k_induction_circuits_agree_with_the_folded_check() {
+        let never = || false;
+        let fold = |k: usize, g: &Aig, inv: &[Vec<Lit>]| {
+            let check = certify::check_kind_folded(g, inv, k, &sat, &never);
+            let cert = Certificate::TwoStepKInduction {
+                k: k as u32,
+                clauses: inv.to_vec(),
+                simple_path: false,
+            };
+            (check, check_cert(g, &cert))
+        };
+        // The delay line with a free-running clock beside it.
+        let with_clock = |mut g: Aig| {
+            let c = g.latch(Init::Zero);
+            g.set_next(c, neg(c));
+            g
+        };
+        let g = with_clock(delay());
+        let phase = vec![vec![neg(g.latches[4].lit)]];
+        let mut proved = 0;
+        for k in 1..=3 {
+            let (check, circuit) = fold(k, &g, &phase);
+            // Otherwise the proof needed loop-free paths, or the depth is
+            // too shallow for the check.
+            if check == Ok(0) {
+                assert_eq!(circuit, Ok(()), "depth {k}");
+                proved += 1;
+            }
+        }
+        assert!(proved > 0);
+        // A reachable bad state (d & a, at step 4): no depth passes.
+        let mut u = delay();
+        let (a, d) = (u.latches[0].lit, u.latches[3].lit);
+        u.bads = vec![u.and(d, a)];
+        let u = with_clock(u);
+        let phase_u = vec![vec![neg(u.latches[4].lit)]];
+        for k in 1..=3 {
+            let (check, circuit) = fold(k, &u, &phase_u);
+            assert!(check.is_err() && circuit.is_err(), "depth {k}");
+        }
+        // clocked(), with its constraint: proved at depth 1 with the phase
+        // and b low on even steps, and not with the wrong phase.
+        let g = clocked();
+        let (clk, b) = (g.latches[0].lit, g.latches[2].lit);
+        let (check, circuit) = fold(1, &g, &[vec![neg(clk)], vec![neg(b)]]);
+        assert_eq!((check, circuit), (Ok(0), Ok(())));
+        let (check, circuit) = fold(1, &g, &[vec![clk]]);
+        assert!(check.is_err() && circuit.is_err());
+        // A proof that needed loop-free paths has no circuit.
+        let sp = Certificate::TwoStepKInduction {
+            k: 1,
+            clauses: vec![],
+            simple_path: true,
+        };
+        assert!(witness_circuit(&g, &sp)
+            .unwrap_err()
+            .contains("simple-path"));
     }
 
     #[test]
