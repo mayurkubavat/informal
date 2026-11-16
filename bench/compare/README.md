@@ -37,7 +37,14 @@ replaces an earlier one. The tools must be the pinned ones on every
 machine (`compare.py tools` checks), and InFormal the same commit.
 
 `run --purpose timing` is the only kind of run whose times go into the
-report, and it refuses to start when the machine is busy. The default,
+report, and it refuses to start when more than one CPU core is busy
+(measured from /proc/stat over three seconds; the load average is not
+used, because sleeping desktop and agent processes keep it near 2 on an
+idle machine). `report --timing <file>` takes the time table from such a
+run. In the recorded timing run (`results/timing-98b4b81.jsonl`) each
+design was run three times by each flow, one tool at a time, at normal
+priority with all 16 cores available; the table gives the median and the
+range. Times are measured around the whole process to about 0.05 s. The default,
 `--purpose verdicts`, records times too but the report leaves them out.
 
 ## The tools
@@ -262,9 +269,15 @@ finish in one night. Each record names its machine (`machine`):
   there (rIC3's portfolio entry hangs on macOS).
 
 A proof or counterexample does not depend on the machine; "undetermined at
-the time limit" does. Every "undetermined" from a loaded machine is rerun
-on the box at full speed before the final table, and the report says
-which records came from where.
+the time limit" does. InFormal's default portfolio was therefore run again
+on the box at full speed, alone, on the EBMC examples (run id
+`verdicts-98b4b81-quiet`, records replace the earlier ones). On
+`seven_seg`, `thermocouple` and `uart_transmit` it gives exactly the
+verdicts the loaded MacBook gave. The other five families (`gray`, `delay`,
+`vga`, `i2c`, `lcd`, 70 cases) were not rerun: the box was not free
+long enough. Their InFormal "undetermined" verdicts come from the box at
+low priority with other work running, and are provisional. EBMC's and SymbiYosys's time limits from loaded machines were not
+run again.
 
 ## Changes made because of this comparison
 

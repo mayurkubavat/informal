@@ -515,6 +515,8 @@ def run_sby(c: dict, config: str, out: Path, args) -> dict:
         # script that reaches outside its directory), so that the work
         # directory lands where the script expects it.
         tree = c.get("sby_tree", str(Path(sby_file).parent))
+        if (out / "tree").exists():
+            shutil.rmtree(out / "tree")  # a repeat starts from a clean copy
         shutil.copytree(c["root"] / tree, out / "tree", ignore=shutil.ignore_patterns(".git"))
         run_dir = (out / "tree" / Path(sby_file).relative_to(tree)).parent
         work = run_dir / (Path(sby_file).stem + (f"_{task}" if task else ""))
@@ -657,8 +659,10 @@ def cmd_run(args) -> None:
             "depth": args.depth, "mem_gb": args.mem_gb,
             "load_at_start": round(load, 1), "cpus": os.cpu_count(), "nice": os.nice(0),
             "machine": os.environ.get("COMPARE_MACHINE", "")}
-    if args.purpose == "timing" and load > 1.0:
-        die(f"load is {load:.1f}: a timing run needs a quiet machine (use --purpose verdicts)")
+    busy = busy_cores()
+    meta["busy_cores_at_start"] = busy
+    if args.purpose == "timing" and not busy <= 1.0:
+        die(f"{busy} cores are busy (load {load:.1f}): a timing run needs a quiet machine (use --purpose verdicts)")
     done = set()
     if args.skip_done and out_file.exists():
         for line in out_file.read_text().splitlines():
@@ -690,6 +694,23 @@ def cmd_run(args) -> None:
                         if r["timeout"]:
                             break  # a time limit is not a time: no point repeating it
     print(f"compare: results in {out_file}, logs in {run_dir}")
+
+
+def busy_cores(seconds: float = 3.0) -> float:
+    """CPU cores in use over a few seconds, from /proc/stat. The load
+    average also counts sleeping desktop and agent processes, which keep it
+    near 1 to 2 on an idle machine; this does not."""
+    def sample():
+        f = open("/proc/stat").readline().split()[1:]
+        v = list(map(int, f))
+        return sum(v), v[3] + v[4]
+    try:
+        t0, i0 = sample()
+        time.sleep(seconds)
+        t1, i1 = sample()
+    except OSError:
+        return float("nan")
+    return round((1 - (i1 - i0) / max(t1 - t0, 1)) * (os.cpu_count() or 1), 2)
 
 
 def tally(props: list[dict]) -> dict:
@@ -1015,7 +1036,8 @@ def cmd_report(args) -> None:
         tmeta, trecs = read_results(timing) if timing else (meta, recs)
         w("## Time\n")
         w(f"From `bench/compare/results/{(timing or results).name}`: run `{tmeta.get('id')}`, started {tmeta.get('started')}, "
-          f"machine load at start {tmeta.get('load_at_start')} on {tmeta.get('cpus')} CPUs, InFormal `{tmeta.get('tools', {}).get('informal')}`, "
+          f"{tmeta.get('busy_cores_at_start', '?')} CPU cores busy at the start (load average {tmeta.get('load_at_start')}, "
+          f"which lags) on {tmeta.get('cpus')} CPUs, InFormal `{tmeta.get('tools', {}).get('informal')}`, "
           f"the same limits and tools as above.\n")
         w("Seconds for one tool run on a design, all its properties: the median of the repeats, with the "
           "lowest and highest wall time. InFormal runs its engines in parallel on several cores; SymbiYosys "
@@ -1023,6 +1045,25 @@ def cmd_report(args) -> None:
           "time limit is shown as such and was not repeated. SymbiYosys and EBMC need all of their listed "
           "configurations to give the verdicts of the tables above, so the last column adds them up; for "
           "InFormal it is the `default` run alone (`inhouse` is the same run without the external engines).\n")
+        # A summary first: per set and flow, the time to all of that flow's
+        # verdicts on the designs it read.
+        def flow_total(n, flow):
+            mine = [r for r in trecs if r["case"] == n and r["flow"] == flow and r["accepted"]
+                    and not (flow == "informal" and r["config"] == "inhouse")]
+            return sum(statistics.median(r["walls"]) for r in mine) if mine else None
+        w("| Set | Flow | Designs timed | Wall s, all designs | Wall s, median design | Runs at the time limit |")
+        w("| --- | --- | ---: | ---: | ---: | ---: |")
+        for g in groups:
+            ns = [n for n in names if cases[n]["group"] == g]
+            for flow in FLOWS:
+                tot = [t for t in (flow_total(n, flow) for n in ns) if t is not None]
+                lim = sum(1 for r in trecs if r["case"] in ns and r["flow"] == flow and r["timeout"])
+                if tot:
+                    w(f"| {label.get(g, g)} | {flow} | {len(tot)} | {sum(tot):.1f} | {statistics.median(tot):.2f} | {lim} |")
+        w("")
+        w("Times are measured by the harness around the whole tool process, to about 0.05 s "
+          "(the interval at which it checks whether the process has ended); below a second they "
+          "show start-up cost more than solving.\n")
         w("| Design | Flow | Configuration | Runs | Wall s (median) | Wall s (range) | CPU s (median) | Flow total, wall s |")
         w("| --- | --- | --- | ---: | ---: | --- | ---: | ---: |")
         for n in names:
