@@ -265,6 +265,13 @@ pub struct Request {
     /// (!$isunknown(x))` then always holds and says nothing about the
     /// design. Off unless the user asks.
     pub isunknown_is_false: bool,
+    /// Model only: beside each named assertion with an antecedent, a cover
+    /// target `<name>:precondition` of an attempt that is checked (the
+    /// antecedent matches, past the first ticks, `disable iff` off), with
+    /// the assertion's clock and reset: unreachable means its proof is
+    /// vacuous (docs/vacuity.md). Written as `bad` lines with
+    /// [`Self::cover_targets`].
+    pub precondition_covers: bool,
 }
 
 /// How long the reset lasts in a model that drives the clocks, where one
