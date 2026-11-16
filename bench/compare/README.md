@@ -90,8 +90,10 @@ it the first failing assertion ends the run and every other assertion is
 left without a status.
 
 **EBMC.** EBMC has no default engine beyond a bounded check of depth 1,
-so four configurations are run: `bmc` (`--bound N`), `kind`
-(`--k-induction --bound N`), `bdd` and `ic3`.
+so six configurations are run: `bmc` (`--bound N`), `kind`
+(`--k-induction --bound N`), `bdd`, `ic3`, and for liveness properties
+EBMC's own translation to safety with its two proving engines, `kind-l2s`
+and `bdd-l2s` (`--liveness-to-safety`).
 
 **The reference count.** Each design is also elaborated by the stand-alone
 slang of the suite, and the assert and cover statements in its syntax tree
@@ -104,8 +106,10 @@ depth (`--depth`). A shipped `.sby` keeps its own depth.
 **One verdict per flow.** A flow's verdict on a property is the first
 definite one over its configurations: proven, counterexample, covered or
 unreachable. "No counterexample up to depth N" is reported as *bounded*,
-not as proven. If two configurations of one flow contradict each other,
-the report says so.
+not as proven. If two configurations of one flow give different definite
+verdicts, the flow has no verdict on that property: it is counted as
+undetermined, left out of the agreement counts, and the report lists what
+each configuration said.
 
 ## The designs
 
@@ -167,7 +171,8 @@ authors.
   counterexample (depth 10) and it is the answer the test records. The BDD
   run prints "SAT checker inconsistent" on other designs when `--reset` is
   given, so its proofs under a reset are not counted as agreement or
-  disagreement with anything; the flow's verdict is the counterexample.
+  disagreement with anything. Under the rule above EBMC has no verdict
+  on this property.
 - **`sby-examples/fifo-nofullskip`, covers `w_underfill` and
   `w_overfill`: InFormal unreachable, EBMC covered.** With the skip logic
   defined away, an address can only move when its enable is set, which
@@ -176,6 +181,18 @@ authors.
   SymbiYosys cover run on the same define (depth 40, not part of the
   recorded run) does not reach either cover. Read as a fault in EBMC's
   handling of an immediate cover inside a clocked block under a condition.
+- **EBMC's BDD engine on liveness properties.** Without
+  `--liveness-to-safety` it answers REFUTED, with no trace, on most of
+  EBMC's own liveness examples. On `uart_transmit_1` (the transmitter
+  returns to idle within eight cycles, by reading the source): EBMC `--bdd`
+  says REFUTED; EBMC `--bdd --liveness-to-safety` and `--k-induction
+  --liveness-to-safety` say PROVED; EBMC's bounded check finds no lasso up
+  to depth 40; InFormal proves it; SymbiYosys in `live` mode with
+  `suprove` proves it once the property is moved into a clocked block for
+  its front end. On `gray_1` cut down to a 2-bit counter the picture is the
+  same. The `-l2s` configurations were added to the run for this reason,
+  so that EBMC is measured with the option that works; where plain `bdd`
+  contradicts them EBMC has no verdict under the rule above.
 - **Covers under EBMC's IC3 engine.** It reports REFUTED for covers that
   EBMC's own bounded check reaches with a trace (`sby-examples/fifo`
   `w_nreset`, `quickstart-cover`): it answers the cover as an assertion of

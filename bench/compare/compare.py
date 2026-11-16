@@ -410,6 +410,10 @@ EBMC_CONFIGS = {
     "kind": lambda a: ["--k-induction", "--bound", str(a.depth)],
     "bdd": lambda a: ["--bdd"],
     "ic3": lambda a: ["--ic3"],
+    # EBMC's own translation of liveness properties to safety ones, with
+    # its two engines that prove.
+    "kind-l2s": lambda a: ["--k-induction", "--bound", str(a.depth), "--liveness-to-safety"],
+    "bdd-l2s": lambda a: ["--bdd", "--liveness-to-safety"],
 }
 
 
@@ -693,14 +697,14 @@ def tally(props: list[dict]) -> dict:
 # report
 
 DEFINITE = ("proven", "cex", "covered", "unreachable")
-ORDER = {"cex": 0, "covered": 0, "proven": 1, "unreachable": 1, "bounded": 2, "undetermined": 3,
+ORDER = {"conflict": -1, "cex": 0, "covered": 0, "proven": 1, "unreachable": 1, "bounded": 2, "undetermined": 3,
          "unsupported": 4, "dropped": 4}
 
 
 def merged(recs: list[dict]) -> dict:
     """The verdict of one flow on one case, over its configurations: per
-    property the first definite verdict (a counterexample or cover trace
-    before a proof, so a contradiction inside one flow shows as `conflict`)."""
+    property the definite verdict its configurations give, or `conflict`
+    when two of them give different ones."""
     props: dict = {}
     for r in recs:
         for p in r["props"]:
@@ -708,8 +712,14 @@ def merged(recs: list[dict]) -> dict:
             new = dict(p, config=r["config"])
             if cur is None:
                 props[p["key"]] = new
+            elif cur.get("conflict"):
+                if p["verdict"] in DEFINITE:
+                    cur["conflict"] += f", {r['config']}: {p['verdict']}"
             elif cur["verdict"] in DEFINITE and p["verdict"] in DEFINITE and cur["verdict"] != p["verdict"]:
+                # The flow contradicts itself: it has no verdict on this
+                # property, and the report lists what each configuration said.
                 cur["conflict"] = f"{cur['config']}: {cur['verdict']}, {r['config']}: {p['verdict']}"
+                cur["verdict"] = "conflict"
             elif ORDER[p["verdict"]] < ORDER[cur["verdict"]]:
                 props[p["key"]] = new
     return props
@@ -821,7 +831,8 @@ def cmd_report(args) -> None:
              "neutral": "Third-party designs"}
 
     w("## Summary\n")
-    w("Properties are counted once per design. *Definite* is proven, counterexample, covered or unreachable; "
+    w("Properties are counted once per design. *Definite* is proven, counterexample, covered or unreachable "
+      "(a property on which two configurations of one flow contradict each other counts as undetermined for that flow); "
       "*bounded* is no counterexample (or no cover trace) up to the depth; *refused* is a property in a design "
       "the flow did not read, or one its engines do not support.\n")
     w("| Set | Designs | Properties | Flow | Designs read | Definite | Bounded | Undetermined | Refused |")
@@ -842,7 +853,7 @@ def cmd_report(args) -> None:
                         cnt["definite"] += 1
                     elif v == "bounded":
                         cnt["bounded"] += 1
-                    elif v == "undetermined":
+                    elif v in ("undetermined", "conflict"):
                         cnt["undetermined"] += 1
                     else:
                         cnt["refused"] += 1
@@ -923,7 +934,7 @@ def cmd_report(args) -> None:
                 continue
             d = sum(1 for k in keys if mine.get(k, {}).get("verdict") in DEFINITE)
             b = sum(1 for k in keys if mine.get(k, {}).get("verdict") == "bounded")
-            u = sum(1 for k in keys if mine.get(k, {}).get("verdict") == "undetermined")
+            u = sum(1 for k in keys if mine.get(k, {}).get("verdict") in ("undetermined", "conflict"))
             cells.append(f"{d} / {b} / {u} / {len(keys) - d - b - u}")
         ref = refs.get(n)
         src = "" if ref is None else "invalid" if not ref["accepted"] else str(
