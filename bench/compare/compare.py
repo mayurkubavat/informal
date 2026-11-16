@@ -707,6 +707,45 @@ ORDER = {"conflict": -1, "cex": 0, "covered": 0, "proven": 1, "unreachable": 1, 
          "unsupported": 4, "dropped": 4}
 
 
+LIVENESS = re.compile(r"\bs_eventually\b(?!\s*\[)|\bs_until(_with)?\b|\beventually\b(?!\s*\[)")
+
+
+def liveness_keys(c: dict) -> set:
+    """The labels of the case's properties that are liveness properties
+    (an unbounded s_eventually, eventually or strong until), from the
+    source text."""
+    found = set()
+    for f in c["files"]:
+        try:
+            text = (c["root"] / f).read_text(errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"\b(\w+)\s*:\s*assert\s+property\s*\(([^;]*)", text):
+            if LIVENESS.search(m.group(2)):
+                found.add(m.group(1))
+    return found
+
+
+def ebmc_bdd_liveness(recs: list[dict], c: dict) -> list[dict]:
+    """EBMC's plain BDD engine answers REFUTED, without a trace, on
+    liveness properties that its own --liveness-to-safety engines prove
+    (bench/compare/README.md, Differences). Its REFUTED on a liveness
+    property is therefore not taken as a verdict; its PROVED is (it agrees
+    with the liveness-to-safety engines wherever both decide)."""
+    live = liveness_keys(c)
+    out = []
+    for r in recs:
+        if r["flow"] == "ebmc" and r["config"] == "bdd" and live:
+            props = []
+            for p in r["props"]:
+                if p["verdict"] == "cex" and p["key"].rsplit(".", 1)[-1] in live:
+                    p = dict(p, verdict="undetermined", note="plain BDD REFUTED on a liveness property")
+                props.append(p)
+            r = dict(r, props=props)
+        out.append(r)
+    return out
+
+
 def merged(recs: list[dict]) -> dict:
     """The verdict of one flow on one case, over its configurations: per
     property the definite verdict its configurations give, or `conflict`
@@ -732,11 +771,12 @@ def merged(recs: list[dict]) -> dict:
 
 
 def read_results(path: Path) -> tuple[dict, list[dict]]:
-    meta, recs = {}, []
+    meta, recs, metas = {}, [], []
     for line in path.read_text().splitlines():
         r = json.loads(line)
         if r["record"] == "run":
             meta = r
+            metas.append(r)
         else:
             recs.append(r)
     # A later record for the same case, flow and configuration replaces an
@@ -749,6 +789,7 @@ def read_results(path: Path) -> tuple[dict, list[dict]]:
         if cur is not None:
             cur["walls"].append(r["wall_s"])
             cur["cpus"].append(r["cpu_s"])
+    meta = dict(meta, all=metas)
     return meta, list(last.values())
 
 
@@ -804,6 +845,8 @@ def cmd_report(args) -> None:
         by_flow = {}
         for flow in FLOWS:
             mine = [r for r in recs if r["case"] == n and r["flow"] == flow]
+            if flow == "ebmc":
+                mine = ebmc_bdd_liveness(mine, cases[n])
             if mine:
                 by_flow[flow] = merged(mine)
             # EBMC's bounded check marks the design's assumptions ASSUMED and
@@ -822,9 +865,22 @@ def cmd_report(args) -> None:
       f"`bench/compare/results/{results.name}`; do not edit by hand. "
       "What is run and how is in `bench/compare/README.md`.\n")
     t = meta.get("tools", {})
-    w(f"- Run `{meta.get('id')}` ({meta.get('purpose')}), started {meta.get('started')}; "
-      f"machine load at start {meta.get('load_at_start')} on {meta.get('cpus')} CPUs, priority (nice) {meta.get('nice')}.")
-    w(f"- InFormal `{t.get('informal')}`; {t.get('sby')}; {t.get('yosys')} (OSS CAD Suite {t.get('oss-cad-suite')}); {t.get('ebmc')}.")
+    used = {(r.get("machine") or "box") for r in recs}
+    parts = {}
+    for m in meta.get("all", [meta]):
+        k = m.get("machine") or "box"
+        if k in used:
+            parts.setdefault(k, []).append(m)
+    w(f"- Run `{meta.get('id')}` ({meta.get('purpose')}), {len(meta.get('all', [meta]))} sittings on "
+      f"{len(parts)} machine(s), the first started {min(m.get('started', '') for m in meta.get('all', [meta]))}:")
+    for k, ms in sorted(parts.items()):
+        n = sum(1 for r in recs if (r.get("machine") or "box") == k)
+        loads = [m.get("load_at_start") for m in ms if m.get("load_at_start") is not None]
+        w(f"  {k}: {n} tool runs, {ms[0].get('cpus')} CPUs, load at the start of a sitting "
+          f"{min(loads)} to {max(loads)}, harness at `{', '.join(sorted({m['tools'].get('informal', '?') for m in ms}))}`.")
+    w(f"- InFormal: the tool's sources of `98b4b81` on every machine (some binaries were built from the later "
+      f"commits named above, which differ from it only in the LLM crate and one test file); {t.get('sby')}; {t.get('yosys')} "
+      f"(OSS CAD Suite {t.get('oss-cad-suite')}); {t.get('ebmc')}.")
     w(f"- Limits: {meta.get('timeout_s')} s per SymbiYosys or EBMC run (one configuration, all properties), "
       f"{meta.get('prop_timeout_s')} s per property in InFormal, "
       f"depth {meta.get('depth')} for the bounded engines of SymbiYosys and EBMC.")

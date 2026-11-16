@@ -191,8 +191,20 @@ authors.
   `suprove` proves it once the property is moved into a clocked block for
   its front end. On `gray_1` cut down to a 2-bit counter the picture is the
   same. The `-l2s` configurations were added to the run for this reason,
-  so that EBMC is measured with the option that works; where plain `bdd`
-  contradicts them EBMC has no verdict under the rule above.
+  so that EBMC is measured with the option that works.
+
+  Over the whole run, on liveness properties: plain `bdd` says PROVED on
+  18 properties where a `-l2s` configuration also decides, and they agree
+  on all 18; it says REFUTED on 11 where a `-l2s` configuration decides,
+  and they disagree on all 11; and on all 96 liveness properties it
+  refutes, EBMC's own bounded check finds no counterexample loop up to
+  depth 20. So the report takes plain `bdd`'s PROVED on a liveness property
+  as a verdict and does not take its REFUTED (`ebmc_bdd_liveness` in
+  `compare.py`); a property is a liveness property when its text holds an
+  unbounded `s_eventually`, `eventually` or strong until. This rule is
+  about one EBMC engine, written after seeing its answers, and is stated
+  here so that a reader can undo it: without it EBMC has 85 more
+  counterexamples on its own example set.
 - **Covers under EBMC's IC3 engine.** It reports REFUTED for covers that
   EBMC's own bounded check reaches with a trace (`sby-examples/fifo`
   `w_nreset`, `quickstart-cover`): it answers the cover as an assertion of
@@ -226,6 +238,27 @@ because of this comparison and is listed in the next section when it lands.
   EBMC PWM examples) is not supported.
 - svlang accepts the `bind` of common_cells `cc_fifo`, which slang rejects
   when run to the letter of the standard.
+
+## Machines
+
+The verdict run `verdicts-98b4b81` was shared between three machines to
+finish in one night. Each record names its machine (`machine`):
+
+- the Linux box (16 cores, 2 of them at low priority, other work running):
+  InFormal's tests, the SymbiYosys examples, the third-party designs, the
+  EBMC examples `gray`, `PWM`, `delay`, `vga` (all flows), InFormal on
+  `i2c` and `lcd`, and EBMC's liveness configurations on its cases;
+- a cloud machine (4 CPUs): SymbiYosys and EBMC on `i2c`, `lcd`,
+  `seven_seg`, `thermocouple`, `uart_transmit`, and EBMC's liveness
+  configurations on them;
+- a MacBook: InFormal's own engines (`inhouse`) on `seven_seg`,
+  `thermocouple`, `uart_transmit`. The external engines were not used
+  there (rIC3's portfolio entry hangs on macOS).
+
+A proof or counterexample does not depend on the machine; "undetermined at
+the time limit" does. Every "undetermined" from a loaded machine is rerun
+on the box at full speed before the final table, and the report says
+which records came from where.
 
 ## Changes made because of this comparison
 
