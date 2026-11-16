@@ -226,6 +226,13 @@ def run(args):
                "--timeout", str(args.timeout), "--jobs", "1", "--db", os.path.join(d, "runs.jsonl")]
         t0 = time.time()
         p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+        # The scope lives as long as any process in it: an engine child that
+        # outlived informal (seen with abc after a portfolio's time limit)
+        # would hold its memory and CPU through the following models.
+        leftover = subprocess.run(["systemctl", "--user", "is-active", "--quiet", f"{unit}.scope"]).returncode == 0
+        if leftover:
+            subprocess.run(["systemctl", "--user", "kill", "--signal=KILL", f"{unit}.scope"], capture_output=True)
+            subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], capture_output=True)
         wall = round((time.time() - t0) * 1000)
         rows = []
         if os.path.exists(os.path.join(d, "runs.jsonl")):
@@ -234,6 +241,7 @@ def run(args):
             rows = [{"verdict": "unknown", "detail": "killed (memory limit or signal)" if p.returncode else "no result",
                      "engine": args.config, "wall_ms": wall, "timeout_ms": args.timeout * 1000}]
         for r in rows:
+            r.update({"leftover_killed": leftover})
             r.update({"model": model, "repeat": rep, "config": args.config, "outside_cpu": round(quiet, 3),
                       "waited_s": waited, "load1": round(load1, 2), "exit": p.returncode})
         with lock:
