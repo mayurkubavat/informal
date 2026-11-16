@@ -626,3 +626,42 @@ to try.
     other properties' logic already was); tests/sv/lowering.lock changed
     with them.
 
+
+## D20. Tasks as JasperGold has them: each proved on a model of its own
+
+- **Decision (2026-11-16):** a session has tasks (`task -create`, `-edit`,
+  `-set`, `-list`, `-delete`; `-task T` on `assert`, `assume`, `cover`,
+  `stopat`, `prove`, `report` and `get_property_list`). Every property
+  belongs to one task, `<embedded>` by default, and outside it is named
+  `T::name`. Each task has its own assumptions and cut points; a prove
+  runs task by task, each on a model the front end builds for that task
+  alone (the design, the task's enabled assumptions, its cut points).
+  Black boxes, clocks and reset stay the design's. A copy of a property
+  given by command is bound again under its new name; a copy of a property
+  written in the RTL points at the original's check (`copy_of`), since the
+  RTL's text cannot be bound again elsewhere. Tasks, the current task and
+  each property's task are in the session JSON and the MCP replies
+  (`task` on `property_list` and `prove`).
+- **Alternatives:** keep one model and only group properties for display
+  (cheap, but an assumption made for one task would constrain every
+  other, the reason `assume -task` was an error until now); one model per
+  task with every task's targets in it (one lowering, but a task's model
+  would carry other tasks' monitors).
+- **Why:** vendor scripts use tasks to give a property a different
+  environment: OpenTitan's flow makes a task per run with its assumptions,
+  and moves assertions into a task with a cut point that the embedded
+  task must not see (docs/vendor-script-tally.md: `task` in 6 of 12
+  scripts, `stopat -task` in 5). That is only sound when the models
+  differ. A lowering per task costs one svlang run per task proved, small
+  next to the proofs.
+- **Open issues**
+  - Assumptions written in the RTL are part of the design: svlang cannot
+    leave one out of a model, so they are in every task's model. A new
+    task lists them as copies so that its list matches its model; in
+    JasperGold a task made without `-copy_assumes` has none of them.
+    Leaving them out needs svlang to name each constraint after its
+    assumption (the same change D19 waits for).
+  - `prove -bg` runs in the foreground: tasks are proved one after the
+    other, not at the same time.
+  - Abstractions, ratings and proof settings are not copied between tasks
+    (`-copy_abstractions` and the like are ignored with a note).

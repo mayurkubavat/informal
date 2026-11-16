@@ -302,6 +302,7 @@ impl Api {
             "property_get" => self.property_get(args),
             "property_cone" => self.property_cone(args),
             "design_hierarchy" => self.design_hierarchy(args),
+            "design_info" => self.design_info(),
             "design_source" => self.design_source(args),
             "trace_get" => self.trace_get(args),
             "prove" => self.prove_start(args),
@@ -480,23 +481,28 @@ impl Api {
         let status = opt_str(args, "status")?;
         let name = opt_str(args, "name")?;
         let origin = opt_str(args, "origin")?;
+        let task = opt_str(args, "task")?;
         self.on_shell(false, move |sh| {
             let s = sh.session.borrow();
+            if let Some(t) = &task {
+                s.task_name(t).map_err(|e| err("not_found", e))?;
+            }
             let props: Vec<Value> = s
                 .props
                 .iter()
+                .filter(|p| task.as_deref().is_none_or(|t| p.task == t))
                 .filter(|p| kind.as_deref().is_none_or(|k| p.kind.label() == k))
                 .filter(|p| status.as_deref().is_none_or(|w| p.status.word() == w))
                 .filter(|p| name.as_deref().is_none_or(|n| glob(n, &p.name)))
                 .filter(|p| origin.as_deref().is_none_or(|o| origin_of(p) == o))
                 .map(|p| prop_view(p, false))
                 .collect();
-            json!({
+            Ok(json!({
                 "schema": "informal.properties/1",
                 "total": s.props.len(),
                 "properties": props,
-            })
-        })
+            }))
+        })?
     }
 
     fn property_get(&self, args: &Value) -> Reply {
@@ -545,6 +551,16 @@ impl Api {
     }
 
     // ------------------------------------------------------------- design
+
+    fn design_info(&self) -> Reply {
+        self.on_shell(false, move |sh| {
+            let mut s = sh.session.borrow_mut();
+            let info = s.design_info();
+            let mut v = serde_json::to_value(&info).map_err(|e| err("internal", e.to_string()))?;
+            v["schema"] = json!("informal.design_info/1");
+            Ok(v)
+        })?
+    }
 
     fn design_hierarchy(&self, args: &Value) -> Reply {
         let scope = opt_str(args, "scope")?;
@@ -734,6 +750,7 @@ impl Api {
 
     fn prove(&self, args: &Value) -> Reply {
         let names = strings(args, "properties")?;
+        let task = opt_str(args, "task")?;
         let limit = match opt_f64(args, "time_limit_s")? {
             Some(t) if t > 0.0 => Some(Duration::from_secs_f64(t)),
             Some(_) => return Err(err("arguments", "time_limit_s must be above 0")),
@@ -743,13 +760,37 @@ impl Api {
         self.state.inner.lock().unwrap().progress = None;
         self.on_shell(true, move |sh| {
             let mut s = sh.session.borrow_mut();
+            let task = match &task {
+                Some(t) => Some(s.task_name(t).map_err(|e| err("not_found", e))?),
+                None => None,
+            };
             let mut which = Vec::new();
             for n in &names {
-                let m = s.matching(n);
+                let mut m = match &task {
+                    Some(t) => {
+                        let mut m = s.matching(&informal_fpv::session::qualify(t, n));
+                        m.retain(|&i| &s.props[i].task == t);
+                        m
+                    }
+                    None => Vec::new(),
+                };
+                if m.is_empty() {
+                    m = s.matching(n);
+                }
                 if m.is_empty() {
                     return Err(err("not_found", format!("no property matches {n}")));
                 }
                 which.extend(m);
+            }
+            if let (Some(t), true) = (&task, names.is_empty()) {
+                which = s
+                    .props_of(t)
+                    .into_iter()
+                    .filter(|&i| s.props[i].enabled && s.props[i].kind != Kind::Assume)
+                    .collect();
+                if which.is_empty() {
+                    return Err(err("rejected", format!("task {t} has nothing to prove")));
+                }
             }
             which.sort();
             which.dedup();
@@ -908,7 +949,7 @@ impl Api {
                     .iter()
                     .filter(|p| match p.kind.as_str() {
                         "command" => false,
-                        "cut_point" => !s.design.ai_stopats.contains(&p.text),
+                        "cut_point" => !s.tasks.iter().any(|t| t.ai_stopats.contains(&p.text)),
                         _ => !s
                             .props
                             .iter()
@@ -1139,7 +1180,7 @@ fn check(s: &Session, p: &Proposal) -> Result<(), ApiError> {
     match p.kind.as_str() {
         "command" => Ok(()),
         "cut_point" => match s.cut_point(&p.text) {
-            Ok(cut) if s.design.stopats.contains(&cut) => {
+            Ok(cut) if s.stopats_of(&s.current_task).contains(&cut) => {
                 Err(format!("`{cut}` is already a cut point"))
             }
             r => r.map(|_| ()),
@@ -1251,11 +1292,27 @@ fn prop_view(p: &Property, full: bool) -> Value {
         Status::Unprocessed => {}
     }
     v.insert("has_trace".into(), json!(p.trace.is_some()));
+    v.insert("task".into(), json!(p.task));
+    if let Some(c) = &p.copy_of {
+        v.insert("copy_of".into(), json!(c));
+    }
     if let Some(s) = &p.source {
         v.insert("source".into(), json!({"file": s.file, "line": s.line}));
     }
     if !p.under_ai.is_empty() {
         v.insert("under_ai".into(), json!(p.under_ai));
+    }
+    if let Some(st) = &p.stats {
+        v.insert("stats".into(), json!(st));
+    }
+    match (p.vacuity, &p.status) {
+        (Some(x), _) => {
+            v.insert("vacuity".into(), json!(x.word()));
+        }
+        (None, Status::Proven { .. }) if p.kind == Kind::Assert => {
+            v.insert("vacuity".into(), json!("not checked"));
+        }
+        _ => {}
     }
     if full {
         v.insert("engines".into(), json!(p.engines));
@@ -1297,7 +1354,13 @@ fn summary(s: &Session, mode: Mode, state: &State) -> Value {
         "files": s.design.files,
         "clocks": s.clocks,
         "reset": s.reset,
-        "cut_points": s.design.stopats,
+        "cut_points": s.stopats_of(&s.current_task),
+        "current_task": s.current_task,
+        "tasks": s.tasks.iter().map(|t| json!({
+            "name": t.name,
+            "properties": s.props.iter().filter(|p| p.task == t.name).count(),
+            "cut_points": t.stopats,
+        })).collect::<Vec<_>>(),
         "black_boxes": s.design.bbox.iter().chain(&s.design.bbox_instances).collect::<Vec<_>>(),
         "time_limit_s": s.time_limit.as_secs_f64(),
         "engines": s.engine_names(),
@@ -1309,7 +1372,7 @@ fn summary(s: &Session, mode: Mode, state: &State) -> Value {
         },
         "ai": {
             "properties": s.props.iter().filter(|p| p.ai).count(),
-            "cut_points": s.design.ai_stopats.len(),
+            "cut_points": s.tasks.iter().map(|t| t.ai_stopats.len()).sum::<usize>(),
             "pending_proposals": i.proposals.iter().filter(|p| p.state == "pending").count(),
         },
     })

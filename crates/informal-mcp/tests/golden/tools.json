@@ -88,7 +88,12 @@
               },
               "type": "array"
             },
+            "current_task": {
+              "description": "The task commands and tools without a task apply to",
+              "type": "string"
+            },
             "cut_points": {
+              "description": "The current task's",
               "items": {
                 "type": "string"
               },
@@ -148,6 +153,33 @@
             "schema": {
               "const": "informal.summary/1",
               "type": "string"
+            },
+            "tasks": {
+              "description": "Each task: its own properties, assumptions and cut points, proved on its own model",
+              "items": {
+                "properties": {
+                  "cut_points": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "properties": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "name",
+                  "properties",
+                  "cut_points"
+                ],
+                "type": "object"
+              },
+              "type": "array"
             },
             "time_limit_s": {
               "type": "number"
@@ -302,7 +334,12 @@
           },
           "type": "array"
         },
+        "current_task": {
+          "description": "The task commands and tools without a task apply to",
+          "type": "string"
+        },
         "cut_points": {
+          "description": "The current task's",
           "items": {
             "type": "string"
           },
@@ -362,6 +399,33 @@
         "schema": {
           "const": "informal.summary/1",
           "type": "string"
+        },
+        "tasks": {
+          "description": "Each task: its own properties, assumptions and cut points, proved on its own model",
+          "items": {
+            "properties": {
+              "cut_points": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "properties": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "properties",
+              "cut_points"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         },
         "time_limit_s": {
           "type": "number"
@@ -454,6 +518,10 @@
             "error"
           ],
           "type": "string"
+        },
+        "task": {
+          "description": "Only this task's properties",
+          "type": "string"
         }
       },
       "required": [],
@@ -465,6 +533,10 @@
         "properties": {
           "items": {
             "properties": {
+              "copy_of": {
+                "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+                "type": "string"
+              },
               "depth": 0,
               "detail": {
                 "description": "Why it is undetermined or in error",
@@ -518,6 +590,7 @@
                 ],
                 "type": "object"
               },
+              "stats": "<stats>",
               "status": {
                 "description": "proven and unreachable are proofs; cex and covered come with a trace",
                 "enum": [
@@ -531,6 +604,10 @@
                 ],
                 "type": "string"
               },
+              "task": {
+                "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+                "type": "string"
+              },
               "time_ms": 0,
               "under_ai": {
                 "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
@@ -538,6 +615,10 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "vacuity": {
+                "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+                "type": "string"
               }
             },
             "required": [
@@ -589,6 +670,10 @@
       "properties": {
         "property": {
           "properties": {
+            "copy_of": {
+              "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+              "type": "string"
+            },
             "depth": 0,
             "detail": {
               "description": "Why it is undetermined or in error",
@@ -642,6 +727,7 @@
               ],
               "type": "object"
             },
+            "stats": "<stats>",
             "status": {
               "description": "proven and unreachable are proofs; cex and covered come with a trace",
               "enum": [
@@ -655,6 +741,10 @@
               ],
               "type": "string"
             },
+            "task": {
+              "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+              "type": "string"
+            },
             "time_ms": 0,
             "under_ai": {
               "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
@@ -662,6 +752,10 @@
                 "type": "string"
               },
               "type": "array"
+            },
+            "vacuity": {
+              "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+              "type": "string"
             }
           },
           "required": [
@@ -809,6 +903,56 @@
   },
   {
     "changes": false,
+    "description": "What the design holds, counted on its netlist (instances, inputs, flops, latches, memories, clocks and resets found), what the script declared (clocks, reset, black boxes, the current task's cut points and properties), and the size of the current task's model after lowering (Btor2 nodes, states, inputs, constraints, targets, and the bit-blasted AIG). Builds the model, so it takes as long as one lowering.",
+    "input": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "design_info",
+    "output": {
+      "properties": {
+        "design": {
+          "description": "Counts on the netlist as elaborated (before black boxes and cut points)",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "The current task's model as the engines get it",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "model_error": {
+          "description": "Why the model was not built",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.design_info/1",
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "top": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "task"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
     "description": "Lines of a design file or script, by line range (at most 400 lines a call).",
     "input": {
       "properties": {
@@ -938,6 +1082,10 @@
         },
         "property": {
           "properties": {
+            "copy_of": {
+              "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+              "type": "string"
+            },
             "depth": 0,
             "detail": {
               "description": "Why it is undetermined or in error",
@@ -991,6 +1139,7 @@
               ],
               "type": "object"
             },
+            "stats": "<stats>",
             "status": {
               "description": "proven and unreachable are proofs; cex and covered come with a trace",
               "enum": [
@@ -1004,6 +1153,10 @@
               ],
               "type": "string"
             },
+            "task": {
+              "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+              "type": "string"
+            },
             "time_ms": 0,
             "under_ai": {
               "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
@@ -1011,6 +1164,10 @@
                 "type": "string"
               },
               "type": "array"
+            },
+            "vacuity": {
+              "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+              "type": "string"
             }
           },
           "required": [
@@ -1083,7 +1240,7 @@
   },
   {
     "changes": false,
-    "description": "Run the engines on the named assertions and covers (all enabled ones when none is named) and return each one's result. Only this gives a verdict. With wait=false it returns at once: follow with prove_status, end with prove_stop.",
+    "description": "Run the engines on the named assertions and covers (the enabled ones of the task, or of the current task, when none is named) and return each one's result. Each task is proved on its own model, with its own assumptions and cut points. Only this gives a verdict. With wait=false it returns at once: follow with prove_status, end with prove_stop.",
     "input": {
       "properties": {
         "properties": {
@@ -1092,6 +1249,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "task": {
+          "description": "Prove this task's enabled assertions and covers (with properties: look the names up in it)",
+          "type": "string"
         },
         "time_limit_s": {
           "description": "Per property; the session's limit when left out, and never above the server's",
@@ -1115,6 +1276,10 @@
         "results": {
           "items": {
             "properties": {
+              "copy_of": {
+                "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+                "type": "string"
+              },
               "depth": 0,
               "detail": {
                 "description": "Why it is undetermined or in error",
@@ -1168,6 +1333,7 @@
                 ],
                 "type": "object"
               },
+              "stats": "<stats>",
               "status": {
                 "description": "proven and unreachable are proofs; cex and covered come with a trace",
                 "enum": [
@@ -1181,6 +1347,10 @@
                 ],
                 "type": "string"
               },
+              "task": {
+                "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+                "type": "string"
+              },
               "time_ms": 0,
               "under_ai": {
                 "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
@@ -1188,6 +1358,10 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "vacuity": {
+                "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+                "type": "string"
               }
             },
             "required": [

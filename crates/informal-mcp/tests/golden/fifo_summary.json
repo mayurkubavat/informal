@@ -13,6 +13,7 @@
       "signal": "clk"
     }
   ],
+  "current_task": "<embedded>",
   "cut_points": [],
   "elaborated": true,
   "engines": "<engines>",
@@ -33,6 +34,13 @@
   },
   "reset": "!rst_n",
   "schema": "informal.summary/1",
+  "tasks": [
+    {
+      "cut_points": [],
+      "name": "<embedded>",
+      "properties": 11
+    }
+  ],
   "time_limit_s": 60.0,
   "top": "fifo"
 }

@@ -83,6 +83,10 @@ fn property() -> Value {
             ("source", obj(&[("file", s("")), ("line", n(""))], &["file", "line"])),
             ("under_ai", list(s(""), "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them")),
             ("engines", list(json!({"type": "object"}), "Every engine's run in the last prove")),
+            ("task", s("The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)")),
+            ("stats", json!({"type": "object", "description": "What the last prove measured: engine, wall_ms, cpu_ms (process and engine processes, may exceed wall time), peak_rss_kb (only when the high-water mark rose during this property), depth and depth_kind (trace, k, frames or bound), max_bound, invariant_clauses, evidence, certificate. A field the engines did not measure is left out"})),
+            ("vacuity", s("For a proven assertion: what the vacuity checks found, or `not checked`")),
+            ("copy_of", s("For a copy of a property written in the RTL, the original: its check in the model is this one's")),
         ],
         &["name", "kind", "status", "origin", "has_trace"],
     )
@@ -133,7 +137,22 @@ fn summary() -> Value {
                 "reset",
                 json!({"type": ["string", "null"], "description": "The condition that holds during reset"}),
             ),
-            ("cut_points", list(s(""), "")),
+            ("cut_points", list(s(""), "The current task's")),
+            ("current_task", s("The task commands and tools without a task apply to")),
+            (
+                "tasks",
+                list(
+                    obj(
+                        &[
+                            ("name", s("")),
+                            ("properties", n("")),
+                            ("cut_points", list(s(""), "")),
+                        ],
+                        &["name", "properties", "cut_points"],
+                    ),
+                    "Each task: its own properties, assumptions and cut points, proved on its own model",
+                ),
+            ),
             ("black_boxes", list(s(""), "")),
             ("time_limit_s", json!({"type": "number"})),
             ("engines", list(s(""), "")),
@@ -233,6 +252,7 @@ pub fn all() -> Vec<Tool> {
                     ("status", one_of(STATUS, "")),
                     ("name", s("Glob on the name (* and ?)")),
                     ("origin", one_of(&["user", "rtl", "ai"], "")),
+                    ("task", s("Only this task's properties")),
                 ],
                 &[],
             ),
@@ -278,6 +298,24 @@ pub fn all() -> Vec<Tool> {
             changes: false,
         },
         Tool {
+            name: "design_info",
+            title: "Design information",
+            description: "What the design holds, counted on its netlist (instances, inputs, flops, latches, memories, clocks and resets found), what the script declared (clocks, reset, black boxes, the current task's cut points and properties), and the size of the current task's model after lowering (Btor2 nodes, states, inputs, constraints, targets, and the bit-blasted AIG). Builds the model, so it takes as long as one lowering.",
+            input: obj(&[], &[]),
+            output: obj(
+                &[
+                    schema("informal.design_info/1"),
+                    ("top", json!({"type": ["string", "null"]})),
+                    ("design", json!({"type": ["object", "null"], "description": "Counts on the netlist as elaborated (before black boxes and cut points)"})),
+                    ("task", s("")),
+                    ("model", json!({"type": ["object", "null"], "description": "The current task's model as the engines get it"})),
+                    ("model_error", s("Why the model was not built")),
+                ],
+                &["schema", "task"],
+            ),
+            changes: false,
+        },
+        Tool {
             name: "design_source",
             title: "Source text",
             description: "Lines of a design file or script, by line range (at most 400 lines a call).",
@@ -319,10 +357,11 @@ pub fn all() -> Vec<Tool> {
         Tool {
             name: "prove",
             title: "Prove properties",
-            description: "Run the engines on the named assertions and covers (all enabled ones when none is named) and return each one's result. Only this gives a verdict. With wait=false it returns at once: follow with prove_status, end with prove_stop.",
+            description: "Run the engines on the named assertions and covers (the enabled ones of the task, or of the current task, when none is named) and return each one's result. Each task is proved on its own model, with its own assumptions and cut points. Only this gives a verdict. With wait=false it returns at once: follow with prove_status, end with prove_stop.",
             input: obj(
                 &[
                     ("properties", list(s(""), "Names or globs")),
+                    ("task", s("Prove this task's enabled assertions and covers (with properties: look the names up in it)")),
                     ("time_limit_s", json!({"type": "number", "description": "Per property; the session's limit when left out, and never above the server's"})),
                     ("wait", b("Default true")),
                 ],

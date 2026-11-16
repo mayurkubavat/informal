@@ -17,6 +17,7 @@ pub const TOOLS: &[&str] = &[
     "property_get",
     "property_cone",
     "design_hierarchy",
+    "design_info",
     "design_source",
     "trace_get",
     "session_log",

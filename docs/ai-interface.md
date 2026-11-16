@@ -113,13 +113,14 @@ reply (`tools/list`).
 | | `script_check` | What a script uses that the tool rejects or ignores, per line, without running it | no |
 | | `session_summary` | Setup, engines, property counts by status, what an AI added or proposed | no |
 | | `session_log` | The last console lines, including every AI-added change | no |
-| Properties | `property_list` | Properties with status, filtered by kind, status, name or origin | no |
-| | `property_get` | One property: status, engine, time, depth, source location, every engine's run | no |
+| Properties | `property_list` | Properties with status, filtered by kind, status, name, origin or task | no |
+| | `property_get` | One property: status, engine, time, depth, source location, task, what the last prove measured (`stats`), vacuity, every engine's run | no |
 | | `property_cone` | Inputs and registers in the property's cone of influence, by register distance | no |
 | Design | `design_hierarchy` | Instance tree with ports and signals | no |
+| | `design_info` | Counts of the design (inputs, flops, latches, memories, clocks and resets found) and the size of the current task's model (Btor2 nodes, states, AIG ands) | no |
 | | `design_source` | Source text by file and line range | no |
 | Traces | `trace_get` | A counterexample or cover trace: values per signal and frame, chosen signals, a frame window | no |
-| Prove | `prove` | Run the engines on named properties with a time limit; each one's result | statuses only |
+| Prove | `prove` | Run the engines on named properties, or on one task's, with a time limit; each one's result | statuses only |
 | | `prove_status` | Progress of a running prove; the result of one started with `wait: false` | no |
 | | `prove_stop` | Stop a running prove | no |
 | Proposals | `proposal_add` | Propose an assumption, helper assertion, cover or cut point | yes, by mode |

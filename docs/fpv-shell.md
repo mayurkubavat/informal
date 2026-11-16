@@ -126,12 +126,17 @@ passes on a different setup without saying so.
 | `assert -env` | — | Add as assumption |
 | `assert -disable/-enable pattern` | `fvdisable / fvenable pattern` | Glob patterns. A property of the RTL can be named without its path (`a_never` for `top.a_never`) when that names one property |
 | `assert -disable/-enable/-remove -regexp {re}` | — | Regular expressions, matched anywhere in the name as Tcl's `regexp` does (anchor with `^` and `$`) |
-| `prove -all`, `prove -property {names}` | `check_fv [-property {names}]` | Prove; prints the report, returns a count summary |
+| `prove -all`, `prove -property {names}`, `prove -task T` | `check_fv [-property {names}]` | Prove; prints the report, returns a count summary. `-all` (or nothing) proves the current task; `-task T` that task (see Tasks below) |
 | `set_prove_time_limit 1h`, `set_prove_per_property_time_limit 1h` | `set_fml_var fml_max_time 1H` | Per-property time limit; units `ms`, `s`, `m`, `h`, `d` |
 | `set_engine_mode {Ht B N}` | — | Mapped to informal engines (Ht/Hp → `ric3-ic3`, `abc-pdr`; B → `ric3-bmc`; N → `ric3`); prints the engines it picked |
-| `get_property_list -include {type assert status proven}` | `get_props -type assert -status proven` | Tcl list of names; with `-regexp`, a `name` value is a regular expression |
+| `get_property_list [-task T] -include {type assert status proven}` | `get_props -type assert -status proven` | Tcl list of names; with `-regexp`, a `name` value is a regular expression. Keys: `type`, `status`, `name`, `disabled` (0 or 1), `task` |
 | `get_status name` | — | `proven`, `cex`, `covered`, `unreachable`, `undetermined`, `error`, `unprocessed` |
-| `report [-csv] [-file F [-force]]` | `report_fv -list` | Property table, or comma-separated values; `-file` writes it there |
+| `report [-task T] [-csv] [-file F [-force]]` | `report_fv -list` | Property table, or comma-separated values; `-file` writes it there; `-task` keeps one task's properties |
+| `task -create T ...`, `task -edit T ...`, `task -set T`, `task -list`, `get_task_list`, `task -delete T` | — | Tasks: see below |
+| `get_design_info [-json]`, `report -design` | — | What the design holds and the size of the current task's model: see Design and proof statistics |
+| `get_design_info -list instance\|memory\|clock\|reset [-filter P [-regexp]]` | — | Names of instances, memories, clocks or asynchronous resets found in the design |
+| `get_property_info P [-json] [-cone]`, `report -detail [-property P] [-task T]`, `get_stats [-task T]` | — | What the last prove measured per property: see Design and proof statistics |
+| `assert/assume/cover -task T ...`, `stopat -task T ...` | — | Add to task T instead of the current task |
 | `visualize -violation -property P`, `visualize -cover -property P` | — | Returns the VCD that prove wrote for a CEX or a cover, and opens it with `$INFORMAL_WAVE_VIEWER` (for example `surfer` or `gtkwave`) when that is set |
 | `get_version`, `echo words` | `get_version`, `echo words` | The informal version; print a line |
 | `check_assumptions [-depth N] [-conflict]` | — | Whether the assumptions and reset allow traces of N steps; returns how many they allow, or with `-conflict` the assumptions that conflict (also run before every prove: docs/vacuity.md) |
@@ -143,12 +148,104 @@ Extra informal commands in every flavor: `informal::session` (the session as JSO
 `informal::set_vacuity on|off` (the vacuity checks before and after a prove; on by default). Each flavor's
 commands also stay reachable by namespace (`jg::prove`, `vcf::check_fv`).
 
+## Tasks
+
+A task is a named set of properties, with its own assumptions and cut
+points, as in JasperGold. Every session starts with the task
+`<embedded>`, which holds the properties written in the RTL and every
+property given by command until another task is made current. Decision
+D20 in docs/decisions.md says why it works this way.
+
+| Command | What it does |
+| --- | --- |
+| `task -create T [copy options] [-set]` | Make task T, empty apart from the copies asked for; `-set` makes it current. Returns T |
+| `task -edit T [copy options]` | Copy more properties into T |
+| `task -set T` | Make T the current task: commands without `-task` add to it, `prove -all` proves it, and a short name is looked up in it |
+| `task` | The current task's name |
+| `task -list`, `get_task_list` | The task names, `<embedded>` first |
+| `task -delete T` | Remove T and its properties (not `<embedded>`); the current task goes back to `<embedded>` when it was T |
+
+Copy options take the properties of the source task: `-source_task S`,
+else the current task.
+
+- `-copy {names}`: by name or glob (`*`, `?`), matched against the full
+  name and the name without its task; with `-regexp`, regular expressions.
+- `-copy_asserts`, `-copy_assumes`, `-copy_covers`: every one of that kind;
+  `-copy_all` all three and the cut points.
+- `-copy_stopats`: the source task's cut points.
+- `-copy_ratings`, `-copy_abstractions`, `-copy_related_covers` and
+  `-copy_proof_settings` are accepted and ignored with a note.
+
+A property outside `<embedded>` is named `T::name`, both when it is made
+there (`assert -task T -name a_x ...` or with T current) and when it is
+copied (`T::a_x`); an embedded property also answers to
+`<embedded>::name`, as JasperGold scripts write it. A copy starts
+unprocessed and enabled, whatever the original's state.
+
+Each task is proved on a model of its own: the design, the task's
+enabled assumptions and its cut points, nothing of another task. So an
+assumption of one task does not constrain another, and a cut point in
+one task leaves the same signal driven in the others. Black boxes,
+clocks and reset are the design's and the same in every task.
+
+Assumptions written in the RTL are part of the design and are in every
+task's model (svlang has no way yet to leave one out); a new task lists
+them from the start, as copies, so that its property list says what its
+model holds.
+
+```tcl
+task -create FreeFsm -copy {a_fsm_*} -copy_assumes
+stopat -task FreeFsm u_fsm.state_q
+prove -task FreeFsm
+report -task FreeFsm
+```
+
+## Design and proof statistics
+
+Every number below is counted on the design or measured by a prove; none
+is estimated. What was not measured is said so ("not measured", "not
+checked"), and in JSON the field is left out.
+
+`get_design_info` (also `report -design`) prints a table; `-json` gives
+the same as JSON (the app's Design Info panel and the MCP `design_info`
+tool read that):
+
+| Row | Counted on |
+| --- | --- |
+| instances, inputs, outputs, flops, latches, memories (words x width), clocks and asynchronous resets found, undriven ranges | svlang's netlist of the design as elaborated: before black boxes, cut points and properties. Flops are registers written on a clock edge, latches the level-sensitive ones; a memory is an unpacked array as declared (one of up to 4096 words still becomes registers in the model). A clock counts the registers and memory write ports on it |
+| clocks and reset declared, black boxes | the script |
+| task, cut points, properties | the current task: its assertions, covers, enabled assumptions (those of the design included) and disabled properties |
+| model nodes, states, inputs, targets | the current task's Btor2 model as the engines get it (built for the command, so it takes one lowering): every line but sorts, `state` and `input` lines with their bits, `bad`, `justice` and `constraint` lines |
+| AIG | that model bit-blasted as the in-house engines load it: and gates, latches, inputs |
+
+`get_property_info P` (and `report -detail`, one block per property;
+`get_stats` gives every property's as JSON):
+
+| Field | Meaning |
+| --- | --- |
+| engine | the engine whose verdict was taken |
+| wall time | the property's portfolio run |
+| cpu time | user and system time of the process and of the engine processes it waited for while the property ran; the engines run in parallel, so it can exceed the wall time |
+| peak memory | the resident high-water mark of the process or an engine process, given only when it rose during this property's run (so it is this run's peak) |
+| depth | `trace`: cycles of the counterexample or cover trace; `k`: the k of a k-induction proof; `frames`: IC3/PDR frames when the winner found its invariant; `bound`: the BMC bound an undetermined run reached |
+| deepest bound | the deepest bound any engine reported |
+| invariant clauses | clauses of the inductive invariant the winner gave (its lemmas) |
+| evidence | what the winner gave: `invariant`, `k-induction`, `two-step`, `two-step-k-induction`, `trace`; "none given" for external engines |
+| certificate | the file written for an outside checker (`informal shell --certificate`), or why none was; "not asked for" otherwise |
+| vacuity | what the vacuity checks found (docs/vacuity.md); "not checked" for a proven assertion they did not look at |
+| cone of influence | with `-cone`: the states and inputs (and their bits) the property's target and the assumptions depend on in its model |
+
+The same fields are in the session JSON (`stats` of each property) and
+the MCP replies.
+
 ## Cut points (`stopat`)
 
 `stopat u_core.busy` cuts the signal from whatever drives it (an assign, a
 register, an instance output): everything that reads it sees a free value
 on every step. Names are paths from the top module; a name that is not a
 signal of the design is an error. `stopat -clear` removes them again.
+Cut points belong to a task (`stopat -task T`, else the current task):
+see Tasks above.
 
 A cut is an over-approximation the user asks for, usually to take a deep
 counter, a memory or a whole sub-block out of the proof:
@@ -214,7 +311,7 @@ informal would do with it:
 ```
 fpv.tcl:85: unknown command: check_cov: not an informal command
 fpv.tcl:135: error: analyze: VHDL is not supported yet
-fpv.tcl:238: ignored: task -create ...: tasks are not modelled yet; properties stay in one task
+fpv.tcl:241: ignored: prove -orchestration: ignoring -orchestration (vendor engine/GUI option)
 fpv.tcl:45: tcl error: environment variable DUT_TOP is not set
 9 command(s) honoured, 5 rejected, 2 unknown, 4 ignored option(s) or command(s), 1 Tcl error(s)
 ```
@@ -305,5 +402,6 @@ last result, the ranked list of what the shell should learn next.
 - Black boxes need the boxed module's source to elaborate (a module with
   no source at all is still an error); `-bbox_mul` and `-bbox_a` (box
   wide multipliers and arrays automatically) are ignored with a note.
-- Tasks (`task -create`) are not modelled; everything runs in one task, so
-  `assume -task T` is an error (it would constrain every property).
+- Tasks: an assumption written in the RTL cannot be left out of a task's
+  model (see Tasks). `prove -bg` runs in the foreground, so tasks are
+  proved one after the other.

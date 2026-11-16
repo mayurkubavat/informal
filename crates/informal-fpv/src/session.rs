@@ -128,6 +128,71 @@ pub struct Property {
     /// vacuity checks of a prove, `None` when they did not look at it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vacuity: Option<Vacuity>,
+    /// The task the property belongs to ([`EMBEDDED`] unless a `task`
+    /// command made another). Outside the embedded task the name is
+    /// qualified, `<task>::<name>`, as JasperGold names it.
+    pub task: String,
+    /// A copy, made by `task -create`/`task -edit -copy`, of a property
+    /// written in the RTL: the name of that property, whose check in the
+    /// model this one is. `None` for every other property (a copy of a
+    /// property given by command is bound again under its own name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_of: Option<String>,
+    /// What the last prove measured for this property (times, depth,
+    /// invariant size, certificate): `None` before a prove, and when no
+    /// engine ran on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<crate::stats::ProofStats>,
+}
+
+impl Property {
+    /// The name without its task prefix (`t::a_x` -> `a_x`).
+    pub fn short_name(&self) -> &str {
+        self.name
+            .strip_prefix(self.task.as_str())
+            .and_then(|r| r.strip_prefix("::"))
+            .unwrap_or(&self.name)
+    }
+
+    /// Back to unprocessed, forgetting what the last prove found.
+    pub fn forget_result(&mut self) {
+        self.status = Status::Unprocessed;
+        self.trace = None;
+        self.engines.clear();
+        self.under_ai.clear();
+        self.vacuity = None;
+        self.stats = None;
+    }
+}
+
+/// The task every session starts with: what JasperGold calls the embedded
+/// task. It holds the properties written in the RTL and, until a `task`
+/// command makes another, every property given by command.
+pub const EMBEDDED: &str = "<embedded>";
+
+/// A JasperGold task: a named set of properties, the assumptions among
+/// them, and its own cut points. A prove runs each task's properties on a
+/// model with that task's assumptions and cut points only (decision D20).
+#[derive(Debug, Clone, Serialize)]
+pub struct Task {
+    pub name: String,
+    /// Cut points (`stopat`), as paths from the top module (`u_core.sig`):
+    /// each is cut from its drivers and free on every step.
+    pub stopats: Vec<String>,
+    /// The cut points among `stopats` that were added through the AI
+    /// interface (decision D17).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_stopats: Vec<String>,
+}
+
+impl Task {
+    pub fn new(name: &str) -> Self {
+        Task {
+            name: name.to_string(),
+            stopats: Vec::new(),
+            ai_stopats: Vec::new(),
+        }
+    }
 }
 
 /// What the vacuity checks found for one proven property. The status word
@@ -227,13 +292,6 @@ pub struct Design {
     pub bbox: Vec<String>,
     /// Black boxes by instance path from the top module (`-bbox_i`).
     pub bbox_instances: Vec<String>,
-    /// Cut points (`stopat`), as paths from the top module (`u_core.sig`):
-    /// each is cut from its drivers and free on every step.
-    pub stopats: Vec<String>,
-    /// The cut points among `stopats` that were added through the AI
-    /// interface (decision D17).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ai_stopats: Vec<String>,
     /// `set_lowering skip_initial_checks on`: time-zero checks of signals in
     /// `initial` blocks are left out of the model, not reported as
     /// unsupported.
@@ -255,6 +313,10 @@ pub struct Session {
     /// Active-high "in reset" condition, held for the first cycle only.
     pub reset: Option<String>,
     pub props: Vec<Property>,
+    /// The tasks, [`EMBEDDED`] first; never empty.
+    pub tasks: Vec<Task>,
+    /// The task commands without `-task` apply to (`task -set`).
+    pub current_task: String,
     pub time_limit: Duration,
     /// Engine names to use; empty means every loaded engine.
     pub engine_filter: Vec<String>,
@@ -305,6 +367,8 @@ pub struct Session {
 /// What the environment check found (docs/vacuity.md).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Environment {
+    /// The task whose model was checked.
+    pub task: String,
     /// Steps asked for.
     pub asked: u32,
     /// The longest trace the assumptions and the reset allow, in model
@@ -336,6 +400,8 @@ impl Session {
             clocks: Vec::new(),
             reset: None,
             props: Vec::new(),
+            tasks: vec![Task::new(EMBEDDED)],
+            current_task: EMBEDDED.to_string(),
             time_limit: Duration::from_secs(3600),
             engine_filter: Vec::new(),
             workdir,
@@ -371,8 +437,23 @@ impl Session {
         self.sink = sink;
     }
 
+    /// Add a property given by command to the current task.
     pub fn add_property(
         &mut self,
+        kind: Kind,
+        name: Option<String>,
+        expr: &str,
+    ) -> Result<String, String> {
+        let task = self.current_task.clone();
+        self.add_property_in(&task, kind, name, expr)
+    }
+
+    /// Add a property given by command to `task`. Outside the embedded
+    /// task its name is qualified (`<task>::<name>`); a name given already
+    /// qualified with that task is taken as it is.
+    pub fn add_property_in(
+        &mut self,
+        task: &str,
         kind: Kind,
         name: Option<String>,
         expr: &str,
@@ -382,10 +463,27 @@ impl Session {
         // binds the property at prove and has the last word on both.
         check_operators(expr)?;
         self.check_names(expr)?;
-        let name = name.unwrap_or_else(|| {
-            let n = self.props.iter().filter(|p| p.kind == kind).count();
-            format!("{}_{}", kind.label(), n)
-        });
+        let task = self.task_name(task)?;
+        let short = match name {
+            Some(n) => match n.split_once("::") {
+                Some((t, rest)) if t == task => rest.to_string(),
+                Some((t, _)) => {
+                    return Err(format!(
+                        "property `{n}` names task {t}, but it is being added to task {task}"
+                    ))
+                }
+                None => n,
+            },
+            None => {
+                let n = self
+                    .props
+                    .iter()
+                    .filter(|p| p.kind == kind && p.task == task)
+                    .count();
+                format!("{}_{}", kind.label(), n)
+            }
+        };
+        let name = qualify(&task, &short);
         if self.props.iter().any(|p| p.name == name) {
             return Err(format!("property `{name}` already exists"));
         }
@@ -402,15 +500,147 @@ impl Session {
             ai: false,
             under_ai: Vec::new(),
             vacuity: None,
+            task,
+            copy_of: None,
+            stats: None,
         });
         Ok(name)
+    }
+
+    // ------------------------------------------------------------ tasks
+
+    /// The task called `name`, as the session spells it; `Err` when there
+    /// is none.
+    pub fn task_name(&self, name: &str) -> Result<String, String> {
+        self.tasks
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| t.name.clone())
+            .ok_or_else(|| {
+                format!(
+                    "no task `{name}` (tasks: {})",
+                    self.tasks
+                        .iter()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+    }
+
+    fn task_mut(&mut self, name: &str) -> Result<&mut Task, String> {
+        let name = self.task_name(name)?;
+        Ok(self.tasks.iter_mut().find(|t| t.name == name).unwrap())
+    }
+
+    /// The cut points of `task`.
+    pub fn stopats_of(&self, task: &str) -> &[String] {
+        self.tasks
+            .iter()
+            .find(|t| t.name == task)
+            .map_or(&[][..], |t| &t.stopats)
+    }
+
+    /// The cut points of `task`, to change.
+    pub fn stopats_mut(&mut self, task: &str) -> Result<&mut Vec<String>, String> {
+        Ok(&mut self.task_mut(task)?.stopats)
+    }
+
+    /// `task -create`: a new, empty task. The assumptions written in the
+    /// RTL are in every task's model (they are part of the design: the
+    /// front end cannot leave one out yet), so they are listed in the new
+    /// task from the start, as copies.
+    pub fn create_task(&mut self, name: &str) -> Result<(), String> {
+        if name.is_empty() || name.contains("::") || name.chars().any(char::is_whitespace) {
+            return Err(format!(
+                "task name `{name}`: a name has no white space and no `::`"
+            ));
+        }
+        if self.tasks.iter().any(|t| t.name == name) {
+            return Err(format!("task `{name}` already exists"));
+        }
+        self.tasks.push(Task::new(name));
+        let design_assumes: Vec<usize> = (0..self.props.len())
+            .filter(|&i| self.props[i].rtl && self.props[i].kind == Kind::Assume)
+            .collect();
+        self.copy_into(name, &design_assumes)?;
+        Ok(())
+    }
+
+    /// Copy properties `which` into `task` (`task -create/-edit -copy`):
+    /// each copy is named `<task>::<name without its task>`, starts
+    /// unprocessed, and is enabled. One that is there already is left as it
+    /// is. Returns the names of the copies made.
+    pub fn copy_into(&mut self, task: &str, which: &[usize]) -> Result<Vec<String>, String> {
+        let task = self.task_name(task)?;
+        let mut made = Vec::new();
+        for &i in which {
+            let src = &self.props[i];
+            let name = qualify(&task, src.short_name());
+            if src.task == task || self.props.iter().any(|p| p.name == name) {
+                continue;
+            }
+            let mut p = src.clone();
+            p.forget_result();
+            p.copy_of = match (src.rtl, &src.copy_of) {
+                (true, _) => Some(src.name.clone()),
+                (false, c) => c.clone(),
+            };
+            p.rtl = false;
+            p.ai = false;
+            p.enabled = true;
+            p.name = name.clone();
+            p.task = task.clone();
+            self.props.push(p);
+            made.push(name);
+        }
+        Ok(made)
+    }
+
+    /// Copy `from`'s cut points into `to`.
+    pub fn copy_stopats(&mut self, from: &str, to: &str) -> Result<(), String> {
+        let cuts = self.task_mut(from)?.stopats.clone();
+        let dst = self.stopats_mut(to)?;
+        for c in cuts {
+            if !dst.contains(&c) {
+                dst.push(c);
+            }
+        }
+        Ok(())
+    }
+
+    /// `task -set`: the task that commands without `-task` apply to.
+    pub fn set_task(&mut self, name: &str) -> Result<(), String> {
+        self.current_task = self.task_name(name)?;
+        Ok(())
+    }
+
+    /// `task -delete`: a task and its properties. The embedded task stays.
+    pub fn delete_task(&mut self, name: &str) -> Result<(), String> {
+        let name = self.task_name(name)?;
+        if name == EMBEDDED {
+            return Err(format!("the {EMBEDDED} task cannot be deleted"));
+        }
+        self.tasks.retain(|t| t.name != name);
+        self.props.retain(|p| p.task != name);
+        if self.current_task == name {
+            self.current_task = EMBEDDED.to_string();
+        }
+        Ok(())
+    }
+
+    /// Indices of the properties of `task`.
+    pub fn props_of(&self, task: &str) -> Vec<usize> {
+        (0..self.props.len())
+            .filter(|&i| self.props[i].task == task)
+            .collect()
     }
 
     /// What [`Self::add_property`] would reject, without adding anything.
     pub fn check_property(&self, name: Option<&str>, expr: &str) -> Result<(), String> {
         check_operators(expr)?;
         self.check_names(expr)?;
-        match name {
+        match name.map(|n| qualify(&self.current_task, n)) {
             Some(n) if self.props.iter().any(|p| p.name == n) => {
                 Err(format!("property `{n}` already exists"))
             }
@@ -452,11 +682,13 @@ impl Session {
     /// point as the session lists it.
     pub fn add_ai_cut_point(&mut self, signal: &str) -> Result<String, String> {
         let cut = self.cut_point(signal)?;
-        if self.design.stopats.contains(&cut) {
+        let task = self.current_task.clone();
+        let t = self.task_mut(&task)?;
+        if t.stopats.contains(&cut) {
             return Err(format!("`{cut}` is already a cut point"));
         }
-        self.design.stopats.push(cut.clone());
-        self.design.ai_stopats.push(cut.clone());
+        t.stopats.push(cut.clone());
+        t.ai_stopats.push(cut.clone());
         self.log(&format!("AI-added cut point (stopat) {cut}"));
         Ok(cut)
     }
@@ -464,11 +696,19 @@ impl Session {
     /// Remove an AI-added cut point. Returns the properties whose status
     /// was found with it in the model and is now reset.
     pub fn remove_ai_cut_point(&mut self, cut: &str) -> Result<Vec<String>, String> {
-        if !self.design.ai_stopats.iter().any(|c| c == cut) {
+        if !self
+            .tasks
+            .iter()
+            .any(|t| t.ai_stopats.iter().any(|c| c == cut))
+        {
             return Err(format!("no AI-added cut point `{cut}`"));
         }
-        self.design.ai_stopats.retain(|c| c != cut);
-        self.design.stopats.retain(|c| c != cut);
+        for t in &mut self.tasks {
+            if t.ai_stopats.iter().any(|c| c == cut) {
+                t.ai_stopats.retain(|c| c != cut);
+                t.stopats.retain(|c| c != cut);
+            }
+        }
         self.log(&format!("AI-added cut point {cut} removed"));
         Ok(self.reset_under(&format!("stopat {cut}")))
     }
@@ -479,32 +719,46 @@ impl Session {
         let mut reset = Vec::new();
         for p in &mut self.props {
             if p.under_ai.iter().any(|u| u == item) {
-                p.status = Status::Unprocessed;
-                p.trace = None;
-                p.engines.clear();
-                p.under_ai.clear();
+                p.forget_result();
                 reset.push(p.name.clone());
             }
         }
         reset
     }
 
-    /// The AI-added changes a prove started now would have in its model
-    /// (see [`Property::under_ai`]).
+    /// The AI-added changes a prove of the current task started now would
+    /// have in its model (see [`Property::under_ai`]).
     pub fn ai_in_force(&self) -> Vec<String> {
+        self.ai_in_force_for(&self.current_task)
+    }
+
+    /// [`Self::ai_in_force`] for `task`.
+    pub fn ai_in_force_for(&self, task: &str) -> Vec<String> {
+        let ai_cuts = self
+            .tasks
+            .iter()
+            .filter(|t| t.name == task)
+            .flat_map(|t| t.ai_stopats.iter());
         self.props
             .iter()
-            .filter(|p| p.ai && p.enabled && p.kind == Kind::Assume)
+            .filter(|p| p.ai && p.enabled && p.kind == Kind::Assume && p.task == task)
             .map(|p| p.name.clone())
-            .chain(self.design.ai_stopats.iter().map(|c| format!("stopat {c}")))
+            .chain(ai_cuts.map(|c| format!("stopat {c}")))
             .collect()
     }
 
+    /// The name of property `i`'s check in its task's model: its own name,
+    /// or for a copy of a property in the RTL, the original's.
+    pub fn check_name(&self, i: usize) -> String {
+        let p = &self.props[i];
+        target_name(p.copy_of.as_deref().unwrap_or(&p.name))
+    }
+
     /// The Btor2 model property `i` is proved on: the whole design with
-    /// every assumption and this one target. Lowers the design.
+    /// every assumption of its task and this one target. Lowers the design.
     pub fn model_for(&self, i: usize) -> Result<String, String> {
-        let (btor, _) = self.lower()?;
-        let keep = target_name(&self.props[i].name);
+        let (btor, _) = self.lower(&self.props[i].task)?;
+        let keep = self.check_name(i);
         if !has_target(&btor, &keep) {
             return Err(format!("no check named {keep} in the model"));
         }
@@ -567,24 +821,38 @@ impl Session {
         Ok(rel.to_string())
     }
 
-    /// The cut points as the front end wants them: full paths.
-    fn cut_points(&self) -> Vec<String> {
+    /// `task`'s cut points as the front end wants them: full paths.
+    fn cut_points(&self, task: &str) -> Vec<String> {
         let top = self.design.top.as_deref().unwrap_or("");
-        self.design
-            .stopats
+        self.stopats_of(task)
             .iter()
             .map(|s| format!("{top}.{s}"))
             .collect()
     }
 
-    /// Names matching a Tcl-style glob (`*`, `?`).
+    /// Names matching a Tcl-style glob (`*`, `?`). A pattern that matches
+    /// no name as it stands is tried as `<embedded>::<name>` (JasperGold's
+    /// full name of an embedded property) and then in the current task.
     pub fn matching(&self, pattern: &str) -> Vec<usize> {
-        self.props
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| glob(pattern, &p.name))
-            .map(|(i, _)| i)
-            .collect()
+        let by = |pat: &str, task: Option<&str>| -> Vec<usize> {
+            self.props
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| task.is_none_or(|t| p.task == t) && glob(pat, &p.name))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let direct = by(pattern, None);
+        if !direct.is_empty() {
+            return direct;
+        }
+        if let Some(rest) = pattern.strip_prefix(&format!("{EMBEDDED}::")) {
+            return by(rest, Some(EMBEDDED));
+        }
+        if self.current_task != EMBEDDED {
+            return by(&qualify(&self.current_task, pattern), None);
+        }
+        Vec::new()
     }
 
     pub fn elaborate(&mut self, top: Option<String>) -> anyhow::Result<()> {
@@ -635,6 +903,14 @@ impl Session {
             }
         }
         self.rtl_properties(&d.properties);
+        // Every task lists the design's assumptions (see create_task).
+        let design_assumes: Vec<usize> = (0..self.props.len())
+            .filter(|&i| self.props[i].rtl && self.props[i].kind == Kind::Assume)
+            .collect();
+        let others: Vec<String> = self.tasks[1..].iter().map(|t| t.name.clone()).collect();
+        for t in others {
+            let _ = self.copy_into(&t, &design_assumes);
+        }
         if !d.unlisted_checks.is_empty() {
             self.log(&format!(
                 "NOT CHECKED: {} immediate assertion(s) or cover(s) in the RTL are not in the property table (give each a label of its own, `name: assert (...)`):",
@@ -695,6 +971,9 @@ impl Session {
                 ai: false,
                 under_ai: Vec::new(),
                 vacuity: None,
+                task: EMBEDDED.to_string(),
+                copy_of: None,
+                stats: None,
             });
         }
     }
@@ -746,7 +1025,7 @@ impl Session {
         engines: &[Arc<dyn Engine>],
     ) -> Option<Vacuity> {
         let name = format!("{}:precondition", self.props[i].name);
-        let keep = target_name(&name);
+        let keep = format!("{}:precondition", self.check_name(i));
         if !has_target(btor, &keep) {
             return None;
         }
@@ -779,7 +1058,7 @@ impl Session {
                 Err(e) => self.log(&format!("{name}: certificate not written: {e:#}")),
             }
         }
-        let cut = !(self.design.stopats.is_empty()
+        let cut = !(self.stopats_of(&self.props[i].task).is_empty()
             && self.design.bbox.is_empty()
             && self.design.bbox_instances.is_empty());
         Some(match verdict {
@@ -804,14 +1083,15 @@ impl Session {
     /// of informal-bmc on the model with no targets but a step counter.
     /// Unless that is shorter than `depth`, the assumptions do not conflict
     /// within it (they may still over-constrain: see docs/vacuity.md).
-    pub fn check_environment(&self, btor: &str, depth: u32) -> Environment {
+    pub fn check_environment(&self, task: &str, btor: &str, depth: u32) -> Environment {
         let assumptions: Vec<String> = self
             .props
             .iter()
-            .filter(|p| p.enabled && p.kind == Kind::Assume)
+            .filter(|p| p.enabled && p.kind == Kind::Assume && p.task == task)
             .map(|p| p.name.clone())
             .collect();
         let mut env = Environment {
+            task: task.to_string(),
             asked: depth,
             allowed: None,
             assumptions,
@@ -958,8 +1238,9 @@ impl Session {
             self.elaborate(None)?;
         }
         self.check_reset_and_clocks().map_err(|e| anyhow!(e))?;
-        let (btor, _) = self.lower().map_err(|e| anyhow!(e))?;
-        let env = self.check_environment(&btor, depth);
+        let task = self.current_task.clone();
+        let (btor, _) = self.lower(&task).map_err(|e| anyhow!(e))?;
+        let env = self.check_environment(&task, &btor, depth);
         self.report_environment(&env);
         self.environment = Some(env.clone());
         Ok(env)
@@ -971,6 +1252,10 @@ impl Session {
             "the reset and the assumptions of the design".to_string()
         } else {
             format!("the reset and {}", env.assumptions.join(", "))
+        };
+        let named = match env.task.as_str() {
+            EMBEDDED => named,
+            t => format!("{named} (task {t})"),
         };
         match env.allowed {
             None => self.log(&format!(
@@ -1118,8 +1403,11 @@ impl Session {
         self.engines.iter().map(|e| e.name().to_string()).collect()
     }
 
-    /// Prove the selected assertions and covers (all enabled ones when
-    /// `which` is empty). Returns their indices.
+    /// Prove the selected assertions and covers (the enabled ones of the
+    /// current task when `which` is empty). Returns their indices.
+    ///
+    /// Properties are proved task by task, each task on its own model: the
+    /// design with that task's assumptions and cut points (decision D20).
     ///
     /// Stop (`self.stop`) ends the run: the running property's portfolio is
     /// cancelled, and it and every property not reached yet become
@@ -1136,7 +1424,10 @@ impl Session {
         self.check_reset_and_clocks().map_err(|e| anyhow!(e))?;
         let targets: Vec<usize> = if which.is_empty() {
             (0..self.props.len())
-                .filter(|&i| self.props[i].enabled && self.props[i].kind != Kind::Assume)
+                .filter(|&i| {
+                    let p = &self.props[i];
+                    p.enabled && p.kind != Kind::Assume && p.task == self.current_task
+                })
                 .collect()
         } else {
             which
@@ -1158,6 +1449,20 @@ impl Session {
                 );
             }
         }
+        // Task by task, in the order the tasks were made; the tracker's
+        // slots follow that order.
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for t in self.tasks.iter().map(|t| t.name.clone()) {
+            let members: Vec<usize> = targets
+                .iter()
+                .copied()
+                .filter(|&i| self.props[i].task == t)
+                .collect();
+            if !members.is_empty() {
+                groups.push((t, members));
+            }
+        }
+        let targets: Vec<usize> = groups.iter().flat_map(|g| g.1.clone()).collect();
         let tracker = self.sink.clone().map(|sink| {
             Tracker::start(
                 sink,
@@ -1167,29 +1472,13 @@ impl Session {
             )
         });
         let engines = self.engines();
-        let lowered = self.lower();
         self.environment = None;
-        if let Ok((btor, _)) = &lowered {
-            let assumes = self
-                .props
-                .iter()
-                .any(|p| p.enabled && p.kind == Kind::Assume);
-            if self.environment_depth > 0 && assumes && has_constraints(btor) {
-                let env = self.check_environment(btor, self.environment_depth);
-                self.report_environment(&env);
-                self.environment = Some(env);
-            }
-        }
-        let under_ai = self.ai_in_force();
-        for &i in &targets {
-            self.props[i].under_ai = under_ai.clone();
-        }
         self.frontend = "svlang".into();
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
         // between property events.
         let looping = AtomicBool::new(true);
-        let reached = std::thread::scope(|sc| {
+        let stopped = std::thread::scope(|sc| {
             if let Some(t) = &tracker {
                 let looping = &looping;
                 sc.spawn(move || {
@@ -1203,31 +1492,88 @@ impl Session {
                     }
                 });
             }
-            let r = self.prove_targets(
-                &targets,
-                lowered
-                    .as_ref()
-                    .map(|(btor, rtl)| (btor.as_str(), rtl.as_slice()))
-                    .map_err(String::as_str),
-                &engines,
-                tracker.as_ref(),
-            );
+            let mut base = 0;
+            let mut stopped = false;
+            for (task, members) in &groups {
+                if stopped || self.stop.load(Ordering::SeqCst) {
+                    stopped = true;
+                    self.mark_stopped(members);
+                    continue;
+                }
+                stopped = self.prove_task(task, members, &engines, tracker.as_ref(), base);
+                base += members.len();
+            }
             looping.store(false, Ordering::SeqCst);
-            r
+            stopped
         });
-        // A Stop that came while the last property finished still counts.
-        let stopped = reached < targets.len() || self.stop.load(Ordering::SeqCst);
-        for &i in &targets[reached..] {
+        if let Some(t) = &tracker {
+            t.end(stopped || self.stop.load(Ordering::SeqCst));
+        }
+        Ok(targets)
+    }
+
+    /// Properties a Stop kept from running.
+    fn mark_stopped(&mut self, which: &[usize]) {
+        for &i in which {
             self.props[i].status = Status::Undetermined {
                 reason: "stopped".into(),
             };
             self.props[i].trace = None;
             self.props[i].engines.clear();
+            self.props[i].stats = None;
         }
+    }
+
+    /// Prove `targets`, all of `task`, on that task's model: the
+    /// environment check, the per-property loop and the vacuity checks.
+    /// `base` is the first target's slot in the tracker. Returns whether a
+    /// Stop ended it.
+    fn prove_task(
+        &mut self,
+        task: &str,
+        targets: &[usize],
+        engines: &[Arc<dyn Engine>],
+        tracker: Option<&Tracker>,
+        base: usize,
+    ) -> bool {
+        let lowered = self.lower(task);
+        let mut environment = None;
+        if let Ok((btor, _)) = &lowered {
+            let assumes = self
+                .props
+                .iter()
+                .any(|p| p.enabled && p.kind == Kind::Assume && p.task == task);
+            if self.environment_depth > 0 && assumes && has_constraints(btor) {
+                let env = self.check_environment(task, btor, self.environment_depth);
+                self.report_environment(&env);
+                environment = Some(env);
+            }
+        }
+        let under_ai = self.ai_in_force_for(task);
+        for &i in targets {
+            self.props[i].under_ai = under_ai.clone();
+        }
+        let reached = self.prove_targets(
+            targets,
+            lowered
+                .as_ref()
+                .map(|(btor, rtl)| (btor.as_str(), rtl.as_slice()))
+                .map_err(String::as_str),
+            engines,
+            tracker,
+            base,
+        );
+        // A Stop that came while the last property finished still counts.
+        let stopped = reached < targets.len() || self.stop.load(Ordering::SeqCst);
+        self.mark_stopped(&targets[reached..]);
         // A conflict in the environment empties every proof of this run;
         // otherwise each proven assertion's precondition is covered.
-        let conflict = self.environment.as_ref().is_some_and(Environment::conflict);
-        for &i in &targets {
+        let conflict = environment.as_ref().is_some_and(Environment::conflict);
+        if environment.is_some() {
+            // The last check made is the one the session shows.
+            self.environment = environment;
+        }
+        for &i in targets {
             self.props[i].vacuity = match (&self.props[i].status, conflict) {
                 (Status::Proven { .. }, true) => Some(Vacuity::VacuousEnvironment),
                 _ => None,
@@ -1240,7 +1586,7 @@ impl Session {
                 }
                 let proven = matches!(self.props[i].status, Status::Proven { .. });
                 if proven && self.props[i].kind == Kind::Assert {
-                    self.props[i].vacuity = self.check_precondition(i, btor, &engines);
+                    self.props[i].vacuity = self.check_precondition(i, btor, engines);
                 }
             }
             let vacuous: Vec<&str> = targets
@@ -1256,10 +1602,7 @@ impl Session {
                 ));
             }
         }
-        if let Some(t) = &tracker {
-            t.end(stopped);
-        }
-        Ok(targets)
+        stopped
     }
 
     /// The per-property loop of [`Self::prove`]. Returns how many targets
@@ -1270,17 +1613,21 @@ impl Session {
         lowered: Result<(&str, &[informal_svlang::RtlProperty]), &str>,
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
+        base: usize,
     ) -> usize {
-        for (slot, &i) in targets.iter().enumerate() {
+        for (k, &i) in targets.iter().enumerate() {
+            let slot = base + k;
             if self.stop.load(Ordering::SeqCst) {
-                return slot;
+                return k;
             }
             if let Some(t) = tracker {
                 t.running(slot);
             }
             // Properties added before elaboration are checked now.
             // (One written in the RTL had its names bound in its own scope.)
-            let names = match self.props[i].rtl {
+            let in_rtl = self.props[i].rtl || self.props[i].copy_of.is_some();
+            let check = self.check_name(i);
+            let names = match in_rtl {
                 true => Ok(()),
                 false => self.check_names(&self.props[i].expr),
             };
@@ -1289,10 +1636,8 @@ impl Session {
                 let Ok((_, found)) = lowered else {
                     return Ok(());
                 };
-                match found.iter().find(|f| f.name == self.props[i].name) {
-                    None if self.props[i].rtl => {
-                        Err("not in the model (inside a black box)".to_string())
-                    }
+                match found.iter().find(|f| target_name(&f.name) == check) {
+                    None if in_rtl => Err("not in the model (inside a black box)".to_string()),
                     None => Err("not in the model (disabled)".to_string()),
                     Some(f) => match (&f.unsupported, &f.error) {
                         (Some(why), _) => Err(format!("not supported yet: {why}")),
@@ -1307,13 +1652,14 @@ impl Session {
                 }
                 self.props[i].status = status;
                 self.props[i].engines.clear();
+                self.props[i].stats = None;
                 continue;
             }
             let out = self.workdir.join(format!("prop_{i}.btor2"));
             let built = match lowered {
                 Err(e) => Err(anyhow!("{e}")),
                 Ok((btor, _)) => {
-                    let keep = target_name(&self.props[i].name);
+                    let keep = check.clone();
                     if !has_target(btor, &keep) {
                         // Without its line the model would hold trivially.
                         Err(anyhow!("no check named {keep} in the model"))
@@ -1330,13 +1676,14 @@ impl Session {
                 }
             };
             self.props[i].trace = None;
-            let (mut status, trace, runs) = match built {
+            let (mut status, trace, runs, mut stats) = match built {
                 Err(e) => (
                     Status::Error {
                         message: format!("{e:#}"),
                     },
                     None,
                     Vec::new(),
+                    None,
                 ),
                 Ok(()) => self.check_one(engines, i, &out, tracker.map(|t| (t, slot))),
             };
@@ -1348,14 +1695,26 @@ impl Session {
                     reason: "stopped".into(),
                 };
             }
+            // The verdict may have been withdrawn or stopped since the
+            // statistics were taken: the engine named is the status's.
+            if let Some(st) = &mut stats {
+                if matches!(status, Status::Undetermined { .. } | Status::Error { .. }) {
+                    st.engine = None;
+                    if st.depth_kind != Some("bound") {
+                        st.depth = st.max_bound;
+                        st.depth_kind = st.max_bound.map(|_| "bound");
+                    }
+                }
+            }
             if let Some(t) = tracker {
                 t.finished(slot, &status, &runs);
             }
             self.props[i].status = status;
             self.props[i].trace = trace;
             self.props[i].engines = runs;
+            self.props[i].stats = stats;
             if halt {
-                return slot + 1;
+                return k + 1;
             }
         }
         targets.len()
@@ -1364,9 +1723,10 @@ impl Session {
     /// The enabled properties given by command, each as the name of its
     /// check and a whole directive on its clock: its own clocking event, or
     /// the first declared clock.
-    fn bound_properties(&self) -> Result<Vec<(String, String)>, String> {
+    fn bound_properties(&self, task: &str) -> Result<Vec<(String, String)>, String> {
         let mut out = Vec::new();
-        for p in self.props.iter().filter(|p| !p.rtl && p.enabled) {
+        let given = |p: &&Property| !p.rtl && p.copy_of.is_none() && p.enabled && p.task == task;
+        for p in self.props.iter().filter(given) {
             let expr = p.expr.trim();
             let clocked = if expr.starts_with('@') {
                 expr.to_string()
@@ -1393,7 +1753,7 @@ impl Session {
     /// that does not bind, or a construct the front end does not model.
     /// Nothing is guessed: a guess would turn a typo into a free signal
     /// (D13).
-    fn lower(&self) -> Result<(String, Vec<informal_svlang::RtlProperty>), String> {
+    fn lower(&self, task: &str) -> Result<(String, Vec<informal_svlang::RtlProperty>), String> {
         let req = informal_svlang::Request {
             files: self.design.files.clone(),
             defines: self.design.defines.clone(),
@@ -1404,7 +1764,7 @@ impl Session {
             // informal_svlang::TRACE_MARKER: engines get the text before it
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
-            cut_points: self.cut_points(),
+            cut_points: self.cut_points(task),
             black_box_modules: self.design.bbox.clone(),
             black_box_instances: self
                 .design
@@ -1412,7 +1772,7 @@ impl Session {
                 .iter()
                 .map(|i| format!("{}.{i}", self.design.top.as_deref().unwrap_or("")))
                 .collect(),
-            properties: self.bound_properties()?,
+            properties: self.bound_properties(task)?,
             clocks: self
                 .clocks
                 .iter()
@@ -1445,10 +1805,15 @@ impl Session {
             ));
         }
         if !req.cut_points.is_empty() {
+            let cuts = self.stopats_of(task);
+            let of = match task {
+                EMBEDDED => String::new(),
+                t => format!(" of task {t}"),
+            };
             self.log(&format!(
-                "{} cut point(s) (stopat) are free in this model: {}. A proof holds for the design; a counterexample may use values the design cannot produce there",
-                self.design.stopats.len(),
-                self.design.stopats.join(", ")
+                "{} cut point(s) (stopat){of} are free in this model: {}. A proof holds for the design; a counterexample may use values the design cannot produce there",
+                cuts.len(),
+                cuts.join(", ")
             ));
         }
         let l = informal_svlang::lower(&req);
@@ -1472,7 +1837,12 @@ impl Session {
         i: usize,
         model: &Path,
         tracker: Option<(&Tracker, usize)>,
-    ) -> (Status, Option<String>, Vec<EngineRun>) {
+    ) -> (
+        Status,
+        Option<String>,
+        Vec<EngineRun>,
+        Option<crate::stats::ProofStats>,
+    ) {
         let kind = self.props[i].kind;
         let text = std::fs::read_to_string(model).unwrap_or_default();
         let has = |op: &str| {
@@ -1508,7 +1878,7 @@ impl Session {
                     ms: 0,
                 },
             };
-            return (status, None, Vec::new());
+            return (status, None, Vec::new(), None);
         }
         let req = CheckRequest {
             model: model.to_path_buf(),
@@ -1516,6 +1886,7 @@ impl Session {
             timeout: self.time_limit,
         };
         let stop = Some(self.stop.as_ref());
+        let before = crate::stats::Usage::now();
         let o = match tracker {
             None => portfolio::run_until(engines, &req, None, stop),
             Some((t, slot)) => std::thread::scope(|sc| {
@@ -1532,12 +1903,14 @@ impl Session {
                 portfolio::run_until(engines, &req, Some(tx), stop)
             }),
         };
+        let usage = before.zip(crate::stats::Usage::now());
         let engine = o
             .winner
             .as_ref()
             .map(|w| w.engine.clone())
             .unwrap_or_default();
         let ms = o.wall_ms;
+        let mut certificate = None;
         let winner = engine.clone();
         let verdict = portfolio::verdict(&o);
         if let (Some(dir), Some(w), true) = (&self.certificates, &o.winner, verdict.is_definitive())
@@ -1546,11 +1919,17 @@ impl Session {
             // certificates like an assertion's.
             let cert = w.certificate.as_ref();
             match informal_bmc::certificate::write(dir, model, &w.engine, &verdict, cert) {
-                Ok(s) => self.log(&format!("{}: {}", self.props[i].name, s.line())),
-                Err(e) => self.log(&format!(
-                    "{}: certificate not written: {e:#}",
-                    self.props[i].name
-                )),
+                Ok(s) => {
+                    certificate = Some(s.line());
+                    self.log(&format!("{}: {}", self.props[i].name, s.line()))
+                }
+                Err(e) => {
+                    certificate = Some(format!("not written: {e:#}"));
+                    self.log(&format!(
+                        "{}: certificate not written: {e:#}",
+                        self.props[i].name
+                    ))
+                }
             }
         }
         let status = match (verdict, kind) {
@@ -1608,7 +1987,18 @@ impl Session {
                 r.depth = Some(*d);
             }
         }
-        (status, trace, runs)
+        let winner_cert = o.winner.as_ref().and_then(|w| w.certificate.as_ref());
+        let mut stats =
+            crate::stats::ProofStats::of_run(&status, &runs, o.wall_ms, winner_cert, usage);
+        stats.certificate = certificate;
+        (status, trace, runs, Some(stats))
+    }
+
+    /// The Btor2 model of `task` as the engines get it: the design, the
+    /// task's assumptions and cut points, and every target of the task.
+    pub fn task_model(&self, task: &str) -> Result<String, String> {
+        let (btor, _) = self.lower(task)?;
+        Ok(informal_svlang::split_trace(&btor).0.to_string())
     }
 
     /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the
@@ -1717,8 +2107,17 @@ impl Session {
     /// One row per property of the table `report` prints: name, type,
     /// status, engine and detail.
     pub fn report_rows(&self) -> Vec<[String; 5]> {
+        self.report_rows_of(None)
+    }
+
+    /// [`Self::report_rows`] of one task's properties, or of all.
+    pub fn report_rows_of(&self, task: Option<&str>) -> Vec<[String; 5]> {
         let mut rows = Vec::new();
-        for p in &self.props {
+        for p in self
+            .props
+            .iter()
+            .filter(|p| task.is_none_or(|t| p.task == t))
+        {
             let (engine, detail) = match &p.status {
                 Status::Proven { engine, ms } | Status::Unreachable { engine, ms } => {
                     (engine.clone(), format!("{:.2} s", *ms as f64 / 1000.0))
@@ -1766,11 +2165,16 @@ impl Session {
 
     /// A JasperGold-style summary table.
     pub fn report(&self) -> String {
+        self.report_of(None)
+    }
+
+    /// [`Self::report`] of one task's properties, or of all.
+    pub fn report_of(&self, task: Option<&str>) -> String {
         let mut s = format!(
             "{:<28} {:<7} {:<13} {:<10} {}\n",
             "property", "type", "status", "engine", "detail"
         );
-        for [name, kind, status, engine, detail] in self.report_rows() {
+        for [name, kind, status, engine, detail] in self.report_rows_of(task) {
             s += &format!("{name:<28} {kind:<7} {status:<13} {engine:<10} {detail}\n");
         }
         s
@@ -1778,6 +2182,11 @@ impl Session {
 
     /// The same table as comma-separated values (`report -csv`).
     pub fn report_csv(&self) -> String {
+        self.report_csv_of(None)
+    }
+
+    /// [`Self::report_csv`] of one task's properties, or of all.
+    pub fn report_csv_of(&self, task: Option<&str>) -> String {
         let field = |f: &str| {
             if f.contains([',', '"', '\n']) {
                 format!("\"{}\"", f.replace('"', "\"\""))
@@ -1786,7 +2195,7 @@ impl Session {
             }
         };
         let mut s = String::from("property,type,status,engine,detail\n");
-        for row in self.report_rows() {
+        for row in self.report_rows_of(task) {
             s += &row.iter().map(|f| field(f)).collect::<Vec<_>>().join(",");
             s.push('\n');
         }
@@ -1881,6 +2290,15 @@ fn environment_model(model: &str, n: u32) -> String {
         id(11), id(10),
     );
     out
+}
+
+/// A property's full name in `task`: `<task>::<name>`, or the name alone
+/// in the embedded task.
+pub fn qualify(task: &str, name: &str) -> String {
+    match task {
+        EMBEDDED => name.to_string(),
+        t => format!("{t}::{name}"),
+    }
 }
 
 /// A property's name as its target line in the model has it: a Btor2

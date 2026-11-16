@@ -115,6 +115,64 @@ pub struct Design {
     /// not checked; saying so is the caller's job.
     #[serde(default)]
     pub unlisted_checks: Vec<String>,
+    /// What the design holds, counted on its netlist as elaborated (before
+    /// black boxes, cut points and properties): `None` when it does not
+    /// lower.
+    #[serde(default)]
+    pub stats: Option<DesignStats>,
+}
+
+/// Counts of a design's netlist (`get_design_info`): every number is
+/// counted on svlang's netlist, none estimated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesignStats {
+    /// Instances, the top one included, and the distinct modules they are of.
+    pub instances: usize,
+    pub modules: usize,
+    /// Primary inputs and outputs of the top module (an aggregate port is
+    /// counted per member), with their bits.
+    pub inputs: usize,
+    pub input_bits: u64,
+    pub outputs: usize,
+    pub output_bits: u64,
+    /// Registers written on a clock edge, and their bits.
+    pub flops: usize,
+    pub flop_bits: u64,
+    /// Level-sensitive latches, and their bits.
+    pub latches: usize,
+    pub latch_bits: u64,
+    /// Unpacked arrays kept as memories, as declared.
+    pub memories: Vec<MemoryInfo>,
+    /// Clock signals the registers and memory write ports use, with the
+    /// edges and how many registers (or write ports) on each.
+    pub clocks: Vec<ClockInfo>,
+    /// Asynchronous resets of registers.
+    pub resets: Vec<ResetInfo>,
+    /// Signal bit ranges nothing drives (free in the model).
+    pub undriven: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryInfo {
+    pub name: String,
+    pub words: u64,
+    pub width: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClockInfo {
+    pub signal: String,
+    /// `posedge` and/or `negedge`.
+    pub edges: Vec<String>,
+    /// Registers and memory write ports on it.
+    pub registers: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResetInfo {
+    pub signal: String,
+    pub active_high: bool,
+    pub registers: usize,
 }
 
 impl Design {
