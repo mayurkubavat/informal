@@ -11,5 +11,5 @@ pub mod worker;
 
 pub use compat::{detect_flavor, Flavor, Shell};
 pub use progress::{EngineLine, ProgressKind, PropProgress, ProveProgress, ProveSink};
-pub use session::{Kind, Property, Session, SourceLoc, Status};
+pub use session::{Environment, Kind, Property, Session, SourceLoc, Status, Vacuity};
 pub use worker::{Reply, Request, Worker};

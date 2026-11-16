@@ -721,6 +721,26 @@ const COMMON: &[(&str, Body)] = &[
         s.elaborated = false;
         Ok(().into())
     }),
+    ("check_assumptions", check_assumptions),
+    ("set_vacuity", |s, a| {
+        match a.get(1).map(String::as_str) {
+            None => {
+                return Ok(Value::from(if s.environment_depth > 0 {
+                    "on"
+                } else {
+                    "off"
+                }));
+            }
+            Some("on") => {
+                if s.environment_depth == 0 {
+                    s.environment_depth = 20;
+                }
+            }
+            Some("off") => s.environment_depth = 0,
+            Some(v) => return Err(format!("set_vacuity: on or off, not `{v}`")),
+        }
+        Ok(().into())
+    }),
     ("set_engines", |s, a| {
         let names: Vec<String> = a[1..]
             .iter()
@@ -1043,6 +1063,32 @@ const JG: &[(&str, Body)] = &[
     ("set_proofgrid_mode", |_, _| Ok(().into())),
     ("set_max_trace_length", |_, _| Ok(().into())),
 ];
+
+/// `check_assumptions [-depth N]`: the environment check on its own (it
+/// also runs before every prove): whether the assumptions and the reset
+/// allow traces of N model steps. Returns the number of steps they allow.
+/// `-conflict` is what it checks; `-dead_end` is not done yet.
+fn check_assumptions(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(a, &[("-depth", 1), ("-conflict", 0)], &[])?;
+    let depth = match a.val("-depth") {
+        None => s.environment_depth.max(1),
+        Some(v) => v
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=10_000).contains(n))
+            .ok_or_else(|| format!("check_assumptions: -depth takes 1 to 10000, not `{v}`"))?,
+    };
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let env = s
+        .environment_now(depth)
+        .map_err(|e| format!("check_assumptions: {e}"))?;
+    match env.allowed {
+        Some(n) => Ok(Value::from(n.to_string())),
+        None => Err("check_assumptions: could not decide (no in-house BMC, or out of time)".into()),
+    }
+}
 
 /// `visualize -violation|-cover -property P`: the trace of a CEX or cover,
 /// as the VCD file prove wrote. It is opened with the program named by

@@ -133,11 +133,13 @@ passes on a different setup without saying so.
 | `report [-csv] [-file F [-force]]` | `report_fv -list` | Property table, or comma-separated values; `-file` writes it there |
 | `visualize -violation -property P`, `visualize -cover -property P` | — | Returns the VCD that prove wrote for a CEX or a cover, and opens it with `$INFORMAL_WAVE_VIEWER` (for example `surfer` or `gtkwave`) when that is set |
 | `get_version`, `echo words` | `get_version`, `echo words` | The informal version; print a line |
+| `check_assumptions [-depth N]` | — | Whether the assumptions and reset allow traces of N steps; returns how many they allow (also run before every prove: docs/vacuity.md) |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |
 
-Extra informal commands in every flavor: `informal::session` (the session as JSON)
-and `informal::set_engines name ...` (pick engines by name). Each flavor's
+Extra informal commands in every flavor: `informal::session` (the session as JSON),
+`informal::set_engines name ...` (pick engines by name) and
+`informal::set_vacuity on|off` (the vacuity checks before and after a prove; on by default). Each flavor's
 commands also stay reachable by namespace (`jg::prove`, `vcf::check_fv`).
 
 ## Cut points (`stopat`)

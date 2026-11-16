@@ -526,9 +526,11 @@ to try.
   and the one-step undo keep that visible and reversible; the modes let a
   person stay in the loop or step out of it on purpose.
 - **Open issues**
-  - Nothing detects an over-constraining or vacuous AI-added assumption
-    yet; the checks for that are planned (assumption conflict, vacuity,
-    dead ends), and until then `under_ai` is a warning, not a judgement.
+  - An AI-added assumption that makes the assumptions conflict is now
+    found by the environment check before every prove (D19); one that only
+    over-constrains, or makes a single proof vacuous, is not detected yet
+    (precondition covers, dead ends: planned), so `under_ai` is still a
+    warning, not a judgement.
   - In `propose` mode a server started on its own has no person on the
     other end, and proposals stay pending. The desktop app is where a
     person answers: it serves its own session on a local socket
@@ -591,3 +593,26 @@ to try.
     so the Btor2 reader and bit-blaster stay trusted there, and
     liveness to safety for a justice property.
   - External engines' verdicts (rIC3, ABC) carry no certificate.
+
+## D19. Vacuity is said beside the verdict, and checked by default
+
+- **Decision:** every prove first checks that the assumptions and the
+  reset allow a trace of 20 steps, and later (planned) covers the
+  precondition of every proven assertion. What it finds is a separate
+  `vacuity` field of the property; the status word stays `proven`. On by
+  default, `informal::set_vacuity off` to skip it (Mayur, 2026-11-16).
+- **Alternatives:** opt-in only (fast, but a vacuous proof then looks like
+  any other unless someone asks); a status word of its own such as
+  `vacuous` (clear, but scripts that filter on `proven` would stop seeing
+  those properties).
+- **Why:** a proof under assumptions that conflict holds whatever the
+  design does, and nothing in a proven row said so. The check is cheap:
+  bounded BMC runs on the model the prove builds anyway. Keeping the word
+  keeps vendor scripts working; the field is in the report, the session
+  JSON, the UI and the MCP replies. See docs/vacuity.md.
+- **Open issues**
+  - The conflict is not narrowed to the assumptions that cause it until
+    svlang names each `constraint` line after its assumption.
+  - Precondition and witness covers, design-free checks, needed
+    assumptions and dead ends are planned (docs/vacuity.md).
+

@@ -124,6 +124,28 @@ pub struct Property {
     /// them is removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub under_ai: Vec<String>,
+    /// Whether a proof means anything (docs/vacuity.md): set by the
+    /// vacuity checks of a prove, `None` when they did not look at it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vacuity: Option<Vacuity>,
+}
+
+/// What the vacuity checks found for one proven property. The status word
+/// stays `proven`; this is said beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Vacuity {
+    /// The assumptions and the reset allow no trace as long as the check
+    /// asked for: the proof holds from some step on whatever the design does.
+    VacuousEnvironment,
+}
+
+impl Vacuity {
+    pub fn word(self) -> &'static str {
+        match self {
+            Vacuity::VacuousEnvironment => "vacuous (environment)",
+        }
+    }
 }
 
 /// A file and 1-based line (absolute path).
@@ -247,6 +269,34 @@ pub struct Session {
     /// checker (`informal shell --certificate`; docs/certificates.md).
     #[serde(skip)]
     pub certificates: Option<PathBuf>,
+    /// Steps the environment check asks the assumptions and the reset to
+    /// allow before each prove (`informal::check_assumptions -depth`); 0
+    /// switches the check off.
+    pub environment_depth: u32,
+    /// The last environment check: how many model steps the assumptions and
+    /// the reset allow. Fewer than asked means every proof is vacuous from
+    /// that step on.
+    pub environment: Option<Environment>,
+}
+
+/// What the environment check found (docs/vacuity.md).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Environment {
+    /// Steps asked for.
+    pub asked: u32,
+    /// The longest trace the assumptions and the reset allow, in model
+    /// steps, up to `asked`; `None` when the check could not decide (no
+    /// in-house BMC, or it ran out of time).
+    pub allowed: Option<u32>,
+    /// The assumptions in force when it ran.
+    pub assumptions: Vec<String>,
+}
+
+impl Environment {
+    /// The assumptions and reset allow fewer steps than asked.
+    pub fn conflict(&self) -> bool {
+        self.allowed.is_some_and(|a| a < self.asked)
+    }
 }
 
 impl Session {
@@ -271,6 +321,8 @@ impl Session {
             sink: None,
             trace_reruns: Arc::default(),
             certificates: None,
+            environment_depth: 20,
+            environment: None,
         }
     }
 
@@ -281,8 +333,10 @@ impl Session {
         let workdir = std::mem::take(&mut self.workdir);
         let (stop, sink, dry_run) = (self.stop.clone(), self.sink.take(), self.dry_run);
         let certificates = self.certificates.take();
+        let depth = self.environment_depth;
         *self = Session::new(engines, workdir);
         self.certificates = certificates;
+        self.environment_depth = depth;
         self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
@@ -318,6 +372,7 @@ impl Session {
             engines: Vec::new(),
             ai: false,
             under_ai: Vec::new(),
+            vacuity: None,
         });
         Ok(name)
     }
@@ -610,6 +665,7 @@ impl Session {
                 engines: Vec::new(),
                 ai: false,
                 under_ai: Vec::new(),
+                vacuity: None,
             });
         }
     }
@@ -648,6 +704,120 @@ impl Session {
             ));
         }
         Ok(())
+    }
+
+    /// The environment check: can the assumptions and the reset run for
+    /// `depth` model steps? A trace of n steps that meets every constraint
+    /// has prefixes of every shorter length that do too, so the longest
+    /// allowed trace is found by bisection, each probe one bounded BMC run
+    /// of informal-bmc on the model with no targets but a step counter.
+    /// Unless that is shorter than `depth`, the assumptions do not conflict
+    /// within it (they may still over-constrain: see docs/vacuity.md).
+    pub fn check_environment(&self, btor: &str, depth: u32) -> Environment {
+        let assumptions: Vec<String> = self
+            .props
+            .iter()
+            .filter(|p| p.enabled && p.kind == Kind::Assume)
+            .map(|p| p.name.clone())
+            .collect();
+        let mut env = Environment {
+            asked: depth,
+            allowed: None,
+            assumptions,
+        };
+        let (model, _) = informal_svlang::split_trace(btor);
+        let probe = |n: u32| -> Option<bool> { self.trace_of_length(model, n) };
+        match probe(depth) {
+            Some(true) => env.allowed = Some(depth),
+            None => {}
+            Some(false) => {
+                // Longest n in [0, depth) with a trace: lo has one (or is
+                // -1 for none at all), hi has none.
+                let (mut lo, mut hi) = (-1i64, depth as i64);
+                while hi - lo > 1 {
+                    let mid = (lo + hi) / 2;
+                    match probe(mid as u32) {
+                        Some(true) => lo = mid,
+                        Some(false) => hi = mid,
+                        None => return env,
+                    }
+                }
+                // No trace of even one step: report 0 allowed steps.
+                env.allowed = Some(lo.max(0) as u32);
+                if lo < 0 {
+                    env.allowed = Some(0);
+                    env.asked = env.asked.max(1);
+                }
+            }
+        }
+        env
+    }
+
+    /// Whether `model` (Btor2, its targets ignored) has a trace of `n`
+    /// steps (states 0 to n) that meets every constraint. `None` when the
+    /// in-house BMC is not available or did not finish.
+    fn trace_of_length(&self, model: &str, n: u32) -> Option<bool> {
+        let text = environment_model(model, n);
+        let path = self.workdir.join(format!("environment_{n}.btor2"));
+        std::fs::create_dir_all(&self.workdir).ok()?;
+        std::fs::write(&path, text).ok()?;
+        let bmc = informal_bmc::Bmc {
+            max_depth: Some(n as usize),
+            step: 1,
+        };
+        let req = CheckRequest {
+            model: path.clone(),
+            format: ModelFormat::Btor2,
+            timeout: self.time_limit.min(Duration::from_secs(60)),
+        };
+        let r = bmc.check(&req, &informal_engine::RunContext::new(req.timeout));
+        let _ = std::fs::remove_file(&path);
+        match r.ok()?.verdict {
+            Verdict::Unsafe { .. } => Some(true),
+            // The counter reaches n only at step n, so "not within the bound"
+            // and "never" both mean no trace of n steps.
+            Verdict::Safe => Some(false),
+            Verdict::Unknown { reason } if reason.starts_with("bound") => Some(false),
+            Verdict::Unknown { .. } => None,
+        }
+    }
+
+    /// Elaborate and lower if needed, then run the environment check to
+    /// `depth` steps and keep (and report) its result.
+    pub fn environment_now(&mut self, depth: u32) -> anyhow::Result<Environment> {
+        if !self.elaborated {
+            self.elaborate(None)?;
+        }
+        self.check_reset_and_clocks().map_err(|e| anyhow!(e))?;
+        let (btor, _) = self.lower().map_err(|e| anyhow!(e))?;
+        let env = self.check_environment(&btor, depth);
+        self.report_environment(&env);
+        self.environment = Some(env.clone());
+        Ok(env)
+    }
+
+    /// Say what the environment check found; a conflict is said loudly.
+    fn report_environment(&self, env: &Environment) {
+        let named = if env.assumptions.is_empty() {
+            "the reset and the assumptions of the design".to_string()
+        } else {
+            format!("the reset and {}", env.assumptions.join(", "))
+        };
+        match env.allowed {
+            None => self.log(&format!(
+                "environment check: could not tell whether {named} allow {} steps (no in-house BMC, or out of time); proofs are not checked for vacuity",
+                env.asked
+            )),
+            Some(a) if a < env.asked => self.log(&format!(
+                "VACUOUS ENVIRONMENT: {named} allow no trace longer than {a} step(s) (asked for {}). Every assertion holds from step {} on whatever the design does, so its proof says nothing beyond that step; find the assumptions that conflict (informal::check_assumptions)",
+                env.asked,
+                a + 1
+            )),
+            Some(_) => self.note(&format!(
+                "environment check: {named} allow traces of {} steps",
+                env.asked
+            )),
+        }
     }
 
     /// Mark the properties written inside a black box at elaboration: the
@@ -822,6 +992,18 @@ impl Session {
         });
         let engines = self.engines();
         let lowered = self.lower();
+        self.environment = None;
+        if let Ok((btor, _)) = &lowered {
+            let assumes = self
+                .props
+                .iter()
+                .any(|p| p.enabled && p.kind == Kind::Assume);
+            if self.environment_depth > 0 && assumes && has_constraints(btor) {
+                let env = self.check_environment(btor, self.environment_depth);
+                self.report_environment(&env);
+                self.environment = Some(env);
+            }
+        }
         let under_ai = self.ai_in_force();
         for &i in &targets {
             self.props[i].under_ai = under_ai.clone();
@@ -865,6 +1047,14 @@ impl Session {
             };
             self.props[i].trace = None;
             self.props[i].engines.clear();
+        }
+        // A conflict in the environment empties every proof of this run.
+        let conflict = self.environment.as_ref().is_some_and(Environment::conflict);
+        for &i in &targets {
+            self.props[i].vacuity = match (&self.props[i].status, conflict) {
+                (Status::Proven { .. }, true) => Some(Vacuity::VacuousEnvironment),
+                _ => None,
+            };
         }
         if let Some(t) = &tracker {
             t.end(stopped);
@@ -1354,6 +1544,10 @@ impl Session {
             };
             // Said in the table: what an AI added, and which results
             // stand on an AI-added assumption or cut point.
+            let detail = match p.vacuity {
+                Some(v) => format!("{detail} [{}]", v.word()),
+                None => detail,
+            };
             let detail = match (p.ai, p.under_ai.is_empty()) {
                 (true, _) => format!("{detail} [AI-added]").trim_start().to_string(),
                 (false, false) => format!("{detail} [under AI-added: {}]", p.under_ai.join(", ")),
@@ -1443,6 +1637,50 @@ fn only_target(btor: &str, keep: &str) -> String {
         })
         .flat_map(|l| [l, "\n"])
         .collect()
+}
+
+/// The model has `constraint` lines (assumptions, and the reset).
+fn has_constraints(btor: &str) -> bool {
+    let (model, _) = informal_svlang::split_trace(btor);
+    model
+        .lines()
+        .any(|l| l.split_whitespace().nth(1) == Some("constraint"))
+}
+
+/// `model` with its targets (bad, justice, fair) dropped, plus a step
+/// counter and one `bad` that holds exactly at step `n`: BMC finds it iff
+/// some trace of n steps meets every constraint.
+fn environment_model(model: &str, n: u32) -> String {
+    let mut out = String::new();
+    let mut top = 0u64;
+    for l in model.lines() {
+        let mut w = l.split_whitespace();
+        if let Some(id) = w.next().and_then(|x| x.parse::<u64>().ok()) {
+            top = top.max(id);
+        }
+        if matches!(w.next(), Some("bad" | "justice" | "fair")) {
+            continue;
+        }
+        out += l;
+        out.push('\n');
+    }
+    let width = (32 - n.leading_zeros()).max(1) + 1;
+    let id = |k: u64| top + k;
+    out += &format!(
+        "{} sort bitvec {width}\n{} sort bitvec 1\n{} zero {}\n{} state {} informal_environment_step\n{} init {} {} {}\n{} one {}\n{} add {} {} {}\n{} next {} {} {}\n{} constd {} {n}\n{} eq {} {} {}\n{} bad {} informal_environment\n",
+        id(1),
+        id(2),
+        id(3), id(1),
+        id(4), id(1),
+        id(5), id(1), id(4), id(3),
+        id(6), id(1),
+        id(7), id(1), id(4), id(6),
+        id(8), id(1), id(4), id(7),
+        id(9), id(1),
+        id(10), id(2), id(4), id(9),
+        id(11), id(10),
+    );
+    out
 }
 
 /// A property's name as its target line in the model has it: a Btor2
