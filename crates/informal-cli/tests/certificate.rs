@@ -285,3 +285,52 @@ fn a_btor2_model_is_certified_at_bit_level_and_no_certificate_has_a_reason() {
     assert!(out.contains("certificate: none (informal-bmc gives no certificate)"));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Two models with the same file name from different directories keep
+/// their own certificates in one directory; checking one of them again
+/// reuses its own names.
+#[test]
+fn same_file_name_from_two_directories() {
+    if !have_engines() {
+        return;
+    }
+    let d = scratch("same-name");
+    let src = scratch("same-name-models");
+    for (sub, from) in [("a", "toggle_unsafe.aag"), ("b", "stuck_latch_safe.aag")] {
+        std::fs::create_dir_all(src.join(sub)).unwrap();
+        std::fs::copy(
+            root().join("tests/models").join(from),
+            src.join(sub).join("same.aag"),
+        )
+        .unwrap();
+    }
+    let run = |sub: &str| {
+        Command::new(env!("CARGO_BIN_EXE_informal"))
+            .current_dir(root())
+            .args(["check"])
+            .arg(src.join(sub).join("same.aag"))
+            .args(["--timeout", "30", "--certificate"])
+            .arg(&d)
+            .output()
+            .unwrap()
+            .status
+            .code()
+    };
+    assert_eq!(run("a"), Some(10));
+    assert_eq!(run("b"), Some(20));
+    assert_eq!(run("a"), Some(10));
+    let all: Vec<Summary> = summaries(&d).unwrap().into_iter().map(|(_, s)| s).collect();
+    assert_eq!(all.len(), 2, "{all:?}");
+    let a = all
+        .iter()
+        .find(|s| s.model.ends_with("a/same.aag"))
+        .expect("a's summary");
+    let b = all
+        .iter()
+        .find(|s| s.model.ends_with("b/same.aag"))
+        .expect("b's summary");
+    assert_eq!((a.verdict.as_str(), b.verdict.as_str()), ("unsafe", "safe"));
+    assert_ne!(a.file, b.file);
+    let _ = std::fs::remove_dir_all(&d);
+    let _ = std::fs::remove_dir_all(&src);
+}

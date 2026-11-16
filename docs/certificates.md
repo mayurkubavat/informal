@@ -20,7 +20,11 @@ into `certs/`:
 | `<model>.model.aig` | Btor2 models | the model bit-blasted, binary AIGER | the model the two checkers above read |
 | `<model>.cert.json` | always | summary: model, verdict, engine, kind of evidence (with the depth `k` of a k-induction proof), file and checker, or the reason there is no file | `scripts/certificate_check.py` |
 
-`<model>` is the model's file name with its extension. The second command
+`<model>` is the model's file name with its extension. When the directory
+already holds the certificate of another model with the same file name
+(two `analog.aig` from different directories), `<model>` is that name
+followed by `~` and eight hex digits of a hash of the model's path, so
+neither overwrites the other. The second command
 runs the checkers on every summary in the directory and prints how many
 verdicts were confirmed, how many have nothing to check and why, and which
 failed. Its exit status is 1 when a certificate is wrong.

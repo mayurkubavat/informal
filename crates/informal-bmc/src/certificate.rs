@@ -445,6 +445,7 @@ pub fn write(
         .and_then(|n| n.to_str())
         .context("the model path has no file name")?
         .to_string();
+    let prefix = file_prefix(dir, &name, model);
     let mut s = Summary {
         informal_certificate: 1,
         model: model.display().to_string(),
@@ -489,7 +490,7 @@ pub fn write(
         }
         let (file, bytes, checker) = match (verdict, cert) {
             (Verdict::Unsafe { .. }, Certificate::Trace { init, inputs }) => (
-                format!("{name}.trace"),
+                format!("{prefix}.trace"),
                 aiger_witness(&g, init, inputs)?.into_bytes(),
                 "aigsim",
             ),
@@ -498,10 +499,10 @@ pub fn write(
                 let model_name = if aiger {
                     name.clone()
                 } else {
-                    format!("{name}.model.aig")
+                    format!("{prefix}.model.aig")
                 };
                 (
-                    format!("{name}.cert.aig"),
+                    format!("{prefix}.cert.aig"),
                     witness_file(&g, &w, &model_name),
                     "certifaiger",
                 )
@@ -510,7 +511,7 @@ pub fn write(
         };
         let io = |e: anyhow::Error| format!("{e:#}");
         if !aiger {
-            let m = format!("{name}.model.aig");
+            let m = format!("{prefix}.model.aig");
             put(&m, &aiger::write_binary(&g)).map_err(io)?;
             s.bit_level_model = Some(m);
         }
@@ -526,8 +527,28 @@ pub fn write(
         s.note = Some(e);
     }
     let json = serde_json::to_string_pretty(&s)?;
-    put(&format!("{name}.cert.json"), (json + "\n").as_bytes())?;
+    put(&format!("{prefix}.cert.json"), (json + "\n").as_bytes())?;
     Ok(s)
+}
+
+/// The start of the file names a model's certificate gets in `dir`: its
+/// file name, unless `dir` already holds the summary of another model with
+/// that file name (two `analog.aig` from different directories, say); then
+/// the file name and a hash of the model's path, so neither overwrites the
+/// other.
+fn file_prefix(dir: &Path, name: &str, model: &Path) -> String {
+    let path = model.display().to_string();
+    let taken_by_other = std::fs::read_to_string(dir.join(format!("{name}.cert.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Summary>(&t).ok())
+        .is_some_and(|s| s.model != path);
+    if !taken_by_other {
+        return name.to_string();
+    }
+    let h = path.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    });
+    format!("{name}~{:08x}", h as u32)
 }
 
 /// The summaries in a certificate directory, by file name.
