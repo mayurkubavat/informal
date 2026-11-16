@@ -540,6 +540,29 @@ pub fn check_folded(
     new_sat: &dyn Fn() -> Box<dyn Sat>,
 ) -> Result<(), String> {
     let cone = cone(g, inv);
+    check_folded_inductive(g, &cone, inv, new_sat)?;
+
+    // Safety now, and one step on.
+    let mut e = Enc::new(new_sat());
+    let f0 = e.frame(g, &cone, None);
+    e.assert_inv_ok(&f0, inv, 1);
+    e.constraints(g, &f0);
+    let bad0 = e.any_bad(g, &f0);
+    e.unsat(&[bad0], "safety")?;
+    let f1 = e.step(g, &cone, &f0);
+    e.constraints(g, &f1);
+    let bad1 = e.any_bad(g, &f1);
+    e.unsat(&[bad1], "safety in the second half-step")
+}
+
+/// Init and 2-step consecution of [`check_folded`].
+fn check_folded_inductive(
+    g: &Aig,
+    cone: &[bool],
+    inv: &[Clause],
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+) -> Result<(), String> {
+    let cone = cone.to_vec();
     // Init.
     let mut e = Enc::new(new_sat());
     let f0 = e.frame(g, &cone, None);
@@ -562,19 +585,129 @@ pub fn check_folded(
     // this sense: its two frames both carry the constraints.
     e.constraints(g, &f2);
     let s = e.violate_inv_ok(&f2, inv, 1);
-    e.unsat(&[s], "consecution")?;
+    e.unsat(&[s], "consecution")
+}
 
-    // Safety now, and one step on.
+/// Check a k-induction proof made on the clock-folded model at depth `k`
+/// (k >= 1), on `g` as loaded. One folded step is two loaded steps, and
+/// folded states are the loaded states of the clock's initial phase, so:
+///
+/// - `inv` (the fold's latch map, scorr's merges and any strengthening,
+///   with the clock's phase as a unit clause) is a 2-step invariant, as
+///   in [`check_folded`];
+/// - **base:** from the initial states no bad state is reachable in
+///   loaded steps `0..2k`, with the constraints held up to the bad step;
+/// - **step:** on every loaded path `x0 .. x(2k+1)` that meets the
+///   constraints in steps `0..=2k`, has `inv` in the even states, no bad
+///   state in steps `0..2k` and pairwise different even states, neither
+///   `x(2k)` is bad nor `x(2k+1)` is bad while meeting the constraints.
+///
+/// As in [`check_kind`], states differ on some latch of the cone computed
+/// here, not on a list from the engine.
+pub fn check_kind_folded(
+    g: &Aig,
+    inv: &[Clause],
+    k: usize,
+    new_sat: &dyn Fn() -> Box<dyn Sat>,
+    stop: &dyn Fn() -> bool,
+) -> Result<usize, String> {
+    if k == 0 {
+        return Err("k-induction at depth 0".into());
+    }
+    let cone = cone(g, inv);
+    let state: Vec<Lit> = g
+        .latches
+        .iter()
+        .map(|l| l.lit)
+        .filter(|&l| cone[var(l) as usize])
+        .collect();
+    check_folded_inductive(g, &cone, inv, new_sat)?;
+
+    // Base: no bad state in loaded steps 0..2k from the initial states.
     let mut e = Enc::new(new_sat());
-    let f0 = e.frame(g, &cone, None);
-    e.assert_inv_ok(&f0, inv, 1);
-    e.constraints(g, &f0);
-    let bad0 = e.any_bad(g, &f0);
-    e.unsat(&[bad0], "safety")?;
-    let f1 = e.step(g, &cone, &f0);
-    e.constraints(g, &f1);
-    let bad1 = e.any_bad(g, &f1);
-    e.unsat(&[bad1], "safety in the second half-step")
+    let mut f = e.frame(g, &cone, None);
+    e.init(g, &cone, &f);
+    for j in 0..2 * k {
+        if stop() {
+            return Err("base check stopped".into());
+        }
+        if j > 0 {
+            f = e.step(g, &cone, &f);
+        }
+        e.constraints(g, &f);
+        let bad = e.any_bad(g, &f);
+        e.unsat(&[bad], "base")?;
+        e.sat.add_clause(&[-bad]);
+    }
+
+    // Step.
+    let mut e = Enc::new(new_sat());
+    let mut frames = vec![e.frame(g, &cone, None)];
+    for j in 1..=2 * k + 1 {
+        let f = e.step(g, &cone, &frames[j - 1]);
+        frames.push(f);
+    }
+    for (j, f) in frames.iter().enumerate() {
+        if j % 2 == 0 {
+            e.assert_inv_ok(f, inv, 1);
+        }
+        if j <= 2 * k {
+            e.constraints(g, f);
+        }
+        if j < 2 * k {
+            let bad = e.any_bad(g, f);
+            e.sat.add_clause(&[-bad]);
+        }
+    }
+    // bad(2k), or bad(2k+1) with that step's constraints.
+    let bad0 = e.any_bad(g, &frames[2 * k]);
+    let bad1 = e.any_bad(g, &frames[2 * k + 1]);
+    let late = e.fresh();
+    e.sat.add_clause(&[-late, bad1]);
+    for &c in &g.constraints {
+        let l = frames[2 * k + 1].lit(c);
+        e.sat.add_clause(&[-late, l]);
+    }
+    let goal = e.fresh();
+    e.sat.add_clause(&[-goal, bad0, late]);
+    let even: Vec<usize> = (0..=k).map(|j| 2 * j).collect();
+    let mut differ = 0;
+    loop {
+        if stop() {
+            return Err("step check stopped".into());
+        }
+        match e.sat.solve(&[goal]) {
+            Answer::Unsat => return Ok(differ),
+            Answer::Unknown => return Err("step check stopped".into()),
+            Answer::Sat => {}
+        }
+        differ += 1;
+        let vals: Vec<Vec<bool>> = even
+            .iter()
+            .map(|&j| {
+                state
+                    .iter()
+                    .map(|&r| e.sat.value(frames[j].lit(r)))
+                    .collect()
+            })
+            .collect();
+        let pair = (0..=k)
+            .flat_map(|i| (i + 1..=k).map(move |j| (i, j)))
+            .find(|&(i, j)| vals[i] == vals[j]);
+        let Some((i, j)) = pair else {
+            return Err("step fails".into());
+        };
+        let (fi, fj) = (even[i], even[j]);
+        let mut or = Vec::new();
+        for &r in &state {
+            let (x, y) = (frames[fi].lit(r), frames[fj].lit(r));
+            let d = e.fresh();
+            e.sat.add_clause(&[-d, x, y]);
+            e.sat.add_clause(&[-d, -x, -y]);
+            or.push(d);
+        }
+        e.sat.add_clause(&or);
+    }
 }
 
 /// Check an UNSAFE verdict at `depth` on `g` as loaded: find a trace
@@ -866,6 +999,39 @@ mod tests {
         assert_eq!(
             check_kind(&g, &[], 8, &sat, &never),
             Err("base fails".into())
+        );
+    }
+
+    /// shift() with a free-running clock latch: a folded k-induction
+    /// proof is checked over pairs of loaded steps, its base covers both
+    /// half-steps, and the clock's phase must hold initially.
+    #[test]
+    fn checks_folded_k_induction() {
+        let never = || false;
+        let clocked = |a0: Init| {
+            let mut g = shift(a0);
+            let c = g.latch(Init::Zero);
+            g.set_next(c, neg(c));
+            g
+        };
+        let g = clocked(Init::Zero);
+        let phase = vec![neg(g.latches[2].lit)];
+        assert_eq!(
+            check_kind_folded(&g, &[phase], 1, &sat, &never).map(|_| ()),
+            Ok(())
+        );
+        // b is 1 at loaded step 1: inside the base of a depth-1 proof.
+        let bad = clocked(Init::One);
+        let phase_bad = vec![neg(bad.latches[2].lit)];
+        assert_eq!(
+            check_kind_folded(&bad, &[phase_bad], 1, &sat, &never),
+            Err("base fails".into())
+        );
+        // The wrong phase is not initial.
+        let wrong = vec![g.latches[2].lit];
+        assert_eq!(
+            check_kind_folded(&g, &[wrong], 1, &sat, &never),
+            Err("init fails".into())
         );
     }
 

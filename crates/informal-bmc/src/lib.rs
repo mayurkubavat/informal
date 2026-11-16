@@ -635,6 +635,16 @@ fn kind_certified(
     let r = (|| {
         let k = k.ok_or("missing: k-induction said safe without a depth")?;
         let orig = load_aig(&req.model).map_err(|e| format!("cannot reload the model: {e:#}"))?;
+        if let Some(f) = &p.folded {
+            // A proof on the clock-folded model: checked as one over pairs
+            // of loaded steps. No outside certificate kind covers it yet.
+            let mut inv = certify::lift_folded(&orig, &p.latch_map, p, strengthening, f.ok)?;
+            inv.extend(certify::equalities(&p.merged));
+            certify::check_kind_folded(&orig, &inv, k.max(1), &|| solver(ctx), &|| {
+                ctx.should_stop()
+            })?;
+            return Ok(());
+        }
         let (mut inv, _) = certify::lift_reps(&orig, &p.latch_map, p, strengthening)?;
         inv.extend(certify::equalities(&p.merged));
         // Depth k here is the number of good frames before the bad one.
@@ -650,6 +660,23 @@ fn kind_certified(
         Ok(())
     })();
     Checked::new(report_certificate(req, r, t, ctx), cert)
+}
+
+/// An UNSAFE from k-induction, certified on the loaded model: by replaying
+/// the engine's trace, or (on a clock-folded model, whose trace has two
+/// loaded steps per frame) by a fresh search at the loaded depth.
+fn kind_unsafe(
+    req: &CheckRequest,
+    p: &Prepared,
+    v: Checked,
+    ctx: &RunContext,
+    tr: Option<PreparedTrace>,
+) -> Checked {
+    if p.folded.is_some() {
+        unsafe_certified_at(req, v, ctx, None, true)
+    } else {
+        unsafe_certified(req, v, ctx, tr.map(|t| (p, t)))
+    }
 }
 
 /// Turn a certificate check's outcome into the verdict to report.
@@ -1046,17 +1073,13 @@ impl Engine for KInduction {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare_ctx(req, ctx) {
+        let g = match prepare_ctx_fold(req, ctx, fold_on()) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
         let (v, k, tr) = kind(&g, ctx, self.name(), self.max_depth, &[]);
         let v = kind_certified(req, &g, (v, k), &[], ctx);
-        Ok(result(
-            self.name(),
-            unsafe_certified(req, v, ctx, tr.map(|t| (&*g, t))),
-            t0,
-        ))
+        Ok(result(self.name(), kind_unsafe(req, &g, v, ctx, tr), t0))
     }
 }
 
@@ -1341,7 +1364,7 @@ impl Engine for KindIc3 {
     }
     fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
         let t0 = Instant::now();
-        let g = match prepare_ctx(req, ctx) {
+        let g = match prepare_ctx_fold(req, ctx, fold_on()) {
             Ok(g) => g,
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
@@ -1359,7 +1382,13 @@ impl Engine for KindIc3 {
                     verdict: Verdict::Unknown { .. },
                     ..
                 } => {}
-                v => return Ok(result(self.name(), unsafe_certified(req, v, ctx, None), t0)),
+                v => {
+                    return Ok(result(
+                        self.name(),
+                        unsafe_certified_at(req, v, ctx, None, g.folded.is_some()),
+                        t0,
+                    ))
+                }
             }
             // Houdini gets up to half of what is left.
             let mut h = ctx.clone();
@@ -1372,11 +1401,7 @@ impl Engine for KindIc3 {
         }
         let (v, k, tr) = kind(&g, ctx, self.name(), None, &inv);
         let v = kind_certified(req, &g, (v, k), &inv, ctx);
-        Ok(result(
-            self.name(),
-            unsafe_certified(req, v, ctx, tr.map(|t| (&*g, t))),
-            t0,
-        ))
+        Ok(result(self.name(), kind_unsafe(req, &g, v, ctx, tr), t0))
     }
 }
 
@@ -1873,6 +1898,39 @@ mod tests {
         ];
         for e in engines {
             assert_eq!(check(e, twin), Verdict::Safe, "{}", e.name());
+        }
+    }
+
+    /// A counter that moves on every other step (a free-running clock
+    /// latch gates it), wrapping at 5. The k-induction engines fold the
+    /// clock, so their proofs and counterexamples are on the folded model
+    /// and certified on the loaded one: 7 is never reached, 5 is reached
+    /// at loaded depth 10 (the counter moves on odd steps).
+    #[test]
+    fn kinduction_folds_a_clock() {
+        let clocked = |target: u32| {
+            format!(
+                "1 sort bitvec 3\n2 sort bitvec 1\n3 zero 1\n4 state 1 cnt\n5 init 1 4 3\n\
+                 6 zero 2\n7 state 2 clk\n8 init 2 7 6\n9 not 2 7\n10 next 2 7 9\n\
+                 11 one 1\n12 add 1 4 11\n13 constd 1 5\n14 eq 2 4 13\n15 ite 1 14 3 12\n\
+                 16 ite 1 7 15 4\n17 next 1 4 16\n18 constd 1 {target}\n19 eq 2 4 18\n20 bad 19\n"
+            )
+        };
+        let engines: [&dyn Engine; 2] = [
+            &KInduction {
+                max_depth: Some(40),
+            },
+            &KindIc3 { ic3_share: 0.5 },
+        ];
+        for e in engines {
+            assert_eq!(check(e, &clocked(7)), Verdict::Safe, "{}", e.name());
+            assert_eq!(check(e, &clocked(6)), Verdict::Safe, "{}", e.name());
+            assert_eq!(
+                check(e, &clocked(5)),
+                Verdict::Unsafe { depth: Some(10) },
+                "{}",
+                e.name()
+            );
         }
     }
 

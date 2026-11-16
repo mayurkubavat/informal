@@ -136,16 +136,21 @@ fn every_kind_of_certificate_is_written_and_holds() {
         return;
     }
     let d = scratch("kinds");
-    for (name, engine, kind) in [
-        ("stuck_latch_safe.aag", "informal-ic3", "invariant"),
-        ("delay_safe.aag", "informal-ic3-mt", "invariant"),
-        ("delay_safe.aag", "informal-kind", "k-induction"),
-        ("clocked_safe.aag", "informal-kind", "k-induction"),
-        ("clocked_safe.aag", "informal-ic3", "two-step"),
-        ("split_safe.aag", "informal-kind-ic3", "invariant"),
+    // The k-induction engines fold a free-running clock too, and a
+    // folded k-induction proof has no outside certificate kind yet (it is
+    // certified in the tool only): clocked_safe is proved unfolded here,
+    // and folded below.
+    let unfolded: &[(&str, &str)] = &[("INFORMAL_FOLD", "0")];
+    for (name, engine, kind, env) in [
+        ("stuck_latch_safe.aag", "informal-ic3", "invariant", &[][..]),
+        ("delay_safe.aag", "informal-ic3-mt", "invariant", &[]),
+        ("delay_safe.aag", "informal-kind", "k-induction", &[]),
+        ("clocked_safe.aag", "informal-kind", "k-induction", unfolded),
+        ("clocked_safe.aag", "informal-ic3", "two-step", &[]),
+        ("split_safe.aag", "informal-kind-ic3", "invariant", &[]),
     ] {
-        let dir = d.join(engine);
-        let (code, out, s) = check(name, engine, &dir, &[], &[]);
+        let dir = d.join(format!("{engine}-{}", env.len()));
+        let (code, out, s) = check(name, engine, &dir, &[], env);
         assert_eq!(code, Some(20), "{name} {engine}: {out}");
         let s = s.unwrap();
         assert_eq!(
@@ -167,6 +172,11 @@ fn every_kind_of_certificate_is_written_and_holds() {
         );
         circuit_holds(&dir.join(file), &model(name));
     }
+    let dir = d.join("informal-kind-folded");
+    let (code, out, s) = check("clocked_safe.aag", "informal-kind", &dir, &[], &[]);
+    assert_eq!(code, Some(20), "{out}");
+    let s = s.unwrap();
+    assert_eq!((s.verdict.as_str(), s.evidence.as_str()), ("safe", "none"));
     for (name, engine, depth) in [
         ("counter2_unsafe.aag", "informal-bmc", 3),
         ("counter2_unsafe.aag", "informal-ic3", 3),
