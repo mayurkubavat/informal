@@ -134,7 +134,7 @@ passes on a different setup without saying so.
 | `report [-csv] [-file F [-force]]` | `report_fv -list` | Property table, or comma-separated values; `-file` writes it there |
 | `visualize -violation -property P`, `visualize -cover -property P` | — | Returns the VCD that prove wrote for a CEX or a cover, and opens it with `$INFORMAL_WAVE_VIEWER` (for example `surfer` or `gtkwave`) when that is set |
 | `get_version`, `echo words` | `get_version`, `echo words` | The informal version; print a line |
-| `check_assumptions [-depth N]` | — | Whether the assumptions and reset allow traces of N steps; returns how many they allow (also run before every prove: docs/vacuity.md) |
+| `check_assumptions [-depth N] [-conflict]` | — | Whether the assumptions and reset allow traces of N steps; returns how many they allow, or with `-conflict` the assumptions that conflict (also run before every prove: docs/vacuity.md) |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |
 

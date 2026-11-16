@@ -44,6 +44,7 @@ fn conflicting_rtl_assumptions_make_proofs_vacuous() {
     sh.eval("prove -all").unwrap();
     let env = sh.session.borrow().environment.clone().unwrap();
     assert!(env.conflict(), "{env:?}");
+    assert_eq!(env.conflict_set, ["conflict.m_on", "conflict.m_stop"]);
     assert_eq!(
         a_le(&sh, "conflict.a_le"),
         ("proven", Some(Vacuity::VacuousEnvironment))
@@ -148,4 +149,22 @@ fn precondition_covers_switched_off() {
     assert!(sh
         .eval("elaborate -top request -create_related_covers {nonsense}")
         .is_err());
+}
+
+/// The conflict narrowed: an assumption that takes no part in it is left
+/// out of the set, and `check_assumptions -conflict` returns the set.
+#[test]
+fn conflict_set_leaves_out_bystanders() {
+    let Some(sh) = shell("counter.sv", "counter") else {
+        return;
+    };
+    sh.eval("assume -name m_low {rst |-> en}; assume -name m_on {en}; assume -name m_stop {cnt == 2 |-> !en}")
+        .unwrap();
+    assert_eq!(
+        sh.eval("check_assumptions -depth 20 -conflict").unwrap(),
+        "m_on m_stop"
+    );
+    // No conflict, no set.
+    sh.eval("assume -disable m_stop").unwrap();
+    assert_eq!(sh.eval("check_assumptions -conflict").unwrap(), "");
 }

@@ -611,8 +611,6 @@ to try.
   keeps vendor scripts working; the field is in the report, the session
   JSON, the UI and the MCP replies. See docs/vacuity.md.
 - **Open issues**
-  - The conflict is not narrowed to the assumptions that cause it until
-    svlang names each `constraint` line after its assumption.
   - Witness covers, design-free checks, needed assumptions and dead ends
     are planned (docs/vacuity.md).
   - The precondition covers are in every model the prove builds, so each

@@ -23,8 +23,18 @@ When they allow fewer steps than asked, the prove log says so:
 ```
 informal: VACUOUS ENVIRONMENT: the reset and m_on, m_stop allow no trace
 longer than 2 step(s) (asked for 20). Every assertion holds from step 3 on
-whatever the design does, so its proof says nothing beyond that step; ...
+whatever the design does, so its proof says nothing beyond that step;
+these conflict, and dropping any one of them allows a longer trace:
+conflict.m_on, conflict.m_stop
 ```
+
+The set is found by dropping each assumption in turn (one more bounded
+run each) and leaving it out while the rest still allow no longer trace:
+an assumption that takes no part in the conflict is not listed, and
+dropping any one that is listed allows a longer trace. When several
+different sets conflict, this finds one of them. `reset` is listed when
+the reset itself is part of the conflict. svlang names each `constraint`
+line after its assumption, which is what makes this possible.
 
 and every property proven in that run carries the vacuity
 `vacuous (environment)`: in the report's detail column
@@ -34,7 +44,8 @@ word stays `proven`, so scripts that filter on it work as before.
 
 `check_assumptions [-depth N]` (`informal::check_assumptions` in every
 flavor) runs the same check on its own and returns the number of steps the
-environment allows, up to N.
+environment allows, up to N; with `-conflict` it returns the conflicting
+assumptions instead, as a list (empty when they do not conflict).
 
 Steps are model steps: one per clock cycle for a design on one rising edge,
 two per cycle when the model drives the clocks (both edges, several clocks).
@@ -82,9 +93,10 @@ environment check and the precondition covers.
   the consequent ever matters: an assertion whose consequent always holds
   is non-vacuous by this check. Witness covers and the design-free checks
   (planned) look at that.
-- The conflict is not yet narrowed to the assumptions that cause it: the
-  log lists every assumption in force. Narrowing needs the front end to
-  name each `constraint` line after its assumption.
+- The conflicting set is one set, smallest in the sense that no member can
+  be dropped, not the smallest of all; with more than 64 assumptions it is
+  not narrowed. Script assumptions are not enforced while the reset is
+  held, so one that contradicts the reset value is no conflict.
 - When the in-house BMC is not available (no CaDiCaL) or does not finish
   within the time limit (at most 60 s a probe), the log says the check
   could not decide, and no vacuity is set.
