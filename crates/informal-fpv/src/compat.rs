@@ -488,12 +488,55 @@ fn add_props(
     Ok(name.into())
 }
 
+/// Properties by name or glob. A property of the RTL can also be named
+/// without its path (`a_never` for `top.a_never`, `u.a_x` for
+/// `top.u.a_x`); a short name that is not a glob must then name exactly one.
 fn select(s: &Session, patterns: &[String]) -> Result<Vec<usize>, String> {
     let mut out = Vec::new();
     for p in patterns.iter().flat_map(|p| p.split_whitespace()) {
-        let m = s.matching(p);
+        let mut m = s.matching(p);
+        if m.is_empty() {
+            let suffix = format!("*.{p}");
+            m = s
+                .props
+                .iter()
+                .enumerate()
+                .filter(|(_, q)| q.rtl && glob(&suffix, &q.name))
+                .map(|(i, _)| i)
+                .collect();
+            if m.len() > 1 && !p.contains(['*', '?']) {
+                let names: Vec<&str> = m.iter().map(|&i| s.props[i].name.as_str()).collect();
+                return Err(format!(
+                    "`{p}` is ambiguous: it names {}; give the full name",
+                    names.join(", ")
+                ));
+            }
+        }
         if m.is_empty() {
             return Err(format!("no property matches `{p}`"));
+        }
+        out.extend(m);
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// Properties whose names a regular expression matches anywhere in them,
+/// as Tcl's `regexp` does (`-regexp`; anchor with `^` and `$`).
+fn select_regexp(s: &Session, patterns: &[String]) -> Result<Vec<usize>, String> {
+    let mut out = Vec::new();
+    for p in patterns.iter().flat_map(|p| p.split_whitespace()) {
+        let re = regex::Regex::new(p).map_err(|e| format!("bad regular expression `{p}`: {e}"))?;
+        let m: Vec<usize> = s
+            .props
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| re.is_match(&q.name))
+            .map(|(i, _)| i)
+            .collect();
+        if m.is_empty() {
+            return Err(format!("no property matches the regular expression `{p}`"));
         }
         out.extend(m);
     }
@@ -581,7 +624,12 @@ fn stopat(s: &mut Session, a: &[String]) -> Result<Value, String> {
 }
 
 /// Property names filtered by `{key value ...}` pairs on type and status.
-fn filter_props(s: &Session, include: Option<&str>, exclude: Option<&str>) -> Vec<String> {
+fn filter_props(
+    s: &Session,
+    include: Option<&str>,
+    exclude: Option<&str>,
+    regexp: bool,
+) -> Result<Vec<String>, String> {
     let pairs = |spec: Option<&str>| -> Vec<(String, String)> {
         let w: Vec<String> = spec
             .unwrap_or("")
@@ -594,24 +642,49 @@ fn filter_props(s: &Session, include: Option<&str>, exclude: Option<&str>) -> Ve
             .collect()
     };
     let (inc, exc) = (pairs(include), pairs(exclude));
+    // With -regexp, a name value is a regular expression.
+    let mut res = std::collections::HashMap::new();
+    if regexp {
+        for (k, v) in inc
+            .iter()
+            .chain(&exc)
+            .filter(|(k, _)| k == "name" || k == "-name")
+        {
+            let re =
+                regex::Regex::new(v).map_err(|e| format!("bad regular expression `{v}`: {e}"))?;
+            res.insert((k.clone(), v.clone()), re);
+        }
+    }
     let matches = |p: &crate::session::Property, (k, v): &(String, String)| match k.as_str() {
         "type" | "-type" => p.kind.label() == v || (v == "assertion" && p.kind == Kind::Assert),
         "status" | "-status" => {
             glob(v, p.status.word()) || (v == "falsified" && p.status.word() == "cex")
         }
-        "name" => glob(v, &p.name),
+        "name" | "-name" => match res.get(&(k.clone(), v.clone())) {
+            Some(re) => re.is_match(&p.name),
+            None => glob(v, &p.name),
+        },
         _ => true,
     };
-    s.props
+    Ok(s.props
         .iter()
         .filter(|p| inc.iter().all(|kv| matches(p, kv)) && !exc.iter().any(|kv| matches(p, kv)))
         .map(|p| p.name.clone())
-        .collect()
+        .collect())
 }
 
 // ---------------------------------------------------------------- commands
 
 const COMMON: &[(&str, Body)] = &[
+    ("get_version", |_, _| {
+        Ok(format!("informal {}", env!("CARGO_PKG_VERSION")).into())
+    }),
+    ("echo", |s, a| {
+        if !s.dry_run {
+            println!("{}", a[1..].join(" "));
+        }
+        Ok(().into())
+    }),
     ("session", |s, _| {
         serde_json::to_string_pretty(s)
             .map(Value::from)
@@ -803,13 +876,13 @@ const JG: &[(&str, Body)] = &[
     ("reset", |s, a| {
         let a = Args::parse(
             a,
-            &[("-expression", 1), ("-none", 0)],
+            &[("-expression", 1), ("-expr", 1), ("-none", 0)],
             &[("-non_resettable_regs", 1), ("-analyze_only", 0)],
         )?;
         let old = s.reset.clone();
         s.reset = if a.flag("-none") {
             None
-        } else if let Some(e) = a.val("-expression") {
+        } else if let Some(e) = a.val("-expression").or(a.val("-expr")) {
             Some(e.to_string())
         } else if !a.pos.is_empty() {
             Some(a.pos.join(" "))
@@ -852,8 +925,12 @@ const JG: &[(&str, Body)] = &[
         prove_and_report(s, &which)
     }),
     ("get_property_list", |s, a| {
-        let a = Args::parse(a, &[("-include", 1), ("-exclude", 1)], &[("-task", 1)])?;
-        Ok(filter_props(s, a.val("-include"), a.val("-exclude")).into())
+        let a = Args::parse(
+            a,
+            &[("-include", 1), ("-exclude", 1), ("-regexp", 0)],
+            &[("-task", 1)],
+        )?;
+        Ok(filter_props(s, a.val("-include"), a.val("-exclude"), a.flag("-regexp"))?.into())
     }),
     ("get_status", |s, a| {
         let n = a.get(1).ok_or("get_status: property name required")?;
@@ -862,6 +939,14 @@ const JG: &[(&str, Body)] = &[
     }),
     ("set_prove_time_limit", |s, a| {
         s.time_limit = parse_duration(a.get(1).ok_or("set_prove_time_limit: time required")?)?;
+        Ok(().into())
+    }),
+    // informal's limit is per property already.
+    ("set_prove_per_property_time_limit", |s, a| {
+        s.time_limit = parse_duration(
+            a.get(1)
+                .ok_or("set_prove_per_property_time_limit: time required")?,
+        )?;
         Ok(().into())
     }),
     ("set_engine_mode", |s, a| {
@@ -892,19 +977,41 @@ const JG: &[(&str, Body)] = &[
         names.retain(|n| known.contains(n));
         if names.is_empty() {
             note("set_engine_mode: none of the matching engines is available; using all engines");
+        } else {
+            note(&format!("set_engine_mode: using {}", names.join(", ")));
         }
         s.engine_filter = names;
         Ok(().into())
     }),
     ("report", |s, a| {
-        let _ = Args::parse(
+        let a = Args::parse(
             a,
-            &[("-summary", 0), ("-results", 0)],
-            &[("-task", 1), ("-file", 1), ("-force", 0)],
+            &[
+                ("-summary", 0),
+                ("-results", 0),
+                ("-csv", 0),
+                ("-file", 1),
+                ("-force", 0),
+            ],
+            &[("-task", 1)],
         )?;
-        let r = s.report();
-        if !s.dry_run {
-            print!("{r}");
+        let r = if a.flag("-csv") {
+            s.report_csv()
+        } else {
+            s.report()
+        };
+        if s.dry_run {
+            return Ok(r.into());
+        }
+        match a.val("-file") {
+            Some(f) => {
+                let path = Path::new(f);
+                if path.exists() && !a.flag("-force") {
+                    return Err(format!("report: {f} exists; add -force to overwrite it"));
+                }
+                std::fs::write(path, &r).map_err(|e| format!("report: {f}: {e}"))?;
+            }
+            None => print!("{r}"),
         }
         Ok(r.into())
     }),
@@ -926,14 +1033,95 @@ const JG: &[(&str, Body)] = &[
         ));
         Ok(().into())
     }),
-    ("visualize", |_, _| {
-        Err("visualize: the waveform UI is not available yet (phase 1 UI v1)".into())
-    }),
+    ("visualize", visualize),
     ("set_proofgrid_per_engine_max_jobs", |_, _| Ok(().into())),
+    ("set_proofgrid_per_engine_max_local_jobs", |_, _| {
+        Ok(().into())
+    }),
+    ("set_proofgrid_max_local_jobs", |_, _| Ok(().into())),
     ("set_proofgrid_max_jobs", |_, _| Ok(().into())),
     ("set_proofgrid_mode", |_, _| Ok(().into())),
     ("set_max_trace_length", |_, _| Ok(().into())),
 ];
+
+/// `visualize -violation|-cover -property P`: the trace of a CEX or cover,
+/// as the VCD file prove wrote. It is opened with the program named by
+/// INFORMAL_WAVE_VIEWER (`surfer`, `gtkwave`) when that is set; the path is
+/// returned either way, for the desktop UI's trace view or any VCD viewer.
+fn visualize(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[("-violation", 0), ("-cover", 0), ("-property", 1)],
+        &[
+            ("-new_window", 0),
+            ("-window", 1),
+            ("-bg", 0),
+            ("-min_length", 0),
+            ("-max_length", 1),
+            ("-task", 1),
+        ],
+    )?;
+    let names: Vec<String> = a
+        .val("-property")
+        .map(String::from)
+        .into_iter()
+        .chain(a.pos.iter().cloned())
+        .collect();
+    let [name] = names.as_slice() else {
+        return Err("visualize: name one property with -property".into());
+    };
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let i = match select(s, std::slice::from_ref(name))?.as_slice() {
+        [i] => *i,
+        many => {
+            return Err(format!(
+                "visualize: `{name}` names {} properties; name one",
+                many.len()
+            ))
+        }
+    };
+    let p = &s.props[i];
+    let want = if a.flag("-cover") { "covered" } else { "cex" };
+    if p.status.word() != want {
+        return Err(format!(
+            "visualize: {} is {}; there is a trace only for a {}",
+            p.name,
+            p.status.word(),
+            if want == "cex" {
+                "failing assertion (-violation)"
+            } else {
+                "covered cover (-cover)"
+            }
+        ));
+    }
+    let Some(path) = p.trace.clone() else {
+        return Err(format!(
+            "visualize: no trace was written for {} (see the prove log)",
+            p.name
+        ));
+    };
+    match std::env::var("INFORMAL_WAVE_VIEWER") {
+        Ok(viewer) if !viewer.trim().is_empty() => {
+            let mut words = viewer.split_whitespace();
+            let prog = words.next().unwrap_or_default();
+            std::process::Command::new(prog)
+                .args(words)
+                .arg(&path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| format!("visualize: starting {prog}: {e}"))?;
+            note(&format!("visualize: {path} opened in {prog}"));
+        }
+        _ => note(&format!(
+            "visualize: trace in {path} (open it in the InFormal UI or a VCD viewer; set INFORMAL_WAVE_VIEWER to open it from here)"
+        )),
+    }
+    Ok(path.into())
+}
 
 fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     let a = Args::parse(
@@ -946,14 +1134,25 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
             ("-env", 0),
             ("-bound", 1),
             ("-task", 1),
+            ("-regexp", 0),
         ],
         &[("-severity", 1), ("-tag", 1), ("-from_property", 1)],
     )?;
+    let pick = |s: &Session| {
+        if a.flag("-regexp") {
+            select_regexp(s, &a.pos)
+        } else {
+            select(s, &a.pos)
+        }
+    };
     if a.flag("-disable") || a.flag("-enable") {
-        return set_enabled(s, &a.pos, a.flag("-enable"));
+        for i in pick(s)? {
+            s.props[i].enabled = a.flag("-enable");
+        }
+        return Ok(().into());
     }
     if a.flag("-remove") {
-        let drop = select(s, &a.pos)?;
+        let drop = pick(s)?;
         let mut i = 0;
         s.props.retain(|_| {
             i += 1;
@@ -963,6 +1162,12 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     }
     if a.flag("-bound") {
         return Err(format!("{}: -bound is not supported yet", a.cmd));
+    }
+    if a.flag("-regexp") {
+        return Err(format!(
+            "{}: -regexp selects properties with -enable, -disable or -remove",
+            a.cmd
+        ));
     }
     let expr = match a.pos.as_slice() {
         [e] => e.clone(),
@@ -1151,7 +1356,7 @@ const VCF: &[(&str, Body)] = &[
             let st = if st == "falsified" { "cex" } else { st };
             inc += &format!("status {st}");
         }
-        let mut names = filter_props(s, Some(&inc), None);
+        let mut names = filter_props(s, Some(&inc), None, false)?;
         if let Some(p) = a.pos.first() {
             names.retain(|n| glob(p, n));
         }
@@ -1468,6 +1673,57 @@ mod tests {
         sh.activate(Flavor::Jg);
         assert!(sh.eval("info commands ::check_fv").unwrap().is_empty());
         assert_eq!(sh.eval("get_property_list").unwrap(), "p1 c1");
+    }
+
+    #[test]
+    fn short_names_regexp_and_small_commands() {
+        let sh = shell(Flavor::Jg);
+        sh.eval("assert -name a1 {x}; assert -name a2 {y}; cover -name c1 {z}")
+            .unwrap();
+        // Make two of them look like properties of the RTL.
+        {
+            let mut s = sh.session.borrow_mut();
+            for (i, n) in ["top.a_never", "top.u.a_never"].iter().enumerate() {
+                s.props[i].name = n.to_string();
+                s.props[i].rtl = true;
+            }
+        }
+        assert_eq!(sh.eval("get_status u.a_never").unwrap(), "unprocessed");
+        let e = sh.eval("get_status a_never").unwrap_err();
+        assert!(e.message.contains("ambiguous"), "{}", e.message);
+        // A glob may match several.
+        sh.eval("assert -disable a_n*").unwrap();
+        assert!(sh.session.borrow().props[..2].iter().all(|p| !p.enabled));
+        // -regexp matches anywhere in the name, as Tcl's regexp does.
+        sh.eval("assert -enable -regexp {^top\\.u\\.}").unwrap();
+        assert!(sh.session.borrow().props[1].enabled && !sh.session.borrow().props[0].enabled);
+        assert_eq!(
+            sh.eval("get_property_list -regexp -include {name a_n.*r$}")
+                .unwrap(),
+            "top.a_never top.u.a_never"
+        );
+        assert!(sh.eval("assert -regexp {x}").is_err());
+        // Small commands.
+        assert!(sh.eval("get_version").unwrap().starts_with("informal "));
+        sh.eval("set_prove_time_limit 500ms").unwrap();
+        assert_eq!(sh.session.borrow().time_limit.as_millis(), 500);
+        sh.eval("set_prove_per_property_time_limit 2m").unwrap();
+        assert_eq!(sh.session.borrow().time_limit.as_secs(), 120);
+        sh.eval("reset -expr {!rst_n}").unwrap();
+        assert_eq!(sh.session.borrow().reset.as_deref(), Some("!rst_n"));
+        sh.eval("set_proofgrid_max_local_jobs 4; set_proofgrid_per_engine_max_local_jobs 2")
+            .unwrap();
+        let csv = sh.eval("report -csv").unwrap();
+        assert!(
+            csv.starts_with("property,type,status,engine,detail\n"),
+            "{csv}"
+        );
+        assert!(csv.contains("c1,cover,unprocessed,,"), "{csv}");
+        // No trace before a prove: said, not a silent nothing.
+        let e = sh
+            .eval("visualize -violation -property u.a_never")
+            .unwrap_err();
+        assert!(e.message.contains("is unprocessed"), "{}", e.message);
     }
 
     #[test]

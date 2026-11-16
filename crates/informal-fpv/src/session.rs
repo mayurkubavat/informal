@@ -572,6 +572,7 @@ impl Session {
             std::fs::write(&tree, serde_json::to_string_pretty(&self.design.hierarchy)?)?;
         }
         self.check_black_boxes()?;
+        self.mark_boxed_properties();
         self.elaborated = true;
         Ok(())
     }
@@ -647,6 +648,48 @@ impl Session {
             ));
         }
         Ok(())
+    }
+
+    /// Mark the properties written inside a black box at elaboration: the
+    /// box has no contents, so they are not in the model. They stay in the
+    /// list (no property is dropped without a word), with the reason as
+    /// their status, and the log says which they are.
+    fn mark_boxed_properties(&mut self) {
+        let (Some(d), Some(top)) = (&self.elab, self.design.top.as_deref()) else {
+            return;
+        };
+        let boxed: Vec<String> = d
+            .instances
+            .iter()
+            .filter(|i| self.design.bbox.contains(&i.module))
+            .map(|i| format!("{}.", i.path))
+            .chain(
+                self.design
+                    .bbox_instances
+                    .iter()
+                    .map(|r| format!("{top}.{r}.")),
+            )
+            .collect();
+        if boxed.is_empty() {
+            return;
+        }
+        let mut inside = Vec::new();
+        for p in self.props.iter_mut() {
+            if p.rtl && boxed.iter().any(|b| p.name.starts_with(b.as_str())) {
+                p.status = Status::Error {
+                    message: "not in the model (inside a black box)".to_string(),
+                };
+                inside.push(p.name.clone());
+            }
+        }
+        if !inside.is_empty() {
+            self.log(&format!(
+                "{} propert{} inside black boxes cannot be proved (not in the model): {}",
+                inside.len(),
+                if inside.len() == 1 { "y" } else { "ies" },
+                inside.join(", ")
+            ));
+        }
     }
 
     /// How long the reset lasts in a model that drives the clocks (a design
@@ -1281,12 +1324,10 @@ impl Session {
         }
     }
 
-    /// A JasperGold-style summary table.
-    pub fn report(&self) -> String {
-        let mut s = format!(
-            "{:<28} {:<7} {:<13} {:<10} {}\n",
-            "property", "type", "status", "engine", "detail"
-        );
+    /// One row per property of the table `report` prints: name, type,
+    /// status, engine and detail.
+    pub fn report_rows(&self) -> Vec<[String; 5]> {
+        let mut rows = Vec::new();
         for p in &self.props {
             let (engine, detail) = match &p.status {
                 Status::Proven { engine, ms } | Status::Unreachable { engine, ms } => {
@@ -1318,14 +1359,42 @@ impl Session {
                 (false, false) => format!("{detail} [under AI-added: {}]", p.under_ai.join(", ")),
                 (false, true) => detail,
             };
-            s += &format!(
-                "{:<28} {:<7} {:<13} {:<10} {}\n",
-                p.name,
-                p.kind.label(),
-                status,
+            rows.push([
+                p.name.clone(),
+                p.kind.label().to_string(),
+                status.to_string(),
                 engine,
-                detail
-            );
+                detail,
+            ]);
+        }
+        rows
+    }
+
+    /// A JasperGold-style summary table.
+    pub fn report(&self) -> String {
+        let mut s = format!(
+            "{:<28} {:<7} {:<13} {:<10} {}\n",
+            "property", "type", "status", "engine", "detail"
+        );
+        for [name, kind, status, engine, detail] in self.report_rows() {
+            s += &format!("{name:<28} {kind:<7} {status:<13} {engine:<10} {detail}\n");
+        }
+        s
+    }
+
+    /// The same table as comma-separated values (`report -csv`).
+    pub fn report_csv(&self) -> String {
+        let field = |f: &str| {
+            if f.contains([',', '"', '\n']) {
+                format!("\"{}\"", f.replace('"', "\"\""))
+            } else {
+                f.to_string()
+            }
+        };
+        let mut s = String::from("property,type,status,engine,detail\n");
+        for row in self.report_rows() {
+            s += &row.iter().map(|f| field(f)).collect::<Vec<_>>().join(",");
+            s.push('\n');
         }
         s
     }
@@ -1428,7 +1497,7 @@ pub fn glob(pat: &str, s: &str) -> bool {
     go(pat.as_bytes(), s.as_bytes())
 }
 
-/// `1h`, `30m`, `90s`, `2H`, or plain seconds.
+/// `1h`, `30m`, `90s`, `500ms`, `2H`, or plain seconds.
 pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let s = s.trim();
     let (num, unit) = s.split_at(
@@ -1438,6 +1507,7 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let n: f64 = num.parse().map_err(|_| format!("bad time `{s}`"))?;
     let secs = match unit.to_ascii_lowercase().as_str() {
         "" | "s" => n,
+        "ms" => n / 1000.0,
         "m" => n * 60.0,
         "h" => n * 3600.0,
         "d" => n * 86400.0,

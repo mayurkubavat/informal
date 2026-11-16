@@ -1,7 +1,8 @@
 // elaborate -bbox_m: instances of the module keep their ports, nothing
 // inside is modelled and the outputs are free. What relied on the box's
 // logic can fail; the rest still holds. (The memory inside the box is not
-// part of the model at all.)
+// part of the model at all, and neither is the assertion written inside
+// it: it is listed with an error from elaboration on.)
 //% elaborate -top black_box -bbox_m bb_leaf
 //% clock clk
 //% reset -expression {rst}
@@ -11,10 +12,12 @@
 //= a_through_box cex
 //= a_beside proven
 //= a_other_inst proven
+//= black_box.u.a_inside error
 module bb_leaf(input logic clk, input logic [3:0] i, output logic [3:0] o);
   logic [3:0] mem [0:15];
   always_ff @(posedge clk) mem[i] <= i;
   assign o = ~i;
+  a_inside: assert property (@(posedge clk) o == ~i);
 endmodule
 module bb_plain(input logic [3:0] i, output logic [3:0] o);
   assign o = i + 4'd1;

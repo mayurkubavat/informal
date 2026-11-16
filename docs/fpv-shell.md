@@ -119,17 +119,20 @@ passes on a different setup without saying so.
 | `elaborate ... -bbox_m {M ...} -bbox_i {path ...}` | `set_blackbox -designs {M ...} -cells {path ...}` | Black boxes: ports kept, contents not modelled, outputs free (see below) |
 | `stopat sig ...`, `stopat -clear [sig ...]`, `stopat -list` | `snip_driver sig ...` | Cut points: each signal is cut from its drivers and is free on every step (see below) |
 | `clock clk [-factor N] [-phase P]` | `create_clock clk -period N` | A clock (posedge); the first one declared is the primary clock. `-factor` and `-phase` relate several clocks (see Known gaps); `-both_edges` is accepted and not needed |
-| `reset -expression {!rst_n}` | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
+| `reset -expression {!rst_n}` (or `-expr`) | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
 | — | `sim_run -stable`, `sim_save_reset` | Accepted (reset is applied by the model) |
 | `assert / assume / cover -name N {expr}` | `fvassert / fvassume / fvcover N -expr {expr}` | Add a property |
 | `assert -env` | — | Add as assumption |
-| `assert -disable/-enable pattern` | `fvdisable / fvenable pattern` | Glob patterns |
+| `assert -disable/-enable pattern` | `fvdisable / fvenable pattern` | Glob patterns. A property of the RTL can be named without its path (`a_never` for `top.a_never`) when that names one property |
+| `assert -disable/-enable/-remove -regexp {re}` | — | Regular expressions, matched anywhere in the name as Tcl's `regexp` does (anchor with `^` and `$`) |
 | `prove -all`, `prove -property {names}` | `check_fv [-property {names}]` | Prove; prints the report, returns a count summary |
-| `set_prove_time_limit 1h` | `set_fml_var fml_max_time 1H` | Per-property time limit |
-| `set_engine_mode {Ht B N}` | — | Mapped to informal engines (Ht/Hp → `ric3-ic3`, `abc-pdr`; B → `ric3-bmc`; N → `ric3`) |
-| `get_property_list -include {type assert status proven}` | `get_props -type assert -status proven` | Tcl list of names |
+| `set_prove_time_limit 1h`, `set_prove_per_property_time_limit 1h` | `set_fml_var fml_max_time 1H` | Per-property time limit; units `ms`, `s`, `m`, `h`, `d` |
+| `set_engine_mode {Ht B N}` | — | Mapped to informal engines (Ht/Hp → `ric3-ic3`, `abc-pdr`; B → `ric3-bmc`; N → `ric3`); prints the engines it picked |
+| `get_property_list -include {type assert status proven}` | `get_props -type assert -status proven` | Tcl list of names; with `-regexp`, a `name` value is a regular expression |
 | `get_status name` | — | `proven`, `cex`, `covered`, `unreachable`, `undetermined`, `error`, `unprocessed` |
-| `report` | `report_fv -list` | Property table |
+| `report [-csv] [-file F [-force]]` | `report_fv -list` | Property table, or comma-separated values; `-file` writes it there |
+| `visualize -violation -property P`, `visualize -cover -property P` | — | Returns the VCD that prove wrote for a CEX or a cover, and opens it with `$INFORMAL_WAVE_VIEWER` (for example `surfer` or `gtkwave`) when that is set |
+| `get_version`, `echo words` | `get_version`, `echo words` | The informal version; print a line |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |
 
@@ -194,7 +197,10 @@ holds for the design, a counterexample may use output values the boxed
 logic cannot produce. The prove log lists the boxes in force. A module
 name with no instance in this design is ignored with a note (flow scripts
 list boxes for every configuration); an instance path that does not exist
-is an error. Signals inside a box cannot be named in properties.
+is an error. Signals inside a box cannot be named in properties, and the
+assertions written inside a boxed module stay in the list with the
+status `error` ("not in the model (inside a black box)") from elaborate
+on, which says which they are.
 
 ## Checking a script before running it
 
@@ -203,7 +209,7 @@ script without elaborating or proving anything, and lists per line what
 informal would do with it:
 
 ```
-fpv.tcl:85: unknown command: get_version: not an informal command
+fpv.tcl:85: unknown command: check_cov: not an informal command
 fpv.tcl:135: error: analyze: VHDL is not supported yet
 fpv.tcl:238: ignored: task -create ...: tasks are not modelled yet; properties stay in one task
 fpv.tcl:45: tcl error: environment variable DUT_TOP is not set
