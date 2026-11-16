@@ -138,13 +138,33 @@ pub enum Vacuity {
     /// The assumptions and the reset allow no trace as long as the check
     /// asked for: the proof holds from some step on whatever the design does.
     VacuousEnvironment,
+    /// The precondition cover was hit by a trace that replays: some attempt
+    /// of the assertion was checked.
+    NonVacuous,
+    /// The same, in a model with cut points or black boxes: the trace may
+    /// use values the real logic cannot produce there.
+    NonVacuousCutPoints,
+    /// The precondition cover is unreachable: no attempt is ever checked.
+    Vacuous,
+    /// The precondition cover was neither hit nor proved unreachable in
+    /// the time it had.
+    NotChecked,
 }
 
 impl Vacuity {
     pub fn word(self) -> &'static str {
         match self {
             Vacuity::VacuousEnvironment => "vacuous (environment)",
+            Vacuity::NonVacuous => "non-vacuous",
+            Vacuity::NonVacuousCutPoints => "non-vacuous (cut points)",
+            Vacuity::Vacuous => "vacuous",
+            Vacuity::NotChecked => "vacuity not checked",
         }
+    }
+
+    /// The proof says nothing (or nothing beyond some step).
+    pub fn is_vacuous(self) -> bool {
+        matches!(self, Vacuity::Vacuous | Vacuity::VacuousEnvironment)
     }
 }
 
@@ -277,6 +297,9 @@ pub struct Session {
     /// the reset allow. Fewer than asked means every proof is vacuous from
     /// that step on.
     pub environment: Option<Environment>,
+    /// Cover the precondition of every proven assertion after a prove
+    /// (`informal::set_vacuity`, `elaborate -no_preconditions`).
+    pub preconditions: bool,
 }
 
 /// What the environment check found (docs/vacuity.md).
@@ -323,6 +346,7 @@ impl Session {
             certificates: None,
             environment_depth: 20,
             environment: None,
+            preconditions: true,
         }
     }
 
@@ -333,10 +357,11 @@ impl Session {
         let workdir = std::mem::take(&mut self.workdir);
         let (stop, sink, dry_run) = (self.stop.clone(), self.sink.take(), self.dry_run);
         let certificates = self.certificates.take();
-        let depth = self.environment_depth;
+        let (depth, pre) = (self.environment_depth, self.preconditions);
         *self = Session::new(engines, workdir);
         self.certificates = certificates;
         self.environment_depth = depth;
+        self.preconditions = pre;
         self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
@@ -706,6 +731,68 @@ impl Session {
         Ok(())
     }
 
+    /// Cover assertion `i`'s precondition (`<name>:precondition` in the
+    /// model): hit by a trace that replays means some attempt was checked;
+    /// unreachable means none ever is. `None` when the model has no such
+    /// cover (an assertion with no antecedent, an `until`).
+    fn check_precondition(
+        &self,
+        i: usize,
+        btor: &str,
+        engines: &[Arc<dyn Engine>],
+    ) -> Option<Vacuity> {
+        let name = format!("{}:precondition", self.props[i].name);
+        let keep = target_name(&name);
+        if !has_target(btor, &keep) {
+            return None;
+        }
+        let out = self.workdir.join(format!("prop_{i}.precondition.btor2"));
+        let (model, section) = informal_svlang::split_trace(btor);
+        let mut w = std::fs::write(&out, only_target(model, &keep));
+        if w.is_ok() && !section.is_empty() {
+            w = std::fs::write(trace_model(&out), only_target(btor, &keep));
+        }
+        if w.is_err() {
+            return Some(Vacuity::NotChecked);
+        }
+        let req = CheckRequest {
+            model: out.clone(),
+            format: ModelFormat::Btor2,
+            timeout: self.time_limit,
+        };
+        let o = portfolio::run_until(engines, &req, None, Some(self.stop.as_ref()));
+        let verdict = portfolio::verdict(&o);
+        if let (Some(dir), Some(w), true) = (&self.certificates, &o.winner, verdict.is_definitive())
+        {
+            match informal_bmc::certificate::write(
+                dir,
+                &out,
+                &w.engine,
+                &verdict,
+                w.certificate.as_ref(),
+            ) {
+                Ok(s) => self.log(&format!("{name}: {}", s.line())),
+                Err(e) => self.log(&format!("{name}: certificate not written: {e:#}")),
+            }
+        }
+        let cut = !(self.design.stopats.is_empty()
+            && self.design.bbox.is_empty()
+            && self.design.bbox_instances.is_empty());
+        Some(match verdict {
+            Verdict::Safe => Vacuity::Vacuous,
+            Verdict::Unsafe { depth } => {
+                // The replay is the only check a hit gets, as for a cover.
+                let witness = o.winner.as_ref().and_then(|w| w.witness.as_deref());
+                match self.write_trace(&name, &out, witness, depth) {
+                    Ok(_) if cut => Vacuity::NonVacuousCutPoints,
+                    Ok(_) => Vacuity::NonVacuous,
+                    Err(_) => Vacuity::NotChecked,
+                }
+            }
+            Verdict::Unknown { .. } => Vacuity::NotChecked,
+        })
+    }
+
     /// The environment check: can the assumptions and the reset run for
     /// `depth` model steps? A trace of n steps that meets every constraint
     /// has prefixes of every shorter length that do too, so the longest
@@ -1048,13 +1135,37 @@ impl Session {
             self.props[i].trace = None;
             self.props[i].engines.clear();
         }
-        // A conflict in the environment empties every proof of this run.
+        // A conflict in the environment empties every proof of this run;
+        // otherwise each proven assertion's precondition is covered.
         let conflict = self.environment.as_ref().is_some_and(Environment::conflict);
         for &i in &targets {
             self.props[i].vacuity = match (&self.props[i].status, conflict) {
                 (Status::Proven { .. }, true) => Some(Vacuity::VacuousEnvironment),
                 _ => None,
             };
+        }
+        if let (Ok((btor, _)), false, true) = (&lowered, conflict, self.preconditions) {
+            for &i in &targets[..reached] {
+                if self.stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                let proven = matches!(self.props[i].status, Status::Proven { .. });
+                if proven && self.props[i].kind == Kind::Assert {
+                    self.props[i].vacuity = self.check_precondition(i, btor, &engines);
+                }
+            }
+            let vacuous: Vec<&str> = targets
+                .iter()
+                .filter(|&&i| self.props[i].vacuity == Some(Vacuity::Vacuous))
+                .map(|&i| self.props[i].name.as_str())
+                .collect();
+            if !vacuous.is_empty() {
+                self.log(&format!(
+                    "VACUOUS: {} proven assertion(s) never check anything, because no trace reaches their antecedent (precondition unreachable): {}",
+                    vacuous.len(),
+                    vacuous.join(", ")
+                ));
+            }
         }
         if let Some(t) = &tracker {
             t.end(stopped);
@@ -1219,6 +1330,7 @@ impl Session {
                 .map(|c| (c.signal.clone(), c.factor, c.phase))
                 .collect(),
             cover_targets: true,
+            precondition_covers: self.preconditions,
             reset: self.reset.clone(),
             tick: self.tick_reset(),
             skip_initial_checks: self.design.skip_initial_checks,
@@ -1365,7 +1477,7 @@ impl Session {
         if let Status::Cex { depth, .. } | Status::Covered { depth, .. } = &mut status {
             if !self.stop.load(Ordering::SeqCst) {
                 let witness = o.winner.as_ref().and_then(|w| w.witness.as_deref());
-                match self.write_trace(i, model, witness, *depth) {
+                match self.write_trace(&self.props[i].name, model, witness, *depth) {
                     Ok((path, d)) => {
                         // IC3 and external engines often report no depth; the
                         // replayed trace has one.
@@ -1421,12 +1533,11 @@ impl Session {
     /// the verdict stands).
     fn write_trace(
         &self,
-        i: usize,
+        name: &str,
         model: &Path,
         witness: Option<&str>,
         depth: Option<u32>,
     ) -> Result<(String, usize), Option<String>> {
-        let name = &self.props[i].name;
         let clock = self.clocks.first().map_or("clk", |c| c.signal.as_str());
         // Replay on the copy with named combinational nets when there is one.
         let with_nets = trace_model(model);
@@ -1507,7 +1618,7 @@ impl Session {
     }
 
     /// A line for the console: the app's sink when there is one, else stderr.
-    fn log(&self, line: &str) {
+    pub(crate) fn log(&self, line: &str) {
         match &self.sink {
             Some(s) => s.line(line, true),
             None => eprintln!("informal: {line}"),

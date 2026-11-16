@@ -597,8 +597,8 @@ to try.
 ## D19. Vacuity is said beside the verdict, and checked by default
 
 - **Decision:** every prove first checks that the assumptions and the
-  reset allow a trace of 20 steps, and later (planned) covers the
-  precondition of every proven assertion. What it finds is a separate
+  reset allow a trace of 20 steps, and then covers the precondition of
+  every proven assertion (a cover svlang compiles from the same property). What it finds is a separate
   `vacuity` field of the property; the status word stays `proven`. On by
   default, `informal::set_vacuity off` to skip it (Mayur, 2026-11-16).
 - **Alternatives:** opt-in only (fast, but a vacuous proof then looks like
@@ -613,6 +613,10 @@ to try.
 - **Open issues**
   - The conflict is not narrowed to the assumptions that cause it until
     svlang names each `constraint` line after its assumption.
-  - Precondition and witness covers, design-free checks, needed
-    assumptions and dead ends are planned (docs/vacuity.md).
+  - Witness covers, design-free checks, needed assumptions and dead ends
+    are planned (docs/vacuity.md).
+  - The precondition covers are in every model the prove builds, so each
+    property's model carries their logic too (outside its cone, as the
+    other properties' logic already was); tests/sv/lowering.lock changed
+    with them.
 

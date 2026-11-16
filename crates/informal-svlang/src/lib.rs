@@ -68,8 +68,13 @@ fn show(d: &NetlistDiag) -> String {
 /// uses an operator svlang does not compile yet.
 /// How properties are compiled: the cycles in reset whose attempts are left
 /// out, for every clock and for one clock and edge.
-fn property_options(skip_cycles: u32, clock_skips: &[(String, bool, u32)]) -> PropertyOptions {
+fn property_options(
+    skip_cycles: u32,
+    clock_skips: &[(String, bool, u32)],
+    preconditions: bool,
+) -> PropertyOptions {
     let mut opts = PropertyOptions::default();
+    opts.precondition_covers = preconditions;
     opts.skip_cycles = skip_cycles;
     opts.skip_by_clock = clock_skips
         .iter()
@@ -207,8 +212,9 @@ fn rtl_properties(
     nl: &mut Netlist,
     skip_cycles: u32,
     clock_skips: &[(String, bool, u32)],
+    preconditions: bool,
 ) -> Vec<RtlProperty> {
-    let opts = property_options(skip_cycles, clock_skips);
+    let opts = property_options(skip_cycles, clock_skips, preconditions);
     let outcomes = nl.compile_properties(&opts);
     // The source files the properties stand in, read once each.
     let mut sources: std::collections::HashMap<u32, Option<String>> = Default::default();
@@ -364,7 +370,7 @@ fn model(
     clock_skips: &[(String, bool, u32)],
 ) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
     let mut nl = base.clone();
-    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips);
+    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips, req.precondition_covers);
     // The labelled immediate assertions are targets of the model too, under
     // their labels (the ones that cannot be listed were reported at compile).
     immediate_checks(&nl, &mut properties);
@@ -373,7 +379,7 @@ fn model(
         design,
         &mut nl,
         &req.properties,
-        &property_options(skip_cycles, clock_skips),
+        &property_options(skip_cycles, clock_skips, req.precondition_covers),
     ));
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
@@ -559,7 +565,7 @@ pub fn compile(req: &Request) -> Design {
         };
         match comp.lower_netlist(&config) {
             LowerOutcome::Lowered(mut nl) => {
-                properties = rtl_properties(&mut nl, 0, &[]);
+                properties = rtl_properties(&mut nl, 0, &[], false);
                 unlisted_checks = immediate_checks(&nl, &mut properties);
             }
             LowerOutcome::Unsupported(ds) => {

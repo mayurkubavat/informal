@@ -85,3 +85,67 @@ fn script_assumptions_and_switching_one_off() {
     assert!(sh.session.borrow().environment.is_none());
     assert_eq!(a_le(&sh, "counter.a_le"), ("proven", None));
 }
+
+fn vacuity(sh: &Shell, name: &str) -> Option<Vacuity> {
+    a_le(sh, name).1
+}
+
+/// Precondition covers: a request that can come is checked, one an
+/// assumption rules out is not, and a `disable iff` that is always true
+/// leaves nothing to check.
+#[test]
+fn precondition_covers_after_proofs() {
+    let Some(sh) = shell("request.sv", "request") else {
+        return;
+    };
+    sh.eval("prove -all").unwrap();
+    assert_eq!(
+        a_le(&sh, "request.a_ack"),
+        ("proven", Some(Vacuity::NonVacuous))
+    );
+    assert_eq!(
+        a_le(&sh, "request.a_off"),
+        ("proven", Some(Vacuity::Vacuous))
+    );
+    let report = sh.eval("report").unwrap();
+    assert!(report.contains("[vacuous]"), "{report}");
+    assert!(report.contains("[non-vacuous]"), "{report}");
+
+    // An assumption that no request ever comes empties a_ack.
+    sh.eval("assume -name m_quiet {!req}; prove -all").unwrap();
+    assert_eq!(
+        a_le(&sh, "request.a_ack"),
+        ("proven", Some(Vacuity::Vacuous))
+    );
+    assert!(!sh.session.borrow().environment.as_ref().unwrap().conflict());
+
+    // A cut point anywhere in the model qualifies a hit.
+    sh.eval("assume -disable m_quiet; stopat spare; prove -all")
+        .unwrap();
+    assert_eq!(
+        vacuity(&sh, "request.a_ack"),
+        Some(Vacuity::NonVacuousCutPoints)
+    );
+}
+
+/// `elaborate -no_preconditions` and `set_vacuity off` leave the covers
+/// out; `-create_related_covers {precondition}` asks for them again.
+#[test]
+fn precondition_covers_switched_off() {
+    let Some(sh) = shell("request.sv", "request") else {
+        return;
+    };
+    sh.eval(
+        "elaborate -top request -no_preconditions; clock clk; reset -expression {rst}; prove -all",
+    )
+    .unwrap();
+    assert_eq!(vacuity(&sh, "request.a_off"), None);
+    sh.eval("elaborate -top request -create_related_covers {precondition}; clock clk; reset -expression {rst}; prove -all")
+        .unwrap();
+    assert_eq!(vacuity(&sh, "request.a_off"), Some(Vacuity::Vacuous));
+    sh.eval("informal::set_vacuity off; prove -all").unwrap();
+    assert_eq!(vacuity(&sh, "request.a_off"), None);
+    assert!(sh
+        .eval("elaborate -top request -create_related_covers {nonsense}")
+        .is_err());
+}

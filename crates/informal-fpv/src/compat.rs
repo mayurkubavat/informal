@@ -735,8 +735,12 @@ const COMMON: &[(&str, Body)] = &[
                 if s.environment_depth == 0 {
                     s.environment_depth = 20;
                 }
+                s.preconditions = true;
             }
-            Some("off") => s.environment_depth = 0,
+            Some("off") => {
+                s.environment_depth = 0;
+                s.preconditions = false;
+            }
             Some(v) => return Err(format!("set_vacuity: on or off, not `{v}`")),
         }
         Ok(().into())
@@ -808,12 +812,12 @@ const JG: &[(&str, Body)] = &[
                 ("-parameter", 2),
                 ("-bbox_m", 1),
                 ("-bbox_i", 1),
+                ("-create_related_covers", 1),
+                ("-no_preconditions", 0),
             ],
             &[
                 ("-bbox_mul", 1),
-                ("-create_related_covers", 1),
                 ("-disable_auto_bbox", 0),
-                ("-no_preconditions", 0),
                 ("-bbox_a", 1),
                 ("-loop_limit", 1),
                 ("-multiple_tops", 0),
@@ -836,6 +840,20 @@ const JG: &[(&str, Body)] = &[
                 })
                 .collect()
         };
+        // Precondition covers are made for every proven assertion unless
+        // this elaboration asks for none; witness covers are not yet run.
+        if a.flag("-no_preconditions") {
+            s.preconditions = false;
+        }
+        for kinds in a.all("-create_related_covers") {
+            for k in kinds[0].split_whitespace() {
+                match k {
+                    "precondition" => s.preconditions = true,
+                    "witness" => s.log("elaborate -create_related_covers witness: witness covers are not yet run; precondition covers are (docs/vacuity.md)"),
+                    _ => return Err(format!("elaborate -create_related_covers: precondition or witness, not `{k}`")),
+                }
+            }
+        }
         s.design.bbox = list("-bbox_m");
         s.design.bbox_instances = list("-bbox_i");
         s.elaborate(a.val("-top").map(String::from))
