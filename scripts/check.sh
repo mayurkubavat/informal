@@ -41,9 +41,11 @@ DVQ="${DVQ-$HOME/.local/bin/dvq run build --}"; [ -x "$HOME/.local/bin/dvq" ] ||
 if [ -n "$DVQ" ] && [ -z "${DVQ_CLASS:-}${RDEV_JOB_ID:-}" ]; then
     # More than the build class preset (4 CPUs, 6G): a full run builds and
     # tests the whole workspace in parallel; 12G leaves room for that.
-    # --quiet (land.sh --busy) builds with 2 jobs, so 4 CPUs are enough.
+    # --quiet (land.sh --busy) builds with 2 jobs, so 4 CPUs are enough, and
+    # 7G: twelve queued --quiet gates peaked at 0.5-5.7G (median 1.5G), and
+    # asking 12G kept them waiting behind other jobs for RAM they never used.
     case " $* " in
-        *" --quiet "*) export DVQ_CPU="${DVQ_CPU:-400%}" ;;
+        *" --quiet "*) export DVQ_CPU="${DVQ_CPU:-400%}" DVQ_MEM="${DVQ_MEM:-7G}" ;;
         *) export DVQ_CPU="${DVQ_CPU:-800%}" ;;
     esac
     export DVQ_MEM="${DVQ_MEM:-12G}"
