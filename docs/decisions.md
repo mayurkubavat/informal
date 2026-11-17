@@ -581,13 +581,20 @@ to try.
   over five engines) is confirmed by Certifaiger and aigsim; a circuit
   without its invariant and a trace with one input changed are rejected. On
   a first sample of 22 fast HWMCC'24 verdicts (9 unsafe, 13 safe: 6 by
-  invariant, 7 by k-induction) all are confirmed, in 15 s together. The share over all of
-  HWMCC'24 is still to be measured.
+  invariant, 7 by k-induction) all are confirmed, in 15 s together. Over
+  all 319 HWMCC'24 bit-level models (2026-11-16, commit `82e23a8`, the
+  in-house engines at 120 s per model, a busy machine), 188 verdicts (138
+  safe, 50 unsafe, none against the published answers): 183 confirmed by
+  Certifaiger and aigsim, 0 rejected, 5 with no witness circuit (k-induction
+  that needed the simple-path condition: `psyco_io_1` and four of the
+  `goel/industry/gen*` models). By kind: 59 invariants, 23 k-induction
+  proofs, 50 two-step invariants, 1 folded k-induction proof, 50 traces;
+  every UNSAFE is confirmed. Checking all 183 took 896 s.
 - **Open issues**
   - k-induction proofs that need the simple-path condition have no witness
     circuit: that a path repeats no state is not a property of its last
-    `k` states. The summary says so; how often it happens on HWMCC'24 is
-    not measured yet.
+    `k` states. The summary says so. On HWMCC'24 it was 5 of 188
+    verdicts at 120 s.
   - A k-induction circuit has `k` copies of the cone, and its inductive
     condition is as hard as the proof was. Deep proofs may be slow to check.
   - Btor2 models are certified on the bit-blasted model InFormal writes,
