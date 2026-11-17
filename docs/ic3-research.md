@@ -571,7 +571,10 @@ engines; `INFORMAL_FOLD=0` turns it off.
 with their own check on the loaded model (`certify::check_kind_folded`).
 Hard set, informal-kind-ic3, 300 s, 2 seeds: 4, 6 solved (mean 5.0)
 against 2, 2 unfolded; cv32e40x-p299 and p607 gained on both seeds,
-nothing lost.
+nothing lost. Portfolio on the 99 clocked models (300 s, one model at a
+time, 11 GB cap) with folding in both IC3 and k-induction engines: 55
+solved (54 with folding in IC3 only, 45 without); merged with the
+unchanged 220 other models that is 202 of 319, 0 wrong.
 
 *Note on the H16, H18 and H19 runs.* Those arms ran while other
 threads' jobs shared the machine. A later A/B on a quiet machine gave
