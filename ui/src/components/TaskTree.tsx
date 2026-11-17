@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { groupOf, KIND_LETTER, STATUS_LABEL, SUMMARY, TASK, taskOf, type StatusFilter, type ViewProp as Property, type ViewStatus } from "../model";
 import { Glyph } from "./Glyph";
 import { ChevronIcon } from "./icons";
@@ -135,8 +135,11 @@ export function TaskTree({
         }
         const open = !closedTasks.has(t);
         const sel = many ? task === t && filter === null : filter === null;
+        // One task keeps the flat layout (the root row, then its groups);
+        // several nest each task's groups in a group of its own.
+        const Wrap = many ? "div" : Fragment;
         return (
-          <div key={t} role="group">
+          <Wrap key={t} {...(many ? { role: "group" } : {})}>
             <div
               className={`tree-row ${sel ? "sel" : ""}`}
               role="treeitem"
@@ -155,7 +158,7 @@ export function TaskTree({
               <span className="tree-count">{many ? members.length : total}</span>
             </div>
             {open && groupsOf(t, members, groupCounts, assumed)}
-          </div>
+          </Wrap>
         );
       })}
     </div>
