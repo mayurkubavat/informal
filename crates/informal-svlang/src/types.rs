@@ -265,6 +265,11 @@ pub struct Request {
     /// (!$isunknown(x))` then always holds and says nothing about the
     /// design. Off unless the user asks.
     pub isunknown_is_false: bool,
+    /// Model only: also build a precondition-cover model (`<name>:precondition`)
+    /// for assertions with antecedents (`|->`, `|=>`), returned in
+    /// [`Lowered::preconditions_btor2`] and [`Lowered::preconditions`] so
+    /// the primary [`Lowered::btor2`] stays free of extra cover logic.
+    pub precondition_covers: bool,
 }
 
 /// How long the reset lasts in a model that drives the clocks, where one
@@ -345,4 +350,15 @@ pub struct Lowered {
     /// period of the fastest one.
     #[serde(default)]
     pub half_cycle: bool,
+    /// Precondition cover targets (`<name>:precondition`) emitted when
+    /// [`Request::precondition_covers`] is true. A target listed here that
+    /// has no `bad` line in [`Self::preconditions_btor2`] was folded to
+    /// constant false by elaboration (unreachable at time zero).
+    #[serde(default)]
+    pub preconditions: Vec<String>,
+    /// Btor2 model holding `<name>:precondition` `bad` targets alongside all
+    /// active assumptions and reset, when [`Request::precondition_covers`]
+    /// is true.
+    #[serde(default)]
+    pub preconditions_btor2: String,
 }

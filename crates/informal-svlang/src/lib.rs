@@ -68,9 +68,14 @@ fn show(d: &NetlistDiag) -> String {
 /// uses an operator svlang does not compile yet.
 /// How properties are compiled: the cycles in reset whose attempts are left
 /// out, for every clock and for one clock and edge.
-fn property_options(skip_cycles: u32, clock_skips: &[(String, bool, u32)]) -> PropertyOptions {
+fn property_options(
+    skip_cycles: u32,
+    clock_skips: &[(String, bool, u32)],
+    precondition_covers: bool,
+) -> PropertyOptions {
     let mut opts = PropertyOptions::default();
     opts.skip_cycles = skip_cycles;
+    opts.precondition_covers = precondition_covers;
     opts.skip_by_clock = clock_skips
         .iter()
         .map(|(input, posedge, ticks)| svlang::netlist::ClockSkip {
@@ -207,8 +212,9 @@ fn rtl_properties(
     nl: &mut Netlist,
     skip_cycles: u32,
     clock_skips: &[(String, bool, u32)],
+    precondition_covers: bool,
 ) -> Vec<RtlProperty> {
-    let opts = property_options(skip_cycles, clock_skips);
+    let opts = property_options(skip_cycles, clock_skips, precondition_covers);
     let outcomes = nl.compile_properties(&opts);
     // The source files the properties stand in, read once each.
     let mut sources: std::collections::HashMap<u32, Option<String>> = Default::default();
@@ -364,7 +370,7 @@ fn model(
     clock_skips: &[(String, bool, u32)],
 ) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
     let mut nl = base.clone();
-    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips);
+    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips, false);
     // The labelled immediate assertions are targets of the model too, under
     // their labels (the ones that cannot be listed were reported at compile).
     immediate_checks(&nl, &mut properties);
@@ -373,7 +379,7 @@ fn model(
         design,
         &mut nl,
         &req.properties,
-        &property_options(skip_cycles, clock_skips),
+        &property_options(skip_cycles, clock_skips, false),
     ));
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
@@ -416,6 +422,58 @@ fn model(
     }
     let m = btor2::write(&nl, &options).map_err(|e| vec![e.to_string()])?;
     Ok((m, properties))
+}
+
+fn precondition_model(
+    req: &Request,
+    comp: &svlang::Compilation,
+    design: &svlang::ElaboratedDesign,
+    base: &Netlist,
+    reset_steps: u32,
+    skip_cycles: u32,
+    clock_skips: &[(String, bool, u32)],
+) -> Option<(Vec<String>, String)> {
+    let mut nl = base.clone();
+    let opts = property_options(skip_cycles, clock_skips, true);
+    let _ = nl.compile_properties(&opts);
+    let _ = command_properties(comp, design, &mut nl, &req.properties, &opts);
+    let names: Vec<String> = nl
+        .checks
+        .iter()
+        .filter_map(|c| c.label.as_deref())
+        .filter(|l| l.ends_with(":precondition"))
+        .map(|l| {
+            l.chars()
+                .map(|c| if c.is_whitespace() { '_' } else { c })
+                .collect()
+        })
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let mut options = btor2::Options::default();
+    options.trace_outputs = false;
+    options.name_prefix = "informal".into();
+    options.covers = true;
+    options.both_edges = true;
+    options.clocks = req
+        .clocks
+        .iter()
+        .map(|(input, half_period, phase)| btor2::Clock {
+            input: input.clone(),
+            half_period: *half_period,
+            phase: *phase,
+        })
+        .collect();
+    if let Some(text) = &req.reset {
+        let value = reset_value(comp, design, &mut nl, text).ok()?;
+        options.reset = Some(btor2::Reset {
+            value,
+            steps: reset_steps,
+        });
+    }
+    let m = btor2::write(&nl, &options).ok()?;
+    Some((names, m.btor2))
 }
 
 /// Elaborate and lower the design to a Btor2 model. Every labelled
@@ -465,20 +523,39 @@ pub fn lower(req: &Request) -> Lowered {
     // edges, several clocks, computed clocks), again with that model's
     // reset length: which model it is depends on the properties' clocks too.
     let reset = u32::from(req.reset.is_some());
+    let (mut reset_steps, mut skip_cycles, mut clock_skips): (u32, u32, &[(String, bool, u32)]) =
+        (reset, reset, &[]);
     let mut built = model(req, &comp, &elab.design, &base, reset, reset, &[]);
     if matches!(&built, Ok((m, _)) if m.steps_per_cycle > 1) && req.reset.is_some() {
+        reset_steps = req.tick.steps;
+        skip_cycles = req.tick.cycles;
+        clock_skips = &req.tick.by_clock;
         built = model(
             req,
             &comp,
             &elab.design,
             &base,
-            req.tick.steps,
-            req.tick.cycles,
-            &req.tick.by_clock,
+            reset_steps,
+            skip_cycles,
+            clock_skips,
         );
     }
     match built {
         Ok((m, properties)) => {
+            let (preconditions, preconditions_btor2) = if req.precondition_covers {
+                precondition_model(
+                    req,
+                    &comp,
+                    &elab.design,
+                    &base,
+                    reset_steps,
+                    skip_cycles,
+                    clock_skips,
+                )
+                .unwrap_or_default()
+            } else {
+                Default::default()
+            };
             // The per-property notes below say more than the writer's count.
             let mut notes: Vec<String> = m
                 .notes
@@ -503,6 +580,8 @@ pub fn lower(req: &Request) -> Lowered {
                 btor2: m.btor2,
                 properties,
                 half_cycle: m.steps_per_cycle > 1,
+                preconditions,
+                preconditions_btor2,
             }
         }
         Err(errors) => fail(errors),
@@ -559,7 +638,7 @@ pub fn compile(req: &Request) -> Design {
         };
         match comp.lower_netlist(&config) {
             LowerOutcome::Lowered(mut nl) => {
-                properties = rtl_properties(&mut nl, 0, &[]);
+                properties = rtl_properties(&mut nl, 0, &[], false);
                 unlisted_checks = immediate_checks(&nl, &mut properties);
             }
             LowerOutcome::Unsupported(ds) => {

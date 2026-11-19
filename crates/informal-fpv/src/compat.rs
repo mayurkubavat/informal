@@ -476,8 +476,12 @@ fn add_props(
     kind: Kind,
     name: Option<String>,
     expr: &str,
+    task: Option<&str>,
 ) -> Result<Value, String> {
-    let name = s.add_property(kind, name, expr)?;
+    let name = match task {
+        Some(t) => s.add_property_in_task(kind, name, expr, t)?,
+        None => s.add_property(kind, name, expr)?,
+    };
     let loc = match informal_tcl::caller_location() {
         Some((file, line)) => Some(SourceLoc::new(&file, line)),
         None => informal_tcl::current_script().and_then(|f| SourceLoc::search(&f, &name)),
@@ -541,47 +545,47 @@ fn stopat(s: &mut Session, a: &[String]) -> Result<Value, String> {
         &[("-clear", 0), ("-list", 0), ("-task", 1)],
         &[("-env", 0)],
     )?;
-    // Tasks are not modelled: the cut applies to every property. That only
-    // frees more (a proof still holds), unlike an assumption.
-    if let Some(t) = a.val("-task") {
-        note(&format!(
-            "{}: -task {t}: tasks are not modelled, the cut applies to every property",
-            a.cmd
-        ));
-    }
+    let task = a
+        .val("-task")
+        .map(String::from)
+        .unwrap_or_else(|| s.current_task.clone());
+    s.ensure_task(&task)
+        .map_err(|e| format!("{}: {e}", a.cmd))?;
     let names: Vec<String> = a
         .pos
         .iter()
         .flat_map(|w| w.split_whitespace().map(String::from))
         .collect();
     if a.flag("-list") {
-        return Ok(Value::List(s.design.stopats.clone()));
+        return Ok(Value::List(
+            s.stopats_in_task(&task)
+                .map_err(|e| format!("{}: {e}", a.cmd))?,
+        ));
     }
     let names = names
         .iter()
         .map(|n| s.cut_point(n).map_err(|e| format!("{}: {e}", a.cmd)))
         .collect::<Result<Vec<_>, _>>()?;
     if a.flag("-clear") {
-        if names.is_empty() {
-            s.design.stopats.clear();
-        } else {
-            s.design.stopats.retain(|x| !names.contains(x));
-        }
+        s.clear_stopats_in_task(&task, &names)
+            .map_err(|e| format!("{}: {e}", a.cmd))?;
         return Ok(().into());
     }
     if names.is_empty() {
         return Err(format!("{}: signal name(s) required", a.cmd));
     }
-    for n in names {
-        if !s.design.stopats.contains(&n) {
-            s.design.stopats.push(n);
-        }
-    }
+    s.add_stopats_in_task(&task, &names)
+        .map_err(|e| format!("{}: {e}", a.cmd))?;
     Ok(().into())
 }
 
-/// Property names filtered by `{key value ...}` pairs on type and status.
-fn filter_props(s: &Session, include: Option<&str>, exclude: Option<&str>) -> Vec<String> {
+/// Property names filtered by `{key value ...}` pairs on type, status and task.
+fn filter_props(
+    s: &Session,
+    include: Option<&str>,
+    exclude: Option<&str>,
+    task: Option<&str>,
+) -> Vec<String> {
     let pairs = |spec: Option<&str>| -> Vec<(String, String)> {
         let w: Vec<String> = spec
             .unwrap_or("")
@@ -597,14 +601,21 @@ fn filter_props(s: &Session, include: Option<&str>, exclude: Option<&str>) -> Ve
     let matches = |p: &crate::session::Property, (k, v): &(String, String)| match k.as_str() {
         "type" | "-type" => p.kind.label() == v || (v == "assertion" && p.kind == Kind::Assert),
         "status" | "-status" => {
-            glob(v, p.status.word()) || (v == "falsified" && p.status.word() == "cex")
+            glob(v, p.status.word())
+                || (v == "falsified" && p.status.word() == "cex")
+                || (v == "vacuous" && p.status.is_vacuous())
         }
+        "task" | "-task" => glob(v, &p.task),
         "name" => glob(v, &p.name),
         _ => true,
     };
     s.props
         .iter()
-        .filter(|p| inc.iter().all(|kv| matches(p, kv)) && !exc.iter().any(|kv| matches(p, kv)))
+        .filter(|p| {
+            task.is_none_or(|t| p.task == t)
+                && inc.iter().all(|kv| matches(p, kv))
+                && !exc.iter().any(|kv| matches(p, kv))
+        })
         .map(|p| p.name.clone())
         .collect()
 }
@@ -713,6 +724,7 @@ const JG: &[(&str, Body)] = &[
             &[
                 ("-top", 1),
                 ("-parameter", 2),
+                ("-param", 2),
                 ("-bbox_m", 1),
                 ("-bbox_i", 1),
             ],
@@ -729,7 +741,7 @@ const JG: &[(&str, Body)] = &[
                 ("-auto_hr_info", 0),
             ],
         )?;
-        for p in a.all("-parameter") {
+        for p in a.all("-parameter").chain(a.all("-param")) {
             s.design.params.push((p[0].clone(), p[1].clone()));
         }
         // The black boxes of this elaboration (each option takes a name or
@@ -828,7 +840,12 @@ const JG: &[(&str, Body)] = &[
     ("prove", |s, a| {
         let a = Args::parse(
             a,
-            &[("-all", 0), ("-property", 1), ("-time_limit", 1)],
+            &[
+                ("-all", 0),
+                ("-property", 1),
+                ("-task", 1),
+                ("-time_limit", 1),
+            ],
             &[
                 ("-bg", 0),
                 ("-with_proof_core", 0),
@@ -836,24 +853,57 @@ const JG: &[(&str, Body)] = &[
                 ("-per_property_time_limit", 1),
                 ("-dump_trace", 0),
                 ("-sst", 1),
-                ("-task", 1),
                 ("-orchestration", 1),
             ],
         )?;
         if let Some(t) = a.val("-time_limit") {
             s.time_limit = parse_duration(t)?;
         }
-        let which: Vec<String> = a.all("-property").flatten().cloned().collect();
-        let which = if which.is_empty() {
-            Vec::new()
-        } else {
-            select(s, &which)?
+        if let Some(t) = a.val("-task") {
+            s.ensure_task(t).map_err(|e| format!("prove: {e}"))?;
+        }
+        let named: Vec<String> = a.all("-property").flatten().cloned().collect();
+        let which = match (named.is_empty(), a.val("-task")) {
+            (true, None) => Vec::new(),
+            (true, Some(t)) => (0..s.props.len())
+                .filter(|&i| {
+                    s.props[i].enabled && s.props[i].kind != Kind::Assume && s.props[i].task == t
+                })
+                .collect(),
+            (false, None) => select(s, &named)?,
+            (false, Some(t)) => select(s, &named)?
+                .into_iter()
+                .filter(|&i| s.props[i].task == t)
+                .collect(),
         };
+        if a.val("-task").is_some() && which.is_empty() {
+            print!("{}", s.report_for_task(a.val("-task")));
+            return Ok("proven 0 cex 0 covered 0 unreachable 0 undetermined 0 error 0".into());
+        }
         prove_and_report(s, &which)
     }),
+    ("check_assumptions", |s, a| {
+        let a = Args::parse(
+            a,
+            &[("-conflict", 0), ("-live", 0), ("-task", 1)],
+            &[("-show", 0), ("-bg", 0)],
+        )?;
+        if let Some(t) = a.val("-task") {
+            s.ensure_task(t)
+                .map_err(|e| format!("check_assumptions: {e}"))?;
+        }
+        let ok = s
+            .check_assumptions(a.val("-task"), a.flag("-live"))
+            .map_err(|e| format!("{e:#}"))?;
+        Ok((if ok { "consistent" } else { "conflict" }).into())
+    }),
     ("get_property_list", |s, a| {
-        let a = Args::parse(a, &[("-include", 1), ("-exclude", 1)], &[("-task", 1)])?;
-        Ok(filter_props(s, a.val("-include"), a.val("-exclude")).into())
+        let a = Args::parse(a, &[("-include", 1), ("-exclude", 1), ("-task", 1)], &[])?;
+        if let Some(t) = a.val("-task") {
+            s.ensure_task(t)
+                .map_err(|e| format!("get_property_list: {e}"))?;
+        }
+        Ok(filter_props(s, a.val("-include"), a.val("-exclude"), a.val("-task")).into())
     }),
     ("get_status", |s, a| {
         let n = a.get(1).ok_or("get_status: property name required")?;
@@ -897,12 +947,15 @@ const JG: &[(&str, Body)] = &[
         Ok(().into())
     }),
     ("report", |s, a| {
-        let _ = Args::parse(
+        let a = Args::parse(
             a,
-            &[("-summary", 0), ("-results", 0)],
-            &[("-task", 1), ("-file", 1), ("-force", 0)],
+            &[("-summary", 0), ("-results", 0), ("-task", 1)],
+            &[("-file", 1), ("-force", 0)],
         )?;
-        let r = s.report();
+        if let Some(t) = a.val("-task") {
+            s.ensure_task(t).map_err(|e| format!("report: {e}"))?;
+        }
+        let r = s.report_for_task(a.val("-task"));
         if !s.dry_run {
             print!("{r}");
         }
@@ -919,13 +972,7 @@ const JG: &[(&str, Body)] = &[
         .into())
     }),
     ("stopat", stopat),
-    ("task", |_, a| {
-        note(&format!(
-            "task {}: tasks are not modelled yet; properties stay in one task",
-            a[1..].join(" ")
-        ));
-        Ok(().into())
-    }),
+    ("task", jg_task),
     ("visualize", |_, _| {
         Err("visualize: the waveform UI is not available yet (phase 1 UI v1)".into())
     }),
@@ -979,22 +1026,86 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     } else {
         kind
     };
-    // Tasks are not modelled: every property is in one task. That is
-    // harmless for a target, but an assumption scoped to another task would
-    // constrain every property here.
-    if let Some(t) = a.val("-task").filter(|t| *t != "<embedded>") {
-        if kind == Kind::Assume {
-            return Err(format!(
-                "{}: -task {t}: tasks are not modelled, and applying this assumption to every property could prove them vacuously",
-                a.cmd
-            ));
-        }
-        note(&format!(
-            "{}: -task {t} ignored (tasks are not modelled)",
-            a.cmd
-        ));
+    add_props(
+        s,
+        kind,
+        a.val("-name").map(String::from),
+        &expr,
+        a.val("-task"),
+    )
+}
+
+fn jg_task(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    if a.len() == 1 {
+        return Ok(s.current_task.clone().into());
     }
-    add_props(s, kind, a.val("-name").map(String::from), &expr)
+    let mut create: Option<String> = None;
+    let mut copy_from: Option<String> = None;
+    let mut set_flag = false;
+    let mut set_target: Option<String> = None;
+    let mut list_flag = false;
+    let mut isolated = false;
+    let mut i = 1;
+    while i < a.len() {
+        match a[i].as_str() {
+            "-create" => {
+                let name = a
+                    .get(i + 1)
+                    .ok_or("task: -create needs a task name")?
+                    .clone();
+                create = Some(name);
+                i += 2;
+            }
+            "-copy" | "-source_task" => {
+                let src = a
+                    .get(i + 1)
+                    .ok_or_else(|| format!("task: {} needs a source task", a[i]))?
+                    .clone();
+                copy_from = Some(src);
+                i += 2;
+            }
+            "-set" => {
+                set_flag = true;
+                if create.is_none() {
+                    if let Some(next) = a.get(i + 1).filter(|w| !w.starts_with('-')) {
+                        set_target = Some(next.clone());
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            "-list" => {
+                list_flag = true;
+                i += 1;
+            }
+            "-isolated" => {
+                isolated = true;
+                i += 1;
+            }
+            "-copy_assumes" | "-copy_asserts" | "-copy_covers" | "-copy_stopats" | "-copy_all" => {
+                i += 1;
+            }
+            other => return Err(format!("task: unsupported option `{other}`")),
+        }
+    }
+    if list_flag {
+        return Ok(Value::List(s.task_names()));
+    }
+    if let Some(name) = create {
+        s.create_task(&name, copy_from.as_deref(), isolated, set_flag)
+            .map_err(|e| format!("task: {e}"))?;
+        return Ok(name.into());
+    }
+    if let Some(target) = set_target {
+        s.set_current_task(&target)
+            .map_err(|e| format!("task: {e}"))?;
+        return Ok(target.into());
+    }
+    if set_flag {
+        return Err("task: -set needs a task name (or -create <name>)".into());
+    }
+    Ok(s.current_task.clone().into())
 }
 
 const VCF: &[(&str, Body)] = &[
@@ -1050,11 +1161,13 @@ const VCF: &[(&str, Body)] = &[
                 ("-sva", 0),
                 ("-vcs", 1),
                 ("-define", 1),
+                ("-parameters", 1),
             ],
             &[("-cov", 1), ("-inject_fault", 1), ("-work", 1)],
         )?;
         vcf_format(&a)?;
         vcf_compile(s, &a)?;
+        vcf_parameters(s, &a)?;
         s.elaborate(a.val("-top").map(String::from))
             .map_err(|e| format!("{e:#}"))?;
         Ok(s.design.top.clone().unwrap_or_default().into())
@@ -1075,16 +1188,7 @@ const VCF: &[(&str, Body)] = &[
             &[("-sva", 0), ("-vcs", 1), ("-parameters", 1)],
             &[("-cov", 1), ("-work", 1), ("-library", 1)],
         )?;
-        if let Some(v) = a.val("-vcs") {
-            let words: Vec<String> = v.split_whitespace().map(String::from).collect();
-            for w in &words {
-                if let Some(p) = w.strip_prefix("-pvalue+") {
-                    if let Some((k, val)) = p.split_once('=') {
-                        s.design.params.push((k.to_string(), val.to_string()));
-                    }
-                }
-            }
-        }
+        vcf_parameters(s, &a)?;
         s.elaborate(a.pos.first().cloned())
             .map_err(|e| format!("{e:#}"))?;
         Ok(s.design.top.clone().unwrap_or_default().into())
@@ -1151,7 +1255,7 @@ const VCF: &[(&str, Body)] = &[
             let st = if st == "falsified" { "cex" } else { st };
             inc += &format!("status {st}");
         }
-        let mut names = filter_props(s, Some(&inc), None);
+        let mut names = filter_props(s, Some(&inc), None, None);
         if let Some(p) = a.pos.first() {
             names.retain(|n| glob(p, n));
         }
@@ -1183,6 +1287,30 @@ fn vcf_compile(s: &mut Session, a: &Args) -> Result<(), String> {
     apply_compile_words(s, &words, None)
 }
 
+fn vcf_parameters(s: &mut Session, a: &Args) -> Result<(), String> {
+    if let Some(v) = a.val("-vcs") {
+        for w in v.split_whitespace() {
+            if let Some(p) = w.strip_prefix("-pvalue+") {
+                if let Some((k, val)) = p.split_once('=') {
+                    s.design.params.push((k.to_string(), val.to_string()));
+                }
+            }
+        }
+    }
+    for spec in a.all("-parameters") {
+        for item in spec[0]
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|w| !w.is_empty())
+        {
+            let (k, val) = item.split_once('=').ok_or_else(|| {
+                format!("{}: -parameters expects NAME=VALUE, got `{item}`", a.cmd)
+            })?;
+            s.design.params.push((k.to_string(), val.to_string()));
+        }
+    }
+    Ok(())
+}
+
 fn vcf_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     let a = Args::parse(
         a,
@@ -1199,7 +1327,7 @@ fn vcf_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> 
             ))
         }
     };
-    add_props(s, kind, name, &expr)
+    add_props(s, kind, name, &expr, None)
 }
 
 /// Command names a flavor defines (its map plus the commands shared by
@@ -1428,16 +1556,20 @@ mod tests {
     #[test]
     fn rejects_what_it_cannot_honour() {
         let sh = shell(Flavor::Jg);
-        let e = sh.eval("assert -name r {a |-> b [->2]}").unwrap_err();
-        assert!(e.message.contains("[->"), "{}", e.message);
-        // A bounded range is taken: the front end compiles it at prove.
+        let e = sh
+            .eval("assert -name bad {accept_on (rst) a |-> b}")
+            .unwrap_err();
+        assert!(e.message.contains("accept_on"), "{}", e.message);
+        // Goto, non-consecutive and bounded ranges are compiled natively by svlang.
+        sh.eval("assert -name r1 {a |-> b [->2]}").unwrap();
+        sh.eval("assert -name r2 {a |-> b [=1:2] ##1 c}").unwrap();
         sh.eval("assert -name r {a |-> ##[1:3] b}").unwrap();
         assert!(sh
             .session
             .borrow()
             .props
             .iter()
-            .any(|p| p.name == "r" && !p.rtl));
+            .any(|p| p.name == "r1" && !p.rtl));
         let e = sh.eval("prove -all -frobnicate").unwrap_err();
         assert!(e.message.contains("unsupported option -frobnicate"));
         // Engine-tuning options are accepted.
@@ -1451,6 +1583,41 @@ mod tests {
             "{}",
             e.message
         );
+    }
+
+    #[test]
+    fn tasks_scope_properties_and_cut_points() {
+        let sh = shell(Flavor::Jg);
+        sh.eval("clock clk; reset -expression {!rst_n}").unwrap();
+        assert_eq!(sh.eval("task").unwrap(), "<embedded>");
+        // Referencing a task before `task -create` fails closed.
+        let e = sh.eval("assume -task ghost -name m0 {a}").unwrap_err();
+        assert!(e.message.contains("unknown task `ghost`"), "{}", e.message);
+
+        sh.eval("task -create t1 -set").unwrap();
+        assert_eq!(sh.eval("task").unwrap(), "t1");
+        assert_eq!(sh.eval("task -list").unwrap(), "<embedded> t1");
+        sh.eval("assume -name m_t1 {a}; assert -name a_t1 {b}")
+            .unwrap();
+        sh.eval("stopat -task t1 u.sig").unwrap();
+
+        sh.eval("task -set <embedded>").unwrap();
+        sh.eval("assert -name a_emb {b}").unwrap();
+        assert_eq!(sh.eval("get_property_list -task t1").unwrap(), "m_t1 a_t1");
+        assert_eq!(
+            sh.eval("get_property_list -task <embedded>").unwrap(),
+            "a_emb"
+        );
+        assert_eq!(sh.eval("stopat -list -task t1").unwrap(), "u.sig");
+        assert_eq!(sh.eval("stopat -list -task <embedded>").unwrap(), "");
+
+        // `-copy` clones the source task's command properties and cut points.
+        sh.eval("task -create t2 -copy t1").unwrap();
+        assert_eq!(
+            sh.eval("get_property_list -task t2").unwrap(),
+            "t2::m_t1 t2::a_t1"
+        );
+        assert_eq!(sh.eval("stopat -list -task t2").unwrap(), "u.sig");
     }
 
     #[test]

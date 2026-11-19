@@ -38,6 +38,10 @@ pub struct PropProgress {
     /// profiler); empty, and left out, before that.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub engines: Vec<EngineRun>,
+    /// True when an assertion was proved vacuously (unreachable precondition
+    /// or inconsistent assumptions).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vacuous: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -103,6 +107,7 @@ fn queued(name: String, kind: &'static str) -> PropProgress {
         reason: None,
         message: None,
         engines: Vec::new(),
+        vacuous: false,
     }
 }
 
@@ -112,7 +117,16 @@ pub fn from_status(name: &str, kind: &'static str, s: &Status) -> PropProgress {
     p.status = s.word();
     match s {
         Status::Unprocessed => {}
-        Status::Proven { engine, ms } | Status::Unreachable { engine, ms } => {
+        Status::Proven {
+            engine,
+            ms,
+            vacuous,
+        } => {
+            p.engine = Some(engine.clone());
+            p.ms = Some(*ms);
+            p.vacuous = *vacuous;
+        }
+        Status::Unreachable { engine, ms } => {
             p.engine = Some(engine.clone());
             p.ms = Some(*ms);
         }
@@ -131,6 +145,9 @@ pub fn from_status(name: &str, kind: &'static str, s: &Status) -> PropProgress {
 /// `a_never9: cex at depth 11 [ric3-bmc, 30 ms]`. Same shape as the mock's.
 pub fn line_for(p: &PropProgress) -> String {
     let mut s = format!("{}: {}", p.name, p.status);
+    if p.vacuous {
+        s += " (vacuous)";
+    }
     if let Some(d) = p.depth {
         s += &format!(" at depth {d}");
     }
@@ -379,6 +396,7 @@ mod tests {
             &Status::Proven {
                 engine: "ic3".into(),
                 ms: 3,
+                vacuous: false,
             },
             &[],
         );

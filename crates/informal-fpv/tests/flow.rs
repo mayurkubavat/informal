@@ -176,3 +176,114 @@ fn fifo_known_answers() {
     let want: Vec<_> = want.iter().map(|(n, st)| (n.to_string(), *st)).collect();
     assert_eq!(v, want);
 }
+
+#[test]
+fn vacuity_assumption_conflict_and_param_overrides() {
+    let engines = informal_bmc::engines();
+    if engines.is_empty() {
+        informal_engine::tool_missing("needs CaDiCaL");
+        return;
+    }
+    let work = std::env::temp_dir().join(format!("informal-fpv-signoff-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let rtl = work.join("param_cnt.sv");
+    std::fs::write(
+        &rtl,
+        "module param_cnt #(parameter int MAX = 9) (\n\
+           input  logic       clk,\n\
+           input  logic       rst,\n\
+           input  logic       en,\n\
+           output logic [3:0] q\n\
+         );\n\
+           always_ff @(posedge clk)\n\
+             if (rst) q <= 4'd0;\n\
+             else if (en && q < MAX[3:0]) q <= q + 4'd1;\n\
+         endmodule\n",
+    )
+    .unwrap();
+
+    // 1. JG `elaborate -param MAX 5` overrides default 9 -> q never exceeds 5.
+    let sh = Shell::new(Session::new(engines.clone(), work.join("jg")), Flavor::Jg);
+    sh.eval(&format!(
+        "analyze -sv {{{}}}\n\
+         elaborate -top param_cnt -param MAX 5\n\
+         clock clk\n\
+         reset -expression {{rst}}\n\
+         assert -name a_live {{q == 4'd3 |-> q <= 4'd5}}\n\
+         assert -name a_vac  {{q == 4'd7 |-> q == 4'd0}}\n\
+         prove -all",
+        rtl.display()
+    ))
+    .unwrap();
+    {
+        let s = sh.session.borrow();
+        let a_live = s.props.iter().find(|p| p.name == "a_live").unwrap();
+        let a_vac = s.props.iter().find(|p| p.name == "a_vac").unwrap();
+        assert_eq!(a_live.status.word(), "proven");
+        assert!(!a_live.status.is_vacuous(), "{:?}", a_live.status);
+        assert_eq!(a_vac.status.word(), "proven");
+        assert!(a_vac.status.is_vacuous(), "{:?}", a_vac.status);
+        assert!(!s.assumption_conflict);
+        assert!(s.report().contains("[vacuous]"));
+    }
+    assert_eq!(
+        sh.eval("get_property_list -include {status vacuous}")
+            .unwrap(),
+        "a_vac"
+    );
+    assert_eq!(
+        sh.eval("get_property_list -include {status proven} -exclude {status vacuous}")
+            .unwrap(),
+        "a_live"
+    );
+    assert_eq!(sh.eval("check_assumptions").unwrap(), "consistent");
+
+    // 2. Contradictory assumptions in task `t_bad` are detected without
+    //    affecting `<embedded>`.
+    sh.eval(
+        "task -create t_bad\n\
+         assume -task t_bad -name m1 {en}\n\
+         assume -task t_bad -name m2 {!en}\n\
+         assert -task t_bad -name a_anything {q == 4'd15}",
+    )
+    .unwrap();
+    assert_eq!(
+        sh.eval("check_assumptions -task t_bad").unwrap(),
+        "conflict"
+    );
+    assert_eq!(
+        sh.eval("check_assumptions -task <embedded>").unwrap(),
+        "consistent"
+    );
+    sh.eval("prove -task t_bad").unwrap();
+    {
+        let s = sh.session.borrow();
+        assert!(s.assumption_conflict);
+        let p = s.props.iter().find(|p| p.name == "a_anything").unwrap();
+        assert!(p.status.is_vacuous(), "{:?}", p.status);
+    }
+
+    // 3. VCF `elaborate -parameters {MAX=4}` overrides MAX to 4.
+    let vcf = Shell::new(Session::new(engines, work.join("vcf")), Flavor::Vcf);
+    vcf.eval(&format!(
+        "analyze -format sverilog {{{}}}\n\
+         elaborate param_cnt -parameters {{MAX=4}}\n\
+         create_clock clk -period 10\n\
+         create_reset rst -high\n\
+         fvassert a_bound -expr {{q <= 4'd4}}\n\
+         fvcover  c_four  -expr {{q == 4'd4}}\n\
+         fvcover  c_five  -expr {{q == 4'd5}}\n\
+         check_fv",
+        rtl.display()
+    ))
+    .unwrap();
+    assert_eq!(
+        statuses(&vcf),
+        [
+            ("a_bound".to_string(), "proven"),
+            ("c_four".to_string(), "covered"),
+            ("c_five".to_string(), "unreachable"),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&work);
+}

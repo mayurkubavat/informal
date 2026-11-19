@@ -43,6 +43,18 @@ impl Kind {
     }
 }
 
+/// Name of the root proof task that holds RTL properties and any command
+/// property added without `-task` (until `task -set` selects another).
+pub const EMBEDDED_TASK: &str = "<embedded>";
+
+fn default_task() -> String {
+    EMBEDDED_TASK.to_string()
+}
+
+fn is_default_task(task: &str) -> bool {
+    task == EMBEDDED_TASK
+}
+
 /// Result of proving one property, in the vendor tools' vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -51,6 +63,10 @@ pub enum Status {
     Proven {
         engine: String,
         ms: u128,
+        /// True when the assertion's precondition is unreachable or the
+        /// active assumptions allow no trace past reset.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        vacuous: bool,
     },
     Cex {
         engine: String,
@@ -86,6 +102,11 @@ impl Status {
             Status::Undetermined { .. } => "undetermined",
             Status::Error { .. } => "error",
         }
+    }
+
+    /// True when an assertion was proved vacuously.
+    pub fn is_vacuous(&self) -> bool {
+        matches!(self, Status::Proven { vacuous: true, .. })
     }
 }
 
@@ -124,6 +145,22 @@ pub struct Property {
     /// them is removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub under_ai: Vec<String>,
+    /// Proof task this property belongs to (`"<embedded>"` by default).
+    #[serde(default = "default_task", skip_serializing_if = "is_default_task")]
+    pub task: String,
+}
+
+/// An isolated proof task created with `task -create`. Assumptions and cut
+/// points added to a task apply only when proving targets in that task, never
+/// leaking into `<embedded>` or sibling tasks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Task {
+    pub name: String,
+    /// Task-scoped cut points (`stopat -task <name>`), relative to `top`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stopats: Vec<String>,
+    /// Inherit `<embedded>` command assumptions and cut points.
+    pub inherit_embedded: bool,
 }
 
 /// A file and 1-based line (absolute path).
@@ -226,6 +263,16 @@ pub struct Session {
     pub hierarchy: Vec<informal_svlang::Instance>,
     /// Front end that built the last prove's models (`svlang` or `slang`).
     pub frontend: String,
+    /// Active task for commands without `-task` (`"<embedded>"` by default).
+    #[serde(default = "default_task", skip_serializing_if = "is_default_task")]
+    pub current_task: String,
+    /// User-created proof tasks (`task -create`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<Task>,
+    /// Set when the last `prove` or `check_assumptions` found that the active
+    /// assumptions allow no trace past reset.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub assumption_conflict: bool,
     /// Set from another thread (the app's Stop) to end a running prove:
     /// checked between properties and forwarded to the engine portfolio,
     /// whose external engines then kill their process groups. Cleared when
@@ -266,6 +313,9 @@ impl Session {
             elab: None,
             hierarchy: Vec::new(),
             frontend: String::new(),
+            current_task: default_task(),
+            tasks: Vec::new(),
+            assumption_conflict: false,
             stop: Arc::default(),
             dry_run: false,
             sink: None,
@@ -288,12 +338,106 @@ impl Session {
         self.sink = sink;
     }
 
+    pub fn has_task(&self, name: &str) -> bool {
+        name == EMBEDDED_TASK || self.tasks.iter().any(|t| t.name == name)
+    }
+
+    pub fn ensure_task(&self, name: &str) -> Result<(), String> {
+        if self.has_task(name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "unknown task `{name}` (create it first with `task -create {name}`)"
+            ))
+        }
+    }
+
+    pub fn task_names(&self) -> Vec<String> {
+        std::iter::once(EMBEDDED_TASK.to_string())
+            .chain(self.tasks.iter().map(|t| t.name.clone()))
+            .collect()
+    }
+
+    pub fn set_current_task(&mut self, name: &str) -> Result<(), String> {
+        self.ensure_task(name)?;
+        self.current_task = name.to_string();
+        Ok(())
+    }
+
+    pub fn create_task(
+        &mut self,
+        name: &str,
+        copy_from: Option<&str>,
+        isolated: bool,
+        set_current: bool,
+    ) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("task name cannot be empty".into());
+        }
+        if self.has_task(name) {
+            return Err(format!("task `{name}` already exists"));
+        }
+        let (stopats, inherit_embedded) = match copy_from {
+            None => (Vec::new(), !isolated),
+            Some(src) => {
+                self.ensure_task(src)?;
+                if src == EMBEDDED_TASK {
+                    (self.design.stopats.clone(), !isolated)
+                } else {
+                    let t = self.tasks.iter().find(|t| t.name == src).unwrap();
+                    (t.stopats.clone(), !isolated && t.inherit_embedded)
+                }
+            }
+        };
+        if let Some(src) = copy_from {
+            let copied: Vec<Property> = self
+                .props
+                .iter()
+                .filter(|p| !p.rtl && p.task == src)
+                .map(|p| {
+                    let local = p.name.rsplit("::").next().unwrap_or(&p.name);
+                    let mut c = p.clone();
+                    c.name = format!("{name}::{local}");
+                    c.task = name.to_string();
+                    c.status = Status::Unprocessed;
+                    c.trace = None;
+                    c.engines.clear();
+                    c.under_ai.clear();
+                    c
+                })
+                .collect();
+            self.props.extend(copied);
+        }
+        self.tasks.push(Task {
+            name: name.to_string(),
+            stopats,
+            inherit_embedded,
+        });
+        if set_current {
+            self.current_task = name.to_string();
+        }
+        Ok(())
+    }
+
     pub fn add_property(
         &mut self,
         kind: Kind,
         name: Option<String>,
         expr: &str,
     ) -> Result<String, String> {
+        let task = self.current_task.clone();
+        self.add_property_in_task(kind, name, expr, &task)
+    }
+
+    pub fn add_property_in_task(
+        &mut self,
+        kind: Kind,
+        name: Option<String>,
+        expr: &str,
+        task: &str,
+    ) -> Result<String, String> {
+        self.ensure_task(task)?;
         // Reject up front what the front end's property compiler is known
         // not to take, and names the design does not have. The front end
         // binds the property at prove and has the last word on both.
@@ -318,6 +462,7 @@ impl Session {
             engines: Vec::new(),
             ai: false,
             under_ai: Vec::new(),
+            task: task.to_string(),
         });
         Ok(name)
     }
@@ -408,23 +553,104 @@ impl Session {
     /// The AI-added changes a prove started now would have in its model
     /// (see [`Property::under_ai`]).
     pub fn ai_in_force(&self) -> Vec<String> {
+        self.ai_in_force_for_task(EMBEDDED_TASK)
+    }
+
+    pub fn ai_in_force_for_task(&self, task: &str) -> Vec<String> {
+        let inherit = self.task_inherits_embedded(task);
         self.props
             .iter()
-            .filter(|p| p.ai && p.enabled && p.kind == Kind::Assume)
+            .filter(|p| {
+                p.ai && p.enabled
+                    && p.kind == Kind::Assume
+                    && (p.task == task || (inherit && p.task == EMBEDDED_TASK))
+            })
             .map(|p| p.name.clone())
-            .chain(self.design.ai_stopats.iter().map(|c| format!("stopat {c}")))
+            .chain(
+                self.design
+                    .ai_stopats
+                    .iter()
+                    .filter(|_| task == EMBEDDED_TASK || inherit)
+                    .map(|c| format!("stopat {c}")),
+            )
             .collect()
     }
 
+    fn task_inherits_embedded(&self, task: &str) -> bool {
+        task == EMBEDDED_TASK
+            || self
+                .tasks
+                .iter()
+                .find(|t| t.name == task)
+                .is_none_or(|t| t.inherit_embedded)
+    }
+
+    /// Cut points listed in `task` itself (not counting inherited ones).
+    pub fn stopats_in_task(&self, task: &str) -> Result<Vec<String>, String> {
+        self.ensure_task(task)?;
+        if task == EMBEDDED_TASK {
+            Ok(self.design.stopats.clone())
+        } else {
+            Ok(self
+                .tasks
+                .iter()
+                .find(|t| t.name == task)
+                .map(|t| t.stopats.clone())
+                .unwrap_or_default())
+        }
+    }
+
+    pub fn add_stopats_in_task(&mut self, task: &str, names: &[String]) -> Result<(), String> {
+        self.ensure_task(task)?;
+        let dst = if task == EMBEDDED_TASK {
+            &mut self.design.stopats
+        } else {
+            &mut self
+                .tasks
+                .iter_mut()
+                .find(|t| t.name == task)
+                .unwrap()
+                .stopats
+        };
+        for n in names {
+            if !dst.contains(n) {
+                dst.push(n.clone());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn clear_stopats_in_task(&mut self, task: &str, names: &[String]) -> Result<(), String> {
+        self.ensure_task(task)?;
+        let dst = if task == EMBEDDED_TASK {
+            &mut self.design.stopats
+        } else {
+            &mut self
+                .tasks
+                .iter_mut()
+                .find(|t| t.name == task)
+                .unwrap()
+                .stopats
+        };
+        if names.is_empty() {
+            dst.clear();
+        } else {
+            dst.retain(|x| !names.contains(x));
+        }
+        Ok(())
+    }
+
     /// The Btor2 model property `i` is proved on: the whole design with
-    /// every assumption and this one target. Lowers the design.
+    /// every assumption of property `i`'s task and this one target. Lowers
+    /// the design.
     pub fn model_for(&self, i: usize) -> Result<String, String> {
-        let (btor, _) = self.lower()?;
+        let task = &self.props[i].task;
+        let lowered = self.lower_for_task(task, false)?;
         let keep = target_name(&self.props[i].name);
-        if !has_target(&btor, &keep) {
+        if !has_target(&lowered.btor2, &keep) {
             return Err(format!("no check named {keep} in the model"));
         }
-        let (model, _) = informal_svlang::split_trace(&btor);
+        let (model, _) = informal_svlang::split_trace(&lowered.btor2);
         Ok(only_target(model, &keep))
     }
 
@@ -483,14 +709,27 @@ impl Session {
         Ok(rel.to_string())
     }
 
-    /// The cut points as the front end wants them: full paths.
-    fn cut_points(&self) -> Vec<String> {
+    /// The cut points of `task` as the front end wants them: full paths.
+    fn cut_points_for_task(&self, task: &str) -> Vec<String> {
         let top = self.design.top.as_deref().unwrap_or("");
-        self.design
-            .stopats
-            .iter()
-            .map(|s| format!("{top}.{s}"))
-            .collect()
+        let mut rels: Vec<&str> = Vec::new();
+        if self.task_inherits_embedded(task) {
+            for s in &self.design.stopats {
+                if !rels.contains(&s.as_str()) {
+                    rels.push(s.as_str());
+                }
+            }
+        }
+        if task != EMBEDDED_TASK {
+            if let Some(t) = self.tasks.iter().find(|t| t.name == task) {
+                for s in &t.stopats {
+                    if !rels.contains(&s.as_str()) {
+                        rels.push(s.as_str());
+                    }
+                }
+            }
+        }
+        rels.into_iter().map(|s| format!("{top}.{s}")).collect()
     }
 
     /// Names matching a Tcl-style glob (`*`, `?`).
@@ -609,6 +848,7 @@ impl Session {
                 engines: Vec::new(),
                 ai: false,
                 under_ai: Vec::new(),
+                task: default_task(),
             });
         }
     }
@@ -778,12 +1018,81 @@ impl Session {
             )
         });
         let engines = self.engines();
-        let lowered = self.lower();
-        let under_ai = self.ai_in_force();
+        // Lower one isolated model per distinct task present in `targets` so
+        // task-scoped assumptions and cut points never leak across tasks.
+        let mut distinct_tasks: Vec<String> = Vec::new();
         for &i in &targets {
-            self.props[i].under_ai = under_ai.clone();
+            let t = &self.props[i].task;
+            if !distinct_tasks.iter().any(|x| x == t) {
+                distinct_tasks.push(t.clone());
+            }
+        }
+        if distinct_tasks.is_empty() {
+            distinct_tasks.push(self.current_task.clone());
+        }
+        let mut by_task: std::collections::HashMap<
+            String,
+            Result<informal_svlang::Lowered, String>,
+        > = Default::default();
+        for t in &distinct_tasks {
+            let under_ai = self.ai_in_force_for_task(t);
+            for &i in &targets {
+                if &self.props[i].task == t {
+                    self.props[i].under_ai = under_ai.clone();
+                }
+            }
+            by_task.insert(t.clone(), self.lower_for_task(t, !engines.is_empty()));
         }
         self.frontend = "svlang".into();
+        self.assumption_conflict = false;
+
+        // Check once per task whether the active assumptions contradict each
+        // other (no trace survives past reset).
+        let mut conflict_tasks: std::collections::HashSet<String> = Default::default();
+        if !engines.is_empty() {
+            for t in &distinct_tasks {
+                if self.stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Ok(l) = &by_task[t] {
+                    let (model, _) = informal_svlang::split_trace(&l.btor2);
+                    let constraints = model
+                        .lines()
+                        .filter(|ln| ln.split_whitespace().nth(1) == Some("constraint"))
+                        .count();
+                    if constraints > usize::from(self.reset.is_some()) {
+                        let min_steps = if l.half_cycle && self.reset.is_some() {
+                            self.tick_reset().steps + 4
+                        } else {
+                            u32::from(self.reset.is_some()) + 4
+                        };
+                        if let Some(alive_btor) = assume_alive_btor2(model, min_steps) {
+                            let path = self.workdir.join("assume_consistency.btor2");
+                            if std::fs::write(&path, alive_btor).is_ok() {
+                                let v = self.check_aux_reachability(
+                                    &engines,
+                                    &path,
+                                    Some(min_steps as usize),
+                                );
+                                let _ = std::fs::remove_file(&path);
+                                if matches!(v, Verdict::Safe) {
+                                    self.assumption_conflict = true;
+                                    conflict_tasks.insert(t.clone());
+                                    let where_in = if t == EMBEDDED_TASK {
+                                        String::new()
+                                    } else {
+                                        format!(" in task {t}")
+                                    };
+                                    self.log(&format!(
+                                        "ASSUMPTION CONFLICT{where_in}: the active assumptions allow no trace past reset; assertions proved under them are vacuous"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
         // between property events.
@@ -804,10 +1113,8 @@ impl Session {
             }
             let r = self.prove_targets(
                 &targets,
-                lowered
-                    .as_ref()
-                    .map(|(btor, rtl)| (btor.as_str(), rtl.as_slice()))
-                    .map_err(String::as_str),
+                &by_task,
+                &conflict_tasks,
                 &engines,
                 tracker.as_ref(),
             );
@@ -829,12 +1136,134 @@ impl Session {
         Ok(targets)
     }
 
+    /// Check whether the active assumptions of `task` (or `self.current_task`)
+    /// allow a valid post-reset trace (`live = false`) or an infinite fair
+    /// trace (`live = true`). Returns `true` when consistent, `false` when
+    /// contradictory / deadlocked.
+    pub fn check_assumptions(&mut self, task: Option<&str>, live: bool) -> anyhow::Result<bool> {
+        if self.dry_run {
+            return Ok(true);
+        }
+        if !self.elaborated {
+            self.elaborate(None)?;
+        }
+        self.check_reset_and_clocks().map_err(|e| anyhow!(e))?;
+        let task = task
+            .map(String::from)
+            .unwrap_or_else(|| self.current_task.clone());
+        self.ensure_task(&task).map_err(|e| anyhow!(e))?;
+        let engines = self.engines();
+        if engines.is_empty() {
+            bail!("check_assumptions: no engines available");
+        }
+        let lowered = self
+            .lower_for_task(&task, false)
+            .map_err(|e| anyhow!("{e}"))?;
+        let (model, _) = informal_svlang::split_trace(&lowered.btor2);
+        std::fs::create_dir_all(&self.workdir)?;
+        let path = self.workdir.join("assume_consistency.btor2");
+        let consistent = if live {
+            let btor = assume_live_btor2(model)
+                .ok_or_else(|| anyhow!("could not build liveness consistency model"))?;
+            std::fs::write(&path, btor)?;
+            let own: Vec<Arc<dyn Engine>> = engines
+                .iter()
+                .filter(|e| e.name().starts_with("informal-") && !e.name().contains("wbmc"))
+                .cloned()
+                .collect();
+            let use_engines = if own.is_empty() {
+                &engines[..]
+            } else {
+                &own[..]
+            };
+            let req = CheckRequest {
+                model: path.clone(),
+                format: ModelFormat::Btor2,
+                timeout: self.time_limit,
+            };
+            let o = portfolio::run_until(use_engines, &req, None, Some(self.stop.as_ref()));
+            let _ = std::fs::remove_file(&path);
+            !matches!(portfolio::verdict(&o), Verdict::Safe)
+        } else {
+            let min_steps = if lowered.half_cycle && self.reset.is_some() {
+                self.tick_reset().steps + 4
+            } else {
+                u32::from(self.reset.is_some()) + 4
+            };
+            let btor = assume_alive_btor2(model, min_steps)
+                .ok_or_else(|| anyhow!("could not build assumption consistency model"))?;
+            std::fs::write(&path, btor)?;
+            let v = self.check_aux_reachability(&engines, &path, Some(min_steps as usize));
+            let _ = std::fs::remove_file(&path);
+            !matches!(v, Verdict::Safe)
+        };
+        self.assumption_conflict = !consistent;
+        if !consistent {
+            let where_in = if task == EMBEDDED_TASK {
+                String::new()
+            } else {
+                format!(" in task {task}")
+            };
+            self.log(&format!(
+                "ASSUMPTION CONFLICT{where_in}: the active assumptions are inconsistent"
+            ));
+        }
+        Ok(consistent)
+    }
+
+    /// Auxiliary target reachability check (for assumption consistency and
+    /// assertion precondition vacuity). When `exact_bound` is `Some(k)` (step
+    /// counter targets), BMC up to `k` is both sound and complete; when `None`
+    /// (general precondition covers), a shallow BMC pre-check finds witness
+    /// traces in ~1 ms before falling back to the full engine portfolio.
+    fn check_aux_reachability(
+        &self,
+        engines: &[Arc<dyn Engine>],
+        model: &Path,
+        exact_bound: Option<usize>,
+    ) -> Verdict {
+        let has_inhouse_bmc = engines.iter().any(|e| e.name() == "informal-bmc");
+        if has_inhouse_bmc {
+            let bmc = informal_bmc::Bmc {
+                max_depth: Some(exact_bound.unwrap_or(16)),
+                step: 1,
+            };
+            let req = CheckRequest {
+                model: model.to_path_buf(),
+                format: ModelFormat::Btor2,
+                timeout: self.time_limit.min(Duration::from_secs(5)),
+            };
+            if let Ok(r) = bmc.check(&req, &informal_engine::RunContext::new(req.timeout)) {
+                match (&r.verdict, exact_bound) {
+                    (Verdict::Unsafe { .. } | Verdict::Safe, _) => return r.verdict,
+                    // Step counter `_informal_alive_cnt == k` is reachable iff
+                    // reachable at step `k`, so bounded exhaustion at `k`
+                    // proves unreachability unless timed out.
+                    (Verdict::Unknown { reason }, Some(_))
+                        if !reason.contains("timeout") && !reason.contains("stop") =>
+                    {
+                        return Verdict::Safe;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let req = CheckRequest {
+            model: model.to_path_buf(),
+            format: ModelFormat::Btor2,
+            timeout: self.time_limit,
+        };
+        let o = portfolio::run_until(engines, &req, None, Some(self.stop.as_ref()));
+        portfolio::verdict(&o)
+    }
+
     /// The per-property loop of [`Self::prove`]. Returns how many targets
     /// it got through; fewer than all means a Stop ended it.
     fn prove_targets(
         &mut self,
         targets: &[usize],
-        lowered: Result<(&str, &[informal_svlang::RtlProperty]), &str>,
+        by_task: &std::collections::HashMap<String, Result<informal_svlang::Lowered, String>>,
+        conflict_tasks: &std::collections::HashSet<String>,
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
     ) -> usize {
@@ -845,6 +1274,11 @@ impl Session {
             if let Some(t) = tracker {
                 t.running(slot);
             }
+            let task_name = self.props[i].task.clone();
+            let lowered = by_task
+                .get(&task_name)
+                .map(|r| r.as_ref().map_err(String::as_str))
+                .unwrap_or(Err("task was not lowered"));
             // Properties added before elaboration are checked now.
             // (One written in the RTL had its names bound in its own scope.)
             let names = match self.props[i].rtl {
@@ -853,10 +1287,10 @@ impl Session {
             };
             if let Err(e) = names.and_then(|()| {
                 // The property must be in this model, compiled.
-                let Ok((_, found)) = lowered else {
+                let Ok(l) = lowered else {
                     return Ok(());
                 };
-                match found.iter().find(|f| f.name == self.props[i].name) {
+                match l.properties.iter().find(|f| f.name == self.props[i].name) {
                     None if self.props[i].rtl => {
                         Err("not in the model (inside a black box)".to_string())
                     }
@@ -876,11 +1310,12 @@ impl Session {
                 self.props[i].engines.clear();
                 continue;
             }
+            let keep = target_name(&self.props[i].name);
             let out = self.workdir.join(format!("prop_{i}.btor2"));
             let built = match lowered {
                 Err(e) => Err(anyhow!("{e}")),
-                Ok((btor, _)) => {
-                    let keep = target_name(&self.props[i].name);
+                Ok(l) => {
+                    let btor = l.btor2.as_str();
                     if !has_target(btor, &keep) {
                         // Without its line the model would hold trivially.
                         Err(anyhow!("no check named {keep} in the model"))
@@ -907,6 +1342,46 @@ impl Session {
                 ),
                 Ok(()) => self.check_one(engines, i, &out, tracker.map(|t| (t, slot))),
             };
+            // Vacuity check on proven assertions: either the task's active
+            // assumptions are inconsistent, or the assertion's antecedent
+            // (`<keep>:precondition`) is unreachable.
+            if self.props[i].kind == Kind::Assert {
+                if let Status::Proven { vacuous, .. } = &mut status {
+                    if conflict_tasks.contains(&task_name) {
+                        *vacuous = true;
+                    } else if !engines.is_empty() && !self.stop.load(Ordering::SeqCst) {
+                        if let Ok(l) = lowered {
+                            let pre_keep = format!("{keep}:precondition");
+                            if l.preconditions.iter().any(|n| n == &pre_keep) {
+                                if !has_target(&l.preconditions_btor2, &pre_keep) {
+                                    *vacuous = true;
+                                } else {
+                                    let vac_path = self.workdir.join(format!("vacuity_{i}.btor2"));
+                                    if std::fs::write(
+                                        &vac_path,
+                                        only_target(&l.preconditions_btor2, &pre_keep),
+                                    )
+                                    .is_ok()
+                                    {
+                                        let v =
+                                            self.check_aux_reachability(engines, &vac_path, None);
+                                        let _ = std::fs::remove_file(&vac_path);
+                                        if matches!(v, Verdict::Safe) {
+                                            *vacuous = true;
+                                        }
+                                    }
+                                }
+                                if *vacuous {
+                                    self.log(&format!(
+                                        "{}: proven vacuously (its precondition is unreachable)",
+                                        self.props[i].name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // Stopped mid-run: the portfolio came back without a verdict.
             // A verdict that landed just before the Stop is kept.
             let halt = self.stop.load(Ordering::SeqCst);
@@ -928,12 +1403,18 @@ impl Session {
         targets.len()
     }
 
-    /// The enabled properties given by command, each as the name of its
-    /// check and a whole directive on its clock: its own clocking event, or
-    /// the first declared clock.
-    fn bound_properties(&self) -> Result<Vec<(String, String)>, String> {
+    /// The enabled command properties in force for `task` (its own properties
+    /// plus `<embedded>` command assumptions when `task` inherits them), each
+    /// as the name of its check and a whole directive on its clock.
+    fn bound_properties_for_task(&self, task: &str) -> Result<Vec<(String, String)>, String> {
+        let inherit = self.task_inherits_embedded(task);
         let mut out = Vec::new();
-        for p in self.props.iter().filter(|p| !p.rtl && p.enabled) {
+        for p in self.props.iter().filter(|p| {
+            !p.rtl
+                && p.enabled
+                && (p.task == task
+                    || (p.kind == Kind::Assume && inherit && p.task == EMBEDDED_TASK))
+        }) {
             let expr = p.expr.trim();
             let clocked = if expr.starts_with('@') {
                 expr.to_string()
@@ -954,13 +1435,14 @@ impl Session {
         Ok(out)
     }
 
-    /// One Btor2 model with every enabled property, and the properties as
-    /// the front end compiled them: those written in the RTL, then those
-    /// given by command. `Err` rejects the design: a compile error, a reset
-    /// that does not bind, or a construct the front end does not model.
-    /// Nothing is guessed: a guess would turn a typo into a free signal
-    /// (D13).
-    fn lower(&self) -> Result<(String, Vec<informal_svlang::RtlProperty>), String> {
+    /// Isolated Btor2 lowering for `task`, with only `task`'s active
+    /// assumptions and cut points.
+    fn lower_for_task(
+        &self,
+        task: &str,
+        precondition_covers: bool,
+    ) -> Result<informal_svlang::Lowered, String> {
+        let cut_points = self.cut_points_for_task(task);
         let req = informal_svlang::Request {
             files: self.design.files.clone(),
             defines: self.design.defines.clone(),
@@ -971,7 +1453,7 @@ impl Session {
             // informal_svlang::TRACE_MARKER: engines get the text before it
             // (unchanged), the trace replay all of it.
             trace_outputs: true,
-            cut_points: self.cut_points(),
+            cut_points,
             black_box_modules: self.design.bbox.clone(),
             black_box_instances: self
                 .design
@@ -979,7 +1461,7 @@ impl Session {
                 .iter()
                 .map(|i| format!("{}.{i}", self.design.top.as_deref().unwrap_or("")))
                 .collect(),
-            properties: self.bound_properties()?,
+            properties: self.bound_properties_for_task(task)?,
             clocks: self
                 .clocks
                 .iter()
@@ -990,6 +1472,7 @@ impl Session {
             tick: self.tick_reset(),
             skip_initial_checks: self.design.skip_initial_checks,
             isunknown_is_false: self.design.isunknown_is_false,
+            precondition_covers,
         };
         // What the user chose to leave out is said with every model.
         if req.skip_initial_checks {
@@ -1011,10 +1494,16 @@ impl Session {
             ));
         }
         if !req.cut_points.is_empty() {
+            let top_prefix = format!("{}.", self.design.top.as_deref().unwrap_or(""));
+            let shown: Vec<&str> = req
+                .cut_points
+                .iter()
+                .map(|c| c.strip_prefix(&top_prefix).unwrap_or(c.as_str()))
+                .collect();
             self.log(&format!(
                 "{} cut point(s) (stopat) are free in this model: {}. A proof holds for the design; a counterexample may use values the design cannot produce there",
-                self.design.stopats.len(),
-                self.design.stopats.join(", ")
+                shown.len(),
+                shown.join(", ")
             ));
         }
         let l = informal_svlang::lower(&req);
@@ -1022,7 +1511,7 @@ impl Session {
             self.log(&format!("svlang: {n}"));
         }
         if l.ok {
-            Ok((l.btor2, l.properties))
+            Ok(l)
         } else {
             Err(format!("svlang: {}", l.errors.join("; ")))
         }
@@ -1072,6 +1561,7 @@ impl Session {
                 _ => Status::Proven {
                     engine: "elaboration".into(),
                     ms: 0,
+                    vacuous: false,
                 },
             };
             return (status, None, Vec::new());
@@ -1121,7 +1611,11 @@ impl Session {
         }
         let status = match (verdict, kind) {
             (Verdict::Safe, Kind::Cover) => Status::Unreachable { engine, ms },
-            (Verdict::Safe, _) => Status::Proven { engine, ms },
+            (Verdict::Safe, _) => Status::Proven {
+                engine,
+                ms,
+                vacuous: false,
+            },
             (Verdict::Unsafe { depth }, Kind::Cover) => Status::Covered { engine, depth, ms },
             (Verdict::Unsafe { depth }, _) => Status::Cex { engine, depth, ms },
             (Verdict::Unknown { reason }, _) => Status::Undetermined { reason },
@@ -1283,13 +1777,29 @@ impl Session {
 
     /// A JasperGold-style summary table.
     pub fn report(&self) -> String {
+        self.report_for_task(None)
+    }
+
+    pub fn report_for_task(&self, task: Option<&str>) -> String {
         let mut s = format!(
             "{:<28} {:<7} {:<13} {:<10} {}\n",
             "property", "type", "status", "engine", "detail"
         );
-        for p in &self.props {
+        for p in self
+            .props
+            .iter()
+            .filter(|p| task.is_none_or(|t| p.task == t))
+        {
             let (engine, detail) = match &p.status {
-                Status::Proven { engine, ms } | Status::Unreachable { engine, ms } => {
+                Status::Proven {
+                    engine,
+                    ms,
+                    vacuous,
+                } => {
+                    let vac = if *vacuous { " [vacuous]" } else { "" };
+                    (engine.clone(), format!("{:.2} s{vac}", *ms as f64 / 1000.0))
+                }
+                Status::Unreachable { engine, ms } => {
                     (engine.clone(), format!("{:.2} s", *ms as f64 / 1000.0))
                 }
                 Status::Cex { engine, depth, ms } | Status::Covered { engine, depth, ms } => (
@@ -1313,11 +1823,16 @@ impl Session {
             };
             // Said in the table: what an AI added, and which results
             // stand on an AI-added assumption or cut point.
-            let detail = match (p.ai, p.under_ai.is_empty()) {
+            let mut detail = match (p.ai, p.under_ai.is_empty()) {
                 (true, _) => format!("{detail} [AI-added]").trim_start().to_string(),
                 (false, false) => format!("{detail} [under AI-added: {}]", p.under_ai.join(", ")),
                 (false, true) => detail,
             };
+            if task.is_none() && p.task != EMBEDDED_TASK {
+                detail = format!("{detail} [task: {}]", p.task)
+                    .trim_start()
+                    .to_string();
+            }
             s += &format!(
                 "{:<28} {:<7} {:<13} {:<10} {}\n",
                 p.name,
@@ -1384,12 +1899,124 @@ fn target_name(name: &str) -> String {
         .collect()
 }
 
+/// Build a single-target Btor2 model from `btor` (with all `bad`, `justice`,
+/// `fair` and `output` lines stripped, keeping every `constraint`) whose
+/// `bad` line fires when a saturating counter reaches `min_steps`. If the
+/// target is `Safe` (unreachable), no trace of length `min_steps + 1`
+/// satisfies the model's assumptions.
+fn assume_alive_btor2(btor: &str, min_steps: u32) -> Option<String> {
+    let mut max_id = 0u64;
+    let mut sort1 = None;
+    let mut sort8 = None;
+    let mut kept = String::new();
+    for l in btor.lines() {
+        let w: Vec<&str> = l.split_whitespace().collect();
+        if let Some(id) = w.first().and_then(|s| s.parse::<u64>().ok()) {
+            max_id = max_id.max(id);
+            if w.get(1) == Some(&"sort") && w.get(2) == Some(&"bitvec") {
+                match w.get(3).copied() {
+                    Some("1") => sort1 = Some(id),
+                    Some("8") => sort8 = Some(id),
+                    _ => {}
+                }
+            }
+            if matches!(
+                w.get(1).copied(),
+                Some("bad" | "justice" | "fair" | "output")
+            ) {
+                continue;
+            }
+        }
+        kept.push_str(l);
+        kept.push('\n');
+    }
+    let mut next_id = max_id + 1;
+    let mut alloc = || {
+        let id = next_id;
+        next_id += 1;
+        id
+    };
+    let s1 = sort1.unwrap_or_else(|| {
+        let id = alloc();
+        kept.push_str(&format!("{id} sort bitvec 1\n"));
+        id
+    });
+    let s8 = sort8.unwrap_or_else(|| {
+        let id = alloc();
+        kept.push_str(&format!("{id} sort bitvec 8\n"));
+        id
+    });
+    let z8 = alloc();
+    let o8 = alloc();
+    let k8 = alloc();
+    let cnt = alloc();
+    let ini = alloc();
+    let eq_k = alloc();
+    let inc = alloc();
+    let nxt_v = alloc();
+    let nxt = alloc();
+    let bad = alloc();
+    let goal = min_steps.min(254);
+    kept.push_str(&format!(
+        "{z8} zero {s8}\n\
+         {o8} one {s8}\n\
+         {k8} constd {s8} {goal}\n\
+         {cnt} state {s8} _informal_alive_cnt\n\
+         {ini} init {s8} {cnt} {z8}\n\
+         {eq_k} eq {s1} {cnt} {k8}\n\
+         {inc} add {s8} {cnt} {o8}\n\
+         {nxt_v} ite {s8} {eq_k} {cnt} {inc}\n\
+         {nxt} next {s8} {cnt} {nxt_v}\n\
+         {bad} bad {eq_k} _informal_assume_alive\n"
+    ));
+    Some(kept)
+}
+
+/// Build a liveness consistency Btor2 model (`justice 1 <true>`) keeping all
+/// `constraint` and `fair` lines: `Safe` iff no infinite fair trace exists.
+fn assume_live_btor2(btor: &str) -> Option<String> {
+    let mut max_id = 0u64;
+    let mut sort1 = None;
+    let mut kept = String::new();
+    for l in btor.lines() {
+        let w: Vec<&str> = l.split_whitespace().collect();
+        if let Some(id) = w.first().and_then(|s| s.parse::<u64>().ok()) {
+            max_id = max_id.max(id);
+            if w.get(1) == Some(&"sort") && w.get(2) == Some(&"bitvec") && w.get(3) == Some(&"1") {
+                sort1 = Some(id);
+            }
+            if matches!(w.get(1).copied(), Some("bad" | "justice" | "output")) {
+                continue;
+            }
+        }
+        kept.push_str(l);
+        kept.push('\n');
+    }
+    let mut next_id = max_id + 1;
+    let mut alloc = || {
+        let id = next_id;
+        next_id += 1;
+        id
+    };
+    let s1 = sort1.unwrap_or_else(|| {
+        let id = alloc();
+        kept.push_str(&format!("{id} sort bitvec 1\n"));
+        id
+    });
+    let t1 = alloc();
+    let j = alloc();
+    kept.push_str(&format!(
+        "{t1} one {s1}\n{j} justice 1 {t1} _informal_assume_live\n"
+    ));
+    Some(kept)
+}
+
 /// Operators the front end's property compiler does not take, checked
 /// when a property is given so that the command fails and not the prove.
-/// (It takes bounded sequences, the `until` family, `s_eventually`, and
-/// `nexttime`, `eventually` and `always` with a bound; a range that ends
-/// at `$` where it may not is found when it binds the property.)
-const NOT_COMPILED: &[&str] = &["[->", "[=", "accept_on", "reject_on", "#-#", "#=#", "not "];
+/// (svlang compiles bounded and unbounded sequences including `[->m:n]`,
+/// `[=m:n]`, `##[m:$]`, `[*m:$]`, `strong(...)`, the `until` family,
+/// `s_eventually`, and bounded `nexttime`, `eventually` and `always`.)
+const NOT_COMPILED: &[&str] = &["accept_on", "reject_on", "#-#", "#=#", "not "];
 
 /// `Err` for a property text that is empty or uses one of [`NOT_COMPILED`].
 fn check_operators(expr: &str) -> Result<(), String> {

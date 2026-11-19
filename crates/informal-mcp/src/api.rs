@@ -1231,7 +1231,21 @@ fn prop_view(p: &Property, full: bool) -> Value {
     v.insert("origin".into(), json!(origin_of(p)));
     v.insert("status".into(), json!(p.status.word()));
     match &p.status {
-        Status::Proven { engine, ms } | Status::Unreachable { engine, ms } => {
+        Status::Proven {
+            engine,
+            ms,
+            vacuous,
+        } => {
+            v.insert("engine".into(), json!(engine));
+            v.insert("time_ms".into(), json!(*ms as u64));
+            if *vacuous {
+                v.insert(
+                    "detail".into(),
+                    json!("vacuous (precondition is unreachable)"),
+                );
+            }
+        }
+        Status::Unreachable { engine, ms } => {
             v.insert("engine".into(), json!(engine));
             v.insert("time_ms".into(), json!(*ms as u64));
         }

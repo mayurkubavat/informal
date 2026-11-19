@@ -15,6 +15,7 @@ export interface PropStatus {
   ms?: number;
   reason?: string;
   message?: string;
+  vacuous?: boolean;
 }
 
 export interface Property {
@@ -159,6 +160,7 @@ export interface PropProgress {
   ms?: number;
   reason?: string;
   message?: string;
+  vacuous?: boolean;
   // Present once the property finished (the portfolio's per-engine record).
   engines?: EngineRun[];
 }
