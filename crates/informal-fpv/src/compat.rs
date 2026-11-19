@@ -679,32 +679,6 @@ const JG: &[(&str, Body)] = &[
         s.clear();
         Ok(().into())
     }),
-    ("task", |s, a| {
-        let a = Args::parse(
-            a,
-            &[("-create", 0), ("-name", 1), ("-assume", 1), ("-task", 1)],
-            &[],
-        )?;
-        if a.flag("-create") {
-            let name = a.val("-name").ok_or("task -create requires -name")?;
-            s.add_task(name.to_string());
-            Ok(format!("task {name} created").into())
-        } else if let Some(assume) = a.val("-assume") {
-            let task_name = a.val("-task").ok_or("task -assume requires -task")?;
-            s.add_assumption_to_task(task_name, assume.to_string())
-                .map_err(|e| format!("task: {e}"))?;
-            Ok(format!("assumption `{assume}` added to task `{task_name}`").into())
-        } else {
-            Err("task: use -create -name <name> or -assume <expr> -task <name>".into())
-        }
-    }),
-    ("bind", |s, a| {
-        let a = Args::parse(a, &[("-module", 1), ("-target", 1)], &[])?;
-        let module = a.val("-module").ok_or("bind requires -module")?;
-        let target = a.val("-target").ok_or("bind requires -target")?;
-        s.add_bind(module.to_string(), target.to_string());
-        Ok(format!("bind `{module}` to `{target}`").into())
-    }),
     ("analyze", |s, a| {
         let langs = [
             "-sv", "-sv09", "-sv12", "-sv17", "-sv2009", "-sv2012", "-sv2017", "-v2k", "-verilog",

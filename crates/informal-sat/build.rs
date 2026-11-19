@@ -42,6 +42,13 @@ fn main() {
             for l in ["bitwuzla", "bitwuzlals", "bitwuzlabv", "bitwuzlabb"] {
                 println!("cargo:rustc-link-lib=static={l}");
             }
+            if cfg!(target_os = "macos") {
+                for d in ["/opt/homebrew/lib", "/usr/local/lib"] {
+                    if std::path::Path::new(d).is_dir() {
+                        println!("cargo:rustc-link-search=native={d}");
+                    }
+                }
+            }
             for l in ["gmp", "mpfr"] {
                 println!("cargo:rustc-link-lib=dylib={l}");
             }

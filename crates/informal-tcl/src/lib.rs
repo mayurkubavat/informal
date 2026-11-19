@@ -526,7 +526,10 @@ mod tests {
         );
         i.eval_file(&f).unwrap();
         i.eval("here d").unwrap();
-        let file = f.to_string_lossy().into_owned();
+        let file = std::fs::canonicalize(&f)
+            .unwrap_or(f)
+            .to_string_lossy()
+            .into_owned();
         let at = |n| Some((file.clone(), n));
         assert_eq!(
             *seen.borrow(),

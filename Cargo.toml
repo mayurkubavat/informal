@@ -18,7 +18,6 @@ toml = "0.8"
 regex = "1"
 clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
-svlang = { git = "https://github.com/mayurkubavat/svlang", rev = "4b5d424bae61e87e01bcacb8d5641e6975922dd8" }
 informal-ir = { path = "crates/informal-ir" }
 informal-engine = { path = "crates/informal-engine" }
 informal-engines-ext = { path = "crates/informal-engines-ext" }
@@ -29,12 +28,11 @@ informal-sat = { path = "crates/informal-sat" }
 informal-aig = { path = "crates/informal-aig" }
 informal-bmc = { path = "crates/informal-bmc" }
 informal-svlang = { path = "crates/informal-svlang" }
+# Pinned by commit (docs/third-party.md).
+svlang = { git = "https://github.com/mayurkubavat/svlang", rev = "e7af3f030f97664d5c62238af990c773c5c37f3d" }
 informal-bitwuzla = { path = "crates/informal-bitwuzla" }
 informal-llm = { path = "crates/informal-llm" }
 informal-mcp = { path = "crates/informal-mcp" }
-
-[patch.crates-io]
-svlang = { git = "https://github.com/mayurkubavat/svlang", rev = "4b5d424bae61e87e01bcacb8d5641e6975922dd8" }
 
 [profile.release]
 lto = "thin"
