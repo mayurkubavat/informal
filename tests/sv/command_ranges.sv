@@ -11,6 +11,7 @@
 //% assert -name a_through {disable iff (rst) req |=> busy throughout (##[1:2] gnt)}
 //% assert -name a_first {@(posedge clk) disable iff (rst) req ##1 first_match(##[1:2] gnt) |=> gnt}
 //% assert -name a_unbounded {disable iff (rst) req |-> ##[1:$] gnt}
+//% assert -name a_unsup {disable iff (rst) req |-> always gnt}
 //% assert -name a_fixed {disable iff (rst) req |-> ##1 !gnt}
 //% cover -name c_late {disable iff (rst) req ##[3:4] gnt ##1 gnt}
 //% cover -name c_one {disable iff (rst) req ##[0:1] gnt}
@@ -19,7 +20,8 @@
 //= a_held proven
 //= a_through proven
 //= a_first proven
-//= a_unbounded error
+//= a_unbounded proven
+//= a_unsup error
 //= a_fixed proven
 //= c_late covered
 //= c_one unreachable

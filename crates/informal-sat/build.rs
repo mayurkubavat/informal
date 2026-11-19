@@ -16,10 +16,15 @@ fn main() {
     let tools = std::env::var_os("INFORMAL_TOOLS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_default()
-                .join("Silicon/DV/tools")
+            let local = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools");
+            if local.is_dir() {
+                local
+            } else {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_default()
+                    .join("Silicon/DV/tools")
+            }
         });
     // Bitwuzla's static library already contains its patched CaDiCaL,
     // C API included: link it instead of a second CaDiCaL, and tell crates
@@ -41,6 +46,13 @@ fn main() {
             println!("cargo:rustc-link-search=native={}", dir.display());
             for l in ["bitwuzla", "bitwuzlals", "bitwuzlabv", "bitwuzlabb"] {
                 println!("cargo:rustc-link-lib=static={l}");
+            }
+            if cfg!(target_os = "macos") {
+                for d in ["/opt/homebrew/lib", "/usr/local/lib"] {
+                    if std::path::Path::new(d).is_dir() {
+                        println!("cargo:rustc-link-search=native={d}");
+                    }
+                }
             }
             for l in ["gmp", "mpfr"] {
                 println!("cargo:rustc-link-lib=dylib={l}");

@@ -31,7 +31,9 @@ VERDICT = {10: "unsafe", 20: "safe"}
 
 
 def aigfuzz():
-    tools = os.environ.get("INFORMAL_TOOLS_DIR", os.path.expanduser("~/Silicon/DV/tools"))
+    repo_tools = os.path.join(REPO, "tools")
+    default_tools = repo_tools if os.path.isdir(repo_tools) else os.path.expanduser("~/Silicon/DV/tools")
+    tools = os.environ.get("INFORMAL_TOOLS_DIR", default_tools)
     path = os.environ.get("AIGFUZZ") or os.path.join(tools, "aiger/aigfuzz")
     if not os.access(path, os.X_OK):
         sys.exit(f"fuzz: no aigfuzz at {path}: scripts/tools.sh build aiger")

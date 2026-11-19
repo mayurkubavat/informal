@@ -176,3 +176,74 @@ fn fifo_known_answers() {
     let want: Vec<_> = want.iter().map(|(n, st)| (n.to_string(), *st)).collect();
     assert_eq!(v, want);
 }
+
+#[test]
+fn param_overrides_jg_and_vcf() {
+    let engines = informal_bmc::engines();
+    if engines.is_empty() {
+        informal_engine::tool_missing("needs CaDiCaL");
+        return;
+    }
+    let work = std::env::temp_dir().join(format!("informal-fpv-params-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let rtl = work.join("param_cnt.sv");
+    std::fs::write(
+        &rtl,
+        "module param_cnt #(parameter int MAX = 9) (\n\
+           input  logic       clk,\n\
+           input  logic       rst,\n\
+           input  logic       en,\n\
+           output logic [3:0] q\n\
+         );\n\
+           always_ff @(posedge clk)\n\
+             if (rst) q <= 4'd0;\n\
+             else if (en && q < MAX[3:0]) q <= q + 4'd1;\n\
+         endmodule\n",
+    )
+    .unwrap();
+
+    let jg = Shell::new(Session::new(engines.clone(), work.join("jg")), Flavor::Jg);
+    jg.eval(&format!(
+        "analyze -sv {{{}}}\n\
+         elaborate -top param_cnt -param MAX 5\n\
+         clock clk\n\
+         reset -expression {{rst}}\n\
+         assert -name a_bound {{q <= 4'd5}}\n\
+         cover  -name c_five  {{q == 4'd5}}\n\
+         cover  -name c_six   {{q == 4'd6}}\n\
+         prove -all",
+        rtl.display()
+    ))
+    .unwrap();
+    assert_eq!(
+        statuses(&jg),
+        [
+            ("a_bound".to_string(), "proven"),
+            ("c_five".to_string(), "covered"),
+            ("c_six".to_string(), "unreachable"),
+        ]
+    );
+
+    let vcf = Shell::new(Session::new(engines, work.join("vcf")), Flavor::Vcf);
+    vcf.eval(&format!(
+        "analyze -format sverilog {{{}}}\n\
+         elaborate param_cnt -parameters {{MAX=4}}\n\
+         create_clock clk -period 10\n\
+         create_reset rst -high\n\
+         fvassert a_bound -expr {{q <= 4'd4}}\n\
+         fvcover  c_four  -expr {{q == 4'd4}}\n\
+         fvcover  c_five  -expr {{q == 4'd5}}\n\
+         check_fv",
+        rtl.display()
+    ))
+    .unwrap();
+    assert_eq!(
+        statuses(&vcf),
+        [
+            ("a_bound".to_string(), "proven"),
+            ("c_four".to_string(), "covered"),
+            ("c_five".to_string(), "unreachable"),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&work);
+}

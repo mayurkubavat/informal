@@ -154,7 +154,9 @@ def btor2_witness(states, inputs, init, frames, bad):
 
 
 def find_btorsim(arg):
-    tools = os.environ.get("INFORMAL_TOOLS_DIR", os.path.expanduser("~/Silicon/DV/tools"))
+    repo_tools = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+    default_tools = repo_tools if os.path.isdir(repo_tools) else os.path.expanduser("~/Silicon/DV/tools")
+    tools = os.environ.get("INFORMAL_TOOLS_DIR", default_tools)
     for p in (arg, os.environ.get("BTORSIM"), os.path.join(tools, "btor2tools/build/bin/btorsim")):
         if p and os.access(p, os.X_OK):
             return p

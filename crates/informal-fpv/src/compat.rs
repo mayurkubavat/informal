@@ -932,32 +932,6 @@ const JG: &[(&str, Body)] = &[
         s.clear();
         Ok(().into())
     }),
-    ("task", |s, a| {
-        let a = Args::parse(
-            a,
-            &[("-create", 0), ("-name", 1), ("-assume", 1), ("-task", 1)],
-            &[],
-        )?;
-        if a.flag("-create") {
-            let name = a.val("-name").ok_or("task -create requires -name")?;
-            s.add_task(name.to_string());
-            Ok(format!("task {name} created").into())
-        } else if let Some(assume) = a.val("-assume") {
-            let task_name = a.val("-task").ok_or("task -assume requires -task")?;
-            s.add_assumption_to_task(task_name, assume.to_string())
-                .map_err(|e| format!("task: {e}"))?;
-            Ok(format!("assumption `{assume}` added to task `{task_name}`").into())
-        } else {
-            Err("task: use -create -name <name> or -assume <expr> -task <name>".into())
-        }
-    }),
-    ("bind", |s, a| {
-        let a = Args::parse(a, &[("-module", 1), ("-target", 1)], &[])?;
-        let module = a.val("-module").ok_or("bind requires -module")?;
-        let target = a.val("-target").ok_or("bind requires -target")?;
-        s.add_bind(module.to_string(), target.to_string());
-        Ok(format!("bind `{module}` to `{target}`").into())
-    }),
     ("analyze", |s, a| {
         let langs = [
             "-sv", "-sv09", "-sv12", "-sv17", "-sv2009", "-sv2012", "-sv2017", "-v2k", "-verilog",
@@ -992,6 +966,7 @@ const JG: &[(&str, Body)] = &[
             &[
                 ("-top", 1),
                 ("-parameter", 2),
+                ("-param", 2),
                 ("-bbox_m", 1),
                 ("-bbox_i", 1),
                 ("-create_related_covers", 1),
@@ -1008,7 +983,7 @@ const JG: &[(&str, Body)] = &[
                 ("-auto_hr_info", 0),
             ],
         )?;
-        for p in a.all("-parameter") {
+        for p in a.all("-parameter").chain(a.all("-param")) {
             s.design.params.push((p[0].clone(), p[1].clone()));
         }
         // The black boxes of this elaboration (each option takes a name or
@@ -1644,11 +1619,13 @@ const VCF: &[(&str, Body)] = &[
                 ("-sva", 0),
                 ("-vcs", 1),
                 ("-define", 1),
+                ("-parameters", 1),
             ],
             &[("-cov", 1), ("-inject_fault", 1), ("-work", 1)],
         )?;
         vcf_format(&a)?;
         vcf_compile(s, &a)?;
+        vcf_parameters(s, &a)?;
         s.elaborate(a.val("-top").map(String::from))
             .map_err(|e| format!("{e:#}"))?;
         Ok(s.design.top.clone().unwrap_or_default().into())
@@ -1669,16 +1646,7 @@ const VCF: &[(&str, Body)] = &[
             &[("-sva", 0), ("-vcs", 1), ("-parameters", 1)],
             &[("-cov", 1), ("-work", 1), ("-library", 1)],
         )?;
-        if let Some(v) = a.val("-vcs") {
-            let words: Vec<String> = v.split_whitespace().map(String::from).collect();
-            for w in &words {
-                if let Some(p) = w.strip_prefix("-pvalue+") {
-                    if let Some((k, val)) = p.split_once('=') {
-                        s.design.params.push((k.to_string(), val.to_string()));
-                    }
-                }
-            }
-        }
+        vcf_parameters(s, &a)?;
         s.elaborate(a.pos.first().cloned())
             .map_err(|e| format!("{e:#}"))?;
         Ok(s.design.top.clone().unwrap_or_default().into())
@@ -1775,6 +1743,30 @@ fn vcf_compile(s: &mut Session, a: &Args) -> Result<(), String> {
         }
     }
     apply_compile_words(s, &words, None)
+}
+
+fn vcf_parameters(s: &mut Session, a: &Args) -> Result<(), String> {
+    if let Some(v) = a.val("-vcs") {
+        for w in v.split_whitespace() {
+            if let Some(p) = w.strip_prefix("-pvalue+") {
+                if let Some((k, val)) = p.split_once('=') {
+                    s.design.params.push((k.to_string(), val.to_string()));
+                }
+            }
+        }
+    }
+    for spec in a.all("-parameters") {
+        for item in spec[0]
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|w| !w.is_empty())
+        {
+            let (k, val) = item.split_once('=').ok_or_else(|| {
+                format!("{}: -parameters expects NAME=VALUE, got `{item}`", a.cmd)
+            })?;
+            s.design.params.push((k.to_string(), val.to_string()));
+        }
+    }
+    Ok(())
 }
 
 fn vcf_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
@@ -2023,10 +2015,13 @@ mod tests {
     #[test]
     fn rejects_what_it_cannot_honour() {
         let sh = shell(Flavor::Jg);
-        let e = sh.eval("assert -name r {a |-> b [->2]}").unwrap_err();
-        assert!(e.message.contains("[->"), "{}", e.message);
-        // A bounded range is taken: the front end compiles it at prove.
+        let e = sh
+            .eval("assert -name r {accept_on (c) (a |-> b)}")
+            .unwrap_err();
+        assert!(e.message.contains("accept_on"), "{}", e.message);
+        // Ranges and goto repetition are taken: the front end compiles them at prove.
         sh.eval("assert -name r {a |-> ##[1:3] b}").unwrap();
+        sh.eval("assert -name r_goto {a |-> b [->2]}").unwrap();
         assert!(sh
             .session
             .borrow()

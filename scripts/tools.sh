@@ -14,7 +14,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-tools=${INFORMAL_TOOLS_DIR:-$HOME/Silicon/DV/tools}
+if [ -n "${INFORMAL_TOOLS_DIR:-}" ]; then
+    tools="$INFORMAL_TOOLS_DIR"
+elif [ -d "$PWD/tools" ]; then
+    tools="$PWD/tools"
+else
+    tools="$HOME/Silicon/DV/tools"
+fi
 jobs=${CARGO_BUILD_JOBS:-$(nproc)}
 
 manifest() { grep -v '^\s*\(#\|$\)' tools.lock; }

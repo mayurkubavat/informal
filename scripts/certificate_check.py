@@ -52,7 +52,9 @@ ENGINES = ["informal-bmc", "informal-kind", "informal-ic3", "informal-kind-ic3",
 
 def tools():
     """{name: path}, and the names that are missing."""
-    base = os.environ.get("INFORMAL_TOOLS_DIR") or os.path.expanduser("~/Silicon/DV/tools")
+    repo_tools = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+    default_tools = repo_tools if os.path.isdir(repo_tools) else os.path.expanduser("~/Silicon/DV/tools")
+    base = os.environ.get("INFORMAL_TOOLS_DIR") or default_tools
     places = {
         "certifaiger": "certifaiger/bin/certifaiger",
         "aigsim": "aiger/aigsim",

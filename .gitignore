@@ -80,4 +80,6 @@ __pycache__/
 # ...except tracked test fixtures
 !ui/tests/fixtures/*.vcd
 !tests/**/*.vcd
-tools/
+
+# Local third-party tool builds (scripts/tools.sh)
+/tools/

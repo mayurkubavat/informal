@@ -280,18 +280,6 @@ pub struct Clock {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub struct Task {
-    pub name: String,
-    pub assumptions: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Bind {
-    pub module: String,
-    pub target: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
 pub struct Design {
     pub files: Vec<PathBuf>,
     pub defines: Vec<(String, Option<String>)>,
@@ -502,7 +490,7 @@ impl Session {
         self.props.push(Property {
             name: name.clone(),
             kind,
-            expr: expanded,
+            expr: expr.to_string(),
             enabled: true,
             status: Status::Unprocessed,
             trace: None,
@@ -705,32 +693,6 @@ impl Session {
         Ok(cut)
     }
 
-    pub fn add_task(&mut self, name: String) {
-        self.design.tasks.push(Task {
-            name,
-            assumptions: Vec::new(),
-        });
-    }
-
-    pub fn add_assumption_to_task(
-        &mut self,
-        task_name: &str,
-        assumption: String,
-    ) -> Result<(), String> {
-        let task = self
-            .design
-            .tasks
-            .iter_mut()
-            .find(|t| t.name == task_name)
-            .ok_or_else(|| format!("task `{task_name}` not found"))?;
-        task.assumptions.push(assumption);
-        Ok(())
-    }
-
-    pub fn add_bind(&mut self, module: String, target: String) {
-        self.design.binds.push(Bind { module, target });
-    }
-
     /// Remove an AI-added cut point. Returns the properties whose status
     /// was found with it in the model and is now reset.
     pub fn remove_ai_cut_point(&mut self, cut: &str) -> Result<Vec<String>, String> {
@@ -824,9 +786,6 @@ impl Session {
     /// that names a signal the top module does not declare. (Unchecked, a
     /// typo would leave the real reset free and give a wrong verdict.)
     pub(crate) fn check_reset_and_clocks(&self) -> Result<(), String> {
-        if self.clocks.is_empty() {
-            return Err("no clocks declared: declare one with `clock` / `create_clock`".into());
-        }
         if let Some(r) = &self.reset {
             self.check_names(r)
                 .map_err(|e| format!("reset {{{r}}}: {e}"))?;
@@ -2352,16 +2311,10 @@ fn target_name(name: &str) -> String {
 
 /// Operators the front end's property compiler does not take, checked
 /// when a property is given so that the command fails and not the prove.
-/// (It takes bounded sequences, the `until` family, `s_eventually`, and
-/// `nexttime`, `eventually` and `always` with a bound; a range that ends
-/// at `$` where it may not is found when it binds the property.)
+/// (It takes bounded and unbounded sequences, goto `[->]` and
+/// non-consecutive `[=]` repetition, `strong`, the `until` family,
+/// `s_eventually`, and `nexttime`, `eventually` and `always` with a bound.)
 const NOT_COMPILED: &[&str] = &["accept_on", "reject_on", "#-#", "#=#", "not "];
-
-/// Expand SVA [->n] and [=n] into supported sequences.
-fn expand_sva(expr: &str) -> String {
-    // This is still just a placeholder; a real decomposition requires a parser.
-    expr.to_string()
-}
 
 /// `Err` for a property text that is empty or uses one of [`NOT_COMPILED`].
 fn check_operators(expr: &str) -> Result<(), String> {

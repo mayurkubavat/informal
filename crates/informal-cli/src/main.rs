@@ -228,14 +228,6 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         jobs: usize,
     },
-    /// Run engines over models in batch mode.
-    Batch {
-        script: PathBuf,
-        #[arg(long, default_value = "config/engines.toml")]
-        engines: PathBuf,
-        #[arg(long, default_value_t = 60)]
-        timeout: u64,
-    },
 }
 
 /// The engines built into this binary; with `isolate`, each as a child
@@ -558,24 +550,6 @@ fn main() -> anyhow::Result<()> {
                 bail!("{}", l.errors.join("\n"));
             }
             print!("{}", l.btor2);
-        }
-        Cmd::Batch {
-            script,
-            engines,
-            timeout,
-        } => {
-            let text = std::fs::read_to_string(&script)
-                .with_context(|| format!("reading {}", script.display()))?;
-            let flavor = informal_fpv::detect_flavor(&text);
-            let mut engines = informal_engines_ext::load(&engines)?;
-            engines.extend(in_house(isolate)?);
-            let mut session = informal_fpv::Session::new(engines, PathBuf::from("informal_work"));
-            session.time_limit = Duration::from_secs(timeout);
-            let shell = informal_fpv::Shell::new(session, flavor);
-            if let Err(e) = shell.source(&script) {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
         }
         Cmd::Shell {
             script,

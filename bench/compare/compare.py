@@ -34,7 +34,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-TOOLS = Path(os.environ.get("INFORMAL_TOOLS_DIR", Path.home() / "Silicon/DV/tools"))
+TOOLS = Path(
+    os.environ.get(
+        "INFORMAL_TOOLS_DIR",
+        REPO / "tools" if (REPO / "tools").is_dir() else Path.home() / "Silicon/DV/tools",
+    )
+)
 WORK = Path(os.environ.get("INFORMAL_COMPARE_DIR", Path.home() / ".cache/informal/compare"))
 SUITE = TOOLS / "oss-cad-suite"
 EBMC = TOOLS / "ebmc/usr/bin/ebmc"
