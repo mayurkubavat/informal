@@ -521,7 +521,15 @@ starts on another seed with that core as its standing invariant.
 of at least 8 (6.0 without restarts), and no model that is solved on
 all three seeds today is lost.
 
-*Result:* pending.
+*Result (2026-11-16): miss.* All arms below ran on the same build (5597fa0, clock folding on by
+default), hard set of 29 models, 300 s, 3 seeds, with other threads'
+jobs on the machine at low priority. Single IC3 with
+restarts every 20 s (doubling): 13, 12, 11 solved (mean 12.0) against
+11, 10, 10 without (10.3). One model clearly gained (cv32e40x-p478,
+1/3 to 3/3), none lost. The prediction was a mean of at least 8 against
+6.0 on the unfolded engine; folding moved the baseline past that, and
+on the folded engine the gain (+1.7) is within what one model flipping
+on two seeds gives. Off by default.
 
 ### H17. Fold the free-running clock (prediction, 2026-11-14)
 
@@ -559,6 +567,22 @@ eight models clearly gained (the seven above without p607, plus p514
 and veer_axi-p06) and none lost. Folding is now the default in the IC3
 engines; `INFORMAL_FOLD=0` turns it off.
 
+*Follow-up (2026-11-16).* The k-induction engines fold too (6d750c5),
+with their own check on the loaded model (`certify::check_kind_folded`).
+Hard set, informal-kind-ic3, 300 s, 2 seeds: 4, 6 solved (mean 5.0)
+against 2, 2 unfolded; cv32e40x-p299 and p607 gained on both seeds,
+nothing lost. Portfolio on the 99 clocked models (300 s, one model at a
+time, 11 GB cap) with folding in both IC3 and k-induction engines: 55
+solved (54 with folding in IC3 only, 45 without); merged with the
+unchanged 220 other models that is 202 of 319, 0 wrong.
+
+*Note on the H16, H18 and H19 runs.* Those arms ran while other
+threads' jobs shared the machine. A later A/B on a quiet machine gave
+single IC3 with folding 14, 13, 13 (mean 13.3) on 04fdf49 and 14, 13,
+12 (13.0) on 5597fa0, so the build did not regress: their baseline of
+10.3 was load. Each of those arms is compared only with a baseline run
+under the same conditions.
+
 ### H18. The shared lemma pool is a trace: import it without asking (prediction, 2026-11-14)
 
 *Evidence.* The 4-worker IC3 re-proves every lemma it takes from another
@@ -593,7 +617,27 @@ mean of at least 8 (checked: 7.0), and no verdict is withdrawn by the
 certificate in any arm. If a single certificate fails, the claim is
 wrong somewhere and the mode stays off.
 
-*Result:* pending. The default stays `checked`.
+*Result (2026-11-16): miss on the solved count, hit on soundness.*
+All arms below ran on the same build (5597fa0, clock folding on by
+default), hard set of 29 models, 300 s, 3 seeds, with other threads'
+jobs on the machine at low priority. 4-worker IC3:
+
+| arm | solved per seed | mean |
+|---|---|---|
+| `checked` (default) | 15, 16, 16 | 15.7 |
+| `unchecked` | 17, 16, 15 | 16.0 |
+| `core` (standing invariants only) | 15, 15, 12 | 14.0 |
+| `off` (no sharing) | 13, 13, 11 | 12.3 |
+
+No certificate failed in any arm, so the claim that the pool prefix is
+a valid trace survived 36 runs of the unchecked mode. But the
+prediction (a mean of at least 8 against 7.0) was written on the
+unfolded engine; on the folded one unchecked gains one model
+(cv32e40x-p281, 0/3 to 2/3) and nothing clearly. Sharing itself is
+worth about 3.4 models (`off` loses Piccolo BEQ, p019, p131), and most
+of that needs the ordinary lemmas, not only the standing invariants.
+The default stays `checked`; `unchecked` is a candidate for one diverse
+worker.
 
 ### H19. Literals have memory: skip drops that keep failing (prediction, 2026-11-14)
 
@@ -633,7 +677,13 @@ instead of 9.7, three times as many of them, and four frames fewer.
 The length prediction (under 0.3 literals) is a miss on p658 and a16
 (+0.3). Single runs of a chaotic engine decide nothing either way.
 
-*Result:* pending the seeded hard set run. Off by default.
+*Result (2026-11-16): miss.* All arms below ran on the same build (5597fa0, clock folding on by
+default), hard set of 29 models, 300 s, 3 seeds, with other threads'
+jobs on the machine at low priority. Single IC3 with
+`INFORMAL_IC3_DROPSKIP=20`: 10, 14, 10 solved (mean 11.3) against 10.3,
+with no model clearly gained or lost. With the clock folded the guard
+literals are mostly gone (15% and 10% of failed drops above), so there
+is little left to skip. Off by default.
 
 - **H4. The obligation queue revisits the same region.** 2,657
   obligations, rising level by level. Measure how many obligations a new

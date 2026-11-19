@@ -12,10 +12,12 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 informal-engine.workspace = true
+informal-ir.workspace = true
 informal-aig.workspace = true
 informal-bmc.workspace = true
 informal-tcl.workspace = true
 informal-svlang.workspace = true
+libc = "0.2"
 
 [dev-dependencies]
 informal-engines-ext.workspace = true

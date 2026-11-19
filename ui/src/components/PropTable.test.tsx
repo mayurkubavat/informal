@@ -66,11 +66,22 @@ describe("PropTable", () => {
     expect(names()).toEqual(["a_max", "b_step", "c_cov"]);
   });
 
-  it("ignores clicks on the unsortable Task column", async () => {
-    table();
+  it("sorts by task", async () => {
+    const tasked = [{ ...props[0], name: "t::b_step", task: "t" }, props[1], props[2]];
+    render(<PropTable props={tasked} total={3} selected={null} onSelect={() => {}} onOpen={() => {}} />);
     const th = screen.getByRole("columnheader", { name: "Task" });
     await userEvent.click(th);
-    expect(th).not.toHaveAttribute("aria-sort");
+    expect(th).toHaveAttribute("aria-sort", "ascending");
+    expect(names()).toEqual(["a_max", "c_cov", "t::b_step"]);
+  });
+
+  it("hides the columns it is told to, and shows the measured ones", () => {
+    const measured = [{ ...props[0], stats: { wall_ms: 41, cpu_ms: 1500, invariant_clauses: 7, evidence: "invariant" } }, props[1], props[2]];
+    render(<PropTable props={measured} total={3} selected={null} onSelect={() => {}} onOpen={() => {}} hidden={["engine", "memory"]} />);
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads).toEqual(["", "Name", "Status", "Bound", "Time", "CPU", "Lemmas", "Proof", "Task"]);
+    const row = within(screen.getAllByRole("row")[1]).getAllByRole("cell").map((c) => c.textContent);
+    expect(row.slice(5, 8)).toEqual(["1.50s", "7", "invariant"]);
   });
 
   it("moves the selection with arrow keys, clamped at both ends", () => {

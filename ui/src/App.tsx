@@ -6,11 +6,11 @@
 // as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, type AiStatus, EngineLine, Flavor, type GuiRequest, type GuiState, ProveProgress, Reply, SessionView } from "./backend";
+import { backend, type AiStatus, type DesignInfo as DesignInfoData, EngineLine, Flavor, type GuiRequest, type GuiState, ProveProgress, Reply, SessionView } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
-  bound, clock, designScopes, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, TASK, sourceFile, sourceLine, statusKey, time, traceOf, withProgress,
-  type BottomTab, type Center, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
+  bound, clock, designScopes, memText, OPTIONAL_COLS, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, sourceFile, sourceLine, statusKey, taskOf, time, traceOf, withProgress,
+  type BottomTab, type Center, type ColKey, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useTheme } from "./useTheme";
 import { BOTTOM_DEFAULT, clampBottom, clampLeft, LEFT_MAX, LEFT_MIN, useLayout } from "./useLayout";
@@ -28,6 +28,7 @@ import { EngineLog } from "./components/EngineLog";
 import { SourceView } from "./components/SourceView";
 import { TraceView } from "./components/TraceView";
 import { Profiler } from "./components/Profiler";
+import { DesignInfo } from "./components/DesignInfo";
 import { KIND_LABEL, Proposals } from "./components/Proposals";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
@@ -71,13 +72,15 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
+  // The task the table shows (the task tree's selection); null: every task.
+  const [taskFilter, setTaskFilter] = useState<string | null>(null);
   // Text of files read for the source view and the design tree, by path.
   const [texts, setTexts] = useState<Record<string, string>>({});
   // The property shown in the trace tab (null: no trace tab), and its VCD.
   const [traceName, setTraceName] = useState<string | null>(null);
   const [trace, setTrace] = useState<{ path: string; text: string | null; error: string | null } | null>(null);
   const { layout, set } = useLayout();
-  const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW, profiler } = layout;
+  const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW, profiler, hidden } = layout;
   const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW, setProfiler] = useMemo(
     () => [set("center"), set("left"), set("leftOpen"), set("bottom"), set("bottomH"), set("leftW"), set("profiler")],
     [set],
@@ -96,6 +99,11 @@ export default function App() {
   const [focusReq, setFocusReq] = useState<{ id: string; n: number } | null>(null);
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
   const closeCtx = useCallback(() => setCtx(null), []);
+  // The column chooser (header right-click, the strip's Columns button).
+  const [colMenu, setColMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeColMenu = useCallback(() => setColMenu(null), []);
+  const setHidden = useMemo(() => set("hidden"), [set]);
+  const toggleCol = (k: ColKey) => setHidden((h) => (h.includes(k) ? h.filter((x) => x !== k) : [...h, k]));
   const pathRef = useRef<HTMLInputElement>(null);
 
   // ---- Ask mode ----
@@ -369,9 +377,13 @@ export default function App() {
   // A script's prove (`source` that adds properties and proves them) keeps
   // its rows from the last progress event until the script's reply lands.
   const allProps = withProgress(session?.props ?? [], live || proving || busy ? progress : null);
+  const tasks = session?.tasks?.map((t) => t.name);
+  // A task that is gone (task -delete) no longer filters.
+  const shownTask = taskFilter && (tasks ?? []).includes(taskFilter) ? taskFilter : null;
   const props = allProps.filter(
     (p) =>
       matches(p, filter) &&
+      (!shownTask || taskOf(p) === shownTask) &&
       (!statusFilter || statusKey(p) === statusFilter || (statusFilter !== "assume" && p.kind !== "assume" && p.status.status === statusFilter)),
   );
   const counts: Partial<Record<ViewStatus, number>> = {};
@@ -554,6 +566,26 @@ export default function App() {
   );
 
   const idle = !busy && !running;
+
+  // ---- Design Info tab ----
+  // Read when the tab is opened (it builds the current task's model, so it
+  // is not redone after every command: the tab says when it is out of date).
+  const [info, setInfo] = useState<{ data: DesignInfoData | null; error: string | null; of: SessionView | null }>({ data: null, error: null, of: null });
+  const [infoLoading, setInfoLoading] = useState(false);
+  const loadInfo = useCallback(() => {
+    const of = session;
+    setInfoLoading(true);
+    backend.designInfo().then(
+      (data) => setInfo({ data, error: null, of }),
+      (e) => setInfo((i) => ({ ...i, error: String(e instanceof Error ? e.message : e), of })),
+    ).finally(() => setInfoLoading(false));
+  }, [session]);
+  const infoOpen = bottomTab === "info";
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (infoOpen && !wasOpen.current && idle && session?.elaborated) loadInfo();
+    wasOpen.current = infoOpen && (!!session?.elaborated || wasOpen.current);
+  }, [infoOpen, idle, session?.elaborated, loadInfo]);
   const proveAll = () => allProps.length && idle && prove(proveCmd);
   const proveSelected = () => current && current.kind !== "assume" && idle && prove(proveOne(current.name));
   const runScript = () => {
@@ -725,7 +757,7 @@ export default function App() {
         { label: "Close design", disabled: true },
       ],
     },
-    { label: "Edit", items: [{ label: "Find property", keys: "Ctrl+F", onClick: focusFilter }, { label: "Clear filters", onClick: () => { setFilter(""); setStatusFilter(null); } }, { sep: true }, { label: "Console prompt", keys: "Ctrl+L", onClick: focusConsole }] },
+    { label: "Edit", items: [{ label: "Find property", keys: "Ctrl+F", onClick: focusFilter }, { label: "Clear filters", onClick: () => { setFilter(""); setStatusFilter(null); setTaskFilter(null); } }, { sep: true }, { label: "Console prompt", keys: "Ctrl+L", onClick: focusConsole }] },
     {
       label: "View",
       items: [
@@ -738,6 +770,8 @@ export default function App() {
         { label: "Messages", keys: "Ctrl+3", checked: bottomTab === "messages", onClick: () => setBottomTab("messages") },
         { label: "Log", keys: "Ctrl+4", checked: bottomTab === "log", onClick: () => setBottomTab("log") },
         { label: "Profiler", keys: "Ctrl+5", checked: profiler && bottomTab === "profiler", onClick: openProfiler },
+        { label: "Design Info", checked: bottomTab === "info", onClick: () => setBottomTab("info") },
+        { label: "Table columns…", onClick: () => setColMenu({ x: Math.max(8, window.innerWidth - 220), y: 80 }) },
         { sep: true },
         { label: "Input mode: Tcl", checked: inputMode === "tcl", onClick: () => setMode("tcl") },
         {
@@ -757,7 +791,7 @@ export default function App() {
         { label: "Theme: Dark", checked: theme === "dark", onClick: () => setTheme("dark") },
       ],
     },
-    { label: "Design", items: [{ label: "Show hierarchy", onClick: () => { setLeftOpen(true); setLeft("design"); } }, { label: "Elaborate", disabled: true }] },
+    { label: "Design", items: [{ label: "Show hierarchy", onClick: () => { setLeftOpen(true); setLeft("design"); } }, { label: "Design info", onClick: () => setBottomTab("info") }, { label: "Elaborate", disabled: true }] },
     {
       label: "Prove",
       items: [
@@ -878,6 +912,11 @@ export default function App() {
             </span>
             <span className="progress-text mono">
               {progress.done} of {progress.total} · {clock(progress.elapsed_ms)}
+              {(() => {
+                // The property an engine is on now: which engine, how deep, how long.
+                const r = progress.props.find((q) => q.status === "running");
+                return r ? ` · ${r.name}${r.engine ? ` ${r.engine}` : ""}${r.depth != null ? ` k=${r.depth}` : ""} ${clock(r.ms ?? 0)}` : "";
+              })()}
             </span>
           </span>
         )}
@@ -922,6 +961,10 @@ export default function App() {
                   selected={selected}
                   onSelect={setSelected}
                   onOpen={(n) => (traceOf(allProps.find((p) => p.name === n) ?? null) ? openTrace(n) : select(n))}
+                  tasks={tasks}
+                  current={session?.current_task}
+                  task={shownTask}
+                  onTask={setTaskFilter}
                 />
               ) : (
                 <DesignTree scopes={scopes} files={session?.design.files ?? []} fallback={!hierarchy?.length} onAddSignal={addSignal} />
@@ -966,7 +1009,12 @@ export default function App() {
                     clear status filter
                   </button>
                 )}
-                {(filter.trim() || statusFilter) && (
+                {shownTask && (
+                  <button className="link small" onClick={() => setTaskFilter(null)} title={`Showing task ${shownTask} only`}>
+                    all tasks
+                  </button>
+                )}
+                {(filter.trim() || statusFilter || shownTask) && (
                   <span className="filter-count" role="status" aria-live="polite">
                     {props.length} of {allProps.length}
                   </span>
@@ -986,6 +1034,17 @@ export default function App() {
                   }}
                   aria-label="Filter properties"
                 />
+                <button
+                  className="btn small"
+                  aria-haspopup="menu"
+                  title="Show or hide table columns (also: right-click the header)"
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setColMenu({ x: r.left, y: r.bottom + 2 });
+                  }}
+                >
+                  Columns
+                </button>
               </>
             ) : (
               <span className="strip-summary mono">{srcPath}{focusLine ? `:${focusLine}` : ""}</span>
@@ -1002,6 +1061,8 @@ export default function App() {
                 setSelected(p.name);
                 setCtx({ name: p.name, x, y });
               }}
+              hidden={hidden}
+              onHeaderContext={(x, y) => setColMenu({ x, y })}
             />
           ) : (
             <SourceView text={source} focus={focusLine} focusEnd={focusEnd} />
@@ -1030,6 +1091,7 @@ export default function App() {
               ["details", current ? `Details: ${current.name}` : "Details"],
               ["messages", `Messages${events.some((e) => !e.ok) ? ` (${events.filter((e) => !e.ok).length})` : ""}`],
               ["log", "Log"],
+              ["info", "Design Info"],
               ...(profiler ? ([["profiler", "Profiler", closeProfiler]] as [string, string, () => void][]) : []),
               ...(ai?.proposals.length ? ([["proposals", `Proposals${waiting ? ` (${waiting})` : ""}`]] as [string, string][]) : []),
             ]}
@@ -1093,7 +1155,34 @@ export default function App() {
                     <dt>Time</dt>
                     <dd className="mono">{time(current) || "—"}</dd>
                     <dt>Task</dt>
-                    <dd className="mono">{TASK}</dd>
+                    <dd className="mono">{taskOf(current)}</dd>
+                    {current.stats && current.status.status !== "running" && (
+                      <>
+                        <dt title="Process CPU time while the property ran, engine processes included; can exceed the wall time">CPU</dt>
+                        <dd className="mono">{current.stats.cpu_ms != null ? `${(current.stats.cpu_ms / 1000).toFixed(2)}s` : "not measured"}</dd>
+                        <dt title="trace: cycles to the failure or cover; k: k-induction; frames: IC3 frames; bound: BMC bound reached">Depth</dt>
+                        <dd className="mono">{current.stats.depth != null ? `${current.stats.depth} (${current.stats.depth_kind})` : "not measured"}{current.stats.max_bound != null ? ` · deepest bound ${current.stats.max_bound}` : ""}</dd>
+                        <dt title="What the winning engine gave">Evidence</dt>
+                        <dd className="mono">
+                          {current.stats.evidence ?? "none given"}
+                          {current.stats.invariant_clauses != null ? ` · ${current.stats.invariant_clauses} clause${current.stats.invariant_clauses === 1 ? "" : "s"}` : ""}
+                        </dd>
+                        <dt title="Only when the high-water mark rose during this property's run">Peak mem</dt>
+                        <dd className="mono">{current.stats.peak_rss_kb != null ? memText(current.stats.peak_rss_kb) : "not measured"}</dd>
+                        {current.stats.certificate && (
+                          <>
+                            <dt>Certificate</dt>
+                            <dd className="mono" title={current.stats.certificate}>{current.stats.certificate}</dd>
+                          </>
+                        )}
+                      </>
+                    )}
+                    {current.kind === "assert" && current.status.status === "proven" && (
+                      <>
+                        <dt>Vacuity</dt>
+                        <dd>{(current.vacuity ?? "not checked").replace(/-/g, " ")}</dd>
+                      </>
+                    )}
                     {current.ai && (
                       <>
                         <dt>Origin</dt>
@@ -1153,6 +1242,9 @@ export default function App() {
               <p className="empty">Select a property to see its expression, result and source.</p>
             ))}
           {bottomTab === "messages" && <Messages events={events} />}
+          {bottomTab === "info" && (
+            <DesignInfo info={info.data} error={info.error} loading={infoLoading} stale={!!info.data && info.of !== session} onRefresh={idle ? loadInfo : undefined} />
+          )}
           {bottomTab === "proposals" && ai && <Proposals ai={ai} busy={deciding || !idle} onDecide={decide} />}
           {bottomTab === "profiler" && profiler && <Profiler prop={current} props={allProps} />}
         </section>
@@ -1201,6 +1293,15 @@ export default function App() {
             { sep: true as const },
             { label: "Check connection", onClick: checkLlm },
           ]}
+        />
+      )}
+      {colMenu && (
+        <ContextMenu
+          x={colMenu.x}
+          y={colMenu.y}
+          label="Table columns"
+          onClose={closeColMenu}
+          items={OPTIONAL_COLS.map((c) => ({ label: c.label, checked: !hidden.includes(c.key), title: c.title, onClick: () => toggleCol(c.key) }))}
         />
       )}
       {ctx && ctxProp && <ContextMenu x={ctx.x} y={ctx.y} items={ctxItems} label={`Actions for ${ctxProp.name}`} onClose={closeCtx} />}

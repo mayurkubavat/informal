@@ -1,7 +1,7 @@
 # Vendor script tally
 
 What `informal shell --check` reports over public JasperGold and VC Formal scripts
-(`scripts/vendor_tcl_corpus.py`), as of 2026-11-14. Counts are scripts, not uses.
+(`scripts/vendor_tcl_corpus.py`), as of 2026-11-16. Counts are scripts, not uses.
 Regenerate after the shell learns a command; the corpus is kept outside the repo.
 
 Sources (repository, commit, scripts kept):
@@ -10,27 +10,27 @@ Sources (repository, commit, scripts kept):
 - lowRISC/ibex 3d524f19ee8e464b3fb0e29c77dc9ff45934815a 1 scripts
 - black-parrot/black-parrot d7f3156173c857271dc790766f77f5aaa3813dda 1 scripts
 
+Since tasks are modelled (D20), `prove -task` and `report -task` of a task
+no script made (OpenTitan's `Connectivity`, which JasperGold's connectivity
+app makes) are errors. In check mode nothing is elaborated, so `task -copy`
+and `assert -regexp` find no properties of the RTL to match.
+
 12 scripts, 0 would run to the end, 0 not checked
 
-## Commands informal does not have (24)
+## Commands informal does not have (19)
 
 | scripts | what |
 | ---: | --- |
 | 5 | `check_cov` |
-| 4 | `set_proofgrid_per_engine_max_local_jobs` |
 | 2 | `custom_engine` |
-| 2 | `set_proofgrid_max_local_jobs` |
 | 2 | `set_prove_cache` |
 | 2 | `set_prove_cache_mode` |
 | 2 | `set_prove_cache_path` |
-| 2 | `set_prove_per_property_time_limit` |
 | 1 | `blackbox_assistant` |
 | 1 | `check_conn` |
 | 1 | `check_fv_setup` |
-| 1 | `echo` |
 | 1 | `get_fv_complexity` |
 | 1 | `get_reset_info` |
-| 1 | `get_version` |
 | 1 | `report_abstractions` |
 | 1 | `report_fv_setup` |
 | 1 | `set_abstractions` |
@@ -45,27 +45,27 @@ Sources (repository, commit, scripts kept):
 
 | scripts | what |
 | ---: | --- |
-| 4 | `assert -regexp` |
+| 4 | `assert` |
 | 1 | `assume -from_assert` |
-| 1 | `clock_cmd -both_edges` |
 | 1 | `clock_cmd -rate` |
 | 1 | `fvassume -expr` |
 | 1 | `fvassume -regexp` |
-| 1 | `get_property_list -regexp` |
+| 1 | `get_property_list` |
 | 1 | `get_props -usage` |
-| 1 | `report -csv` |
-| 1 | `reset -expr` |
+| 1 | `prove` |
+| 1 | `report` |
+| 1 | `report -include_type` |
 
 ## Accepted and ignored (8)
 
 | scripts | what |
 | ---: | --- |
-| 6 | `task` |
-| 5 | `stopat -task` |
+| 5 | `task` |
 | 2 | `elaborate -disable_auto_bbox` |
-| 2 | `prove -task` |
 | 1 | `check_fv -block` |
-| 1 | `report -task` |
+| 1 | `clock -both_edges` |
+| 1 | `get_design_info -verbosity` |
+| 1 | `prove -task` |
 | 1 | `set_fml_var fml_max_mem` |
 | 1 | `stopat -env` |
 
@@ -95,4 +95,4 @@ Sources (repository, commit, scripts kept):
 
 ## Commands honoured (uses)
 
-`task` 18, `analyze` 13, `stopat` 7, `clear` 5, `get_design_info` 5, `elaborate` 4, `assert` 4, `clock_cmd` 3, `prove` 3, `report` 3, `reset` 3, `set_fml_var` 2, `get_property_list` 1, `set_prove_time_limit` 1, `set_proofgrid_mode` 1, `check_fv` 1, `create_clock` 1, `create_reset` 1, `report_fv` 1, `set_fml_appmode` 1, `sim_run` 1, `sim_save_reset` 1, `assume` 0, `fvassume` 0, `get_props` 0
+`task` 18, `analyze` 13, `stopat` 7, `clear` 5, `get_design_info` 5, `clock_cmd` 4, `elaborate` 4, `reset` 4, `set_proofgrid_per_engine_max_local_jobs` 4, `assert` 4, `get_property_list` 2, `prove` 2, `report` 2, `set_proofgrid_max_local_jobs` 2, `set_prove_per_property_time_limit` 2, `echo` 2, `set_fml_var` 2, `set_prove_time_limit` 1, `set_proofgrid_mode` 1, `get_version` 1, `check_fv` 1, `create_clock` 1, `create_reset` 1, `report_fv` 1, `set_fml_appmode` 1, `sim_run` 1, `sim_save_reset` 1, `assume` 0, `fvassume` 0, `get_props` 0

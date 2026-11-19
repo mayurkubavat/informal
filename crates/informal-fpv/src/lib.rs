@@ -6,10 +6,14 @@
 pub mod compat;
 pub mod progress;
 pub mod session;
+pub mod stats;
 pub mod trace;
 pub mod worker;
 
 pub use compat::{detect_flavor, Flavor, Shell};
 pub use progress::{EngineLine, ProgressKind, PropProgress, ProveProgress, ProveSink};
-pub use session::{Kind, Property, Session, SourceLoc, Status};
+pub use session::{
+    Environment, Kind, Property, Session, SourceLoc, Status, Task, Vacuity, EMBEDDED,
+};
+pub use stats::{DesignInfo, ProofStats, PropertyInfo};
 pub use worker::{Reply, Request, Worker};

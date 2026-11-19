@@ -12,7 +12,9 @@
 //! and are not implemented are errors, so a migrated script never passes
 //! silently on a different setup.
 
-use crate::session::{glob, parse_duration, Clock, Kind, Session, SourceLoc, Status};
+use crate::session::{
+    glob, parse_duration, qualify, Clock, Kind, Session, SourceLoc, Status, EMBEDDED,
+};
 use informal_tcl::{Interp, TclError, Value};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -473,11 +475,12 @@ fn apply_compile_words(
 
 fn add_props(
     s: &mut Session,
+    task: &str,
     kind: Kind,
     name: Option<String>,
     expr: &str,
 ) -> Result<Value, String> {
-    let name = s.add_property(kind, name, expr)?;
+    let name = s.add_property_in(task, kind, name, expr)?;
     let loc = match informal_tcl::caller_location() {
         Some((file, line)) => Some(SourceLoc::new(&file, line)),
         None => informal_tcl::current_script().and_then(|f| SourceLoc::search(&f, &name)),
@@ -488,10 +491,30 @@ fn add_props(
     Ok(name.into())
 }
 
+/// Properties by name or glob. A property of the RTL can also be named
+/// without its path (`a_never` for `top.a_never`, `u.a_x` for
+/// `top.u.a_x`); a short name that is not a glob must then name exactly one.
 fn select(s: &Session, patterns: &[String]) -> Result<Vec<usize>, String> {
     let mut out = Vec::new();
     for p in patterns.iter().flat_map(|p| p.split_whitespace()) {
-        let m = s.matching(p);
+        let mut m = s.matching(p);
+        if m.is_empty() {
+            let suffix = format!("*.{p}");
+            m = s
+                .props
+                .iter()
+                .enumerate()
+                .filter(|(_, q)| q.rtl && glob(&suffix, &q.name))
+                .map(|(i, _)| i)
+                .collect();
+            if m.len() > 1 && !p.contains(['*', '?']) {
+                let names: Vec<&str> = m.iter().map(|&i| s.props[i].name.as_str()).collect();
+                return Err(format!(
+                    "`{p}` is ambiguous: it names {}; give the full name",
+                    names.join(", ")
+                ));
+            }
+        }
         if m.is_empty() {
             return Err(format!("no property matches `{p}`"));
         }
@@ -500,6 +523,179 @@ fn select(s: &Session, patterns: &[String]) -> Result<Vec<usize>, String> {
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+/// Properties whose names a regular expression matches anywhere in them,
+/// as Tcl's `regexp` does (`-regexp`; anchor with `^` and `$`).
+fn select_regexp(s: &Session, patterns: &[String]) -> Result<Vec<usize>, String> {
+    let mut out = Vec::new();
+    for p in patterns.iter().flat_map(|p| p.split_whitespace()) {
+        let re = regex::Regex::new(p).map_err(|e| format!("bad regular expression `{p}`: {e}"))?;
+        // An embedded property is also matched by its full name,
+        // `<embedded>::<name>`, as JasperGold scripts write it.
+        let m: Vec<usize> = s
+            .props
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| {
+                re.is_match(&q.name)
+                    || (q.task == EMBEDDED && re.is_match(&format!("{EMBEDDED}::{}", q.name)))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if m.is_empty() {
+            return Err(format!("no property matches the regular expression `{p}`"));
+        }
+        out.extend(m);
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// [`select`] with `-task`: a name is first looked for in that task
+/// (`a_x` there is `<task>::a_x`).
+fn select_in(s: &Session, task: Option<&str>, patterns: &[String]) -> Result<Vec<usize>, String> {
+    let Some(t) = task else {
+        return select(s, patterns);
+    };
+    let mut out = Vec::new();
+    for p in patterns.iter().flat_map(|p| p.split_whitespace()) {
+        let q = qualify(t, p);
+        let mut m: Vec<usize> = s.matching(&q);
+        m.retain(|&i| s.props[i].task == t);
+        if m.is_empty() {
+            m = select(s, &[p.to_string()])?;
+        }
+        out.extend(m);
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// `task`: JasperGold's tasks (decision D20).
+///
+/// - `task -create <name> [-source_task <t>] [-copy <names>] [-regexp]
+///   [-copy_asserts] [-copy_assumes] [-copy_covers] [-copy_stopats] [-set]`
+/// - `task -edit <name>` with the same copy options
+/// - `task -set <name>`, `task -list`, `task -delete <name>`
+/// - `task` alone: the current task's name.
+///
+/// A copy is named `<task>::<name>` and starts unprocessed. Copies come
+/// from the source task (`-source_task`, else the current task).
+fn task(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    // `-set <name>` alone switches; with -create or -edit it is a flag.
+    if a.len() == 3 && a[1] == "-set" {
+        s.set_task(&a[2]).map_err(|e| format!("task: {e}"))?;
+        return Ok(a[2].clone().into());
+    }
+    let a = Args::parse(
+        a,
+        &[
+            ("-create", 1),
+            ("-edit", 1),
+            ("-delete", 1),
+            ("-list", 0),
+            ("-set", 0),
+            ("-source_task", 1),
+            ("-copy", 1),
+            ("-regexp", 0),
+            ("-copy_asserts", 0),
+            ("-copy_assumes", 0),
+            ("-copy_covers", 0),
+            ("-copy_stopats", 0),
+            ("-copy_all", 0),
+        ],
+        &[
+            ("-copy_ratings", 0),
+            ("-copy_abstractions", 1),
+            ("-copy_related_covers", 0),
+            ("-copy_proof_settings", 0),
+        ],
+    )?;
+    if a.flag("-list") {
+        return Ok(Value::List(
+            s.tasks.iter().map(|t| t.name.clone()).collect(),
+        ));
+    }
+    if let Some(t) = a.val("-delete") {
+        s.delete_task(t).map_err(|e| format!("task: {e}"))?;
+        return Ok(().into());
+    }
+    let name = match (a.val("-create"), a.val("-edit")) {
+        (Some(n), None) => {
+            s.create_task(n).map_err(|e| format!("task: {e}"))?;
+            n.to_string()
+        }
+        (None, Some(n)) => s.task_name(n).map_err(|e| format!("task: {e}"))?,
+        (Some(_), Some(_)) => return Err("task: -create and -edit together".into()),
+        (None, None) => {
+            if !a.pos.is_empty() || a.opts.iter().any(|(k, _)| k != "-set") {
+                return Err("task: -create, -edit, -set, -list or -delete is needed".into());
+            }
+            return Ok(s.current_task.clone().into());
+        }
+    };
+    let source = match a.val("-source_task") {
+        Some(t) => s.task_name(t).map_err(|e| format!("task: {e}"))?,
+        None => s.current_task.clone(),
+    };
+    if source == name && a.val("-create").is_some() {
+        return Err(format!(
+            "task: -source_task {source} is the task being made"
+        ));
+    }
+    let from = s.props_of(&source);
+    let all = a.flag("-copy_all");
+    let mut which: Vec<usize> = from
+        .iter()
+        .copied()
+        .filter(|&i| match s.props[i].kind {
+            Kind::Assert => all || a.flag("-copy_asserts"),
+            Kind::Assume => all || a.flag("-copy_assumes"),
+            Kind::Cover => all || a.flag("-copy_covers"),
+        })
+        .collect();
+    for pats in a.all("-copy") {
+        let words: Vec<String> = pats[0].split_whitespace().map(String::from).collect();
+        // Names are looked for in the source task.
+        let hit = |p: &crate::session::Property, w: &str| -> Result<bool, String> {
+            Ok(if a.flag("-regexp") {
+                let re = regex::Regex::new(w)
+                    .map_err(|e| format!("task: bad regular expression `{w}`: {e}"))?;
+                re.is_match(&p.name) || re.is_match(p.short_name())
+            } else {
+                glob(w, &p.name) || glob(w, p.short_name())
+            })
+        };
+        for w in &words {
+            let mut found = false;
+            for &i in &from {
+                if hit(&s.props[i], w)? {
+                    which.push(i);
+                    found = true;
+                }
+            }
+            if !found {
+                note(&format!(
+                    "task: -copy {w}: no property of task {source} matches"
+                ));
+            }
+        }
+    }
+    which.sort();
+    which.dedup();
+    s.copy_into(&name, &which)
+        .map_err(|e| format!("task: {e}"))?;
+    if all || a.flag("-copy_stopats") {
+        s.copy_stopats(&source, &name)
+            .map_err(|e| format!("task: {e}"))?;
+    }
+    if a.flag("-set") {
+        s.set_task(&name).map_err(|e| format!("task: {e}"))?;
+    }
+    Ok(name.into())
 }
 
 fn set_enabled(s: &mut Session, patterns: &[String], on: bool) -> Result<Value, String> {
@@ -541,31 +737,29 @@ fn stopat(s: &mut Session, a: &[String]) -> Result<Value, String> {
         &[("-clear", 0), ("-list", 0), ("-task", 1)],
         &[("-env", 0)],
     )?;
-    // Tasks are not modelled: the cut applies to every property. That only
-    // frees more (a proof still holds), unlike an assumption.
-    if let Some(t) = a.val("-task") {
-        note(&format!(
-            "{}: -task {t}: tasks are not modelled, the cut applies to every property",
-            a.cmd
-        ));
-    }
+    // The task's own cut points: `-task`, else the current task.
+    let task = match a.val("-task") {
+        Some(t) => s.task_name(t).map_err(|e| format!("{}: {e}", a.cmd))?,
+        None => s.current_task.clone(),
+    };
     let names: Vec<String> = a
         .pos
         .iter()
         .flat_map(|w| w.split_whitespace().map(String::from))
         .collect();
     if a.flag("-list") {
-        return Ok(Value::List(s.design.stopats.clone()));
+        return Ok(Value::List(s.stopats_of(&task).to_vec()));
     }
     let names = names
         .iter()
         .map(|n| s.cut_point(n).map_err(|e| format!("{}: {e}", a.cmd)))
         .collect::<Result<Vec<_>, _>>()?;
+    let cuts = s.stopats_mut(&task)?;
     if a.flag("-clear") {
         if names.is_empty() {
-            s.design.stopats.clear();
+            cuts.clear();
         } else {
-            s.design.stopats.retain(|x| !names.contains(x));
+            cuts.retain(|x| !names.contains(x));
         }
         return Ok(().into());
     }
@@ -573,15 +767,22 @@ fn stopat(s: &mut Session, a: &[String]) -> Result<Value, String> {
         return Err(format!("{}: signal name(s) required", a.cmd));
     }
     for n in names {
-        if !s.design.stopats.contains(&n) {
-            s.design.stopats.push(n);
+        if !cuts.contains(&n) {
+            cuts.push(n);
         }
     }
     Ok(().into())
 }
 
 /// Property names filtered by `{key value ...}` pairs on type and status.
-fn filter_props(s: &Session, include: Option<&str>, exclude: Option<&str>) -> Vec<String> {
+fn filter_props(
+    s: &Session,
+    include: Option<&str>,
+    exclude: Option<&str>,
+    regexp: bool,
+    task: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let task = task.map(|t| s.task_name(t)).transpose()?;
     let pairs = |spec: Option<&str>| -> Vec<(String, String)> {
         let w: Vec<String> = spec
             .unwrap_or("")
@@ -594,24 +795,52 @@ fn filter_props(s: &Session, include: Option<&str>, exclude: Option<&str>) -> Ve
             .collect()
     };
     let (inc, exc) = (pairs(include), pairs(exclude));
+    // With -regexp, a name value is a regular expression.
+    let mut res = std::collections::HashMap::new();
+    if regexp {
+        for (k, v) in inc
+            .iter()
+            .chain(&exc)
+            .filter(|(k, _)| k == "name" || k == "-name")
+        {
+            let re =
+                regex::Regex::new(v).map_err(|e| format!("bad regular expression `{v}`: {e}"))?;
+            res.insert((k.clone(), v.clone()), re);
+        }
+    }
     let matches = |p: &crate::session::Property, (k, v): &(String, String)| match k.as_str() {
         "type" | "-type" => p.kind.label() == v || (v == "assertion" && p.kind == Kind::Assert),
         "status" | "-status" => {
             glob(v, p.status.word()) || (v == "falsified" && p.status.word() == "cex")
         }
-        "name" => glob(v, &p.name),
+        "name" | "-name" => match res.get(&(k.clone(), v.clone())) {
+            Some(re) => re.is_match(&p.name),
+            None => glob(v, &p.name),
+        },
+        "disabled" | "-disabled" => (v == "1" || v == "true") != p.enabled,
+        "task" | "-task" => p.task == *v,
         _ => true,
     };
-    s.props
+    Ok(s.props
         .iter()
+        .filter(|p| task.as_deref().is_none_or(|t| p.task == t))
         .filter(|p| inc.iter().all(|kv| matches(p, kv)) && !exc.iter().any(|kv| matches(p, kv)))
         .map(|p| p.name.clone())
-        .collect()
+        .collect())
 }
 
 // ---------------------------------------------------------------- commands
 
 const COMMON: &[(&str, Body)] = &[
+    ("get_version", |_, _| {
+        Ok(format!("informal {}", env!("CARGO_PKG_VERSION")).into())
+    }),
+    ("echo", |s, a| {
+        if !s.dry_run {
+            println!("{}", a[1..].join(" "));
+        }
+        Ok(().into())
+    }),
     ("session", |s, _| {
         serde_json::to_string_pretty(s)
             .map(Value::from)
@@ -646,6 +875,30 @@ const COMMON: &[(&str, Body)] = &[
         // The design is read again with the new setting at the next
         // elaborate or prove.
         s.elaborated = false;
+        Ok(().into())
+    }),
+    ("check_assumptions", check_assumptions),
+    ("set_vacuity", |s, a| {
+        match a.get(1).map(String::as_str) {
+            None => {
+                return Ok(Value::from(if s.environment_depth > 0 {
+                    "on"
+                } else {
+                    "off"
+                }));
+            }
+            Some("on") => {
+                if s.environment_depth == 0 {
+                    s.environment_depth = 20;
+                }
+                s.preconditions = true;
+            }
+            Some("off") => {
+                s.environment_depth = 0;
+                s.preconditions = false;
+            }
+            Some(v) => return Err(format!("set_vacuity: on or off, not `{v}`")),
+        }
         Ok(().into())
     }),
     ("set_engines", |s, a| {
@@ -741,12 +994,12 @@ const JG: &[(&str, Body)] = &[
                 ("-parameter", 2),
                 ("-bbox_m", 1),
                 ("-bbox_i", 1),
+                ("-create_related_covers", 1),
+                ("-no_preconditions", 0),
             ],
             &[
                 ("-bbox_mul", 1),
-                ("-create_related_covers", 1),
                 ("-disable_auto_bbox", 0),
-                ("-no_preconditions", 0),
                 ("-bbox_a", 1),
                 ("-loop_limit", 1),
                 ("-multiple_tops", 0),
@@ -769,6 +1022,20 @@ const JG: &[(&str, Body)] = &[
                 })
                 .collect()
         };
+        // Precondition covers are made for every proven assertion unless
+        // this elaboration asks for none; witness covers are not yet run.
+        if a.flag("-no_preconditions") {
+            s.preconditions = false;
+        }
+        for kinds in a.all("-create_related_covers") {
+            for k in kinds[0].split_whitespace() {
+                match k {
+                    "precondition" => s.preconditions = true,
+                    "witness" => s.log("elaborate -create_related_covers witness: witness covers are not yet run; precondition covers are (docs/vacuity.md)"),
+                    _ => return Err(format!("elaborate -create_related_covers: precondition or witness, not `{k}`")),
+                }
+            }
+        }
         s.design.bbox = list("-bbox_m");
         s.design.bbox_instances = list("-bbox_i");
         s.elaborate(a.val("-top").map(String::from))
@@ -829,13 +1096,13 @@ const JG: &[(&str, Body)] = &[
     ("reset", |s, a| {
         let a = Args::parse(
             a,
-            &[("-expression", 1), ("-none", 0)],
+            &[("-expression", 1), ("-expr", 1), ("-none", 0)],
             &[("-non_resettable_regs", 1), ("-analyze_only", 0)],
         )?;
         let old = s.reset.clone();
         s.reset = if a.flag("-none") {
             None
-        } else if let Some(e) = a.val("-expression") {
+        } else if let Some(e) = a.val("-expression").or(a.val("-expr")) {
             Some(e.to_string())
         } else if !a.pos.is_empty() {
             Some(a.pos.join(" "))
@@ -854,7 +1121,12 @@ const JG: &[(&str, Body)] = &[
     ("prove", |s, a| {
         let a = Args::parse(
             a,
-            &[("-all", 0), ("-property", 1), ("-time_limit", 1)],
+            &[
+                ("-all", 0),
+                ("-property", 1),
+                ("-time_limit", 1),
+                ("-task", 1),
+            ],
             &[
                 ("-bg", 0),
                 ("-with_proof_core", 0),
@@ -862,24 +1134,52 @@ const JG: &[(&str, Body)] = &[
                 ("-per_property_time_limit", 1),
                 ("-dump_trace", 0),
                 ("-sst", 1),
-                ("-task", 1),
                 ("-orchestration", 1),
             ],
         )?;
         if let Some(t) = a.val("-time_limit") {
             s.time_limit = parse_duration(t)?;
         }
+        let task = a.val("-task").map(|t| s.task_name(t)).transpose()?;
         let which: Vec<String> = a.all("-property").flatten().cloned().collect();
-        let which = if which.is_empty() {
-            Vec::new()
-        } else {
-            select(s, &which)?
+        let which = match (&task, which.is_empty()) {
+            // -task alone: every enabled assertion and cover of that task.
+            (Some(t), true) => {
+                let members: Vec<usize> = s
+                    .props_of(t)
+                    .into_iter()
+                    .filter(|&i| s.props[i].enabled && s.props[i].kind != Kind::Assume)
+                    .collect();
+                if members.is_empty() {
+                    note(&format!("prove -task {t}: the task has nothing to prove"));
+                    return Ok(().into());
+                }
+                members
+            }
+            (_, true) => Vec::new(),
+            (t, false) => select_in(s, t.as_deref(), &which)?,
         };
         prove_and_report(s, &which)
     }),
     ("get_property_list", |s, a| {
-        let a = Args::parse(a, &[("-include", 1), ("-exclude", 1)], &[("-task", 1)])?;
-        Ok(filter_props(s, a.val("-include"), a.val("-exclude")).into())
+        let a = Args::parse(
+            a,
+            &[
+                ("-include", 1),
+                ("-exclude", 1),
+                ("-regexp", 0),
+                ("-task", 1),
+            ],
+            &[],
+        )?;
+        Ok(filter_props(
+            s,
+            a.val("-include"),
+            a.val("-exclude"),
+            a.flag("-regexp"),
+            a.val("-task"),
+        )?
+        .into())
     }),
     ("get_status", |s, a| {
         let n = a.get(1).ok_or("get_status: property name required")?;
@@ -888,6 +1188,14 @@ const JG: &[(&str, Body)] = &[
     }),
     ("set_prove_time_limit", |s, a| {
         s.time_limit = parse_duration(a.get(1).ok_or("set_prove_time_limit: time required")?)?;
+        Ok(().into())
+    }),
+    // informal's limit is per property already.
+    ("set_prove_per_property_time_limit", |s, a| {
+        s.time_limit = parse_duration(
+            a.get(1)
+                .ok_or("set_prove_per_property_time_limit: time required")?,
+        )?;
         Ok(().into())
     }),
     ("set_engine_mode", |s, a| {
@@ -918,48 +1226,297 @@ const JG: &[(&str, Body)] = &[
         names.retain(|n| known.contains(n));
         if names.is_empty() {
             note("set_engine_mode: none of the matching engines is available; using all engines");
+        } else {
+            note(&format!("set_engine_mode: using {}", names.join(", ")));
         }
         s.engine_filter = names;
         Ok(().into())
     }),
     ("report", |s, a| {
-        let _ = Args::parse(
+        let a = Args::parse(
             a,
-            &[("-summary", 0), ("-results", 0)],
-            &[("-task", 1), ("-file", 1), ("-force", 0)],
+            &[
+                ("-summary", 0),
+                ("-results", 0),
+                ("-csv", 0),
+                ("-file", 1),
+                ("-force", 0),
+                ("-task", 1),
+                ("-design", 0),
+                ("-detail", 0),
+                ("-property", 1),
+            ],
+            &[],
         )?;
-        let r = s.report();
-        if !s.dry_run {
-            print!("{r}");
+        let task = a.val("-task").map(|t| s.task_name(t)).transpose()?;
+        let r = if a.flag("-design") {
+            if s.dry_run {
+                return Ok(().into());
+            }
+            s.design_info().text()
+        } else if a.flag("-detail") || a.val("-property").is_some() {
+            // One block per property: what its last prove measured.
+            let which: Vec<usize> = match a.val("-property") {
+                Some(p) => select_in(s, task.as_deref(), &[p.to_string()])?,
+                None => (0..s.props.len())
+                    .filter(|&i| task.as_deref().is_none_or(|t| s.props[i].task == t))
+                    .collect(),
+            };
+            which
+                .iter()
+                .map(|&i| s.property_info(i, false).text())
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else if a.flag("-csv") {
+            s.report_csv_of(task.as_deref())
+        } else {
+            s.report_of(task.as_deref())
+        };
+        if s.dry_run {
+            return Ok(r.into());
+        }
+        match a.val("-file") {
+            Some(f) => {
+                let path = Path::new(f);
+                if path.exists() && !a.flag("-force") {
+                    return Err(format!("report: {f} exists; add -force to overwrite it"));
+                }
+                std::fs::write(path, &r).map_err(|e| format!("report: {f}: {e}"))?;
+            }
+            None => print!("{r}"),
         }
         Ok(r.into())
     }),
-    ("get_design_info", |s, _| {
-        Ok(format!(
-            "top {} files {} clocks {} props {}",
-            s.design.top.as_deref().unwrap_or("-"),
-            s.design.files.len(),
-            s.clocks.len(),
-            s.props.len()
-        )
-        .into())
+    ("get_design_info", get_design_info),
+    ("get_property_info", get_property_info),
+    ("get_stats", |s, a| {
+        let a = Args::parse(a, &[("-task", 1)], &[])?;
+        let task = a.val("-task").map(|t| s.task_name(t)).transpose()?;
+        let rows: Vec<serde_json::Value> = s
+            .props
+            .iter()
+            .filter(|p| task.as_deref().is_none_or(|t| p.task == t))
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "task": p.task,
+                    "kind": p.kind.label(),
+                    "status": p.status.word(),
+                    "vacuity": p.vacuity.map(|v| v.word()),
+                    "stats": p.stats,
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&rows)
+            .map(Value::from)
+            .map_err(|e| e.to_string())
     }),
     ("stopat", stopat),
-    ("task", |_, a| {
-        note(&format!(
-            "task {}: tasks are not modelled yet; properties stay in one task",
-            a[1..].join(" ")
-        ));
+    ("task", task),
+    ("get_task_list", |s, _| {
+        Ok(Value::List(
+            s.tasks.iter().map(|t| t.name.clone()).collect(),
+        ))
+    }),
+    ("visualize", visualize),
+    ("set_proofgrid_per_engine_max_jobs", |_, _| Ok(().into())),
+    ("set_proofgrid_per_engine_max_local_jobs", |_, _| {
         Ok(().into())
     }),
-    ("visualize", |_, _| {
-        Err("visualize: the waveform UI is not available yet (phase 1 UI v1)".into())
-    }),
-    ("set_proofgrid_per_engine_max_jobs", |_, _| Ok(().into())),
+    ("set_proofgrid_max_local_jobs", |_, _| Ok(().into())),
     ("set_proofgrid_max_jobs", |_, _| Ok(().into())),
     ("set_proofgrid_mode", |_, _| Ok(().into())),
     ("set_max_trace_length", |_, _| Ok(().into())),
 ];
+
+/// `get_design_info [-json] [-list instance|memory|clock|reset [-filter P
+/// [-regexp]]]`: the design's counts and the current task's model size
+/// (stats.rs). The table by default, JSON with `-json`, names with `-list`.
+fn get_design_info(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[("-json", 0), ("-list", 1), ("-filter", 1), ("-regexp", 0)],
+        &[("-verbosity", 1), ("-silent", 0)],
+    )?;
+    if s.dry_run {
+        return Ok(().into());
+    }
+    if let Some(what) = a.val("-list") {
+        let d = s.elab.as_ref().ok_or("get_design_info: elaborate first")?;
+        let stats = d.stats.clone().unwrap_or_default();
+        let names: Vec<String> = match what {
+            "instance" | "instances" => d.instances.iter().map(|i| i.path.clone()).collect(),
+            "memory" | "memories" => stats.memories.iter().map(|m| m.name.clone()).collect(),
+            "clock" | "clocks" => stats.clocks.iter().map(|c| c.signal.clone()).collect(),
+            "reset" | "resets" => stats.resets.iter().map(|r| r.signal.clone()).collect(),
+            other => {
+                return Err(format!(
+                "get_design_info -list {other}: not supported yet (instance, memory, clock, reset)"
+            ))
+            }
+        };
+        let keep = |n: &str| -> Result<bool, String> {
+            match (a.val("-filter"), a.flag("-regexp")) {
+                (None, _) => Ok(true),
+                (Some(f), true) => regex::Regex::new(f)
+                    .map(|re| re.is_match(n))
+                    .map_err(|e| format!("get_design_info: bad regular expression `{f}`: {e}")),
+                (Some(f), false) => Ok(glob(f, n)),
+            }
+        };
+        let mut out = Vec::new();
+        for n in names {
+            if keep(&n)? {
+                out.push(n);
+            }
+        }
+        return Ok(Value::List(out));
+    }
+    let info = s.design_info();
+    if a.flag("-json") {
+        return serde_json::to_string_pretty(&info)
+            .map(Value::from)
+            .map_err(|e| e.to_string());
+    }
+    let text = info.text();
+    print!("{text}");
+    Ok(text.into())
+}
+
+/// `get_property_info <name> [-json] [-cone]`: what the last prove
+/// measured for one property; `-cone` adds its cone of influence (it
+/// lowers the design).
+fn get_property_info(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(a, &[("-json", 0), ("-cone", 0), ("-task", 1)], &[])?;
+    let [name] = a.pos.as_slice() else {
+        return Err("get_property_info: name one property".into());
+    };
+    let task = a.val("-task").map(|t| s.task_name(t)).transpose()?;
+    let i = match select_in(s, task.as_deref(), std::slice::from_ref(name))?.as_slice() {
+        [i] => *i,
+        many => {
+            return Err(format!(
+                "get_property_info: `{name}` names {} properties; name one",
+                many.len()
+            ))
+        }
+    };
+    let info = s.property_info(i, a.flag("-cone"));
+    if a.flag("-json") {
+        return serde_json::to_string_pretty(&info)
+            .map(Value::from)
+            .map_err(|e| e.to_string());
+    }
+    Ok(info.text().into())
+}
+
+/// `check_assumptions [-depth N]`: the environment check on its own (it
+/// also runs before every prove): whether the assumptions and the reset
+/// allow traces of N model steps. Returns the number of steps they allow.
+/// `-conflict` is what it checks; `-dead_end` is not done yet.
+fn check_assumptions(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(a, &[("-depth", 1), ("-conflict", 0)], &[])?;
+    let depth = match a.val("-depth") {
+        None => s.environment_depth.max(1),
+        Some(v) => v
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=10_000).contains(n))
+            .ok_or_else(|| format!("check_assumptions: -depth takes 1 to 10000, not `{v}`"))?,
+    };
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let env = s
+        .environment_now(depth)
+        .map_err(|e| format!("check_assumptions: {e}"))?;
+    match env.allowed {
+        // -conflict: the assumptions that conflict, as a list (empty when
+        // none do).
+        Some(_) if a.flag("-conflict") => Ok(Value::List(env.conflict_set)),
+        Some(n) => Ok(Value::from(n.to_string())),
+        None => Err("check_assumptions: could not decide (no in-house BMC, or out of time)".into()),
+    }
+}
+
+/// `visualize -violation|-cover -property P`: the trace of a CEX or cover,
+/// as the VCD file prove wrote. It is opened with the program named by
+/// INFORMAL_WAVE_VIEWER (`surfer`, `gtkwave`) when that is set; the path is
+/// returned either way, for the desktop UI's trace view or any VCD viewer.
+fn visualize(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[("-violation", 0), ("-cover", 0), ("-property", 1)],
+        &[
+            ("-new_window", 0),
+            ("-window", 1),
+            ("-bg", 0),
+            ("-min_length", 0),
+            ("-max_length", 1),
+            ("-task", 1),
+        ],
+    )?;
+    let names: Vec<String> = a
+        .val("-property")
+        .map(String::from)
+        .into_iter()
+        .chain(a.pos.iter().cloned())
+        .collect();
+    let [name] = names.as_slice() else {
+        return Err("visualize: name one property with -property".into());
+    };
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let i = match select(s, std::slice::from_ref(name))?.as_slice() {
+        [i] => *i,
+        many => {
+            return Err(format!(
+                "visualize: `{name}` names {} properties; name one",
+                many.len()
+            ))
+        }
+    };
+    let p = &s.props[i];
+    let want = if a.flag("-cover") { "covered" } else { "cex" };
+    if p.status.word() != want {
+        return Err(format!(
+            "visualize: {} is {}; there is a trace only for a {}",
+            p.name,
+            p.status.word(),
+            if want == "cex" {
+                "failing assertion (-violation)"
+            } else {
+                "covered cover (-cover)"
+            }
+        ));
+    }
+    let Some(path) = p.trace.clone() else {
+        return Err(format!(
+            "visualize: no trace was written for {} (see the prove log)",
+            p.name
+        ));
+    };
+    match std::env::var("INFORMAL_WAVE_VIEWER") {
+        Ok(viewer) if !viewer.trim().is_empty() => {
+            let mut words = viewer.split_whitespace();
+            let prog = words.next().unwrap_or_default();
+            std::process::Command::new(prog)
+                .args(words)
+                .arg(&path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| format!("visualize: starting {prog}: {e}"))?;
+            note(&format!("visualize: {path} opened in {prog}"));
+        }
+        _ => note(&format!(
+            "visualize: trace in {path} (open it in the InFormal UI or a VCD viewer; set INFORMAL_WAVE_VIEWER to open it from here)"
+        )),
+    }
+    Ok(path.into())
+}
 
 fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     let a = Args::parse(
@@ -972,14 +1529,33 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
             ("-env", 0),
             ("-bound", 1),
             ("-task", 1),
+            ("-regexp", 0),
         ],
         &[("-severity", 1), ("-tag", 1), ("-from_property", 1)],
     )?;
+    let task = a.val("-task").map(|t| s.task_name(t)).transpose()?;
+    let pick = |s: &Session| {
+        let found = if a.flag("-regexp") {
+            select_regexp(s, &a.pos)
+        } else {
+            select_in(s, task.as_deref(), &a.pos)
+        }?;
+        Ok::<_, String>(match &task {
+            Some(t) => found
+                .into_iter()
+                .filter(|&i| &s.props[i].task == t)
+                .collect(),
+            None => found,
+        })
+    };
     if a.flag("-disable") || a.flag("-enable") {
-        return set_enabled(s, &a.pos, a.flag("-enable"));
+        for i in pick(s)? {
+            s.props[i].enabled = a.flag("-enable");
+        }
+        return Ok(().into());
     }
     if a.flag("-remove") {
-        let drop = select(s, &a.pos)?;
+        let drop = pick(s)?;
         let mut i = 0;
         s.props.retain(|_| {
             i += 1;
@@ -989,6 +1565,12 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     }
     if a.flag("-bound") {
         return Err(format!("{}: -bound is not supported yet", a.cmd));
+    }
+    if a.flag("-regexp") {
+        return Err(format!(
+            "{}: -regexp selects properties with -enable, -disable or -remove",
+            a.cmd
+        ));
     }
     let expr = match a.pos.as_slice() {
         [e] => e.clone(),
@@ -1005,22 +1587,8 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     } else {
         kind
     };
-    // Tasks are not modelled: every property is in one task. That is
-    // harmless for a target, but an assumption scoped to another task would
-    // constrain every property here.
-    if let Some(t) = a.val("-task").filter(|t| *t != "<embedded>") {
-        if kind == Kind::Assume {
-            return Err(format!(
-                "{}: -task {t}: tasks are not modelled, and applying this assumption to every property could prove them vacuously",
-                a.cmd
-            ));
-        }
-        note(&format!(
-            "{}: -task {t} ignored (tasks are not modelled)",
-            a.cmd
-        ));
-    }
-    add_props(s, kind, a.val("-name").map(String::from), &expr)
+    let task = task.unwrap_or_else(|| s.current_task.clone());
+    add_props(s, &task, kind, a.val("-name").map(String::from), &expr)
 }
 
 const VCF: &[(&str, Body)] = &[
@@ -1177,7 +1745,7 @@ const VCF: &[(&str, Body)] = &[
             let st = if st == "falsified" { "cex" } else { st };
             inc += &format!("status {st}");
         }
-        let mut names = filter_props(s, Some(&inc), None);
+        let mut names = filter_props(s, Some(&inc), None, false, None)?;
         if let Some(p) = a.pos.first() {
             names.retain(|n| glob(p, n));
         }
@@ -1225,7 +1793,8 @@ fn vcf_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> 
             ))
         }
     };
-    add_props(s, kind, name, &expr)
+    let task = s.current_task.clone();
+    add_props(s, &task, kind, name, &expr)
 }
 
 /// Command names a flavor defines (its map plus the commands shared by
@@ -1494,6 +2063,57 @@ mod tests {
         sh.activate(Flavor::Jg);
         assert!(sh.eval("info commands ::check_fv").unwrap().is_empty());
         assert_eq!(sh.eval("get_property_list").unwrap(), "p1 c1");
+    }
+
+    #[test]
+    fn short_names_regexp_and_small_commands() {
+        let sh = shell(Flavor::Jg);
+        sh.eval("assert -name a1 {x}; assert -name a2 {y}; cover -name c1 {z}")
+            .unwrap();
+        // Make two of them look like properties of the RTL.
+        {
+            let mut s = sh.session.borrow_mut();
+            for (i, n) in ["top.a_never", "top.u.a_never"].iter().enumerate() {
+                s.props[i].name = n.to_string();
+                s.props[i].rtl = true;
+            }
+        }
+        assert_eq!(sh.eval("get_status u.a_never").unwrap(), "unprocessed");
+        let e = sh.eval("get_status a_never").unwrap_err();
+        assert!(e.message.contains("ambiguous"), "{}", e.message);
+        // A glob may match several.
+        sh.eval("assert -disable a_n*").unwrap();
+        assert!(sh.session.borrow().props[..2].iter().all(|p| !p.enabled));
+        // -regexp matches anywhere in the name, as Tcl's regexp does.
+        sh.eval("assert -enable -regexp {^top\\.u\\.}").unwrap();
+        assert!(sh.session.borrow().props[1].enabled && !sh.session.borrow().props[0].enabled);
+        assert_eq!(
+            sh.eval("get_property_list -regexp -include {name a_n.*r$}")
+                .unwrap(),
+            "top.a_never top.u.a_never"
+        );
+        assert!(sh.eval("assert -regexp {x}").is_err());
+        // Small commands.
+        assert!(sh.eval("get_version").unwrap().starts_with("informal "));
+        sh.eval("set_prove_time_limit 500ms").unwrap();
+        assert_eq!(sh.session.borrow().time_limit.as_millis(), 500);
+        sh.eval("set_prove_per_property_time_limit 2m").unwrap();
+        assert_eq!(sh.session.borrow().time_limit.as_secs(), 120);
+        sh.eval("reset -expr {!rst_n}").unwrap();
+        assert_eq!(sh.session.borrow().reset.as_deref(), Some("!rst_n"));
+        sh.eval("set_proofgrid_max_local_jobs 4; set_proofgrid_per_engine_max_local_jobs 2")
+            .unwrap();
+        let csv = sh.eval("report -csv").unwrap();
+        assert!(
+            csv.starts_with("property,type,status,engine,detail\n"),
+            "{csv}"
+        );
+        assert!(csv.contains("c1,cover,unprocessed,,"), "{csv}");
+        // No trace before a prove: said, not a silent nothing.
+        let e = sh
+            .eval("visualize -violation -property u.a_never")
+            .unwrap_err();
+        assert!(e.message.contains("is unprocessed"), "{}", e.message);
     }
 
     #[test]

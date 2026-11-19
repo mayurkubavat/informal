@@ -52,8 +52,8 @@ archives from git, checked against the hashes in Bitwuzla's wrap files.
 macOS (MacBook, arm64): Homebrew has no `tcl-tk@8` any more; point
 `INFORMAL_TCL_LIB_DIR` at a Tcl 8.6 library (8.6.15 works). GMP needs
 `RUSTFLAGS="-L /opt/homebrew/lib"`. Bitwuzla installs its library in
-`install/lib`, not `install/lib/x86_64-linux-gnu`, so `scripts/tools.sh
-check` reports it missing there although the build finds it.
+`install/lib`, not `install/lib/x86_64-linux-gnu`; `scripts/tools.sh`
+accepts either.
 
 Not installed: Pono and BtorMC (their `engines.toml` entries are
 unchecked), Surfer (the app's trace hand-off hides itself without it).

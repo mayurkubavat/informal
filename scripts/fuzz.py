@@ -59,6 +59,8 @@ def main():
     ap.add_argument("--config", default="config/engines.toml", help="the external engines' configuration")
     ap.add_argument("--large", action="store_true", help="aigfuzz's large circuits instead of small ones")
     args = ap.parse_args()
+    if not (0 <= args.seed and args.seed + args.count <= 2**31 - 1):
+        sys.exit("fuzz: aigfuzz reads its seed as a C int: seeds must be between 0 and 2147483647")
     fuzz = aigfuzz()
     if not os.access(args.informal, os.X_OK):
         sys.exit(f"fuzz: no {args.informal} (cargo build --release -p informal-cli, or --informal)")

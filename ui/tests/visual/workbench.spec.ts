@@ -91,7 +91,7 @@ for (const s of sizes)
 
       test("design browser", async ({ page }) => {
         await ready(page, "fast=1&design=fifo");
-        await page.getByRole("tab", { name: "Design" }).click();
+        await page.getByRole("tab", { name: "Design", exact: true }).click();
         await page.getByRole("treeitem").filter({ hasText: "u_wp" }).click();
         await expect(page.locator(".design-head")).toContainText("fifo.u_wp");
         await shot(page, n("design"));
@@ -126,7 +126,7 @@ for (const s of sizes)
           localStorage.setItem("informal-layout", JSON.stringify({ leftW: 320, bottomH: 320, left: "design", center: "table", bottom: "console", leftOpen: true })),
         );
         await ready(page);
-        await expect(page.getByRole("tab", { name: "Design" })).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByRole("tab", { name: "Design", exact: true })).toHaveAttribute("aria-selected", "true");
         await shot(page, n("layout"));
       });
 
@@ -139,7 +139,7 @@ for (const s of sizes)
 
       test("prove running", async ({ page }) => {
         await midRun(page);
-        await expect(page.locator(".progress-text")).toHaveText("1 of 5 · 0:00");
+        await expect(page.locator(".progress-text")).toContainText("1 of 5 · 0:00 · ");
         await shot(page, n("running"));
       });
 

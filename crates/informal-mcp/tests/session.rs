@@ -113,6 +113,9 @@ fn stable(v: &Value) -> Value {
                     "engine" => json!("<engine>"),
                     "time_ms" | "depth" => json!(0),
                     "engines" => json!("<engines>"),
+                    // Measured times and engine-dependent sizes; their
+                    // content is tested in informal-fpv's tests/stats.rs.
+                    "stats" => json!("<stats>"),
                     _ => stable(v),
                 };
                 (k.clone(), v)

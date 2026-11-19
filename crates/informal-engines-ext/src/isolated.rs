@@ -238,6 +238,7 @@ impl Engine for Isolated {
             Some(b) => {
                 let mut c = Command::new("systemd-run");
                 c.args(["--user", "--scope", "--quiet", "--collect"])
+                    .args(crate::rdev_slice())
                     // Above the child's own budget, so that stops it first.
                     .arg(format!("-pMemoryMax={}M", b / 1_000_000 / 10 * 12))
                     .arg("-pMemorySwapMax=0")
@@ -257,6 +258,7 @@ impl Engine for Isolated {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        crate::die_with_parent(&mut cmd);
         let mut child = cmd
             .spawn()
             .with_context(|| format!("starting {} for {}", self.exe.display(), self.name))?;

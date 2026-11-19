@@ -13,12 +13,20 @@ db=bench/runs-linux-full.jsonl
 log=bench/full.log
 models=bench/hwmcc24/extracted
 informal=target/release/informal
+# Heavy steps wait in the dvq formal queue (~/linux-tuning/dvq): one at a time,
+# CPU/memory capped. DVQ= runs them directly; dvq missing also runs directly.
+DVQ="${DVQ-$HOME/.local/bin/dvq run formal --}"; [ -x "$HOME/.local/bin/dvq" ] || DVQ=
+# The formal class preset (18G) is close to the queue's whole budget and
+# rarely finds that much free: ask for 12G unless DVQ_MEM says otherwise.
+export DVQ_MEM="${DVQ_MEM:-12G}"
+# rIC3 uses 16 threads and this is a timing gate: lift the formal CPU cap.
+export DVQ_CPU="${DVQ_CPU:-1600%}"
 {
   echo "== start $(date -Is) timeout=${timeout}s jobs=$jobs"
-  $informal bench "$models" --each --only ric3-ic3,ric3-bmc,abc-pdr \
+  $DVQ $informal bench "$models" --each --only ric3-ic3,ric3-bmc,abc-pdr \
     --timeout "$timeout" --jobs "$jobs" --db "$db"
   echo "== singles done $(date -Is)"
-  $informal bench "$models" --only ric3 --timeout "$timeout" --jobs 1 --db "$db"
+  $DVQ $informal bench "$models" --only ric3 --timeout "$timeout" --jobs 1 --db "$db"
   echo "== portfolio done $(date -Is)"
   python3 -I scripts/hwmcc_check.py bench/hwmcc24/expected.json "$db"
   echo "== end $(date -Is)"

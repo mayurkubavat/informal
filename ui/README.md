@@ -16,6 +16,19 @@ The app also serves its session to an outside AI agent on a local socket;
 what the agent proposes waits in the Proposals tab for Accept or Reject
 (`../docs/ai-interface.md`).
 
+Tasks (decision D20) are nodes of the task tree: clicking one shows only
+its properties, its status groups filter within it, and the current task is
+marked. The property table's optional columns (engine, bound, time, CPU,
+peak memory, lemmas, proof evidence, task) are shown or hidden from the
+Columns button, a right-click on the header, or View > Table columns; the
+choice is kept with the layout. The Design Info tab shows
+`get_design_info -json`: the design's counts, the setup, and the current
+task's model size; it is read when the tab opens and on Refresh. While a
+prove runs, the progress readout names the running property, its engine,
+the bound reached and its elapsed time. Every statistic is what the
+engines measured (`../docs/fpv-shell.md`, Design and proof statistics).
+The browser mock shows a second task with `?tasks=1`.
+
 ## Run
 
 ```sh

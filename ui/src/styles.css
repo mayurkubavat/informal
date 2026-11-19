@@ -404,6 +404,22 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .details-actions { display: flex; gap: 6px; }
+/* The Details list has longer labels with the statistics rows. */
+.details .kv { grid-template-columns: 76px 1fr; }
+
+/* ---- design info ---- */
+.design-info { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.info-bar { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--border); }
+.info-cols { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); }
+.info-cols section { padding: 8px 12px; border-right: 1px solid var(--border); min-width: 0; }
+.info-cols section:last-child { border-right: 0; }
+.info-cols h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.info-cols h4 .muted { font-weight: 400; margin-left: 4px; }
+.info-cols .kv { grid-template-columns: 96px 1fr; }
+.btn.small { height: 20px; padding: 0 8px; font-size: 11.5px; }
+.empty.err { color: var(--st-error); }
+.tree-row.child.in-task { padding-left: 40px; }
+.tree-row.leaf.in-task { padding-left: 60px; }
 
 /* ---- source ---- */
 .source { margin: 0; overflow: auto; flex: 1; padding: 4px 0; line-height: 1.55; min-width: 0; }

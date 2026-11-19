@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { BottomTab, Center, LeftTab } from "./model";
+import { DEFAULT_HIDDEN, OPTIONAL_COLS, type BottomTab, type Center, type ColKey, type LeftTab } from "./model";
 
 // Dock sizes and open tabs, kept across sessions in localStorage.
 export const LAYOUT_KEY = "informal-layout";
@@ -18,9 +18,11 @@ export type Layout = {
   bottom: BottomTab;
   /** The Profiler dock tab is shown (Tools > Proof profiler, Ctrl+5). */
   profiler: boolean;
+  /** Property table columns the user hid (View > Columns). */
+  hidden: ColKey[];
 };
 
-export const DEFAULT_LAYOUT: Layout = { leftW: null, bottomH: BOTTOM_DEFAULT, leftOpen: true, left: "tasks", center: "table", bottom: "console", profiler: false };
+export const DEFAULT_LAYOUT: Layout = { leftW: null, bottomH: BOTTOM_DEFAULT, leftOpen: true, left: "tasks", center: "table", bottom: "console", profiler: false, hidden: DEFAULT_HIDDEN };
 
 export const clampLeft = (w: number) => Math.round(Math.max(LEFT_MIN, Math.min(LEFT_MAX, w)));
 export const clampBottom = (h: number, viewH: number) => Math.round(Math.max(BOTTOM_MIN, Math.min(viewH * 0.65, h)));
@@ -45,8 +47,9 @@ export function parseLayout(raw: string | null, viewH: number): Layout {
     leftOpen: typeof o.leftOpen === "boolean" ? o.leftOpen : d.leftOpen,
     left: pick(o.left, ["tasks", "design"] as const, d.left),
     center: pick(o.center, ["table", "source"] as const, d.center),
-    bottom: o.profiler === true || o.bottom !== "profiler" ? pick(o.bottom, ["console", "details", "messages", "log", "profiler"] as const, d.bottom) : d.bottom,
+    bottom: o.profiler === true || o.bottom !== "profiler" ? pick(o.bottom, ["console", "details", "messages", "log", "profiler", "info"] as const, d.bottom) : d.bottom,
     profiler: typeof o.profiler === "boolean" ? o.profiler : d.profiler,
+    hidden: Array.isArray(o.hidden) ? OPTIONAL_COLS.map((c) => c.key).filter((k) => (o.hidden as unknown[]).includes(k)) : d.hidden,
   };
 }
 

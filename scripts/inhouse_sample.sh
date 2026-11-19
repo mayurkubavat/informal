@@ -4,11 +4,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 timeout=${1:-60}; jobs=${2:-3}; tag=${3:-$(date +%Y%m%d)}
+# Heavy steps wait in the dvq formal queue (~/linux-tuning/dvq): one at a time,
+# CPU/memory capped. DVQ= runs them directly; dvq missing also runs directly.
+DVQ="${DVQ-$HOME/.local/bin/dvq run formal --}"; [ -x "$HOME/.local/bin/dvq" ] || DVQ=
+# The formal class preset (18G) is close to the queue's whole budget and
+# rarely finds that much free: ask for 12G unless DVQ_MEM says otherwise.
+export DVQ_MEM="${DVQ_MEM:-12G}"
 db=bench/runs-inhouse-sample60-$tag.jsonl
 log=bench/inhouse-sample60-$tag.log
 {
   echo "== start $(date -Is) timeout=${timeout}s jobs=$jobs"
-  target/release/informal bench "${models:-bench/hwmcc24/sample60}" --each \
+  $DVQ target/release/informal bench "${models:-bench/hwmcc24/sample60}" --each \
     --only informal-bmc,informal-kind,informal-ic3,informal-kind-ic3,abc-pdr-pp \
     --timeout "$timeout" --jobs "$jobs" --db "$db"
   python3 -I scripts/hwmcc_check.py bench/hwmcc24/expected.json "$db"

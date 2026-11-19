@@ -19,9 +19,9 @@ export type LogLine = { kind: "in" | "out" | "err" | "ask-in" | "ask" | "ask-ste
 export type LogEvent = { at: Date; cmd: string; ok: boolean; ms: number; summary: string };
 export type Theme = "system" | "light" | "dark";
 export type Center = "table" | "source" | "trace";
-export type BottomTab = "console" | "details" | "messages" | "log" | "profiler" | "proposals";
+export type BottomTab = "console" | "details" | "messages" | "log" | "profiler" | "proposals" | "info";
 export type LeftTab = "tasks" | "design";
-export type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time";
+export type SortKey = "kind" | "name" | "status" | "engine" | "bound" | "time" | "cpu" | "memory" | "lemmas" | "evidence" | "task";
 export type StatusFilter = ViewStatus | "assume" | null;
 
 export const STATUS_LABEL: Record<ViewStatus, string> = {
@@ -38,6 +38,41 @@ export const SUMMARY: StatusWord[] = ["proven", "cex", "covered", "unreachable",
 export const STATUS_ORDER: ViewStatus[] = ["error", "cex", "running", "undetermined", "covered", "unreachable", "proven", "unprocessed"];
 export const KIND_LETTER = { assert: "A", cover: "C", assume: "M" } as const;
 export const TASK = "<embedded>";
+export const taskOf = (p: { task?: string }) => p.task ?? TASK;
+
+// The property table's columns that can be hidden (View > Columns, or a
+// right-click on the header). Name and status always show.
+export type ColKey = "engine" | "bound" | "time" | "cpu" | "memory" | "lemmas" | "evidence" | "task";
+export const OPTIONAL_COLS: { key: ColKey; label: string; num?: boolean; title: string }[] = [
+  { key: "engine", label: "Engine", title: "The engine whose verdict was taken (while running: the engine reporting the deepest bound)" },
+  { key: "bound", label: "Bound", num: true, title: "CEX or cover: trace depth. Proven: ∞. Running: the bound reached so far" },
+  { key: "time", label: "Time", num: true, title: "Wall time of the property's portfolio run (while running: elapsed)" },
+  { key: "cpu", label: "CPU", num: true, title: "CPU time of the process and its engine processes while the property ran; can exceed the wall time" },
+  { key: "memory", label: "Peak mem", num: true, title: "Peak resident memory, when it rose during this property's run" },
+  { key: "lemmas", label: "Lemmas", num: true, title: "Clauses of the inductive invariant the winning engine gave" },
+  { key: "evidence", label: "Proof", title: "What the winner gave: invariant, k-induction (with k), trace" },
+  { key: "task", label: "Task", title: "The task the property belongs to" },
+];
+export const DEFAULT_HIDDEN: ColKey[] = ["cpu", "memory", "lemmas", "evidence"];
+
+// Peak memory as the table shows it.
+export const memText = (kb: number) => (kb < 10240 ? `${kb} KiB` : `${(kb / 1024).toFixed(0)} MiB`);
+// The text of an optional column's cell.
+export function cell(p: ViewProp, k: ColKey): string {
+  const st = p.status.status === "running" ? null : p.stats;
+  switch (k) {
+    case "engine": return p.status.engine ?? "";
+    case "bound": return bound(p);
+    case "time": return time(p);
+    case "cpu": return st?.cpu_ms != null ? `${(st.cpu_ms / 1000).toFixed(2)}s` : "";
+    case "memory": return st?.peak_rss_kb != null ? memText(st.peak_rss_kb) : "";
+    case "lemmas": return st?.invariant_clauses != null ? String(st.invariant_clauses) : "";
+    case "evidence":
+      if (!st?.evidence) return "";
+      return st.depth_kind === "k" && st.depth != null ? `${st.evidence} k=${st.depth}` : st.evidence;
+    case "task": return taskOf(p);
+  }
+}
 
 export function bound(p: ViewProp): string {
   const s = p.status;
@@ -95,6 +130,11 @@ export function sortValue(p: ViewProp, k: SortKey): string | number {
     case "engine": return p.status.engine ?? "";
     case "bound": return p.status.depth ?? (p.status.status === "proven" || p.status.status === "unreachable" ? 1e9 : -1);
     case "time": return p.status.ms ?? -1;
+    case "cpu": return p.stats?.cpu_ms ?? -1;
+    case "memory": return p.stats?.peak_rss_kb ?? -1;
+    case "lemmas": return p.stats?.invariant_clauses ?? -1;
+    case "evidence": return p.stats?.evidence ?? "";
+    case "task": return taskOf(p);
   }
 }
 

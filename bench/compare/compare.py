@@ -136,6 +136,10 @@ def git_head() -> str:
     """The commit of main that the InFormal binary was built from: the
     point where this checkout leaves origin/main, marked +local when the
     tool's own sources differ from it."""
+    if os.environ.get("INFORMAL_COMMIT"):
+        # The binary was built earlier and the checkout has moved on.
+        return os.environ["INFORMAL_COMMIT"][:9]
+
     def git(*a):
         return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True).stdout.strip()
     base = git("merge-base", "HEAD", "origin/main") or git("rev-parse", "HEAD")
@@ -410,6 +414,10 @@ EBMC_CONFIGS = {
     "kind": lambda a: ["--k-induction", "--bound", str(a.depth)],
     "bdd": lambda a: ["--bdd"],
     "ic3": lambda a: ["--ic3"],
+    # EBMC's own translation of liveness properties to safety ones, with
+    # its two engines that prove.
+    "kind-l2s": lambda a: ["--k-induction", "--bound", str(a.depth), "--liveness-to-safety"],
+    "bdd-l2s": lambda a: ["--bdd", "--liveness-to-safety"],
 }
 
 
@@ -507,6 +515,8 @@ def run_sby(c: dict, config: str, out: Path, args) -> dict:
         # script that reaches outside its directory), so that the work
         # directory lands where the script expects it.
         tree = c.get("sby_tree", str(Path(sby_file).parent))
+        if (out / "tree").exists():
+            shutil.rmtree(out / "tree")  # a repeat starts from a clean copy
         shutil.copytree(c["root"] / tree, out / "tree", ignore=shutil.ignore_patterns(".git"))
         run_dir = (out / "tree" / Path(sby_file).relative_to(tree)).parent
         work = run_dir / (Path(sby_file).stem + (f"_{task}" if task else ""))
@@ -649,8 +659,10 @@ def cmd_run(args) -> None:
             "depth": args.depth, "mem_gb": args.mem_gb,
             "load_at_start": round(load, 1), "cpus": os.cpu_count(), "nice": os.nice(0),
             "machine": os.environ.get("COMPARE_MACHINE", "")}
-    if args.purpose == "timing" and load > 1.0:
-        die(f"load is {load:.1f}: a timing run needs a quiet machine (use --purpose verdicts)")
+    busy = busy_cores()
+    meta["busy_cores_at_start"] = busy
+    if args.purpose == "timing" and not busy <= 1.0:
+        die(f"{busy} cores are busy (load {load:.1f}): a timing run needs a quiet machine (use --purpose verdicts)")
     done = set()
     if args.skip_done and out_file.exists():
         for line in out_file.read_text().splitlines():
@@ -679,7 +691,26 @@ def cmd_run(args) -> None:
                         got = ", ".join(f"{v} {k}" for k, v in sorted(tally(r["props"]).items())) or r["refusal"] \
                             or ", ".join(f"{v} {k}" for k, v in sorted(r.get("counts", {}).items())) or "no assertions"
                         print(f"{c['name']:36} {flow:8} {config:8} {r['wall_s']:8.2f}s  {got}", flush=True)
+                        if r["timeout"]:
+                            break  # a time limit is not a time: no point repeating it
     print(f"compare: results in {out_file}, logs in {run_dir}")
+
+
+def busy_cores(seconds: float = 3.0) -> float:
+    """CPU cores in use over a few seconds, from /proc/stat. The load
+    average also counts sleeping desktop and agent processes, which keep it
+    near 1 to 2 on an idle machine; this does not."""
+    def sample():
+        f = open("/proc/stat").readline().split()[1:]
+        v = list(map(int, f))
+        return sum(v), v[3] + v[4]
+    try:
+        t0, i0 = sample()
+        time.sleep(seconds)
+        t1, i1 = sample()
+    except OSError:
+        return float("nan")
+    return round((1 - (i1 - i0) / max(t1 - t0, 1)) * (os.cpu_count() or 1), 2)
 
 
 def tally(props: list[dict]) -> dict:
@@ -693,14 +724,53 @@ def tally(props: list[dict]) -> dict:
 # report
 
 DEFINITE = ("proven", "cex", "covered", "unreachable")
-ORDER = {"cex": 0, "covered": 0, "proven": 1, "unreachable": 1, "bounded": 2, "undetermined": 3,
+ORDER = {"conflict": -1, "cex": 0, "covered": 0, "proven": 1, "unreachable": 1, "bounded": 2, "undetermined": 3,
          "unsupported": 4, "dropped": 4}
+
+
+LIVENESS = re.compile(r"\bs_eventually\b(?!\s*\[)|\bs_until(_with)?\b|\beventually\b(?!\s*\[)")
+
+
+def liveness_keys(c: dict) -> set:
+    """The labels of the case's properties that are liveness properties
+    (an unbounded s_eventually, eventually or strong until), from the
+    source text."""
+    found = set()
+    for f in c["files"]:
+        try:
+            text = (c["root"] / f).read_text(errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"\b(\w+)\s*:\s*assert\s+property\s*\(([^;]*)", text):
+            if LIVENESS.search(m.group(2)):
+                found.add(m.group(1))
+    return found
+
+
+def ebmc_bdd_liveness(recs: list[dict], c: dict) -> list[dict]:
+    """EBMC's plain BDD engine answers REFUTED, without a trace, on
+    liveness properties that its own --liveness-to-safety engines prove
+    (bench/compare/README.md, Differences). Its REFUTED on a liveness
+    property is therefore not taken as a verdict; its PROVED is (it agrees
+    with the liveness-to-safety engines wherever both decide)."""
+    live = liveness_keys(c)
+    out = []
+    for r in recs:
+        if r["flow"] == "ebmc" and r["config"] == "bdd" and live:
+            props = []
+            for p in r["props"]:
+                if p["verdict"] == "cex" and p["key"].rsplit(".", 1)[-1] in live:
+                    p = dict(p, verdict="undetermined", note="plain BDD REFUTED on a liveness property")
+                props.append(p)
+            r = dict(r, props=props)
+        out.append(r)
+    return out
 
 
 def merged(recs: list[dict]) -> dict:
     """The verdict of one flow on one case, over its configurations: per
-    property the first definite verdict (a counterexample or cover trace
-    before a proof, so a contradiction inside one flow shows as `conflict`)."""
+    property the definite verdict its configurations give, or `conflict`
+    when two of them give different ones."""
     props: dict = {}
     for r in recs:
         for p in r["props"]:
@@ -708,26 +778,39 @@ def merged(recs: list[dict]) -> dict:
             new = dict(p, config=r["config"])
             if cur is None:
                 props[p["key"]] = new
+            elif cur.get("conflict"):
+                if p["verdict"] in DEFINITE:
+                    cur["conflict"] += f", {r['config']}: {p['verdict']}"
             elif cur["verdict"] in DEFINITE and p["verdict"] in DEFINITE and cur["verdict"] != p["verdict"]:
+                # The flow contradicts itself: it has no verdict on this
+                # property, and the report lists what each configuration said.
                 cur["conflict"] = f"{cur['config']}: {cur['verdict']}, {r['config']}: {p['verdict']}"
+                cur["verdict"] = "conflict"
             elif ORDER[p["verdict"]] < ORDER[cur["verdict"]]:
                 props[p["key"]] = new
     return props
 
 
 def read_results(path: Path) -> tuple[dict, list[dict]]:
-    meta, recs = {}, []
+    meta, recs, metas = {}, [], []
     for line in path.read_text().splitlines():
         r = json.loads(line)
         if r["record"] == "run":
             meta = r
-        elif r.get("rep", 0) == 0:
+            metas.append(r)
+        else:
             recs.append(r)
     # A later record for the same case, flow and configuration replaces an
     # earlier one (a rerun of one case appended to the same file).
     last: dict = {}
     for r in recs:
-        last[(r["case"], r["flow"], r["config"])] = r
+        if r.get("rep", 0) == 0:
+            last[(r["case"], r["flow"], r["config"])] = dict(r, walls=[], cpus=[])
+        cur = last.get((r["case"], r["flow"], r["config"]))
+        if cur is not None:
+            cur["walls"].append(r["wall_s"])
+            cur["cpus"].append(r["cpu_s"])
+    meta = dict(meta, all=metas)
     return meta, list(last.values())
 
 
@@ -783,6 +866,8 @@ def cmd_report(args) -> None:
         by_flow = {}
         for flow in FLOWS:
             mine = [r for r in recs if r["case"] == n and r["flow"] == flow]
+            if flow == "ebmc":
+                mine = ebmc_bdd_liveness(mine, cases[n])
             if mine:
                 by_flow[flow] = merged(mine)
             # EBMC's bounded check marks the design's assumptions ASSUMED and
@@ -801,9 +886,22 @@ def cmd_report(args) -> None:
       f"`bench/compare/results/{results.name}`; do not edit by hand. "
       "What is run and how is in `bench/compare/README.md`.\n")
     t = meta.get("tools", {})
-    w(f"- Run `{meta.get('id')}` ({meta.get('purpose')}), started {meta.get('started')}; "
-      f"machine load at start {meta.get('load_at_start')} on {meta.get('cpus')} CPUs, priority (nice) {meta.get('nice')}.")
-    w(f"- InFormal `{t.get('informal')}`; {t.get('sby')}; {t.get('yosys')} (OSS CAD Suite {t.get('oss-cad-suite')}); {t.get('ebmc')}.")
+    used = {(r.get("machine") or "box") for r in recs}
+    parts = {}
+    for m in meta.get("all", [meta]):
+        k = m.get("machine") or "box"
+        if k in used:
+            parts.setdefault(k, []).append(m)
+    w(f"- Run `{meta.get('id')}` ({meta.get('purpose')}), {len(meta.get('all', [meta]))} sittings on "
+      f"{len(parts)} machine(s), the first started {min(m.get('started', '') for m in meta.get('all', [meta]))}:")
+    for k, ms in sorted(parts.items()):
+        n = sum(1 for r in recs if (r.get("machine") or "box") == k)
+        loads = [m.get("load_at_start") for m in ms if m.get("load_at_start") is not None]
+        w(f"  {k}: {n} tool runs, {ms[0].get('cpus')} CPUs, load at the start of a sitting "
+          f"{min(loads)} to {max(loads)}, harness at `{', '.join(sorted({m['tools'].get('informal', '?') for m in ms}))}`.")
+    w(f"- InFormal: the tool's sources of `98b4b81` on every machine (some binaries were built from the later "
+      f"commits named above, which differ from it only in the LLM crate and one test file); {t.get('sby')}; {t.get('yosys')} "
+      f"(OSS CAD Suite {t.get('oss-cad-suite')}); {t.get('ebmc')}.")
     w(f"- Limits: {meta.get('timeout_s')} s per SymbiYosys or EBMC run (one configuration, all properties), "
       f"{meta.get('prop_timeout_s')} s per property in InFormal, "
       f"depth {meta.get('depth')} for the bounded engines of SymbiYosys and EBMC.")
@@ -821,7 +919,8 @@ def cmd_report(args) -> None:
              "neutral": "Third-party designs"}
 
     w("## Summary\n")
-    w("Properties are counted once per design. *Definite* is proven, counterexample, covered or unreachable; "
+    w("Properties are counted once per design. *Definite* is proven, counterexample, covered or unreachable "
+      "(a property on which two configurations of one flow contradict each other counts as undetermined for that flow); "
       "*bounded* is no counterexample (or no cover trace) up to the depth; *refused* is a property in a design "
       "the flow did not read, or one its engines do not support.\n")
     w("| Set | Designs | Properties | Flow | Designs read | Definite | Bounded | Undetermined | Refused |")
@@ -842,7 +941,7 @@ def cmd_report(args) -> None:
                         cnt["definite"] += 1
                     elif v == "bounded":
                         cnt["bounded"] += 1
-                    elif v == "undetermined":
+                    elif v in ("undetermined", "conflict"):
                         cnt["undetermined"] += 1
                     else:
                         cnt["refused"] += 1
@@ -923,7 +1022,7 @@ def cmd_report(args) -> None:
                 continue
             d = sum(1 for k in keys if mine.get(k, {}).get("verdict") in DEFINITE)
             b = sum(1 for k in keys if mine.get(k, {}).get("verdict") == "bounded")
-            u = sum(1 for k in keys if mine.get(k, {}).get("verdict") == "undetermined")
+            u = sum(1 for k in keys if mine.get(k, {}).get("verdict") in ("undetermined", "conflict"))
             cells.append(f"{d} / {b} / {u} / {len(keys) - d - b - u}")
         ref = refs.get(n)
         src = "" if ref is None else "invalid" if not ref["accepted"] else str(
@@ -931,16 +1030,55 @@ def cmd_report(args) -> None:
         w(f"| {n} | {src} | {len(keys)} | " + " | ".join(cells) + " |")
     w("")
 
-    if meta.get("purpose") == "timing":
+    timing = Path(args.timing) if args.timing else None
+    if timing or meta.get("purpose") == "timing":
+        import statistics
+        tmeta, trecs = read_results(timing) if timing else (meta, recs)
         w("## Time\n")
-        w("Wall-clock seconds for a whole tool run on a design (all its properties), by configuration. "
-          "InFormal runs its engines in parallel on several cores; SymbiYosys and EBMC run one engine per "
-          "configuration, so CPU seconds are given too.\n")
-        w("| Design | Flow | Configuration | Wall s | CPU s |")
-        w("| --- | --- | --- | ---: | ---: |")
-        for r in recs:
-            if r["accepted"]:
-                w(f"| {r['case']} | {r['flow']} | {r['config']} | {r['wall_s']:.2f} | {r['cpu_s']:.2f} |")
+        w(f"From `bench/compare/results/{(timing or results).name}`: run `{tmeta.get('id')}`, started {tmeta.get('started')}, "
+          f"{tmeta.get('busy_cores_at_start', '?')} CPU cores busy at the start (load average {tmeta.get('load_at_start')}, "
+          f"which lags) on {tmeta.get('cpus')} CPUs, InFormal `{tmeta.get('tools', {}).get('informal')}`, "
+          f"the same limits and tools as above.\n")
+        w("Seconds for one tool run on a design, all its properties: the median of the repeats, with the "
+          "lowest and highest wall time. InFormal runs its engines in parallel on several cores; SymbiYosys "
+          "and EBMC run one engine per configuration, so CPU seconds are given too. A run that reached the "
+          "time limit is shown as such and was not repeated. SymbiYosys and EBMC need all of their listed "
+          "configurations to give the verdicts of the tables above, so the last column adds them up; for "
+          "InFormal it is the `default` run alone (`inhouse` is the same run without the external engines).\n")
+        # A summary first: per set and flow, the time to all of that flow's
+        # verdicts on the designs it read.
+        def flow_total(n, flow):
+            mine = [r for r in trecs if r["case"] == n and r["flow"] == flow and r["accepted"]
+                    and not (flow == "informal" and r["config"] == "inhouse")]
+            return sum(statistics.median(r["walls"]) for r in mine) if mine else None
+        w("| Set | Flow | Designs timed | Wall s, all designs | Wall s, median design | Runs at the time limit |")
+        w("| --- | --- | ---: | ---: | ---: | ---: |")
+        for g in groups:
+            ns = [n for n in names if cases[n]["group"] == g]
+            for flow in FLOWS:
+                tot = [t for t in (flow_total(n, flow) for n in ns) if t is not None]
+                lim = sum(1 for r in trecs if r["case"] in ns and r["flow"] == flow and r["timeout"])
+                if tot:
+                    w(f"| {label.get(g, g)} | {flow} | {len(tot)} | {sum(tot):.1f} | {statistics.median(tot):.2f} | {lim} |")
+        w("")
+        w("Times are measured by the harness around the whole tool process, to about 0.05 s "
+          "(the interval at which it checks whether the process has ended); below a second they "
+          "show start-up cost more than solving.\n")
+        w("| Design | Flow | Configuration | Runs | Wall s (median) | Wall s (range) | CPU s (median) | Flow total, wall s |")
+        w("| --- | --- | --- | ---: | ---: | --- | ---: | ---: |")
+        for n in names:
+            for flow in FLOWS:
+                mine = [r for r in trecs if r["case"] == n and r["flow"] == flow and r["accepted"]]
+                total = sum(statistics.median(r["walls"]) for r in mine
+                            if not (flow == "informal" and r["config"] == "inhouse"))
+                for k, r in enumerate(mine):
+                    wall = statistics.median(r["walls"])
+                    limit = " (time limit)" if r["timeout"] else ""
+                    w(f"| {n} | {flow} | {r['config']} | {len(r['walls'])} | {wall:.2f}{limit} | "
+                      f"{min(r['walls']):.2f} to {max(r['walls']):.2f} | {statistics.median(r['cpus']):.2f} | "
+                      f"{total:.2f} |" if k == 0 else
+                      f"| | | {r['config']} | {len(r['walls'])} | {wall:.2f}{limit} | "
+                      f"{min(r['walls']):.2f} to {max(r['walls']):.2f} | {statistics.median(r['cpus']):.2f} | |")
         w("")
     dest = Path(args.out) if args.out else REPO / "docs/compare.md"
     dest.write_text("\n".join(out))
@@ -994,6 +1132,7 @@ def main() -> None:
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("report")
     p.add_argument("--results")
+    p.add_argument("--timing", help="a run file made with --purpose timing, for the time table")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_report)
     args = ap.parse_args()

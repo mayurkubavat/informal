@@ -100,4 +100,44 @@ describe("TaskTree", () => {
       expect(screen.getByText("a_max")).toBeInTheDocument();
     });
   });
+
+  describe("several tasks", () => {
+    const props = [
+      prop("a_max", {}, { status: "proven" }),
+      prop("m_en", { kind: "assume" }),
+      prop("t::a_max", { task: "t" }, { status: "cex" }),
+      prop("t::m_en", { task: "t", kind: "assume" }),
+    ];
+    const tree = (over = {}) => {
+      const onFilter = vi.fn();
+      const onTask = vi.fn();
+      render(
+        <TaskTree total={4} counts={{}} assumes={0} filter={null} onFilter={onFilter} props={props} tasks={["<embedded>", "t"]} current="t" task={null} onTask={onTask} {...over} />,
+      );
+      return { onFilter, onTask };
+    };
+
+    it("lists each task with its own groups and marks the current one", () => {
+      tree();
+      expect(items()).toEqual(["<embedded>2", "Proven1", "Aa_max", "Assumed1", "Mm_en", "tcurrent2", "CEX1", "At::a_max", "Assumed1", "Mt::m_en"]);
+    });
+
+    it("filters the table to a task, and to a group within it", async () => {
+      const { onFilter, onTask } = tree();
+      await userEvent.click(screen.getByText("t"));
+      expect(onTask).toHaveBeenLastCalledWith("t");
+      expect(onFilter).toHaveBeenLastCalledWith(null);
+      await userEvent.click(screen.getByText("CEX"));
+      expect(onTask).toHaveBeenLastCalledWith("t");
+      expect(onFilter).toHaveBeenLastCalledWith("cex");
+    });
+
+    it("highlights the selected task, and a click on it again shows every task", async () => {
+      const { onTask } = tree({ task: "t" });
+      const row = screen.getByText("t").closest(".tree-row")!;
+      expect(row).toHaveClass("sel");
+      await userEvent.click(screen.getByText("t"));
+      expect(onTask).toHaveBeenLastCalledWith(null);
+    });
+  });
 });

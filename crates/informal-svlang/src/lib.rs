@@ -16,8 +16,8 @@ use svlang::netlist::{
 use svlang::semantic::PropKind;
 use svlang::{ElaboratedDesign, ScopeNode, Severity, SymbolKind};
 pub use types::{
-    split_trace, Design, Diagnostic, Instance, Lowered, Request, RtlProperty, Scope, ScopeSignal,
-    Signal, TickReset, TRACE_MARKER,
+    split_trace, ClockInfo, Design, DesignStats, Diagnostic, Instance, Lowered, MemoryInfo,
+    Request, ResetInfo, RtlProperty, Scope, ScopeSignal, Signal, TickReset, TRACE_MARKER,
 };
 
 /// Memories up to this many words become one register per word; larger
@@ -68,8 +68,13 @@ fn show(d: &NetlistDiag) -> String {
 /// uses an operator svlang does not compile yet.
 /// How properties are compiled: the cycles in reset whose attempts are left
 /// out, for every clock and for one clock and edge.
-fn property_options(skip_cycles: u32, clock_skips: &[(String, bool, u32)]) -> PropertyOptions {
+fn property_options(
+    skip_cycles: u32,
+    clock_skips: &[(String, bool, u32)],
+    preconditions: bool,
+) -> PropertyOptions {
     let mut opts = PropertyOptions::default();
+    opts.precondition_covers = preconditions;
     opts.skip_cycles = skip_cycles;
     opts.skip_by_clock = clock_skips
         .iter()
@@ -207,8 +212,9 @@ fn rtl_properties(
     nl: &mut Netlist,
     skip_cycles: u32,
     clock_skips: &[(String, bool, u32)],
+    preconditions: bool,
 ) -> Vec<RtlProperty> {
-    let opts = property_options(skip_cycles, clock_skips);
+    let opts = property_options(skip_cycles, clock_skips, preconditions);
     let outcomes = nl.compile_properties(&opts);
     // The source files the properties stand in, read once each.
     let mut sources: std::collections::HashMap<u32, Option<String>> = Default::default();
@@ -364,7 +370,7 @@ fn model(
     clock_skips: &[(String, bool, u32)],
 ) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
     let mut nl = base.clone();
-    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips);
+    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips, req.precondition_covers);
     // The labelled immediate assertions are targets of the model too, under
     // their labels (the ones that cannot be listed were reported at compile).
     immediate_checks(&nl, &mut properties);
@@ -373,7 +379,7 @@ fn model(
         design,
         &mut nl,
         &req.properties,
-        &property_options(skip_cycles, clock_skips),
+        &property_options(skip_cycles, clock_skips, req.precondition_covers),
     ));
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
@@ -550,6 +556,7 @@ pub fn compile(req: &Request) -> Design {
     // an empty table must never be mistaken for a design with nothing to prove.
     let (mut properties, mut not_lowered, mut unlisted_checks) =
         (Vec::new(), Vec::new(), Vec::new());
+    let mut stats = None;
     if ok {
         let config = LowerConfig {
             top: req.top.clone(),
@@ -559,7 +566,8 @@ pub fn compile(req: &Request) -> Design {
         };
         match comp.lower_netlist(&config) {
             LowerOutcome::Lowered(mut nl) => {
-                properties = rtl_properties(&mut nl, 0, &[]);
+                stats = Some(design_stats(&nl));
+                properties = rtl_properties(&mut nl, 0, &[], false);
                 unlisted_checks = immediate_checks(&nl, &mut properties);
             }
             LowerOutcome::Unsupported(ds) => {
@@ -590,7 +598,102 @@ pub fn compile(req: &Request) -> Design {
         properties,
         not_lowered,
         unlisted_checks,
+        stats: stats.map(|mut st| {
+            st.instances = e
+                .instances
+                .iter()
+                .filter(|i| !i.is_interface || i.parent.is_some())
+                .count();
+            let mut modules: Vec<&str> =
+                e.instances.iter().map(|i| i.definition.as_str()).collect();
+            modules.sort_unstable();
+            modules.dedup();
+            st.modules = modules.len();
+            st
+        }),
     }
+}
+
+/// Count what `nl` holds (before its properties are compiled, which adds
+/// registers of their own).
+fn design_stats(nl: &Netlist) -> DesignStats {
+    use svlang::netlist::ValueKind;
+    let name_of = |id: svlang::netlist::ValueId| -> String {
+        let v = nl.value(id);
+        match (&v.name, &v.kind) {
+            (Some(n), _) => n.clone(),
+            (None, ValueKind::Input(i)) => nl.inputs[*i].name.clone(),
+            _ => format!("(expression {})", id.0),
+        }
+    };
+    let mut st = DesignStats {
+        inputs: nl.inputs.len(),
+        input_bits: nl.inputs.iter().map(|p| u64::from(p.width)).sum(),
+        outputs: nl.outputs.len(),
+        output_bits: nl.outputs.iter().map(|p| u64::from(p.width)).sum(),
+        undriven: nl.undriven.len(),
+        ..Default::default()
+    };
+    let clock_use = |st: &mut DesignStats, c: &svlang::netlist::ClockSpec| {
+        let signal = name_of(c.signal);
+        let edge = c.edge.as_str().to_string();
+        match st.clocks.iter_mut().find(|k| k.signal == signal) {
+            Some(k) => {
+                k.registers += 1;
+                if !k.edges.contains(&edge) {
+                    k.edges.push(edge);
+                }
+            }
+            None => st.clocks.push(ClockInfo {
+                signal,
+                edges: vec![edge],
+                registers: 1,
+            }),
+        }
+    };
+    for r in &nl.states {
+        if r.latch_enable.is_some() {
+            st.latches += 1;
+            st.latch_bits += u64::from(r.width);
+        } else {
+            st.flops += 1;
+            st.flop_bits += u64::from(r.width);
+        }
+        if let Some(c) = &r.clock {
+            clock_use(&mut st, c);
+        }
+        if let Some(a) = &r.async_reset {
+            let signal = name_of(a.signal);
+            match st
+                .resets
+                .iter_mut()
+                .find(|k| k.signal == signal && k.active_high == a.active_high)
+            {
+                Some(k) => k.registers += 1,
+                None => st.resets.push(ResetInfo {
+                    signal,
+                    active_high: a.active_high,
+                    registers: 1,
+                }),
+            }
+        }
+    }
+    // A memory's write ports count as registers on their clocks.
+    for w in nl.memories.iter().flat_map(|m| &m.writes) {
+        if let Some(c) = &w.clock {
+            clock_use(&mut st, c);
+        }
+    }
+    st.memories = nl
+        .memories
+        .iter()
+        .map(|m| MemoryInfo {
+            name: m.name.clone(),
+            words: u64::from(m.depth),
+            width: m.width,
+        })
+        .collect();
+    st
 }
 
 fn signals(e: &ElaboratedDesign) -> Vec<Signal> {

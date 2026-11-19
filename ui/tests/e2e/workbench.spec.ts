@@ -611,7 +611,7 @@ test.describe("layout", () => {
   test("sizes and open tabs persist across reloads in informal-layout", async ({ page }) => {
     await dragBy(page, "Resize left dock", 64, 0);
     await dragBy(page, "Resize bottom dock", 0, -100);
-    await page.getByRole("tab", { name: "Design" }).click();
+    await page.getByRole("tab", { name: "Design", exact: true }).click();
     await page.getByRole("tab", { name: "counter.sv" }).click();
     await page.getByRole("tab", { name: "Messages" }).click();
     const h = await bottomHeight(page);
@@ -621,7 +621,7 @@ test.describe("layout", () => {
     await page.reload();
     await expect.poll(() => leftWidth(page)).toBe(300);
     await expect.poll(() => bottomHeight(page)).toBe(h);
-    await expect(page.getByRole("tab", { name: "Design" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Design", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tab", { name: "counter.sv" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tab", { name: "Messages" })).toHaveAttribute("aria-selected", "true");
   });
@@ -659,7 +659,7 @@ test.describe("live progress", () => {
     await expect(treeGroup(page, "Running")).toContainText("2");
     await expect(statusbar(page)).toContainText(/Proving · \d\/5/);
     await expect(bar(page)).toHaveAttribute("aria-valuemax", "5");
-    await expect(page.locator(".progress-text")).toHaveText(/^\d of 5 · 0:0\d$/);
+    await expect(page.locator(".progress-text")).toHaveText(/^\d of 5 · 0:0\d( · .+)?$/);
     await expect(proveBtn(page)).toBeDisabled();
     await expect(stopBtn(page)).toBeEnabled();
     await expect(stopBtn(page)).toHaveText("Stop");
@@ -675,7 +675,7 @@ test.describe("live progress", () => {
   test("a frozen run shows the mid-run frame", async ({ page }) => {
     await start(page, "freeze=2");
     await expect(statusbar(page)).toContainText("Proving · 1/5");
-    await expect(page.locator(".progress-text")).toHaveText("1 of 5 · 0:00");
+    await expect(page.locator(".progress-text")).toContainText("1 of 5 · 0:00 · ");
     await expect(bar(page)).toHaveAttribute("aria-valuenow", "1");
     await expect(row(page, "a_max")).toContainText("Proven");
     await expect(row(page, "a_step")).toContainText("k=11");
@@ -937,7 +937,7 @@ test.describe("trace tab", () => {
 });
 
 test.describe("design browser", () => {
-  const designTab = (page: Page) => page.getByRole("tab", { name: "Design" });
+  const designTab = (page: Page) => page.getByRole("tab", { name: "Design", exact: true });
   const scopes = (page: Page) => page.getByRole("tree", { name: "Design hierarchy" }).getByRole("treeitem");
   const sigList = (page: Page, path: string) => page.getByRole("listbox", { name: `Signals in ${path}` });
   const sig = (page: Page, path: string, name: string) => sigList(page, path).getByRole("option").filter({ has: page.locator(".sig-name", { hasText: new RegExp(`^${name}$`) }) });

@@ -20,7 +20,11 @@ into `certs/`:
 | `<model>.model.aig` | Btor2 models | the model bit-blasted, binary AIGER | the model the two checkers above read |
 | `<model>.cert.json` | always | summary: model, verdict, engine, kind of evidence (with the depth `k` of a k-induction proof), file and checker, or the reason there is no file | `scripts/certificate_check.py` |
 
-`<model>` is the model's file name with its extension. The second command
+`<model>` is the model's file name with its extension. When the directory
+already holds the certificate of another model with the same file name
+(two `analog.aig` from different directories), `<model>` is that name
+followed by `~` and eight hex digits of a hash of the model's path, so
+neither overwrites the other. The second command
 runs the checkers on every summary in the directory and prints how many
 verdicts were confirmed, how many have nothing to check and why, and which
 failed. Its exit status is 1 when a certificate is wrong.
@@ -92,6 +96,15 @@ the constraints and leads to the present one. That is how
 `certify::check_folded` reads the invariant: it holds on the clock's
 initial phase and again two steps later, and neither that state nor the
 next one is bad.
+
+**Two-step k-induction** (`informal-kind` and `informal-kind-ic3` on a
+clock-folded model; summary `two-step-k-induction`, with `k`). The
+k-induction circuit above with both changes: it remembers `2k + 1` states
+and has the parity latch; the invariant is asked of the states on even
+steps only; and while the oldest remembered state is the initial one, it
+is on step 0. On an even step the last `2k + 1` states are the path of
+`certify::check_kind_folded`'s step condition, on an odd step all
+`2k + 2` are, and before that its base applies.
 
 ## What has no certificate outside yet
 

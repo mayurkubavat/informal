@@ -37,7 +37,14 @@ replaces an earlier one. The tools must be the pinned ones on every
 machine (`compare.py tools` checks), and InFormal the same commit.
 
 `run --purpose timing` is the only kind of run whose times go into the
-report, and it refuses to start when the machine is busy. The default,
+report, and it refuses to start when more than one CPU core is busy
+(measured from /proc/stat over three seconds; the load average is not
+used, because sleeping desktop and agent processes keep it near 2 on an
+idle machine). `report --timing <file>` takes the time table from such a
+run. In the recorded timing run (`results/timing-98b4b81.jsonl`) each
+design was run three times by each flow, one tool at a time, at normal
+priority with all 16 cores available; the table gives the median and the
+range. Times are measured around the whole process to about 0.05 s. The default,
 `--purpose verdicts`, records times too but the report leaves them out.
 
 ## The tools
@@ -90,8 +97,10 @@ it the first failing assertion ends the run and every other assertion is
 left without a status.
 
 **EBMC.** EBMC has no default engine beyond a bounded check of depth 1,
-so four configurations are run: `bmc` (`--bound N`), `kind`
-(`--k-induction --bound N`), `bdd` and `ic3`.
+so six configurations are run: `bmc` (`--bound N`), `kind`
+(`--k-induction --bound N`), `bdd`, `ic3`, and for liveness properties
+EBMC's own translation to safety with its two proving engines, `kind-l2s`
+and `bdd-l2s` (`--liveness-to-safety`).
 
 **The reference count.** Each design is also elaborated by the stand-alone
 slang of the suite, and the assert and cover statements in its syntax tree
@@ -104,8 +113,10 @@ depth (`--depth`). A shipped `.sby` keeps its own depth.
 **One verdict per flow.** A flow's verdict on a property is the first
 definite one over its configurations: proven, counterexample, covered or
 unreachable. "No counterexample up to depth N" is reported as *bounded*,
-not as proven. If two configurations of one flow contradict each other,
-the report says so.
+not as proven. If two configurations of one flow give different definite
+verdicts, the flow has no verdict on that property: it is counted as
+undetermined, left out of the agreement counts, and the report lists what
+each configuration said.
 
 ## The designs
 
@@ -167,7 +178,8 @@ authors.
   counterexample (depth 10) and it is the answer the test records. The BDD
   run prints "SAT checker inconsistent" on other designs when `--reset` is
   given, so its proofs under a reset are not counted as agreement or
-  disagreement with anything; the flow's verdict is the counterexample.
+  disagreement with anything. Under the rule above EBMC has no verdict
+  on this property.
 - **`sby-examples/fifo-nofullskip`, covers `w_underfill` and
   `w_overfill`: InFormal unreachable, EBMC covered.** With the skip logic
   defined away, an address can only move when its enable is set, which
@@ -176,6 +188,30 @@ authors.
   SymbiYosys cover run on the same define (depth 40, not part of the
   recorded run) does not reach either cover. Read as a fault in EBMC's
   handling of an immediate cover inside a clocked block under a condition.
+- **EBMC's BDD engine on liveness properties.** Without
+  `--liveness-to-safety` it answers REFUTED, with no trace, on most of
+  EBMC's own liveness examples. On `uart_transmit_1` (the transmitter
+  returns to idle within eight cycles, by reading the source): EBMC `--bdd`
+  says REFUTED; EBMC `--bdd --liveness-to-safety` and `--k-induction
+  --liveness-to-safety` say PROVED; EBMC's bounded check finds no lasso up
+  to depth 40; InFormal proves it; SymbiYosys in `live` mode with
+  `suprove` proves it once the property is moved into a clocked block for
+  its front end. On `gray_1` cut down to a 2-bit counter the picture is the
+  same. The `-l2s` configurations were added to the run for this reason,
+  so that EBMC is measured with the option that works.
+
+  Over the whole run, on liveness properties: plain `bdd` says PROVED on
+  18 properties where a `-l2s` configuration also decides, and they agree
+  on all 18; it says REFUTED on 11 where a `-l2s` configuration decides,
+  and they disagree on all 11; and on all 96 liveness properties it
+  refutes, EBMC's own bounded check finds no counterexample loop up to
+  depth 20. So the report takes plain `bdd`'s PROVED on a liveness property
+  as a verdict and does not take its REFUTED (`ebmc_bdd_liveness` in
+  `compare.py`); a property is a liveness property when its text holds an
+  unbounded `s_eventually`, `eventually` or strong until. This rule is
+  about one EBMC engine, written after seeing its answers, and is stated
+  here so that a reader can undo it: without it EBMC has 85 more
+  counterexamples on its own example set.
 - **Covers under EBMC's IC3 engine.** It reports REFUTED for covers that
   EBMC's own bounded check reaches with a trace (`sby-examples/fifo`
   `w_nreset`, `quickstart-cover`): it answers the cover as an assertion of
@@ -209,6 +245,39 @@ because of this comparison and is listed in the next section when it lands.
   EBMC PWM examples) is not supported.
 - svlang accepts the `bind` of common_cells `cc_fifo`, which slang rejects
   when run to the letter of the standard.
+
+EBMC's `bdd-l2s` configuration ran out of memory on 52 cases under the
+2.5 GB cap of the run. Those 52 were run again with 8 GB (run id
+`verdicts-98b4b81-mem8` in the same file; its records replace the first
+ones): none gets a verdict, 38 reach the 120 s time limit and 14 still run
+out of memory.
+
+## Machines
+
+The verdict run `verdicts-98b4b81` was shared between three machines to
+finish in one night. Each record names its machine (`machine`):
+
+- the Linux box (16 cores, 2 of them at low priority, other work running):
+  InFormal's tests, the SymbiYosys examples, the third-party designs, the
+  EBMC examples `gray`, `PWM`, `delay`, `vga` (all flows), InFormal on
+  `i2c` and `lcd`, and EBMC's liveness configurations on its cases;
+- a cloud machine (4 CPUs): SymbiYosys and EBMC on `i2c`, `lcd`,
+  `seven_seg`, `thermocouple`, `uart_transmit`, and EBMC's liveness
+  configurations on them;
+- a MacBook: InFormal's own engines (`inhouse`) on `seven_seg`,
+  `thermocouple`, `uart_transmit`. The external engines were not used
+  there (rIC3's portfolio entry hangs on macOS).
+
+A proof or counterexample does not depend on the machine; "undetermined at
+the time limit" does. InFormal's default portfolio was therefore run again
+on the box at full speed, alone, on the EBMC examples (run id
+`verdicts-98b4b81-quiet`, records replace the earlier ones). On
+`seven_seg`, `thermocouple` and `uart_transmit` it gives exactly the
+verdicts the loaded MacBook gave. The other five families (`gray`, `delay`,
+`vga`, `i2c`, `lcd`, 70 cases) were not rerun: the box was not free
+long enough. Their InFormal "undetermined" verdicts come from the box at
+low priority with other work running, and are provisional. EBMC's and SymbiYosys's time limits from loaded machines were not
+run again.
 
 ## Changes made because of this comparison
 

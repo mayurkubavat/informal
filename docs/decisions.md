@@ -526,9 +526,11 @@ to try.
   and the one-step undo keep that visible and reversible; the modes let a
   person stay in the loop or step out of it on purpose.
 - **Open issues**
-  - Nothing detects an over-constraining or vacuous AI-added assumption
-    yet; the checks for that are planned (assumption conflict, vacuity,
-    dead ends), and until then `under_ai` is a warning, not a judgement.
+  - An AI-added assumption that makes the assumptions conflict is now
+    found by the environment check before every prove (D19); one that only
+    over-constrains, or makes a single proof vacuous, is not detected yet
+    (precondition covers, dead ends: planned), so `under_ai` is still a
+    warning, not a judgement.
   - In `propose` mode a server started on its own has no person on the
     other end, and proposals stay pending. The desktop app is where a
     person answers: it serves its own session on a local socket
@@ -557,11 +559,12 @@ to try.
   as loaded (`informal-engine`): the clauses of the invariant, the depth of
   a k-induction proof, or the trace. It is what `certify.rs` has just
   checked, so nothing is searched again; `informal-bmc/src/certificate.rs`
-  writes the files. Three kinds of proof become witness circuits: an
+  writes the files. Four kinds of proof become witness circuits: an
   inductive invariant; k-induction, with the last `k - 1` states kept in
   the circuit so that its one inductive condition is the base and the step;
-  and the two-step invariant of a clock-folded model, with one remembered
-  state and a parity bit. The circuit holds only the cone the proof is
+  the two-step invariant of a clock-folded model, with one remembered
+  state and a parity bit; and k-induction on a clock-folded model, which
+  is the two together (`2k + 1` remembered states and the parity bit). The circuit holds only the cone the proof is
   about, mapped to the model through the symbol table.
 - **Alternatives:** a format of our own with our own checker (nobody else
   would trust or run it); proof logs of the three SAT answers of
@@ -578,16 +581,87 @@ to try.
   over five engines) is confirmed by Certifaiger and aigsim; a circuit
   without its invariant and a trace with one input changed are rejected. On
   a first sample of 22 fast HWMCC'24 verdicts (9 unsafe, 13 safe: 6 by
-  invariant, 7 by k-induction) all are confirmed, in 15 s together. The share over all of
-  HWMCC'24 is still to be measured.
+  invariant, 7 by k-induction) all are confirmed, in 15 s together. Over
+  all 319 HWMCC'24 bit-level models (2026-11-16, commit `82e23a8`, the
+  in-house engines at 120 s per model, a busy machine), 188 verdicts (138
+  safe, 50 unsafe, none against the published answers): 183 confirmed by
+  Certifaiger and aigsim, 0 rejected, 5 with no witness circuit (k-induction
+  that needed the simple-path condition: `psyco_io_1` and four of the
+  `goel/industry/gen*` models). By kind: 59 invariants, 23 k-induction
+  proofs, 50 two-step invariants, 1 folded k-induction proof, 50 traces;
+  every UNSAFE is confirmed. Checking all 183 took 896 s.
 - **Open issues**
   - k-induction proofs that need the simple-path condition have no witness
     circuit: that a path repeats no state is not a property of its last
-    `k` states. The summary says so; how often it happens on HWMCC'24 is
-    not measured yet.
+    `k` states. The summary says so. On HWMCC'24 it was 5 of 188
+    verdicts at 120 s.
   - A k-induction circuit has `k` copies of the cone, and its inductive
     condition is as hard as the proof was. Deep proofs may be slow to check.
   - Btor2 models are certified on the bit-blasted model InFormal writes,
     so the Btor2 reader and bit-blaster stay trusted there, and
     liveness to safety for a justice property.
   - External engines' verdicts (rIC3, ABC) carry no certificate.
+
+## D19. Vacuity is said beside the verdict, and checked by default
+
+- **Decision:** every prove first checks that the assumptions and the
+  reset allow a trace of 20 steps, and then covers the precondition of
+  every proven assertion (a cover svlang compiles from the same property). What it finds is a separate
+  `vacuity` field of the property; the status word stays `proven`. On by
+  default, `informal::set_vacuity off` to skip it (Mayur, 2026-11-16).
+- **Alternatives:** opt-in only (fast, but a vacuous proof then looks like
+  any other unless someone asks); a status word of its own such as
+  `vacuous` (clear, but scripts that filter on `proven` would stop seeing
+  those properties).
+- **Why:** a proof under assumptions that conflict holds whatever the
+  design does, and nothing in a proven row said so. The check is cheap:
+  bounded BMC runs on the model the prove builds anyway. Keeping the word
+  keeps vendor scripts working; the field is in the report, the session
+  JSON, the UI and the MCP replies. See docs/vacuity.md.
+- **Open issues**
+  - Witness covers, design-free checks, needed assumptions and dead ends
+    are planned (docs/vacuity.md).
+  - The precondition covers are in every model the prove builds, so each
+    property's model carries their logic too (outside its cone, as the
+    other properties' logic already was); tests/sv/lowering.lock changed
+    with them.
+
+
+## D20. Tasks as JasperGold has them: each proved on a model of its own
+
+- **Decision (2026-11-16):** a session has tasks (`task -create`, `-edit`,
+  `-set`, `-list`, `-delete`; `-task T` on `assert`, `assume`, `cover`,
+  `stopat`, `prove`, `report` and `get_property_list`). Every property
+  belongs to one task, `<embedded>` by default, and outside it is named
+  `T::name`. Each task has its own assumptions and cut points; a prove
+  runs task by task, each on a model the front end builds for that task
+  alone (the design, the task's enabled assumptions, its cut points).
+  Black boxes, clocks and reset stay the design's. A copy of a property
+  given by command is bound again under its new name; a copy of a property
+  written in the RTL points at the original's check (`copy_of`), since the
+  RTL's text cannot be bound again elsewhere. Tasks, the current task and
+  each property's task are in the session JSON and the MCP replies
+  (`task` on `property_list` and `prove`).
+- **Alternatives:** keep one model and only group properties for display
+  (cheap, but an assumption made for one task would constrain every
+  other, the reason `assume -task` was an error until now); one model per
+  task with every task's targets in it (one lowering, but a task's model
+  would carry other tasks' monitors).
+- **Why:** vendor scripts use tasks to give a property a different
+  environment: OpenTitan's flow makes a task per run with its assumptions,
+  and moves assertions into a task with a cut point that the embedded
+  task must not see (docs/vendor-script-tally.md: `task` in 6 of 12
+  scripts, `stopat -task` in 5). That is only sound when the models
+  differ. A lowering per task costs one svlang run per task proved, small
+  next to the proofs.
+- **Open issues**
+  - Assumptions written in the RTL are part of the design: svlang cannot
+    leave one out of a model, so they are in every task's model. A new
+    task lists them as copies so that its list matches its model; in
+    JasperGold a task made without `-copy_assumes` has none of them.
+    Leaving them out needs svlang to name each constraint after its
+    assumption (the same change D19 waits for).
+  - `prove -bg` runs in the foreground: tasks are proved one after the
+    other, not at the same time.
+  - Abstractions, ratings and proof settings are not copied between tasks
+    (`-copy_abstractions` and the like are ignored with a note).

@@ -72,6 +72,11 @@ one() {
   grep "ms  " "$d/out.log" || true
   rm -rf "$d"
 }
+# Heavy steps wait in the dvq formal queue (~/linux-tuning/dvq): one at a time,
+# CPU/memory capped. DVQ= runs them directly; dvq missing also runs directly.
+DVQ="${DVQ-$HOME/.local/bin/dvq run formal --}"; [ -x "$HOME/.local/bin/dvq" ] || DVQ=
+# The per-model scopes below leave the dvq scope, so dvq only queues this run;
+# the per-model MemoryMax and the jobs fit check are the caps.
 export -f one; export tmp timeout engines mem budget informal each slice high db
-xargs -a "$todo" -P "$jobs" -I{} bash -c 'one "$@"' _ {}
+$DVQ xargs -a "$todo" -P "$jobs" -I{} bash -c 'one "$@"' _ {}
 echo "== end $(date -Is)"

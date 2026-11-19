@@ -12,8 +12,11 @@
       "file": "<root>/tests/fpv/fifo/fifo.jg.tcl",
       "line": 14
     },
+    "stats": "<stats>",
     "status": "proven",
-    "time_ms": 0
+    "task": "<embedded>",
+    "time_ms": 0,
+    "vacuity": "non-vacuous"
   },
   "schema": "informal.property/1"
 }

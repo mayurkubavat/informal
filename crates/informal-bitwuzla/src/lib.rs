@@ -4,13 +4,22 @@
 //! IC3SA and counterexample-guided prophecy come in stage 4.
 
 use informal_engine::{
-    Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
+    Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, RunContext, Verdict,
 };
-use informal_ir::{Line, Model, Op, Sort};
-use std::collections::HashMap;
-use std::ffi::{c_char, CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
+use informal_ir::Model;
 use std::sync::Arc;
+// What only the engine on Bitwuzla uses: without the library it is left
+// out, and so are these.
+#[cfg(informal_bitwuzla)]
+use informal_engine::Progress;
+#[cfg(informal_bitwuzla)]
+use informal_ir::{Line, Op, Sort};
+#[cfg(informal_bitwuzla)]
+use std::collections::HashMap;
+#[cfg(informal_bitwuzla)]
+use std::ffi::{c_char, CStr, CString};
+#[cfg(informal_bitwuzla)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 #[cfg(informal_bitwuzla)]
@@ -44,6 +53,7 @@ pub fn available() -> bool {
     cfg!(informal_bitwuzla)
 }
 
+#[cfg(informal_bitwuzla)]
 type T = i32;
 
 #[cfg(informal_bitwuzla)]
@@ -114,6 +124,7 @@ impl Bz {
 }
 
 /// Bits (MSB first) of a Btor2 constant line.
+#[cfg(informal_bitwuzla)]
 fn const_bits(l: &Line, w: u32) -> anyhow::Result<String> {
     let w = w as usize;
     let lsb_first: Vec<bool> = match l.op {

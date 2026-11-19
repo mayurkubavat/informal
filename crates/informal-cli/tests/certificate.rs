@@ -92,22 +92,35 @@ fn circuit_holds(file: &Path, g: &Aig) {
         file.display()
     );
     let text = String::from_utf8_lossy(&bytes);
+    // The symbol table is the run of `i<k> = <lit>` / `l<k> = <lit>` lines
+    // just before the comment; read it backwards from there, since the
+    // binary gates before it can hold any byte.
+    let end = text.rfind("\nc\nWITNESS b0 ").expect("no WITNESS comment");
     let mut mapped = 0;
-    for line in text.lines() {
+    for line in text[..end].rsplit('\n') {
         let Some((tag, lit)) = line.split_once(" = ") else {
-            continue;
+            break;
         };
-        let lit: u32 = lit.parse().unwrap();
         // The first symbol follows the binary gates on its line.
-        let tag = &tag[tag.rfind(['i', 'l']).unwrap()..];
+        let Some(at) = tag.rfind(['i', 'l']) else {
+            break;
+        };
+        let (tag, Ok(lit)) = (&tag[at..], lit.parse::<u32>()) else {
+            break;
+        };
+        if tag[1..].parse::<u32>().is_err() {
+            break;
+        }
         match tag.as_bytes()[0] {
             b'i' => assert!(g.inputs.contains(&lit), "{line}"),
-            b'l' => assert!(g.is_latch(lit), "{line}"),
-            _ => panic!("{line}"),
+            _ => assert!(g.is_latch(lit), "{line}"),
         }
         mapped += 1;
+        if line.len() > tag.len() + 3 + lit.to_string().len() {
+            break; // the first symbol, after the gates
+        }
     }
-    assert!(mapped > 0 && text.contains("\nc\nWITNESS b0 "));
+    assert!(mapped > 0, "{}: no symbol table", file.display());
 }
 
 /// The AIGER witness in `file` reaches a bad output of `g` when replayed.
@@ -136,16 +149,25 @@ fn every_kind_of_certificate_is_written_and_holds() {
         return;
     }
     let d = scratch("kinds");
-    for (name, engine, kind) in [
-        ("stuck_latch_safe.aag", "informal-ic3", "invariant"),
-        ("delay_safe.aag", "informal-ic3-mt", "invariant"),
-        ("delay_safe.aag", "informal-kind", "k-induction"),
-        ("clocked_safe.aag", "informal-kind", "k-induction"),
-        ("clocked_safe.aag", "informal-ic3", "two-step"),
-        ("split_safe.aag", "informal-kind-ic3", "invariant"),
+    // The k-induction engines fold a free-running clock too:
+    // clocked_safe is proved by them unfolded and folded.
+    let unfolded: &[(&str, &str)] = &[("INFORMAL_FOLD", "0")];
+    for (name, engine, kind, env) in [
+        ("stuck_latch_safe.aag", "informal-ic3", "invariant", &[][..]),
+        ("delay_safe.aag", "informal-ic3-mt", "invariant", &[]),
+        ("delay_safe.aag", "informal-kind", "k-induction", &[]),
+        ("clocked_safe.aag", "informal-kind", "k-induction", unfolded),
+        (
+            "clocked_safe.aag",
+            "informal-kind",
+            "two-step-k-induction",
+            &[],
+        ),
+        ("clocked_safe.aag", "informal-ic3", "two-step", &[]),
+        ("split_safe.aag", "informal-kind-ic3", "invariant", &[]),
     ] {
-        let dir = d.join(engine);
-        let (code, out, s) = check(name, engine, &dir, &[], &[]);
+        let dir = d.join(format!("{engine}-{}-{kind}", env.len()));
+        let (code, out, s) = check(name, engine, &dir, &[], env);
         assert_eq!(code, Some(20), "{name} {engine}: {out}");
         let s = s.unwrap();
         assert_eq!(
@@ -155,7 +177,7 @@ fn every_kind_of_certificate_is_written_and_holds() {
         );
         assert_eq!(s.checker.as_deref(), Some("certifaiger"));
         // Only a k-induction proof has a depth; the delay line needs 3.
-        assert_eq!(s.k.is_some(), kind == "k-induction", "{name}");
+        assert_eq!(s.k.is_some(), kind.contains("k-induction"), "{name}");
         if (name, engine) == ("delay_safe.aag", "informal-kind") {
             assert_eq!(s.k, Some(3));
         }
@@ -274,4 +296,53 @@ fn a_btor2_model_is_certified_at_bit_level_and_no_certificate_has_a_reason() {
     assert_eq!(s.evidence, "none");
     assert!(out.contains("certificate: none (informal-bmc gives no certificate)"));
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Two models with the same file name from different directories keep
+/// their own certificates in one directory; checking one of them again
+/// reuses its own names.
+#[test]
+fn same_file_name_from_two_directories() {
+    if !have_engines() {
+        return;
+    }
+    let d = scratch("same-name");
+    let src = scratch("same-name-models");
+    for (sub, from) in [("a", "toggle_unsafe.aag"), ("b", "stuck_latch_safe.aag")] {
+        std::fs::create_dir_all(src.join(sub)).unwrap();
+        std::fs::copy(
+            root().join("tests/models").join(from),
+            src.join(sub).join("same.aag"),
+        )
+        .unwrap();
+    }
+    let run = |sub: &str| {
+        Command::new(env!("CARGO_BIN_EXE_informal"))
+            .current_dir(root())
+            .args(["check"])
+            .arg(src.join(sub).join("same.aag"))
+            .args(["--timeout", "30", "--certificate"])
+            .arg(&d)
+            .output()
+            .unwrap()
+            .status
+            .code()
+    };
+    assert_eq!(run("a"), Some(10));
+    assert_eq!(run("b"), Some(20));
+    assert_eq!(run("a"), Some(10));
+    let all: Vec<Summary> = summaries(&d).unwrap().into_iter().map(|(_, s)| s).collect();
+    assert_eq!(all.len(), 2, "{all:?}");
+    let a = all
+        .iter()
+        .find(|s| s.model.ends_with("a/same.aag"))
+        .expect("a's summary");
+    let b = all
+        .iter()
+        .find(|s| s.model.ends_with("b/same.aag"))
+        .expect("b's summary");
+    assert_eq!((a.verdict.as_str(), b.verdict.as_str()), ("unsafe", "safe"));
+    assert_ne!(a.file, b.file);
+    let _ = std::fs::remove_dir_all(&d);
+    let _ = std::fs::remove_dir_all(&src);
 }

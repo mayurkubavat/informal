@@ -67,6 +67,11 @@ fi
 
 results=()
 failed=0
+# Builds and the fuzzing wait in the dvq queue (~/.local/bin/dvq) where it
+# is installed; check.sh and inhouse_sample.sh queue themselves. DVQ= runs
+# everything directly.
+DVQB="${DVQ-$HOME/.local/bin/dvq run build --}"; DVQF="${DVQ-$HOME/.local/bin/dvq run formal --}"
+[ -x "$HOME/.local/bin/dvq" ] || { DVQB=; DVQF=; }
 {
     echo "== nightly $(date -Is) on ${ref:-main} $commit"
 
@@ -105,7 +110,7 @@ failed=0
         [ -e bench/hwmcc24 ] || ln -s "$data" bench/hwmcc24
         tag=nightly-$(date +%Y%m%d)
         rm -f "bench/runs-inhouse-sample60-$tag.jsonl" "bench/inhouse-sample60-$tag.log"
-        if cargo build --locked --release -q -p informal-cli && line=$(scripts/inhouse_sample.sh 60 3 "$tag"); then
+        if $DVQB cargo build --locked --release -q -p informal-cli && line=$(scripts/inhouse_sample.sh 60 3 "$tag"); then
             echo "$line"; results+=("hwmcc sample: ${line,,}")
         else
             results+=("hwmcc sample FAIL (bench/inhouse-sample60-$tag.log in $land)"); failed=1
@@ -113,8 +118,8 @@ failed=0
     fi
 
     echo; echo "== 4. fuzzing: random AIGER models, every engine, compared"
-    if cargo build --locked --release -q -p informal-cli \
-        && line=$(python3 -I scripts/fuzz.py --count 200 --seed "$(date +%Y%m%d)000" | tail -n 1); then
+    if $DVQB cargo build --locked --release -q -p informal-cli \
+        && line=$($DVQF python3 -I scripts/fuzz.py --count 200 --seed "$(date +%y%j)000" | tail -n 1); then
         echo "$line"; results+=("${line,,}")
     else
         echo "$line"; results+=("fuzz FAIL (target/fuzz/failures in $land)"); failed=1
