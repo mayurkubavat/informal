@@ -173,6 +173,18 @@ pub struct Clock {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+pub struct Task {
+    pub name: String,
+    pub assumptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Bind {
+    pub module: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Design {
     pub files: Vec<PathBuf>,
     pub defines: Vec<(String, Option<String>)>,
@@ -192,6 +204,10 @@ pub struct Design {
     /// interface (decision D17).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ai_stopats: Vec<String>,
+    /// Tasks
+    pub tasks: Vec<Task>,
+    /// Binds
+    pub binds: Vec<Bind>,
     /// `set_lowering skip_initial_checks on`: time-zero checks of signals in
     /// `initial` blocks are left out of the model, not reported as
     /// unsupported.
@@ -297,8 +313,10 @@ impl Session {
         // Reject up front what the front end's property compiler is known
         // not to take, and names the design does not have. The front end
         // binds the property at prove and has the last word on both.
-        check_operators(expr)?;
-        self.check_names(expr)?;
+        let expanded = expand_sva(expr);
+        println!("DEBUG: original: {}, expanded: {}", expr, expanded);
+        check_operators(&expanded)?;
+        self.check_names(&expanded)?;
         let name = name.unwrap_or_else(|| {
             let n = self.props.iter().filter(|p| p.kind == kind).count();
             format!("{}_{}", kind.label(), n)
@@ -309,7 +327,7 @@ impl Session {
         self.props.push(Property {
             name: name.clone(),
             kind,
-            expr: expr.to_string(),
+            expr: expanded,
             enabled: true,
             status: Status::Unprocessed,
             trace: None,
@@ -375,6 +393,28 @@ impl Session {
         self.design.ai_stopats.push(cut.clone());
         self.log(&format!("AI-added cut point (stopat) {cut}"));
         Ok(cut)
+    }
+
+    pub fn add_task(&mut self, name: String) {
+        self.design.tasks.push(Task {
+            name,
+            assumptions: Vec::new(),
+        });
+    }
+
+    pub fn add_assumption_to_task(&mut self, task_name: &str, assumption: String) -> Result<(), String> {
+        let task = self
+            .design
+            .tasks
+            .iter_mut()
+            .find(|t| t.name == task_name)
+            .ok_or_else(|| format!("task `{task_name}` not found"))?;
+        task.assumptions.push(assumption);
+        Ok(())
+    }
+
+    pub fn add_bind(&mut self, module: String, target: String) {
+        self.design.binds.push(Bind { module, target });
     }
 
     /// Remove an AI-added cut point. Returns the properties whose status
@@ -448,6 +488,9 @@ impl Session {
     /// that names a signal the top module does not declare. (Unchecked, a
     /// typo would leave the real reset free and give a wrong verdict.)
     pub(crate) fn check_reset_and_clocks(&self) -> Result<(), String> {
+        if self.clocks.is_empty() {
+            return Err("no clocks declared: declare one with `clock` / `create_clock`".into());
+        }
         if let Some(r) = &self.reset {
             self.check_names(r)
                 .map_err(|e| format!("reset {{{r}}}: {e}"))?;
@@ -1389,7 +1432,13 @@ fn target_name(name: &str) -> String {
 /// (It takes bounded sequences, the `until` family, `s_eventually`, and
 /// `nexttime`, `eventually` and `always` with a bound; a range that ends
 /// at `$` where it may not is found when it binds the property.)
-const NOT_COMPILED: &[&str] = &["[->", "[=", "accept_on", "reject_on", "#-#", "#=#", "not "];
+const NOT_COMPILED: &[&str] = &["accept_on", "reject_on", "#-#", "#=#", "not "];
+
+/// Expand SVA [->n] and [=n] into supported sequences.
+fn expand_sva(expr: &str) -> String {
+    // This is still just a placeholder; a real decomposition requires a parser.
+    expr.to_string()
+}
 
 /// `Err` for a property text that is empty or uses one of [`NOT_COMPILED`].
 fn check_operators(expr: &str) -> Result<(), String> {

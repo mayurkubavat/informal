@@ -79,3 +79,4 @@ __pycache__/
 # ...except tracked test fixtures
 !ui/tests/fixtures/*.vcd
 !tests/**/*.vcd
+tools/
