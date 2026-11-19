@@ -14,3 +14,7 @@
 - [ ] Verify with tests in tests/sv/
 - [ ] Move to master integration
 
+## Engine & Cache Orchestration
+- [x] Multi-solver orchestration (load balancing) implemented
+- [x] Persistent proof-cache implementation complete
+- [x] Full integration test suite passed
