@@ -402,7 +402,11 @@ impl Session {
         });
     }
 
-    pub fn add_assumption_to_task(&mut self, task_name: &str, assumption: String) -> Result<(), String> {
+    pub fn add_assumption_to_task(
+        &mut self,
+        task_name: &str,
+        assumption: String,
+    ) -> Result<(), String> {
         let task = self
             .design
             .tasks

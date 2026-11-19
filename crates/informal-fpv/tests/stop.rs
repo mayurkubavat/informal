@@ -4,16 +4,21 @@
 //! undetermined ("stopped"), and kill the engine's whole process group, so
 //! no `sleep` is left behind.
 
+#[allow(unused_imports)]
 use informal_fpv::{compat, Flavor, Session, Shell};
 use std::path::{Path, PathBuf};
+#[allow(unused_imports)]
 use std::sync::atomic::Ordering;
+#[allow(unused_imports)]
 use std::time::{Duration, Instant};
 
+#[allow(dead_code)]
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 /// Pids of live processes whose command line contains `marker`.
+#[allow(dead_code)]
 fn procs_with(marker: &str) -> Vec<u32> {
     let Ok(dir) = std::fs::read_dir("/proc") else {
         return Vec::new();

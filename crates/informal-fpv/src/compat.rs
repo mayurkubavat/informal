@@ -680,7 +680,11 @@ const JG: &[(&str, Body)] = &[
         Ok(().into())
     }),
     ("task", |s, a| {
-        let a = Args::parse(a, &[("-create", 0), ("-name", 1), ("-assume", 1), ("-task", 1)], &[])?;
+        let a = Args::parse(
+            a,
+            &[("-create", 0), ("-name", 1), ("-assume", 1), ("-task", 1)],
+            &[],
+        )?;
         if a.flag("-create") {
             let name = a.val("-name").ok_or("task -create requires -name")?;
             s.add_task(name.to_string());
