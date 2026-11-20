@@ -6,7 +6,7 @@
 //= rtl_unsupported.a_ok proven
 module rtl_unsupported(input logic clk, input logic a, output logic q);
   always_ff @(posedge clk) q <= a;
-  a_unsup: assert property (@(posedge clk) a |-> always q);
+  a_unsup: assert property (@(posedge clk) a |-> always (q ##1 q));
   a_range: assert property (@(posedge clk) a |-> ##[1:$] q);
   a_ok:    assert property (@(posedge clk) a |=> q);
 endmodule

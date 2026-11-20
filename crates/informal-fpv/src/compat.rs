@@ -998,7 +998,7 @@ const JG: &[(&str, Body)] = &[
                 .collect()
         };
         // Precondition covers are made for every proven assertion unless
-        // this elaboration asks for none; witness covers are not yet run.
+        // this elaboration asks for none; witness covers run when asked.
         if a.flag("-no_preconditions") {
             s.preconditions = false;
         }
@@ -1006,8 +1006,12 @@ const JG: &[(&str, Body)] = &[
             for k in kinds[0].split_whitespace() {
                 match k {
                     "precondition" => s.preconditions = true,
-                    "witness" => s.log("elaborate -create_related_covers witness: witness covers are not yet run; precondition covers are (docs/vacuity.md)"),
-                    _ => return Err(format!("elaborate -create_related_covers: precondition or witness, not `{k}`")),
+                    "witness" => s.witnesses = true,
+                    _ => {
+                        return Err(format!(
+                            "elaborate -create_related_covers: precondition or witness, not `{k}`"
+                        ))
+                    }
                 }
             }
         }
@@ -1278,6 +1282,7 @@ const JG: &[(&str, Body)] = &[
                     "kind": p.kind.label(),
                     "status": p.status.word(),
                     "vacuity": p.vacuity.map(|v| v.word()),
+                    "witness_trace": p.witness_trace,
                     "stats": p.stats,
                 })
             })

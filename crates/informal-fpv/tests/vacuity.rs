@@ -17,7 +17,12 @@ fn shell(design: &str, top: &str) -> Option<Shell> {
         informal_engine::tool_missing("needs the in-house engines (CaDiCaL)");
         return None;
     }
-    let work = std::env::temp_dir().join(format!("informal-vacuity-{top}-{}", std::process::id()));
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let id = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let work = std::env::temp_dir().join(format!(
+        "informal-vacuity-{top}-{}-{id}",
+        std::process::id()
+    ));
     let sh = Shell::new(Session::new(engines, work), Flavor::Jg);
     let path = root().join("tests/fpv/vacuity").join(design);
     sh.eval(&format!("analyze -sv12 {{{}}}", path.display()))
@@ -230,4 +235,40 @@ fn immediate_precondition_covers_and_named_assumption_conflicts() {
         sh2.eval("check_assumptions -depth 5 -conflict").unwrap(),
         "imm_conf._assume_1 imm_conf._assume_2"
     );
+}
+
+#[test]
+fn witness_covers_run_when_requested_and_write_vcd() {
+    let engines = informal_bmc::engines();
+    if engines.is_empty() {
+        informal_engine::tool_missing("needs the in-house engines (CaDiCaL)");
+        return;
+    }
+    let work = std::env::temp_dir().join(format!("informal-wit-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let sv = work.join("wit.sv");
+    std::fs::write(
+        &sv,
+        "module wit(input logic clk, rst, req, output logic gnt);\n\
+           always_ff @(posedge clk) gnt <= rst ? 1'b0 : req;\n\
+           a_pipe: assert property (@(posedge clk) disable iff (rst) req |=> gnt);\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let run_dir = work.join("run");
+    let sh = Shell::new(Session::new(engines, run_dir.clone()), Flavor::Jg);
+    sh.eval(&format!(
+        "analyze -sv12 {{{}}}; elaborate -top wit -create_related_covers {{precondition witness}}; clock clk; reset -expression {{rst}}; prove -all",
+        sv.display()
+    ))
+    .unwrap();
+    assert_eq!(
+        a_le(&sh, "wit.a_pipe"),
+        ("proven", Some(Vacuity::NonVacuous))
+    );
+    let sess: serde_json::Value = serde_json::from_str(&sh.eval("session").unwrap()).unwrap();
+    let wtrace = sess["props"][0]["witness_trace"].as_str().expect(
+        "witness_trace must be populated when -create_related_covers {witness} is requested",
+    );
+    assert!(run_dir.join(wtrace).is_file(), "missing VCD at {wtrace}");
 }

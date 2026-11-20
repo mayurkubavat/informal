@@ -116,7 +116,7 @@ passes on a different setup without saying so.
 | `clear -all` | (new session) | Forget design and properties |
 | `analyze -sv12 [-f F] [+define+X] [+incdir+D] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources; VHDL is an error for now |
 | `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with svlang; top guessed when omitted |
-| `elaborate ... -no_preconditions`, `-create_related_covers {precondition}` | — | Leave out, or ask again for, the precondition covers run after every prove (docs/vacuity.md); `{witness}` is accepted with a note |
+| `elaborate ... -no_preconditions`, `-create_related_covers {precondition witness}` | — | Leave out, or ask for, precondition vacuity covers and witness covers (`<name>:witness` VCD traces) run after every prove (docs/vacuity.md) |
 | `elaborate ... -bbox_m {M ...} -bbox_i {path ...}` | `set_blackbox -designs {M ...} -cells {path ...}` | Black boxes: ports kept, contents not modelled, outputs free (see below) |
 | `stopat sig ...`, `stopat -clear [sig ...]`, `stopat -list` | `snip_driver sig ...` | Cut points: each signal is cut from its drivers and is free on every step (see below) |
 | `clock clk [-factor N] [-phase P]` | `create_clock clk -period N` | A clock (posedge); the first one declared is the primary clock. `-factor` and `-phase` relate several clocks (see Known gaps); `-both_edges` is accepted and not needed |
@@ -188,10 +188,11 @@ assumption of one task does not constrain another, and a cut point in
 one task leaves the same signal driven in the others. Black boxes,
 clocks and reset are the design's and the same in every task.
 
-Assumptions written in the RTL are part of the design and are in every
-task's model (svlang has no way yet to leave one out); a new task lists
-them from the start, as copies, so that its property list says what its
-model holds.
+Assumptions written in the RTL are part of the design and are copied
+into every new task from the start so that its property list says what
+its model holds; disabling (`assume -disable`) or removing (`assume
+-remove`) an RTL assumption in a task leaves its constraint out of that
+task's model while keeping it active in other tasks.
 
 ```tcl
 task -create FreeFsm -copy {a_fsm_*} -copy_assumes
@@ -402,6 +403,5 @@ last result, the ranked list of what the shell should learn next.
 - Black boxes need the boxed module's source to elaborate (a module with
   no source at all is still an error); `-bbox_mul` and `-bbox_a` (box
   wide multipliers and arrays automatically) are ignored with a note.
-- Tasks: an assumption written in the RTL cannot be left out of a task's
-  model (see Tasks). `prove -bg` runs in the foreground, so tasks are
-  proved one after the other.
+- Tasks: `prove -bg` runs in the foreground, so tasks are proved one
+  after the other.

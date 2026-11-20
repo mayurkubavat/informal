@@ -138,6 +138,10 @@ pub struct Property {
     /// property given by command is bound again under its own name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy_of: Option<String>,
+    /// VCD written for `<name>:witness` when `elaborate -create_related_covers
+    /// {witness}` is enabled and a proven assertion's witness cover is hit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness_trace: Option<String>,
     /// What the last prove measured for this property (times, depth,
     /// invariant size, certificate): `None` before a prove, and when no
     /// engine ran on it.
@@ -158,6 +162,7 @@ impl Property {
     pub fn forget_result(&mut self) {
         self.status = Status::Unprocessed;
         self.trace = None;
+        self.witness_trace = None;
         self.engines.clear();
         self.under_ai.clear();
         self.vacuity = None;
@@ -362,6 +367,9 @@ pub struct Session {
     /// Cover the precondition of every proven assertion after a prove
     /// (`informal::set_vacuity`, `elaborate -no_preconditions`).
     pub preconditions: bool,
+    /// Cover `<name>:witness` (antecedent + consequent) for every proven
+    /// assertion after a prove (`elaborate -create_related_covers {witness}`).
+    pub witnesses: bool,
 }
 
 /// What the environment check found (docs/vacuity.md).
@@ -417,6 +425,7 @@ impl Session {
             environment_depth: 20,
             environment: None,
             preconditions: true,
+            witnesses: false,
         }
     }
 
@@ -427,11 +436,12 @@ impl Session {
         let workdir = std::mem::take(&mut self.workdir);
         let (stop, sink, dry_run) = (self.stop.clone(), self.sink.take(), self.dry_run);
         let certificates = self.certificates.take();
-        let (depth, pre) = (self.environment_depth, self.preconditions);
+        let (depth, pre, wit) = (self.environment_depth, self.preconditions, self.witnesses);
         *self = Session::new(engines, workdir);
         self.certificates = certificates;
         self.environment_depth = depth;
         self.preconditions = pre;
+        self.witnesses = wit;
         self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
@@ -500,6 +510,7 @@ impl Session {
             ai: false,
             under_ai: Vec::new(),
             vacuity: None,
+            witness_trace: None,
             task,
             copy_of: None,
             stats: None,
@@ -959,6 +970,7 @@ impl Session {
                 ai: false,
                 under_ai: Vec::new(),
                 vacuity: None,
+                witness_trace: None,
                 task: EMBEDDED.to_string(),
                 copy_of: None,
                 stats: None,
@@ -1031,7 +1043,12 @@ impl Session {
             format: ModelFormat::Btor2,
             timeout: self.time_limit,
         };
-        let o = portfolio::run_until(engines, &req, None, Some(self.stop.as_ref()));
+        let safety: Vec<_> = engines
+            .iter()
+            .filter(|e| e.name() != "informal-klive")
+            .cloned()
+            .collect();
+        let o = portfolio::run_until(&safety, &req, None, Some(self.stop.as_ref()));
         let verdict = portfolio::verdict(&o);
         if let (Some(dir), Some(w), true) = (&self.certificates, &o.winner, verdict.is_definitive())
         {
@@ -1062,6 +1079,58 @@ impl Session {
             }
             Verdict::Unknown { .. } => Vacuity::NotChecked,
         })
+    }
+
+    /// Run `<name>:witness` (antecedent + consequent) for a proven assertion
+    /// when `elaborate -create_related_covers {witness}` is active, writing a
+    /// VCD witness trace on hit.
+    fn check_witness_cover(
+        &self,
+        i: usize,
+        btor: &str,
+        engines: &[Arc<dyn Engine>],
+    ) -> Option<String> {
+        let name = format!("{}:witness", self.props[i].name);
+        let keep = format!("{}:witness", self.check_name(i));
+        if !has_target(btor, &keep) {
+            return None;
+        }
+        let out = self.workdir.join(format!("prop_{i}.witness.btor2"));
+        let (model, section) = informal_svlang::split_trace(btor);
+        let mut w = std::fs::write(&out, only_target(model, &keep));
+        if w.is_ok() && !section.is_empty() {
+            w = std::fs::write(trace_model(&out), only_target(btor, &keep));
+        }
+        w.ok()?;
+        let req = CheckRequest {
+            model: out.clone(),
+            format: ModelFormat::Btor2,
+            timeout: self.time_limit,
+        };
+        let safety: Vec<_> = engines
+            .iter()
+            .filter(|e| e.name() != "informal-klive")
+            .cloned()
+            .collect();
+        let o = portfolio::run_until(&safety, &req, None, Some(self.stop.as_ref()));
+        let verdict = portfolio::verdict(&o);
+        match verdict {
+            Verdict::Unsafe { depth } => {
+                let witness = o.winner.as_ref().and_then(|w| w.witness.as_deref());
+                match self.write_trace(&name, &out, witness, depth) {
+                    Ok((path, _)) => {
+                        self.log(&format!("{name}: covered ({path})"));
+                        Some(path)
+                    }
+                    Err(_) => None,
+                }
+            }
+            Verdict::Safe => {
+                self.log(&format!("{name}: unreachable"));
+                None
+            }
+            Verdict::Unknown { .. } => None,
+        }
     }
 
     /// The environment check: can the assumptions and the reset run for
@@ -1507,6 +1576,7 @@ impl Session {
                 reason: "stopped".into(),
             };
             self.props[i].trace = None;
+            self.props[i].witness_trace = None;
             self.props[i].engines.clear();
             self.props[i].stats = None;
         }
@@ -1566,6 +1636,7 @@ impl Session {
                 (Status::Proven { .. }, true) => Some(Vacuity::VacuousEnvironment),
                 _ => None,
             };
+            self.props[i].witness_trace = None;
         }
         if let (Ok((btor, _)), false, true) = (&lowered, conflict, self.preconditions) {
             for &i in &targets[..reached] {
@@ -1588,6 +1659,21 @@ impl Session {
                     vacuous.len(),
                     vacuous.join(", ")
                 ));
+            }
+        }
+        if let (Ok((btor, _)), false, true) = (&lowered, conflict, self.witnesses) {
+            for &i in &targets[..reached] {
+                if self.stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                let proven = matches!(self.props[i].status, Status::Proven { .. });
+                let vacuous = matches!(
+                    self.props[i].vacuity,
+                    Some(Vacuity::Vacuous | Vacuity::VacuousEnvironment)
+                );
+                if proven && !vacuous && self.props[i].kind == Kind::Assert {
+                    self.props[i].witness_trace = self.check_witness_cover(i, btor, engines);
+                }
             }
         }
         stopped
@@ -1768,6 +1854,7 @@ impl Session {
                 .collect(),
             cover_targets: true,
             precondition_covers: self.preconditions,
+            witness_covers: self.witnesses,
             reset: self.reset.clone(),
             tick: self.tick_reset(),
             skip_initial_checks: self.design.skip_initial_checks,
@@ -1809,10 +1896,70 @@ impl Session {
             self.log(&format!("svlang: {n}"));
         }
         if l.ok {
-            Ok((l.btor2, l.properties))
+            let disabled = self.disabled_rtl_assumptions(task);
+            let btor2 = if disabled.is_empty() {
+                l.btor2
+            } else {
+                let of = match task {
+                    EMBEDDED => String::new(),
+                    t => format!(" in task {t}"),
+                };
+                self.log(&format!(
+                    "{} RTL assumption(s) disabled{of} and left out of this model: {}",
+                    disabled.len(),
+                    disabled.join(", ")
+                ));
+                drop_assumptions(&l.btor2, &disabled)
+            };
+            Ok((btor2, l.properties))
         } else {
             Err(format!("svlang: {}", l.errors.join("; ")))
         }
+    }
+
+    /// RTL assumption target symbols that have been disabled (`assume -disable`)
+    /// or removed (`assume -remove`) in `task`.
+    fn disabled_rtl_assumptions(&self, task: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        // Explicitly disabled RTL assumptions (or copies of them) in `task`.
+        for p in &self.props {
+            if p.task == task
+                && p.kind == Kind::Assume
+                && !p.enabled
+                && (p.rtl || p.copy_of.is_some())
+            {
+                let sym = match &p.copy_of {
+                    Some(orig) => target_name(orig),
+                    None => target_name(&p.name),
+                };
+                if !out.contains(&sym) {
+                    out.push(sym);
+                }
+            }
+        }
+        // If `elaborate` populated RTL assumptions in `<embedded>`, any RTL
+        // assumption whose copy was removed from `task` (`assume -remove`) is
+        // also excluded from `task`'s model.
+        if task != EMBEDDED && self.props.iter().any(|p| p.rtl) {
+            for orig in self
+                .props
+                .iter()
+                .filter(|p| p.rtl && p.kind == Kind::Assume)
+            {
+                let present = self.props.iter().any(|p| {
+                    p.task == task
+                        && p.kind == Kind::Assume
+                        && p.copy_of.as_deref() == Some(orig.name.as_str())
+                });
+                if !present {
+                    let sym = target_name(&orig.name);
+                    if !out.contains(&sym) {
+                        out.push(sym);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Run the portfolio on one property's model. With a tracker, engine
@@ -1843,16 +1990,24 @@ impl Session {
         // A liveness property is a `justice` line, which informal's own
         // engines read as a safety property (liveness to safety, when the
         // model is loaded). An external engine reads the file itself.
-        let own: Vec<Arc<dyn Engine>>;
+        let filtered: Vec<Arc<dyn Engine>>;
         let engines = if liveness {
-            own = engines
+            filtered = engines
                 .iter()
-                .filter(|e| e.name().starts_with("informal-") && !e.name().contains("wbmc"))
+                .filter(|e| {
+                    (e.name().starts_with("informal-") && !e.name().contains("wbmc"))
+                        || e.capabilities().liveness
+                })
                 .cloned()
                 .collect();
-            &own[..]
+            &filtered[..]
         } else {
-            engines
+            filtered = engines
+                .iter()
+                .filter(|e| e.name() != "informal-klive")
+                .cloned()
+                .collect();
+            &filtered[..]
         };
         if bads == 0 {
             // The front end folded the check to a constant true.
@@ -2218,6 +2373,27 @@ fn target_of(line: &str) -> Option<(&str, &str)> {
 fn has_target(btor: &str, name: &str) -> bool {
     btor.lines()
         .any(|l| target_of(l).is_some_and(|(_, n)| n == name))
+}
+
+/// Drop named `constraint` and `fair` lines whose symbol is in `drop_syms`.
+fn drop_assumptions(btor: &str, drop_syms: &[String]) -> String {
+    btor.lines()
+        .filter(|l| {
+            let mut w = l.split_whitespace();
+            let _id = w.next();
+            match w.next() {
+                Some("constraint" | "fair") => {
+                    let _arg = w.next();
+                    match w.next() {
+                        Some(sym) => !drop_syms.iter().any(|d| d == sym),
+                        None => true,
+                    }
+                }
+                _ => true,
+            }
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect()
 }
 
 /// The model with `keep` as its only target. Fairness lines only matter to

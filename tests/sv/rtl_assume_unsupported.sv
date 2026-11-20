@@ -5,5 +5,5 @@
 //= a1 error
 module rtl_assume_unsupported(input logic clk, input logic a, output logic q);
   always_ff @(posedge clk) q <= a;
-  m_unsup: assume property (@(posedge clk) a |-> always q);
+  m_unsup: assume property (@(posedge clk) a |-> always (q ##1 q));
 endmodule

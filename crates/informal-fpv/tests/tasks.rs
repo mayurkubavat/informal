@@ -214,3 +214,38 @@ prove -task FreeQ
     );
     assert_eq!(status(&sh, "<embedded>::a_max_A"), "unprocessed");
 }
+
+#[test]
+fn rtl_assumptions_can_be_disabled_per_task() {
+    let Some(engines) = engines() else {
+        return;
+    };
+    let work =
+        std::env::temp_dir().join(format!("informal-tasks-rtlassume-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let sv = work.join("rtl_assume.sv");
+    std::fs::write(
+        &sv,
+        "module rtl_assume(input logic clk, rst, en, output logic [2:0] q);\n\
+           always_ff @(posedge clk) q <= rst ? 3'd0 : (en ? q + 3'd1 : q);\n\
+           m_hold: assume property (@(posedge clk) disable iff (rst) !en);\n\
+           a_never4: assert property (@(posedge clk) disable iff (rst) q != 3'd4);\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let sh = Shell::new(Session::new(engines, work.join("run")), Flavor::Jg);
+    sh.eval(&format!(
+        "analyze -sv12 {{{}}}; elaborate -top rtl_assume; clock clk; reset -expression {{rst}}; set_prove_time_limit 60s",
+        sv.display()
+    ))
+    .unwrap();
+    sh.eval("task -create uncons -copy *a_never4").unwrap();
+    sh.eval("assume -disable uncons::rtl_assume.m_hold")
+        .unwrap();
+
+    sh.eval("prove -all").unwrap();
+    assert_eq!(status(&sh, "rtl_assume.a_never4"), "proven");
+
+    sh.eval("prove -task uncons").unwrap();
+    assert_eq!(status(&sh, "uncons::rtl_assume.a_never4"), "cex");
+}

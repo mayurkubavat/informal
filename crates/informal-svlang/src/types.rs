@@ -329,6 +329,10 @@ pub struct Request {
     /// vacuous (docs/vacuity.md). Written as `bad` lines with
     /// [`Self::cover_targets`].
     pub precondition_covers: bool,
+    /// Model only: beside each named assertion with an antecedent, a cover
+    /// target `<name>:witness` of a checked attempt where the consequent
+    /// holds (`elaborate -create_related_covers {witness}`).
+    pub witness_covers: bool,
 }
 
 /// How long the reset lasts in a model that drives the clocks, where one

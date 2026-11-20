@@ -72,9 +72,11 @@ fn property_options(
     skip_cycles: u32,
     clock_skips: &[(String, bool, u32)],
     preconditions: bool,
+    witnesses: bool,
 ) -> PropertyOptions {
     let mut opts = PropertyOptions::default();
     opts.precondition_covers = preconditions;
+    opts.witness_covers = witnesses;
     opts.skip_cycles = skip_cycles;
     opts.skip_by_clock = clock_skips
         .iter()
@@ -260,8 +262,9 @@ fn rtl_properties(
     skip_cycles: u32,
     clock_skips: &[(String, bool, u32)],
     preconditions: bool,
+    witnesses: bool,
 ) -> Vec<RtlProperty> {
-    let opts = property_options(skip_cycles, clock_skips, preconditions);
+    let opts = property_options(skip_cycles, clock_skips, preconditions, witnesses);
     let outcomes = nl.compile_properties(&opts);
     // The source files the properties stand in, read once each.
     let mut sources: std::collections::HashMap<u32, Option<String>> = Default::default();
@@ -400,7 +403,13 @@ fn model(
     clock_skips: &[(String, bool, u32)],
 ) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
     let mut nl = base.clone();
-    let mut properties = rtl_properties(&mut nl, skip_cycles, clock_skips, req.precondition_covers);
+    let mut properties = rtl_properties(
+        &mut nl,
+        skip_cycles,
+        clock_skips,
+        req.precondition_covers,
+        req.witness_covers,
+    );
     // The labelled immediate assertions are targets of the model too, under
     // their labels (the ones that cannot be listed were reported at compile).
     immediate_checks(&nl, &mut properties);
@@ -409,7 +418,12 @@ fn model(
         design,
         &mut nl,
         &req.properties,
-        &property_options(skip_cycles, clock_skips, req.precondition_covers),
+        &property_options(
+            skip_cycles,
+            clock_skips,
+            req.precondition_covers,
+            req.witness_covers,
+        ),
     ));
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
@@ -596,7 +610,7 @@ pub fn compile(req: &Request) -> Design {
         match comp.lower_netlist(&config) {
             LowerOutcome::Lowered(mut nl) => {
                 stats = Some(design_stats(&nl));
-                properties = rtl_properties(&mut nl, 0, &[], false);
+                properties = rtl_properties(&mut nl, 0, &[], false, false);
                 immediate_checks(&nl, &mut properties);
             }
             LowerOutcome::Unsupported(ds) => {

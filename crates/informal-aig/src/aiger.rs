@@ -1,12 +1,22 @@
 //! AIGER 1.9 reader (binary `aig` and ASCII `aag`) and ASCII writer.
-//! Bad-state, constraint and latch-reset sections are supported; outputs
-//! count as bad states when a file has no bad section (AIGER 1.0 style).
-//! Justice and fairness sections are rejected.
+//! Bad-state, constraint, justice, fairness and latch-reset sections are
+//! supported; outputs count as bad states when a file has no bad or justice
+//! section (AIGER 1.0 style).
 
 use crate::{Aig, Init, Lit, Node};
 use anyhow::{anyhow, bail, Context, Result};
 
+/// Read an AIGER 1.9 buffer, converting any justice/fairness properties to
+/// safety via [`crate::l2s::to_safety`].
 pub fn read(bytes: &[u8]) -> Result<Aig> {
+    let mut g = read_raw(bytes)?;
+    crate::l2s::to_safety(&mut g);
+    Ok(g)
+}
+
+/// Read an AIGER 1.9 buffer, keeping [`Aig::justice`] and [`Aig::fairness`]
+/// untouched before liveness-to-safety conversion.
+pub fn read_raw(bytes: &[u8]) -> Result<Aig> {
     let mut r = Reader { b: bytes, pos: 0 };
     let header = r.line()?;
     let h: Vec<&str> = header.split_whitespace().collect();
@@ -30,9 +40,6 @@ pub fn read(bytes: &[u8]) -> Result<Aig> {
         num(8)?,
         num(9)?,
     );
-    if nj > 0 || nf > 0 {
-        bail!("AIGER justice / fairness (liveness) is not supported yet");
-    }
     if m != ni + nl + na {
         bail!("AIGER header: M must equal I + L + A");
     }
@@ -66,6 +73,23 @@ pub fn read(bytes: &[u8]) -> Result<Aig> {
     let mut cons = Vec::new();
     for _ in 0..nc {
         cons.push(r.lit_line()?);
+    }
+    let mut justice_sizes = Vec::with_capacity(nj as usize);
+    for _ in 0..nj {
+        let count: usize = r.line()?.trim().parse().context("bad AIGER justice size")?;
+        justice_sizes.push(count);
+    }
+    let mut justice = Vec::with_capacity(nj as usize);
+    for count in justice_sizes {
+        let mut conds = Vec::with_capacity(count);
+        for _ in 0..count {
+            conds.push(r.lit_line()?);
+        }
+        justice.push(conds);
+    }
+    let mut fairness = Vec::with_capacity(nf as usize);
+    for _ in 0..nf {
+        fairness.push(r.lit_line()?);
     }
     let first_latch = ni + 1;
     for (k, line) in latch_lines.iter().enumerate() {
@@ -136,13 +160,21 @@ pub fn read(bytes: &[u8]) -> Result<Aig> {
             }
         }
     }
-    g.bads = if bads.is_empty() { outs } else { bads };
+    g.bads = if bads.is_empty() && justice.is_empty() {
+        outs
+    } else {
+        bads
+    };
     g.constraints = cons;
+    g.justice = justice;
+    g.fairness = fairness;
     let maxv = g.num_vars();
     for l in g
         .bads
         .iter()
         .chain(&g.constraints)
+        .chain(g.justice.iter().flatten())
+        .chain(&g.fairness)
         .chain(g.latches.iter().map(|l| &l.next))
     {
         if l >> 1 >= maxv {
@@ -155,6 +187,11 @@ pub fn read(bytes: &[u8]) -> Result<Aig> {
 pub fn read_file(path: &std::path::Path) -> Result<Aig> {
     let b = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     read(&b).with_context(|| format!("parsing {}", path.display()))
+}
+
+pub fn read_file_raw(path: &std::path::Path) -> Result<Aig> {
+    let b = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    read_raw(&b).with_context(|| format!("parsing {}", path.display()))
 }
 
 struct Reader<'a> {
@@ -354,5 +391,19 @@ mod tests {
             assert_eq!(val(&g, g.latches[0].next), val(&r, r.latches[0].next));
             assert_eq!(val(&g, g.bads[0]), val(&r, r.bads[0]));
         }
+    }
+
+    #[test]
+    fn aiger_1_9_justice_and_fairness() {
+        // M=3 I=1 L=1 O=0 A=1 B=0 C=0 J=1 F=1
+        // Input 2, Latch 4 (next=6, init=0), J=[2: 2, 4], F=[2], AND 6 = 2 & 5
+        let aag = b"aag 3 1 1 0 1 0 0 1 1\n2\n4 6 0\n2\n2\n4\n2\n6 2 5\ni0 req\nl0 st\n";
+        let raw = read_raw(aag).unwrap();
+        assert_eq!(raw.bads.len(), 0);
+        assert_eq!(raw.justice, vec![vec![2, 4]]);
+        assert_eq!(raw.fairness, vec![2]);
+        let l2s = read(aag).unwrap();
+        assert!(l2s.justice.is_empty());
+        assert_eq!(l2s.bads.len(), 1);
     }
 }

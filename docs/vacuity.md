@@ -79,10 +79,11 @@ trace reaches their antecedent (precondition unreachable): request.a_off
 
 `elaborate -no_preconditions` leaves the covers out from then on, and
 `elaborate -create_related_covers {precondition}` asks for them again (as
-in JasperGold). `-create_related_covers {witness}` is accepted with a
-note: witness covers (antecedent and consequent together) are compiled by
-svlang but not run yet. `informal::set_vacuity off` switches off both the
-environment check and the precondition covers.
+in JasperGold). `-create_related_covers {witness}` runs `<name>:witness`
+(antecedent and consequent together) on every non-vacuous proven
+assertion and writes a VCD witness trace when covered.
+`informal::set_vacuity off` switches off both the environment check and
+the precondition covers.
 
 ## Limits
 

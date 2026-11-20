@@ -9,8 +9,18 @@ use anyhow::{anyhow, bail, Result};
 use informal_ir::{Line, Model, Op, Sort};
 use std::collections::HashMap;
 
-/// Bit-blast a Btor2 model.
+/// Bit-blast a Btor2 model, converting any liveness (`justice` / `fair`)
+/// properties to safety via [`crate::l2s::to_safety`].
 pub fn from_btor2(m: &Model) -> Result<Aig> {
+    let mut g = from_btor2_raw(m)?;
+    // Every safety engine, pass and certificate gets an ordinary safety model.
+    crate::l2s::to_safety(&mut g);
+    Ok(g)
+}
+
+/// Bit-blast a Btor2 model, keeping [`Aig::justice`] and [`Aig::fairness`]
+/// untouched before liveness-to-safety conversion.
+pub fn from_btor2_raw(m: &Model) -> Result<Aig> {
     let bb = Blaster { m };
     let mut g = Aig::new();
     let mut f: HashMap<u32, Word> = HashMap::new();
@@ -120,8 +130,6 @@ pub fn from_btor2(m: &Model) -> Result<Aig> {
         let i = g.input();
         g.set_next(b, i);
     }
-    // Every engine, pass and certificate gets an ordinary safety model.
-    crate::l2s::to_safety(&mut g);
     Ok(g)
 }
 

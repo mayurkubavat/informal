@@ -11,6 +11,7 @@ pub mod certify;
 pub mod cnf;
 pub mod ic3;
 pub mod invariant;
+pub mod klive;
 pub mod mine;
 pub mod scorr;
 pub mod store;
@@ -693,7 +694,7 @@ fn kind_unsafe(
 }
 
 /// Turn a certificate check's outcome into the verdict to report.
-fn report_certificate(
+pub(crate) fn report_certificate(
     req: &CheckRequest,
     r: Result<(), String>,
     t: Instant,
@@ -803,7 +804,7 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
     })
 }
 
-fn solver(ctx: &RunContext) -> Box<dyn Sat> {
+pub(crate) fn solver(ctx: &RunContext) -> Box<dyn Sat> {
     let mut sat = informal_sat::best();
     let (cancel, deadline) = (ctx.cancel.clone(), ctx.deadline);
     sat.set_terminate(Box::new(move || {
@@ -812,7 +813,7 @@ fn solver(ctx: &RunContext) -> Box<dyn Sat> {
     sat
 }
 
-fn unknown(reason: impl Into<String>) -> Verdict {
+pub(crate) fn unknown(reason: impl Into<String>) -> Verdict {
     Verdict::Unknown {
         reason: reason.into(),
     }
@@ -820,13 +821,13 @@ fn unknown(reason: impl Into<String>) -> Verdict {
 
 /// A verdict after its independent check, with what an outside checker
 /// needs to confirm it (only kept with a definitive verdict).
-struct Checked {
+pub(crate) struct Checked {
     verdict: Verdict,
     certificate: Option<Certificate>,
 }
 
 impl Checked {
-    fn new(verdict: Verdict, certificate: Option<Certificate>) -> Self {
+    pub(crate) fn new(verdict: Verdict, certificate: Option<Certificate>) -> Self {
         let certificate = certificate.filter(|_| verdict.is_definitive());
         Checked {
             verdict,
@@ -841,7 +842,7 @@ impl From<Verdict> for Checked {
     }
 }
 
-fn result(name: &str, v: impl Into<Checked>, t0: Instant) -> EngineResult {
+pub(crate) fn result(name: &str, v: impl Into<Checked>, t0: Instant) -> EngineResult {
     let v: Checked = v.into();
     EngineResult {
         engine: name.into(),
@@ -852,7 +853,7 @@ fn result(name: &str, v: impl Into<Checked>, t0: Instant) -> EngineResult {
     }
 }
 
-const FORMATS: [ModelFormat; 2] = [ModelFormat::Aiger, ModelFormat::Btor2];
+pub(crate) const FORMATS: [ModelFormat; 2] = [ModelFormat::Aiger, ModelFormat::Btor2];
 
 /// Bounded model checking: is a bad state reachable in exactly k steps,
 /// for k = 0, 1, 2, ...? Never proves. With `step` > 1 it unrolls `step`
@@ -1627,6 +1628,7 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
         Arc::new(Ic3Engine { mini: false }),
         Arc::new(KindIc3 { ic3_share: 0.5 }),
         Arc::new(Ic3Mt::default()),
+        Arc::new(klive::KLive),
     ]
 }
 

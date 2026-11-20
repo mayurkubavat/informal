@@ -288,13 +288,27 @@ impl Aig {
 }
 
 /// Load a model at bit level by its extension: AIGER (`.aig`, `.aag`) as
-/// is, Btor2 (`.btor2`, `.btor`) bit-blasted.
+/// is, Btor2 (`.btor2`, `.btor`) bit-blasted, with any liveness properties
+/// converted to safety via [`l2s::to_safety`].
 pub fn load(path: &std::path::Path) -> anyhow::Result<Aig> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("aig" | "aag") => aiger::read_file(path),
         Some("btor2" | "btor") => {
             let text = std::fs::read_to_string(path)?;
             btor::from_btor2(&informal_ir::parse(&text)?)
+        }
+        _ => anyhow::bail!("unknown model format: {}", path.display()),
+    }
+}
+
+/// Load a model at bit level keeping [`Aig::justice`] and [`Aig::fairness`]
+/// untouched before liveness-to-safety conversion.
+pub fn load_raw(path: &std::path::Path) -> anyhow::Result<Aig> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("aig" | "aag") => aiger::read_file_raw(path),
+        Some("btor2" | "btor") => {
+            let text = std::fs::read_to_string(path)?;
+            btor::from_btor2_raw(&informal_ir::parse(&text)?)
         }
         _ => anyhow::bail!("unknown model format: {}", path.display()),
     }

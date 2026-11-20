@@ -325,7 +325,9 @@ impl Engine for ExternalEngine {
             formats: self.spec.formats.clone(),
             proves: self.spec.proves,
             finds_bugs: self.spec.finds_bugs,
-            liveness: self.spec.liveness,
+            // Preprocessed engines receive `informal_aig::load` output, which
+            // already reduces liveness (`justice` / `fair`) to pure safety.
+            liveness: self.spec.liveness || self.spec.preprocess,
             lemma_export: false,
             lemma_import: false,
         }
