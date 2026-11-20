@@ -175,6 +175,13 @@ sva_bind sva_bind.u_core.u_mon.a_bound_ok ffcd836dd50e2da3 lines=183 state=21 in
 sva_bind sva_bind.u_core.u_mon.a_bound_goto fcfa3f7e2a594d41 lines=183 state=21 input=3 bad=1 constraint=1 justice=0
 sva_bind sva_bind.u_core.u_mon.a_bound_bad d1687f1e7fc737d8 lines=183 state=21 input=3 bad=1 constraint=1 justice=0
 sva_bind sva_bind.u_core.u_mon.c_bound_full efbf1588c58660e6 lines=183 state=21 input=3 bad=1 constraint=1 justice=0
+sva_not_abort a_not_ok 7e2465e8e2dc3518 lines=153 state=14 input=4 bad=1 constraint=1 justice=0
+sva_not_abort a_not_cex 977f9986a9757970 lines=153 state=14 input=4 bad=1 constraint=1 justice=0
+sva_not_abort a_sync_acc 572d728cc115549b lines=153 state=14 input=4 bad=1 constraint=1 justice=0
+sva_not_abort a_sync_rej 6b0774367a60c10d lines=153 state=14 input=4 bad=1 constraint=1 justice=0
+sva_not_abort a_sync_rej_cex 8c8053e2b0a86cf9 lines=153 state=14 input=4 bad=1 constraint=1 justice=0
+sva_not_abort c_fby fa8a9aed751a76ab lines=153 state=14 input=4 bad=1 constraint=1 justice=0
+sva_not_abort c_fby_unreach 7b81a672b0a45d88 lines=153 state=14 input=4 bad=1 constraint=1 justice=0
 task_isolation t1::a_t1 3dc79da07cd1a929 lines=40 state=3 input=4 bad=1 constraint=2 justice=0
 task_isolation t2::a_t2 8949342c051c3309 lines=41 state=3 input=4 bad=1 constraint=2 justice=0
 task_isolation a_emb e3e9ca285e22b324 lines=35 state=3 input=4 bad=1 constraint=1 justice=0

@@ -2015,13 +2015,16 @@ mod tests {
     #[test]
     fn rejects_what_it_cannot_honour() {
         let sh = shell(Flavor::Jg);
-        let e = sh
-            .eval("assert -name r {accept_on (c) (a |-> b)}")
-            .unwrap_err();
-        assert!(e.message.contains("accept_on"), "{}", e.message);
-        // Ranges and goto repetition are taken: the front end compiles them at prove.
+        let e = sh.eval("assert -name r {a implies b}").unwrap_err();
+        assert!(e.message.contains("implies"), "{}", e.message);
+        // Ranges, goto repetition, negation, followed-by and aborts are taken:
+        // the front end compiles them at prove.
         sh.eval("assert -name r {a |-> ##[1:3] b}").unwrap();
         sh.eval("assert -name r_goto {a |-> b [->2]}").unwrap();
+        sh.eval("assert -name r_not {not (a ##1 b)}").unwrap();
+        sh.eval("assert -name r_fby {(a ##1 b) #-# c}").unwrap();
+        sh.eval("assert -name r_abort {accept_on (c) (a |-> b)}")
+            .unwrap();
         assert!(sh
             .session
             .borrow()

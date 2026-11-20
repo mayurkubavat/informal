@@ -2312,9 +2312,11 @@ fn target_name(name: &str) -> String {
 /// Operators the front end's property compiler does not take, checked
 /// when a property is given so that the command fails and not the prove.
 /// (It takes bounded and unbounded sequences, goto `[->]` and
-/// non-consecutive `[=]` repetition, `strong`, the `until` family,
-/// `s_eventually`, and `nexttime`, `eventually` and `always` with a bound.)
-const NOT_COMPILED: &[&str] = &["accept_on", "reject_on", "#-#", "#=#", "not "];
+/// non-consecutive `[=]` repetition, `strong`, `not`, `#-#` / `#=#`,
+/// `accept_on` / `reject_on` / `sync_accept_on` / `sync_reject_on`, the
+/// `until` family, `s_eventually`, and bounded `nexttime`, `eventually`
+/// and `always`.)
+const NOT_COMPILED: &[&str] = &["implies"];
 
 /// `Err` for a property text that is empty or uses one of [`NOT_COMPILED`].
 fn check_operators(expr: &str) -> Result<(), String> {

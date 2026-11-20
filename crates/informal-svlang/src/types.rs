@@ -213,6 +213,10 @@ impl Design {
             "s_always",
             "strong",
             "weak",
+            "accept_on",
+            "reject_on",
+            "sync_accept_on",
+            "sync_reject_on",
         ];
         let prefix = format!("{top}.");
         // Signals, plus instance names (the start of a hierarchical name).
