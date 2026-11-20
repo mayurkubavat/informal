@@ -740,3 +740,51 @@ fn an_agent_finds_the_failing_assertion_and_proposes_a_fix() {
         .unwrap()
         .contains("no_trace"));
 }
+
+#[test]
+fn mcp_why_cex_and_formal_app_tools_conform_to_schemas() {
+    let Some(api) = api(Mode::Auto, "apps") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/counter/counter.jg.tcl"}),
+    );
+    call(&api, "prove", json!({}));
+
+    let slice = call(&api, "why_cex", json!({"name": "a_never9"}));
+    assert_eq!(slice["schema"], "informal.why_cex/1");
+    assert_eq!(slice["status"], "cex");
+    assert!(!slice["events"].as_array().unwrap().is_empty());
+
+    let pc = call(&api, "prove_cache", json!({"enabled": true, "mode": "rw"}));
+    assert_eq!(pc["enabled"], true);
+
+    let cov_init = call(
+        &api,
+        "check_cov",
+        json!({"action": "init", "models": ["coi"]}),
+    );
+    assert_eq!(cov_init["initialized"], true);
+    let cov_meas = call(
+        &api,
+        "check_cov",
+        json!({"action": "measure", "models": ["coi"]}),
+    );
+    assert_eq!(cov_meas["measured"], true);
+
+    let xp = call(
+        &api,
+        "check_xprop",
+        json!({"action": "init", "targets": ["outputs"]}),
+    );
+    assert_eq!(xp["initialized"], true);
+    let xp_done = call(&api, "check_xprop", json!({"action": "prove"}));
+    assert_eq!(xp_done["schema"], "informal.xprop/1");
+
+    let spv = call(&api, "check_spv", json!({"action": "list"}));
+    assert_eq!(spv["schema"], "informal.spv/1");
+    let conn = call(&api, "check_conn", json!({"action": "list"}));
+    assert_eq!(conn["schema"], "informal.conn/1");
+}

@@ -1712,6 +1712,625 @@
     }
   },
   {
+    "changes": false,
+    "description": "Dynamic backward slice from a falsified assertion (`cex`) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.",
+    "input": {
+      "properties": {
+        "max_events": {
+          "description": "Maximum causal events to return (default 64)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Property name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "why_cex",
+    "output": {
+      "properties": {
+        "active_signals": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "active_slice_signals": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "events": {
+          "items": {
+            "properties": {
+              "frame": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "input",
+                  "register",
+                  "wire"
+                ],
+                "type": "string"
+              },
+              "prev_value": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "signal": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "width": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "frame",
+              "signal",
+              "kind",
+              "width",
+              "value",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "failure_frame": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "property": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.why_cex/1",
+          "type": "string"
+        },
+        "static_cone_signals": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "cex",
+            "covered"
+          ],
+          "type": "string"
+        },
+        "total_frames": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "property",
+        "status",
+        "failure_frame",
+        "total_frames",
+        "static_cone_signals",
+        "active_slice_signals",
+        "active_signals",
+        "events"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Enable, disable, or inspect the cone-of-influence SHA-256 proof cache (`set_prove_cache*`).",
+    "input": {
+      "properties": {
+        "enabled": {
+          "description": "Turn proof caching on or off",
+          "type": "boolean"
+        },
+        "mode": {
+          "description": "Read-write, read-only, or write-only",
+          "enum": [
+            "rw",
+            "ro",
+            "wo"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "Directory below the workspace root for cached verdicts",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "prove_cache",
+    "output": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "rw",
+            "ro",
+            "wo"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.prove_cache/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "enabled",
+        "mode"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Initialize, measure, query, or clear formal coverage (`coi`, `branch`, `toggle`, `functional`).",
+    "input": {
+      "properties": {
+        "action": {
+          "enum": [
+            "init",
+            "measure",
+            "list",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "models": {
+          "items": {
+            "enum": [
+              "coi",
+              "branch",
+              "toggle",
+              "functional",
+              "all"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "proof_core": {
+          "description": "Use minimal proof-core COI on proven assertions",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "check_cov",
+    "output": {
+      "properties": {
+        "initialized": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "model",
+              "name",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "measured": {
+          "type": "boolean"
+        },
+        "models": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "proof_core": {
+          "type": "boolean"
+        },
+        "report": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.cov/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "initialized",
+        "measured",
+        "models",
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Load a connectivity CSV map into the `Connectivity` task, prove its rules, list statuses, or clear it.",
+    "input": {
+      "properties": {
+        "action": {
+          "enum": [
+            "load",
+            "prove",
+            "list",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "file": {
+          "description": "Connectivity CSV path below the workspace root (for load)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "check_conn",
+    "output": {
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "properties": {
+          "items": {
+            "properties": {
+              "copy_of": {
+                "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+                "type": "string"
+              },
+              "depth": 0,
+              "detail": {
+                "description": "Why it is undetermined or in error",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "engine": "<engine>",
+              "engines": "<engines>",
+              "expr": {
+                "description": "The property as written (SystemVerilog)",
+                "type": "string"
+              },
+              "has_trace": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "assert",
+                  "assume",
+                  "cover"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "origin": {
+                "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+                "enum": [
+                  "user",
+                  "rtl",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "file",
+                  "line"
+                ],
+                "type": "object"
+              },
+              "stats": "<stats>",
+              "status": {
+                "description": "proven and unreachable are proofs; cex and covered come with a trace",
+                "enum": [
+                  "unprocessed",
+                  "proven",
+                  "bounded_proven",
+                  "cex",
+                  "covered",
+                  "unreachable",
+                  "undetermined",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "task": {
+                "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+                "type": "string"
+              },
+              "time_ms": 0,
+              "under_ai": {
+                "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "vacuity": {
+                "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "status",
+              "origin",
+              "has_trace"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.conn/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "count",
+        "properties"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Initialize, prove, list, or clear 2-copy self-composition X-propagation checks across outputs, control muxes, memories, assertions, or explicit signals.",
+    "input": {
+      "properties": {
+        "action": {
+          "enum": [
+            "init",
+            "prove",
+            "list",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "enum": [
+              "outputs",
+              "control",
+              "memories",
+              "assertions",
+              "all"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "Explicit sink signals to check",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "x_sources": {
+          "description": "Additional signals allowed to diverge with X",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "check_xprop",
+    "output": {
+      "properties": {
+        "initialized": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "properties": {
+              "category": {
+                "type": "string"
+              },
+              "depth": 0,
+              "engine": "<engine>",
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "category",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "report": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.xprop/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "initialized",
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Create, prove, list, or clear 2-safety non-interference rules proving secret `-from` signals never influence observable `-to` signals.",
+    "input": {
+      "properties": {
+        "action": {
+          "enum": [
+            "create",
+            "prove",
+            "list",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "cond": {
+          "description": "Optional SystemVerilog guard expression",
+          "type": "string"
+        },
+        "from": {
+          "description": "Secret/tainted source signals",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Rule name (optional for create)",
+          "type": "string"
+        },
+        "to": {
+          "description": "Untrusted/observable sink signals",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "check_spv",
+    "output": {
+      "properties": {
+        "report": {
+          "type": "string"
+        },
+        "rules": {
+          "items": {
+            "properties": {
+              "cond": {
+                "type": "string"
+              },
+              "depth": 0,
+              "engine": "<engine>",
+              "from": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              },
+              "to": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "from",
+              "to",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.spv/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "rules"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "changes": true,
     "description": "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
     "input": {

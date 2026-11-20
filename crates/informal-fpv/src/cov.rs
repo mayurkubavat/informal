@@ -497,7 +497,12 @@ fn measure_task_unr(
                 format: ModelFormat::Btor2,
                 timeout,
             };
-            let run = portfolio::run_until(&safety_engines, &req, None, Some(s.stop.as_ref()));
+            let selected = informal_bmc::select_for_btor(
+                &safety_engines,
+                &isolated,
+                !s.engine_filter.is_empty(),
+            );
+            let run = portfolio::run_until(&selected, &req, None, Some(s.stop.as_ref()));
             let _ = std::fs::remove_file(&model_path);
             match portfolio::verdict(&run) {
                 Verdict::Unsafe { .. } => CovStatus::Covered,

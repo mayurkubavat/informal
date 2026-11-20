@@ -94,6 +94,11 @@ pub struct Config {
     /// Stall-aware propagation: once a frame already kept a lemma (cannot
     /// empty this round) and 48 consecutive pushes fail, defer tail pushes.
     pub stall_push: bool,
+    /// Parent-lemma CTP prediction: selectively push parent-derived and short
+    /// frontier lemmas via CTP, trying parent-lemma promotion first.
+    pub parent_ctp: bool,
+    /// CTI-seeded 1-/2-literal invariant mining fed into periodic Houdini.
+    pub cti_mine: bool,
 }
 
 impl Default for Config {
@@ -139,6 +144,8 @@ impl Default for Config {
             dynamic_order: std::env::var_os("INFORMAL_IC3_DYNAMIC").is_some(),
             exctg: std::env::var_os("INFORMAL_IC3_EXCTG").is_some(),
             stall_push: std::env::var_os("INFORMAL_IC3_STALL_PUSH").is_some(),
+            parent_ctp: std::env::var_os("INFORMAL_IC3_PARENT_CTP").is_some(),
+            cti_mine: std::env::var_os("INFORMAL_IC3_CTI_MINE").is_some(),
         }
     }
 }
@@ -351,6 +358,10 @@ pub struct Ic3<'g> {
     /// DynAMic per-literal drop-failure EMA in `[0.0, 1.0]`.
     drop_ema: Vec<f64>,
     pub stats_exctg: usize,
+    /// Lemmas derived from a parent lemma at `i - 1` (for parent-lemma CTP).
+    parent_derived: std::collections::HashSet<Cube>,
+    /// Bounded sample of blocked CTI cubes for CTI-seeded Houdini mining.
+    cti_samples: Vec<Cube>,
     pub stats_queries: usize,
     pub stats_query_time: std::time::Duration,
     pub stats_lift_time: std::time::Duration,
@@ -473,6 +484,8 @@ impl<'g> Ic3<'g> {
             drop_hist: Vec::new(),
             drop_ema: Vec::new(),
             stats_exctg: 0,
+            parent_derived: std::collections::HashSet::new(),
+            cti_samples: Vec::new(),
             stats_queries: 0,
             stats_query_time: Default::default(),
             stats_lift_time: Default::default(),
@@ -1360,6 +1373,9 @@ impl<'g> Ic3<'g> {
                     if let Ok(core) = self.relative_inductive(p, i, false) {
                         self.stats_parent_hits += 1;
                         self.stats_mic_len += core.len();
+                        if self.cfg.parent_ctp {
+                            self.parent_derived.insert(core.clone());
+                        }
                         return core;
                     }
                 }
@@ -1418,6 +1434,9 @@ impl<'g> Ic3<'g> {
             self.stats_mic_len += cube.len();
             if self.aux_cap > 0 && self.cfg.derive && !self.aux.is_empty() {
                 cube = self.widen_with_predicate(cube, i);
+            }
+            if self.cfg.parent_ctp && parent.is_some() {
+                self.parent_derived.insert(cube.clone());
             }
         }
         cube
@@ -1615,6 +1634,9 @@ impl<'g> Ic3<'g> {
             }
             match self.relative_inductive(&ob.cube, ob.level, true) {
                 Ok(core) => {
+                    if self.cfg.cti_mine && self.cti_samples.len() < 128 {
+                        self.cti_samples.push(ob.cube.clone());
+                    }
                     let g = self.generalize(core, ob.level, 0, ctx);
                     // Push the lemma as high as it stays inductive.
                     let mut lvl = ob.level;
@@ -1728,10 +1750,19 @@ impl<'g> Ic3<'g> {
     /// Does lemma `c` of frame `i` hold in frame `i + 1`?
     fn push_lemma(&mut self, c: &Cube, i: usize, ctx: &RunContext) -> bool {
         let mut ctps = 0;
+        let eff_max_ctps = if self.cfg.parent_ctp {
+            if self.parent_derived.contains(c) || c.len() <= 3 {
+                self.cfg.max_ctps.max(2)
+            } else {
+                0
+            }
+        } else {
+            self.cfg.max_ctps
+        };
         loop {
             // Only at the frontier: lower down, CTP lemmas cost more than
             // the pushes they win (measured on the HWMCC'24 sample).
-            let ctp = ctps < self.cfg.max_ctps && i + 1 == self.top();
+            let ctp = ctps < eff_max_ctps && i + 1 == self.top();
             // Tracing (H3) also asks for the counterexample state.
             let want = ctp || self.trace.is_some();
             match self.relative_inductive(c, i + 1, want) {
@@ -1755,6 +1786,33 @@ impl<'g> Ic3<'g> {
                     }
                     if ctx.should_stop() || self.intersects_init(&p) {
                         return false;
+                    }
+                    // Parent-lemma CTP fast path: if a lemma in frame `i - 1`
+                    // already covers `p` and is inductive at `i`, promote it
+                    // directly without paying full MIC generalization cost.
+                    if self.cfg.parent_ctp && i >= 2 {
+                        let par = self.frames[i - 1]
+                            .iter()
+                            .filter(|par| par.iter().all(|l| p.binary_search(l).is_ok()))
+                            .min_by_key(|par| par.len())
+                            .cloned();
+                        if let Some(par_cube) = par {
+                            if let Ok(core) = self.relative_inductive(&par_cube, i, false) {
+                                ctps += 1;
+                                self.stats_ctps += 1;
+                                let mut lvl = i;
+                                while lvl < self.top()
+                                    && self.relative_inductive(&core, lvl + 1, false).is_ok()
+                                {
+                                    lvl += 1;
+                                }
+                                self.parent_derived.insert(core.clone());
+                                self.trace_src = "ctp";
+                                self.add_lemma(core, lvl);
+                                self.trace_src = "po";
+                                continue;
+                            }
+                        }
                     }
                     // Block the predecessor in frame i, if it is not
                     // reachable there; then the push may succeed.
@@ -1918,12 +1976,17 @@ impl<'g> Ic3<'g> {
         let t0 = std::time::Instant::now();
         // The invariant so far is inductive on its own, so it survives and
         // helps the new lemmas through.
-        let cands: Vec<Cube> = self.frames[1..]
+        let mut cands: Vec<Cube> = self.frames[1..]
             .iter()
             .flatten()
             .chain(&self.inf)
             .flat_map(|c| self.expand(c))
             .collect();
+        if self.cfg.cti_mine && self.cti_samples.len() >= 4 {
+            cands.extend(crate::mine::cti_candidates(self.g, &self.cti_samples, 256));
+            cands.sort_unstable();
+            cands.dedup();
+        }
         let mut h = ctx.clone();
         let rest = ctx.deadline.saturating_duration_since(t0);
         h.deadline = t0 + rest / 10;

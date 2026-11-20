@@ -14,6 +14,7 @@ pub mod session;
 pub mod spv;
 pub mod stats;
 pub mod trace;
+pub mod why_cex;
 pub mod worker;
 pub mod xprop;
 

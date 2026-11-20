@@ -930,6 +930,7 @@ const COMMON: &[(&str, Body)] = &[
     ("check_cov", check_cov),
     ("check_xprop", check_xprop),
     ("check_spv", check_spv),
+    ("why_cex", why_cex),
 ];
 
 const JG: &[(&str, Body)] = &[
@@ -2100,6 +2101,32 @@ fn check_spv(s: &mut Session, a: &[String]) -> Result<Value, String> {
     Err("check_spv: expected -create, -prove, -list, -report or -clear".into())
 }
 
+fn why_cex(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[("-property", 1), ("-max_events", 1), ("-json", 0)],
+        &[],
+    )?;
+    let prop = a
+        .val("-property")
+        .or_else(|| a.pos.first().map(String::as_str))
+        .ok_or("why_cex: property name required (why_cex [-max_events N] [-json] <property>)")?;
+    let max_events: usize = match a.val("-max_events") {
+        Some(v) => v
+            .parse()
+            .map_err(|_| format!("why_cex: bad -max_events '{v}'"))?,
+        None => 64,
+    };
+    let rep = crate::why_cex::slice_property_cex(s, prop, max_events)?;
+    if a.flag("-json") {
+        let js = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+        return Ok(js.into());
+    }
+    let text = crate::why_cex::format_text(&rep);
+    print!("{text}");
+    Ok(text.into())
+}
+
 /// `visualize -violation|-cover -property P`: the trace of a CEX or cover,
 /// as the VCD file prove wrote. It is opened with the program named by
 /// INFORMAL_WAVE_VIEWER (`surfer`, `gtkwave`) when that is set; the path is
@@ -2715,10 +2742,11 @@ mod tests {
     #[test]
     fn rejects_what_it_cannot_honour() {
         let sh = shell(Flavor::Jg);
-        let e = sh.eval("assert -name r {a implies b}").unwrap_err();
-        assert!(e.message.contains("implies"), "{}", e.message);
-        // Ranges, goto repetition, negation, followed-by and aborts are taken:
-        // the front end compiles them at prove.
+        let e = sh.eval("assert -name r_empty {   }").unwrap_err();
+        assert!(e.message.contains("empty property"), "{}", e.message);
+        // `implies`, `iff`, `if..else`, ranges, goto repetition, negation,
+        // followed-by and aborts are taken: the front end compiles them at prove.
+        sh.eval("assert -name r_imp {a implies b}").unwrap();
         sh.eval("assert -name r {a |-> ##[1:3] b}").unwrap();
         sh.eval("assert -name r_goto {a |-> b [->2]}").unwrap();
         sh.eval("assert -name r_not {not (a ##1 b)}").unwrap();

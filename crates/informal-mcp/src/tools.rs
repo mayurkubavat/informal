@@ -443,6 +443,227 @@ pub fn all() -> Vec<Tool> {
             changes: true,
         },
         Tool {
+            name: "why_cex",
+            title: "Root-cause slice of a counterexample trace",
+            description: "Dynamic backward slice from a falsified assertion (`cex`) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.",
+            input: obj(
+                &[
+                    ("name", s("Property name")),
+                    ("max_events", n("Maximum causal events to return (default 64)")),
+                ],
+                &["name"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.why_cex/1"),
+                    ("property", s("")),
+                    ("status", one_of(&["cex", "covered"], "")),
+                    ("failure_frame", n("")),
+                    ("total_frames", n("")),
+                    ("static_cone_signals", n("")),
+                    ("active_slice_signals", n("")),
+                    ("active_signals", list(s(""), "")),
+                    (
+                        "events",
+                        list(
+                            obj(
+                                &[
+                                    ("frame", n("")),
+                                    ("signal", s("")),
+                                    ("kind", one_of(&["input", "register", "wire"], "")),
+                                    ("width", n("")),
+                                    ("value", s("")),
+                                    ("prev_value", s("")),
+                                    ("reason", s("")),
+                                ],
+                                &["frame", "signal", "kind", "width", "value", "reason"],
+                            ),
+                            "",
+                        ),
+                    ),
+                ],
+                &[
+                    "schema",
+                    "property",
+                    "status",
+                    "failure_frame",
+                    "total_frames",
+                    "static_cone_signals",
+                    "active_slice_signals",
+                    "active_signals",
+                    "events",
+                ],
+            ),
+            changes: false,
+        },
+        Tool {
+            name: "prove_cache",
+            title: "Configure or inspect the COI proof cache",
+            description: "Enable, disable, or inspect the cone-of-influence SHA-256 proof cache (`set_prove_cache*`).",
+            input: obj(
+                &[
+                    ("enabled", b("Turn proof caching on or off")),
+                    ("path", s("Directory below the workspace root for cached verdicts")),
+                    ("mode", one_of(&["rw", "ro", "wo"], "Read-write, read-only, or write-only")),
+                ],
+                &[],
+            ),
+            output: obj(
+                &[
+                    schema("informal.prove_cache/1"),
+                    ("enabled", b("")),
+                    ("path", s("")),
+                    ("mode", one_of(&["rw", "ro", "wo"], "")),
+                ],
+                &["schema", "enabled", "mode"],
+            ),
+            changes: true,
+        },
+        Tool {
+            name: "check_cov",
+            title: "Formal COI observability and UNR dead-code coverage",
+            description: "Initialize, measure, query, or clear formal coverage (`coi`, `branch`, `toggle`, `functional`).",
+            input: obj(
+                &[
+                    ("action", one_of(&["init", "measure", "list", "clear"], "")),
+                    ("models", list(one_of(&["coi", "branch", "toggle", "functional", "all"], ""), "")),
+                    ("proof_core", b("Use minimal proof-core COI on proven assertions")),
+                ],
+                &["action"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.cov/1"),
+                    ("initialized", b("")),
+                    ("measured", b("")),
+                    ("proof_core", b("")),
+                    ("models", list(s(""), "")),
+                    ("report", s("")),
+                    (
+                        "items",
+                        list(
+                            obj(
+                                &[
+                                    ("id", s("")),
+                                    ("task", s("")),
+                                    ("model", s("")),
+                                    ("name", s("")),
+                                    ("status", s("")),
+                                    ("detail", s("")),
+                                ],
+                                &["id", "model", "name", "status"],
+                            ),
+                            "",
+                        ),
+                    ),
+                ],
+                &["schema", "initialized", "measured", "models", "items"],
+            ),
+            changes: true,
+        },
+        Tool {
+            name: "check_conn",
+            title: "Formal CSV connectivity verification",
+            description: "Load a connectivity CSV map into the `Connectivity` task, prove its rules, list statuses, or clear it.",
+            input: obj(
+                &[
+                    ("action", one_of(&["load", "prove", "list", "clear"], "")),
+                    ("file", s("Connectivity CSV path below the workspace root (for load)")),
+                ],
+                &["action"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.conn/1"),
+                    ("count", n("")),
+                    ("properties", list(property(), "")),
+                ],
+                &["schema", "count", "properties"],
+            ),
+            changes: true,
+        },
+        Tool {
+            name: "check_xprop",
+            title: "Exact 2-copy formal X-propagation verification",
+            description: "Initialize, prove, list, or clear 2-copy self-composition X-propagation checks across outputs, control muxes, memories, assertions, or explicit signals.",
+            input: obj(
+                &[
+                    ("action", one_of(&["init", "prove", "list", "clear"], "")),
+                    ("targets", list(one_of(&["outputs", "control", "memories", "assertions", "all"], ""), "")),
+                    ("x_sources", list(s(""), "Additional signals allowed to diverge with X")),
+                    ("to", list(s(""), "Explicit sink signals to check")),
+                ],
+                &["action"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.xprop/1"),
+                    ("initialized", b("")),
+                    ("report", s("")),
+                    (
+                        "items",
+                        list(
+                            obj(
+                                &[
+                                    ("name", s("")),
+                                    ("category", s("")),
+                                    ("status", s("")),
+                                    ("depth", n("")),
+                                    ("engine", s("")),
+                                ],
+                                &["name", "category", "status"],
+                            ),
+                            "",
+                        ),
+                    ),
+                ],
+                &["schema", "initialized", "items"],
+            ),
+            changes: true,
+        },
+        Tool {
+            name: "check_spv",
+            title: "2-safety formal security taint / non-interference verification",
+            description: "Create, prove, list, or clear 2-safety non-interference rules proving secret `-from` signals never influence observable `-to` signals.",
+            input: obj(
+                &[
+                    ("action", one_of(&["create", "prove", "list", "clear"], "")),
+                    ("name", s("Rule name (optional for create)")),
+                    ("from", list(s(""), "Secret/tainted source signals")),
+                    ("to", list(s(""), "Untrusted/observable sink signals")),
+                    ("cond", s("Optional SystemVerilog guard expression")),
+                ],
+                &["action"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.spv/1"),
+                    ("report", s("")),
+                    (
+                        "rules",
+                        list(
+                            obj(
+                                &[
+                                    ("name", s("")),
+                                    ("task", s("")),
+                                    ("from", list(s(""), "")),
+                                    ("to", list(s(""), "")),
+                                    ("cond", s("")),
+                                    ("status", s("")),
+                                    ("depth", n("")),
+                                    ("engine", s("")),
+                                ],
+                                &["name", "from", "to", "status"],
+                            ),
+                            "",
+                        ),
+                    ),
+                ],
+                &["schema", "rules"],
+            ),
+            changes: true,
+        },
+        Tool {
             name: "tcl_eval",
             title: "Evaluate a Tcl command",
             description: "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",

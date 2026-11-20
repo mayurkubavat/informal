@@ -77,14 +77,20 @@ Properties given by command and properties written in the RTL go through
 the same compiler in svlang.
 
 Supported: `@(posedge clk)` / `@(negedge clk)`, `disable iff (expr)`,
+`accept_on` / `reject_on` / `sync_accept_on` / `sync_reject_on`,
 booleans joined by delays (`a ##1 b ##2 c`, a leading `##N`, ranges
-`##[M:N]`), repetition `[*N]` and `[*M:N]`, sequence `and`, `or`,
-`intersect`, `within`, `throughout` and `first_match`, `|->` and `|=>`,
-`b until c` / `b until_with c` between booleans and their strong forms
-`s_until` / `s_until_with`, `s_eventually b`, `nexttime`, `eventually` and
-`always` with a bound (`nexttime [2] b`, `s_eventually [1:3] b`, `always
-[0:2] b`), and any boolean SystemVerilog expression inside, including `$past(x[, n])`,
-`$rose`, `$fell`, `$stable`, `$changed`.
+`##[M:N]` and `##[M:$]`), consecutive (`[*N]`, `[*M:N]`, `[*M:$]`), goto
+(`[->N]`, `[->M:N]`) and non-consecutive (`[=N]`, `[=M:N]`) repetition,
+sequence `and`, `or`, `intersect`, `within`, `throughout` and
+`first_match`, `|->`, `|=>`, `#-#` and `#=#`, property `and`, `or`,
+`not`, `implies`, `iff` and `if (b) p1 [else p2]`, `b until c` /
+`b until_with c` and their strong forms `s_until` / `s_until_with`,
+`s_eventually b`, `nexttime` / `s_nexttime`, `eventually`, bounded and
+compound unbounded `always` (`nexttime [2] p`, `s_eventually [1:3] b`,
+`always [0:2] b`, `start |=> always p`), procedural concurrent assertions
+inside static loops and tasks, and any pure RTL SystemVerilog expression
+inside (including module/package functions, `$past(x[, n])`, `$rose`,
+`$fell`, `$stable`, `$changed`).
 
 `s_eventually` is a liveness property: no finite trace violates it. (A
 strong until is both: what has to hold meanwhile is a safety check, and
@@ -98,11 +104,11 @@ is such a loop, and the trace's first comment says which frames repeat.
 An `assume` of `s_eventually` is a fairness constraint for these
 properties. External engines are not run on them.
 
-A property given by command is bound at `prove`. Rejected at the command
-itself, with an error naming the construct: a name the top module does
-not have, and the operators the compiler does not take (`[->n]`, `[=n]`,
-`not`, `accept_on`, `#-#`). A range that ends at `$`, and `always` with
-no bound inside another operator, are errors on that property at `prove`.
+A property given by command is bound at `prove`. Names not declared in
+the top module's scope (signals, child instances, module/package functions,
+sequences, properties, parameters, or typedefs) are rejected at the command
+itself so typos never become implicit nets; any unsupported SVA construct
+is reported on that property at `prove`.
 
 ## Command map
 
@@ -145,6 +151,7 @@ passes on a different setup without saying so.
 | `check_cov -init [-model ...]`, `check_cov -waiver -add ...`, `check_cov -measure`, `check_cov -report [-html] [-report_file F]` | `check_cov ...` | Formal COI observability coverage, branch/toggle UNR dead-code detection, functional covers, and waivers |
 | `check_xprop -init [-targets ...]`, `check_xprop -waiver -add ...`, `check_xprop -prove`, `check_xprop -report` | `check_xprop ...` | Exact 2-copy self-composition X-propagation verification over reset-less flops, X literals, and undriven nets |
 | `check_spv -create -from <S> -to <O> [-cond <C>]`, `check_spv -prove`, `check_spv -report`, `check_spv -list` | `check_spv ...` | 2-safety non-interference / security path taint verification catching direct and multi-cycle covert storage channels |
+| `why_cex [-property P] [-max_events N] [-json] [<P>]` | `why_cex ...` | Dynamic backward causal root-cause slice of a counterexample or witness trace (pruning untaken mux arms and non-controlling operands) |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |
 

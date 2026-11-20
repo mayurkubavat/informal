@@ -115,6 +115,12 @@ pub struct Design {
     /// lower.
     #[serde(default)]
     pub stats: Option<DesignStats>,
+    /// Non-signal names visible to properties bound in an instance scope:
+    /// `<inst>.<name>` for functions, tasks, `let`, named sequences/properties,
+    /// typedefs, and imported package items, plus `$pkg:<pkg>` and
+    /// `$pkg:<pkg>::<item>` for package-qualified references.
+    #[serde(default, skip_serializing)]
+    pub scope_names: Vec<String>,
 }
 
 /// Counts of a design's netlist (`get_design_info`): every number is
@@ -185,11 +191,15 @@ impl Design {
             "edge",
             "disable",
             "iff",
+            "implies",
             "or",
             "and",
             "not",
             "if",
             "else",
+            "case",
+            "endcase",
+            "default",
             "inside",
             "dist",
             "throughout",
@@ -212,9 +222,22 @@ impl Design {
             "reject_on",
             "sync_accept_on",
             "sync_reject_on",
+            "signed",
+            "unsigned",
+            "type",
+            "let",
+            "const",
+            "logic",
+            "bit",
+            "byte",
+            "shortint",
+            "int",
+            "longint",
+            "integer",
         ];
         let prefix = format!("{top}.");
-        // Signals, plus instance names (the start of a hierarchical name).
+        // Signals, plus instance names (the start of a hierarchical name),
+        // plus functions/sequences/properties/typedefs/imports in `top`.
         let mut known: std::collections::HashSet<&str> =
             self.top_signals(top).into_iter().map(|(n, _)| n).collect();
         known.extend(
@@ -231,9 +254,28 @@ impl Design {
                 .filter_map(|n| n.split(['.', '[']).next())
                 .filter(|n| !n.is_empty()),
         );
+        known.extend(
+            self.scope_names
+                .iter()
+                .filter_map(|s| s.strip_prefix(&prefix))
+                .filter(|n| !n.contains('.')),
+        );
+        known.extend(
+            self.scope_names
+                .iter()
+                .filter_map(|s| s.strip_prefix("$pkg:"))
+                .filter(|n| !n.contains("::")),
+        );
+        let pkg_items: std::collections::HashSet<&str> = self
+            .scope_names
+            .iter()
+            .filter_map(|s| s.strip_prefix("$pkg:"))
+            .filter(|n| n.contains("::"))
+            .collect();
         let b = expr.as_bytes();
         let mut out = Vec::new();
         let mut i = 0;
+        let mut prev_ident: Option<&str> = None;
         while i < b.len() {
             let c = b[i];
             if c.is_ascii_alphabetic() || c == b'_' {
@@ -243,17 +285,31 @@ impl Design {
                     i += 1;
                 }
                 let prev = if start > 0 { b[start - 1] } else { b' ' };
+                let is_pkg_qual = start >= 2 && b[start - 2] == b':' && b[start - 1] == b':';
                 let word = &expr[start..i];
-                // `$past`, `4'd9`, `.member`, and digits glued to a base.
-                let skip = prev == b'$'
-                    || prev == b'\''
-                    || prev == b'.'
-                    || prev.is_ascii_digit()
-                    || SKIP.contains(&word);
-                if !skip && !known.contains(word) && !out.iter().any(|w| w == word) {
-                    out.push(word.to_string());
+                if is_pkg_qual {
+                    if let Some(pkg) = prev_ident {
+                        let key = format!("{pkg}::{word}");
+                        if !pkg_items.contains(key.as_str()) && !out.iter().any(|w| w == &key) {
+                            out.push(key);
+                        }
+                    }
+                } else {
+                    // `$past`, `4'd9`, `.member`, and digits glued to a base.
+                    let skip = prev == b'$'
+                        || prev == b'\''
+                        || prev == b'.'
+                        || prev.is_ascii_digit()
+                        || SKIP.contains(&word);
+                    if !skip && !known.contains(word) && !out.iter().any(|w| w == word) {
+                        out.push(word.to_string());
+                    }
                 }
+                prev_ident = Some(word);
             } else {
+                if c != b':' {
+                    prev_ident = None;
+                }
                 i += 1;
             }
         }

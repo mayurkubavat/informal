@@ -1444,6 +1444,7 @@ impl Default for Ic3Mt {
                         } else {
                             d.houdini_every
                         },
+                        cti_mine: true,
                         ..d
                     },
                 ),
@@ -1458,6 +1459,7 @@ impl Default for Ic3Mt {
                             derive: true,
                             dynamic_order: true,
                             stall_push: true,
+                            cti_mine: true,
                             ..d
                         },
                     )
@@ -1469,6 +1471,7 @@ impl Default for Ic3Mt {
                             max_ctg_depth: 0,
                             reverse_drop: true,
                             parent_lemma: true,
+                            parent_ctp: true,
                             dynamic_order: true,
                             ..d
                         },
@@ -1482,6 +1485,7 @@ impl Default for Ic3Mt {
                         reverse_drop: true,
                         max_ctps: 3,
                         parent_lemma: true,
+                        parent_ctp: true,
                         exctg: true,
                         stall_push: true,
                         ..d
@@ -1677,7 +1681,7 @@ pub fn select_for_btor(
     if explicit_filter {
         return base;
     }
-    if f.array_states > 0 {
+    if f.array_states > 0 || f.has_arrays {
         let arr: Vec<_> = base
             .iter()
             .filter(|e| !e.name().starts_with("informal-") || e.name().contains("wbmc"))
@@ -1700,7 +1704,26 @@ pub fn select_for_btor(
             return comb;
         }
     }
-    base
+    let has_ic3_mt = base.iter().any(|e| e.name() == "informal-ic3-mt");
+    let arith_heavy = f.arith_ops >= 8 && f.max_width >= 16;
+    let tiny_state = f.state_bits <= 16;
+    let seq: Vec<_> = base
+        .iter()
+        .filter(|e| match e.name() {
+            // `informal-ic3-mt` already runs `Config::default()` as worker #1,
+            // so shedding standalone `informal-ic3` saves 1 solver thread.
+            "informal-ic3" if has_ic3_mt => false,
+            "informal-ic3-mini" if arith_heavy && has_ic3_mt => false,
+            "informal-bmc-s65" if tiny_state || arith_heavy => false,
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    if seq.is_empty() {
+        base
+    } else {
+        seq
+    }
 }
 
 #[cfg(test)]

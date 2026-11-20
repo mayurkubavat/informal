@@ -120,9 +120,15 @@ reply (`tools/list`).
 | | `design_info` | Counts of the design (inputs, flops, latches, memories, clocks and resets found) and the size of the current task's model (Btor2 nodes, states, AIG ands) | no |
 | | `design_source` | Source text by file and line range | no |
 | Traces | `trace_get` | A counterexample or cover trace: values per signal and frame, chosen signals, a frame window | no |
+| | `why_cex` | Dynamic backward causal slice of a `cex` or `covered` trace from failure cycle `T` to `0` (active mux arms, controlling boolean inputs, register transitions) | no |
 | Prove | `prove` | Run the engines on named properties, or on one task's, with a time limit; each one's result | statuses only |
 | | `prove_status` | Progress of a running prove; the result of one started with `wait: false` | no |
 | | `prove_stop` | Stop a running prove | no |
+| | `prove_cache` | Configure or inspect the cone-of-influence SHA-256 proof cache | settings only |
+| Apps | `check_cov` | Formal COI observability and UNR dead-code coverage (`coi`, `branch`, `toggle`, `functional`) | yes |
+| | `check_conn` | Load and prove CSV connectivity maps (`Connectivity` task) | yes |
+| | `check_xprop` | Exact 2-copy self-composition formal X-propagation verification | yes |
+| | `check_spv` | 2-safety formal security path / non-interference verification | yes |
 | Proposals | `proposal_add` | Propose an assumption, helper assertion, cover or cut point | yes, by mode |
 | | `proposal_list` | Every proposal and its state | no |
 | | `proposal_undo` | Withdraw or remove proposals, one or all; results that stood on them are reset | yes |

@@ -12,7 +12,8 @@
 //% assert -name a_first {@(posedge clk) disable iff (rst) req ##1 first_match(##[1:2] gnt) |=> gnt}
 //% assert -name a_unbounded {disable iff (rst) req |-> ##[1:$] gnt}
 //% assert -name a_always {disable iff (rst) req |-> always (n <= 3'd5)}
-//% assert -name a_unsup {disable iff (rst) req |-> always (gnt ##1 gnt)}
+//% assert -name a_always_seq {disable iff (rst) req |-> always (gnt ##1 gnt)}
+//% assert -name a_unsup {disable iff (rst) req |-> (gnt ##1 gnt) [->2]}
 //% assert -name a_fixed {disable iff (rst) req |-> ##1 !gnt}
 //% cover -name c_late {disable iff (rst) req ##[3:4] gnt ##1 gnt}
 //% cover -name c_one {disable iff (rst) req ##[0:1] gnt}
@@ -23,6 +24,7 @@
 //= a_first proven
 //= a_unbounded proven
 //= a_always proven
+//= a_always_seq cex
 //= a_unsup error
 //= a_fixed proven
 //= c_late covered

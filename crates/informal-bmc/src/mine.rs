@@ -310,3 +310,102 @@ fn sat_traces(g: &Aig, lat: &[usize], budget: std::time::Duration) -> (Vec<Vec<u
     }
     (words, live)
 }
+
+/// Mines 1- and 2-literal candidate invariant cubes from observed IC3
+/// counterexamples-to-induction (`ctis`). Each returned cube:
+/// - uses only original AIG latch literals (`var(l) < g.nodes.len()`),
+/// - does not intersect the initial state,
+/// - occurs in at least two distinct CTIs, and
+/// - is never contained in any state visited by a fast constrained forward
+///   simulation run from `Init`.
+pub fn cti_candidates(g: &Aig, ctis: &[Cube], cap: usize) -> Vec<Cube> {
+    if ctis.len() < 2 || cap == 0 || g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
+        return Vec::new();
+    }
+    let latch_idx: HashMap<u32, usize> = g
+        .latches
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (var(l.lit), i))
+        .collect();
+    let max_node = g.nodes.len() as u32;
+    let init_lit = |l: Lit| -> bool {
+        let Some(&idx) = latch_idx.get(&var(l)) else {
+            return true;
+        };
+        match g.latches[idx].init {
+            Init::Zero => informal_aig::is_neg(l),
+            Init::One => !informal_aig::is_neg(l),
+            _ => true,
+        }
+    };
+
+    let mut pair_freq: HashMap<(Lit, Lit), u32> = HashMap::new();
+    let mut unit_freq: HashMap<Lit, u32> = HashMap::new();
+    for cti in ctis {
+        let orig: Vec<Lit> = cti
+            .iter()
+            .copied()
+            .filter(|&l| var(l) < max_node && latch_idx.contains_key(&var(l)))
+            .take(24)
+            .collect();
+        for (i, &la) in orig.iter().enumerate() {
+            if !init_lit(la) {
+                *unit_freq.entry(la).or_default() += 1;
+            }
+            for &lb in &orig[i + 1..] {
+                if var(la) == var(lb) || (init_lit(la) && init_lit(lb)) {
+                    continue;
+                }
+                let pair = if la < lb { (la, lb) } else { (lb, la) };
+                *pair_freq.entry(pair).or_default() += 1;
+            }
+        }
+    }
+    if unit_freq.is_empty() && pair_freq.is_empty() {
+        return Vec::new();
+    }
+
+    let (sig, alive) = simulate_constrained(g, 16, 0xc715_eed0_1234_5678);
+    let sim_violates = |cube: &[Lit]| -> bool {
+        for (step, &mask) in alive.iter().enumerate() {
+            if mask == 0 {
+                continue;
+            }
+            let mut both = mask;
+            for &l in cube {
+                let idx = latch_idx[&var(l)];
+                let w = sig[idx][step];
+                both &= if informal_aig::is_neg(l) { !w } else { w };
+                if both == 0 {
+                    break;
+                }
+            }
+            if both != 0 {
+                return true;
+            }
+        }
+        false
+    };
+
+    let mut scored: Vec<(u32, Cube)> = Vec::new();
+    for (l, cnt) in unit_freq {
+        if cnt >= 2 {
+            let c = vec![l];
+            if !sim_violates(&c) {
+                scored.push((cnt * 2, c));
+            }
+        }
+    }
+    for ((la, lb), cnt) in pair_freq {
+        if cnt >= 2 {
+            let c = vec![la, lb];
+            if !sim_violates(&c) {
+                scored.push((cnt, c));
+            }
+        }
+    }
+    scored.sort_by_key(|x| std::cmp::Reverse(x.0));
+    scored.truncate(cap);
+    scored.into_iter().map(|(_, c)| c).collect()
+}

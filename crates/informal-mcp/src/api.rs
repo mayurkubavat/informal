@@ -274,6 +274,10 @@ impl Api {
         match tool {
             "session_open" | "tcl_eval" => true,
             "prove" => args.get("wait").and_then(Value::as_bool).unwrap_or(true),
+            "check_cov" => args.get("action").and_then(Value::as_str) == Some("measure"),
+            "check_conn" | "check_xprop" | "check_spv" => {
+                args.get("action").and_then(Value::as_str) == Some("prove")
+            }
             _ => false,
         }
     }
@@ -305,6 +309,12 @@ impl Api {
             "design_info" => self.design_info(),
             "design_source" => self.design_source(args),
             "trace_get" => self.trace_get(args),
+            "why_cex" => self.why_cex(args),
+            "prove_cache" => self.prove_cache(args),
+            "check_cov" => self.check_cov(args, false),
+            "check_conn" => self.check_conn(args, false),
+            "check_xprop" => self.check_xprop(args, false),
+            "check_spv" => self.check_spv(args, false),
             "prove" => self.prove_start(args),
             "prove_status" => self.prove_status(),
             "prove_stop" => {
@@ -317,7 +327,16 @@ impl Api {
             t if t.starts_with("gui_") => self.gui_tool(t, args),
             _ => Err(err("not_found", format!("no tool named {tool}"))),
         };
-        if matches!(tool, "proposal_add" | "proposal_undo") {
+        if matches!(
+            tool,
+            "proposal_add"
+                | "proposal_undo"
+                | "prove_cache"
+                | "check_cov"
+                | "check_conn"
+                | "check_xprop"
+                | "check_spv"
+        ) {
             self.changed(tool);
         }
         reply
@@ -329,6 +348,10 @@ impl Api {
             "session_open" => self.session_open(args),
             "tcl_eval" => self.tcl_eval(args),
             "prove" => self.prove(args),
+            "check_cov" => self.check_cov(args, true),
+            "check_conn" => self.check_conn(args, true),
+            "check_xprop" => self.check_xprop(args, true),
+            "check_spv" => self.check_spv(args, true),
             _ => Err(err("not_found", format!("no long tool named {tool}"))),
         };
         drop(long);
@@ -744,6 +767,372 @@ impl Api {
             "signals_omitted": matched - chosen.len(),
             "notes": trace.notes,
         }))
+    }
+
+    fn why_cex(&self, args: &Value) -> Reply {
+        let name = req_str(args, "name")?;
+        let max_events = opt_u64(args, "max_events")?.unwrap_or(64) as usize;
+        let rep = self.on_shell(false, move |sh| {
+            let s = sh.session.borrow();
+            let i = find(&s, &name)?;
+            let p = &s.props[i];
+            if p.trace.is_none() {
+                return Err(err(
+                    "no_trace",
+                    format!(
+                        "{} has no trace: its status is {} (a trace comes with cex or covered)",
+                        p.name,
+                        p.status.word()
+                    ),
+                ));
+            }
+            informal_fpv::why_cex::slice_property_cex(&s, &p.name, max_events)
+                .map_err(|e| err("internal", e))
+        })??;
+        let events: Vec<Value> = rep
+            .events
+            .iter()
+            .map(|ev| {
+                let mut o = serde_json::Map::new();
+                o.insert("frame".into(), json!(ev.frame));
+                o.insert("signal".into(), json!(ev.signal));
+                o.insert("kind".into(), json!(ev.kind));
+                o.insert("width".into(), json!(ev.width));
+                o.insert("value".into(), json!(ev.value));
+                if let Some(prev) = &ev.prev_value {
+                    o.insert("prev_value".into(), json!(prev));
+                }
+                o.insert("reason".into(), json!(ev.reason));
+                Value::Object(o)
+            })
+            .collect();
+        Ok(json!({
+            "schema": "informal.why_cex/1",
+            "property": rep.property,
+            "status": rep.status,
+            "failure_frame": rep.failure_frame,
+            "total_frames": rep.total_frames,
+            "static_cone_signals": rep.static_cone_signals,
+            "active_slice_signals": rep.active_slice_signals,
+            "active_signals": rep.active_signals,
+            "events": events,
+        }))
+    }
+
+    // -------------------------------------------------------- formal apps
+
+    fn prove_cache(&self, args: &Value) -> Reply {
+        self.changing()?;
+        let enabled = opt_bool(args, "enabled")?;
+        let mode = opt_str(args, "mode")?;
+        let path_opt = match opt_str(args, "path")? {
+            Some(raw) => {
+                if Path::new(&raw)
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    return Err(err("path", format!("{raw} must not contain '..'")));
+                }
+                let joined = self.opts.root.join(&raw);
+                if !joined.starts_with(&self.opts.root) {
+                    return Err(err(
+                        "path",
+                        format!("{raw} is outside {}", self.opts.root.display()),
+                    ));
+                }
+                Some(joined)
+            }
+            None => None,
+        };
+        if let Some(ref m) = mode {
+            if !matches!(m.as_str(), "rw" | "ro" | "wo") {
+                return Err(wrong("mode", "one of rw, ro, wo"));
+            }
+        }
+        self.on_shell(false, move |sh| {
+            let mut s = sh.session.borrow_mut();
+            if let Some(en) = enabled {
+                s.prove_cache = en;
+            }
+            if let Some(p) = path_opt {
+                s.prove_cache_dir = Some(p);
+            }
+            if let Some(m) = mode {
+                s.prove_cache_mode = informal_fpv::cache::CacheMode::parse(&m)
+                    .ok_or_else(|| wrong("mode", "one of rw, ro, wo"))?;
+            }
+            let mode_str = match s.prove_cache_mode {
+                informal_fpv::cache::CacheMode::ReadWrite => "rw",
+                informal_fpv::cache::CacheMode::ReadOnly => "ro",
+                informal_fpv::cache::CacheMode::WriteOnly => "wo",
+            };
+            let mut reply = serde_json::Map::new();
+            reply.insert("schema".into(), json!("informal.prove_cache/1"));
+            reply.insert("enabled".into(), json!(s.prove_cache));
+            reply.insert("mode".into(), json!(mode_str));
+            if let Some(ref dir) = s.prove_cache_dir {
+                reply.insert("path".into(), json!(dir.display().to_string()));
+            }
+            Ok(Value::Object(reply))
+        })?
+    }
+
+    fn check_cov(&self, args: &Value, long: bool) -> Reply {
+        self.changing()?;
+        let action = req_str(args, "action")?;
+        let models = strings(args, "models")?;
+        let proof_core = opt_bool(args, "proof_core")?.unwrap_or(false);
+        self.on_shell(long, move |sh| {
+            match action.as_str() {
+                "init" => {
+                    let mut cmd = String::from("check_cov -init");
+                    if !models.is_empty() {
+                        cmd.push_str(&format!(" -model {{{}}}", models.join(" ")));
+                    }
+                    if proof_core {
+                        cmd.push_str(" -enable_prove_based_proof_core");
+                    }
+                    sh.eval(&cmd).map_err(|e| err("rejected", e.message))?;
+                }
+                "measure" => {
+                    let mut cmd = String::from("check_cov -measure");
+                    if !models.is_empty() {
+                        cmd.push_str(&format!(" -type {{{}}}", models.join(" ")));
+                    }
+                    sh.eval(&cmd).map_err(|e| err("rejected", e.message))?;
+                }
+                "clear" => {
+                    sh.session.borrow_mut().cov = Default::default();
+                }
+                "list" => {}
+                other => {
+                    return Err(wrong(
+                        "action",
+                        &format!("init, measure, list, or clear (got {other})"),
+                    ))
+                }
+            }
+            let s = sh.session.borrow();
+            let active_models: Vec<String> = s
+                .cov
+                .active_models()
+                .into_iter()
+                .map(|m| m.as_str().to_string())
+                .collect();
+            let items: Vec<Value> = s
+                .cov
+                .items
+                .iter()
+                .map(|it| {
+                    json!({
+                        "id": it.id,
+                        "task": it.task,
+                        "model": it.model.as_str(),
+                        "name": it.name,
+                        "status": it.status.word(),
+                        "detail": it.detail,
+                    })
+                })
+                .collect();
+            let report = informal_fpv::cov::format_report(&s.cov, None, None, &[], false);
+            Ok(json!({
+                "schema": "informal.cov/1",
+                "initialized": s.cov.initialized,
+                "measured": s.cov.measured,
+                "proof_core": s.cov.prove_based,
+                "models": active_models,
+                "report": report,
+                "items": items,
+            }))
+        })?
+    }
+
+    fn check_conn(&self, args: &Value, long: bool) -> Reply {
+        self.changing()?;
+        let action = req_str(args, "action")?;
+        let csv_path = match opt_str(args, "file")? {
+            Some(f) => Some(self.below_root(&f)?),
+            None => None,
+        };
+        self.on_shell(long, move |sh| {
+            match action.as_str() {
+                "load" => {
+                    let Some(p) = csv_path else {
+                        return Err(err("arguments", "`file` is required when action is `load`"));
+                    };
+                    let cmd = format!("check_conn -load {{{}}}", p.display());
+                    sh.eval(&cmd).map_err(|e| err("rejected", e.message))?;
+                }
+                "prove" => {
+                    sh.eval("check_conn -prove")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "clear" => {
+                    sh.eval("check_conn -clear")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "list" => {}
+                other => {
+                    return Err(wrong(
+                        "action",
+                        &format!("load, prove, list, or clear (got {other})"),
+                    ))
+                }
+            }
+            let s = sh.session.borrow();
+            let props: Vec<Value> = s
+                .props
+                .iter()
+                .filter(|p| p.task == informal_fpv::conn::DEFAULT_CONN_TASK)
+                .map(|p| prop_view(p, false))
+                .collect();
+            Ok(json!({
+                "schema": "informal.conn/1",
+                "count": props.len(),
+                "properties": props,
+            }))
+        })?
+    }
+
+    fn check_xprop(&self, args: &Value, long: bool) -> Reply {
+        self.changing()?;
+        let action = req_str(args, "action")?;
+        let targets = strings(args, "targets")?;
+        let x_sources = strings(args, "x_sources")?;
+        let to = strings(args, "to")?;
+        self.on_shell(long, move |sh| {
+            match action.as_str() {
+                "init" => {
+                    let mut cmd = String::from("check_xprop -init");
+                    if !targets.is_empty() {
+                        cmd.push_str(&format!(" -targets {{{}}}", targets.join(" ")));
+                    }
+                    for src in &x_sources {
+                        cmd.push_str(&format!(" -x_source {{{src}}}"));
+                    }
+                    for dst in &to {
+                        cmd.push_str(&format!(" -to {{{dst}}}"));
+                    }
+                    sh.eval(&cmd).map_err(|e| err("rejected", e.message))?;
+                }
+                "prove" => {
+                    sh.eval("check_xprop -prove")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "clear" => {
+                    sh.eval("check_xprop -clear")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "list" => {}
+                other => {
+                    return Err(wrong(
+                        "action",
+                        &format!("init, prove, list, or clear (got {other})"),
+                    ))
+                }
+            }
+            let s = sh.session.borrow();
+            let items: Vec<Value> = s
+                .xprop
+                .items
+                .iter()
+                .map(|it| {
+                    let mut o = serde_json::Map::new();
+                    o.insert("name".into(), json!(it.name));
+                    o.insert("category".into(), json!(it.category));
+                    o.insert("status".into(), json!(it.status.word()));
+                    if let informal_fpv::xprop::XpropStatus::Cex { depth: Some(d) } = it.status {
+                        o.insert("depth".into(), json!(d));
+                    }
+                    if let Some(ref eng) = it.engine {
+                        o.insert("engine".into(), json!(eng));
+                    }
+                    Value::Object(o)
+                })
+                .collect();
+            let report = informal_fpv::xprop::format_report(&s.xprop);
+            Ok(json!({
+                "schema": "informal.xprop/1",
+                "initialized": s.xprop.initialized,
+                "report": report,
+                "items": items,
+            }))
+        })?
+    }
+
+    fn check_spv(&self, args: &Value, long: bool) -> Reply {
+        self.changing()?;
+        let action = req_str(args, "action")?;
+        let name = opt_str(args, "name")?;
+        let from = strings(args, "from")?;
+        let to = strings(args, "to")?;
+        let cond = opt_str(args, "cond")?;
+        self.on_shell(long, move |sh| {
+            match action.as_str() {
+                "create" => {
+                    if from.is_empty() || to.is_empty() {
+                        return Err(err(
+                            "arguments",
+                            "`from` and `to` are required when action is `create`",
+                        ));
+                    }
+                    let mut cmd = String::from("check_spv -create");
+                    if let Some(ref n) = name {
+                        cmd.push_str(&format!(" -name {{{n}}}"));
+                    }
+                    cmd.push_str(&format!(" -from {{{}}}", from.join(" ")));
+                    cmd.push_str(&format!(" -to {{{}}}", to.join(" ")));
+                    if let Some(ref c) = cond {
+                        cmd.push_str(&format!(" -cond {{{c}}}"));
+                    }
+                    sh.eval(&cmd).map_err(|e| err("rejected", e.message))?;
+                }
+                "prove" => {
+                    sh.eval("check_spv -prove")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "clear" => {
+                    sh.eval("check_spv -clear")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "list" => {}
+                other => {
+                    return Err(wrong(
+                        "action",
+                        &format!("create, prove, list, or clear (got {other})"),
+                    ))
+                }
+            }
+            let s = sh.session.borrow();
+            let rules: Vec<Value> = s
+                .spv
+                .iter()
+                .map(|r| {
+                    let mut o = serde_json::Map::new();
+                    o.insert("name".into(), json!(r.name));
+                    o.insert("task".into(), json!(r.task));
+                    o.insert("from".into(), json!(r.from));
+                    o.insert("to".into(), json!(r.to));
+                    if let Some(ref c) = r.cond {
+                        o.insert("cond".into(), json!(c));
+                    }
+                    o.insert("status".into(), json!(r.status.word()));
+                    if let informal_fpv::spv::SpvStatus::Cex { depth: Some(d) } = r.status {
+                        o.insert("depth".into(), json!(d));
+                    }
+                    if let Some(ref eng) = r.engine {
+                        o.insert("engine".into(), json!(eng));
+                    }
+                    Value::Object(o)
+                })
+                .collect();
+            let report = informal_fpv::spv::format_report(&s.spv);
+            Ok(json!({
+                "schema": "informal.spv/1",
+                "report": report,
+                "rules": rules,
+            }))
+        })?
     }
 
     // -------------------------------------------------------------- prove

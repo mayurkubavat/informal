@@ -1097,7 +1097,8 @@ impl Session {
         }
         let out = self.workdir.join(format!("prop_{i}.precondition.btor2"));
         let (model, section) = informal_svlang::split_trace(btor);
-        let mut w = std::fs::write(&out, only_target(model, &keep));
+        let isolated = only_target(model, &keep);
+        let mut w = std::fs::write(&out, &isolated);
         if w.is_ok() && !section.is_empty() {
             w = std::fs::write(trace_model(&out), only_target(btor, &keep));
         }
@@ -1109,11 +1110,8 @@ impl Session {
             format: ModelFormat::Btor2,
             timeout: self.time_limit,
         };
-        let safety: Vec<_> = engines
-            .iter()
-            .filter(|e| e.name() != "informal-klive")
-            .cloned()
-            .collect();
+        let safety =
+            informal_bmc::select_for_btor(engines, &isolated, !self.engine_filter.is_empty());
         let o = portfolio::run_until(&safety, &req, None, Some(self.stop.as_ref()));
         let verdict = portfolio::verdict(&o);
         if let (Some(dir), Some(w), true) = (&self.certificates, &o.winner, verdict.is_definitive())
@@ -1163,7 +1161,8 @@ impl Session {
         }
         let out = self.workdir.join(format!("prop_{i}.witness.btor2"));
         let (model, section) = informal_svlang::split_trace(btor);
-        let mut w = std::fs::write(&out, only_target(model, &keep));
+        let isolated = only_target(model, &keep);
+        let mut w = std::fs::write(&out, &isolated);
         if w.is_ok() && !section.is_empty() {
             w = std::fs::write(trace_model(&out), only_target(btor, &keep));
         }
@@ -1173,11 +1172,8 @@ impl Session {
             format: ModelFormat::Btor2,
             timeout: self.time_limit,
         };
-        let safety: Vec<_> = engines
-            .iter()
-            .filter(|e| e.name() != "informal-klive")
-            .cloned()
-            .collect();
+        let safety =
+            informal_bmc::select_for_btor(engines, &isolated, !self.engine_filter.is_empty());
         let o = portfolio::run_until(&safety, &req, None, Some(self.stop.as_ref()));
         let verdict = portfolio::verdict(&o);
         match verdict {
@@ -2694,7 +2690,7 @@ pub(crate) fn target_name(name: &str) -> String {
 /// `accept_on` / `reject_on` / `sync_accept_on` / `sync_reject_on`, the
 /// `until` family, `s_eventually`, and bounded `nexttime`, `eventually`
 /// and `always`.)
-const NOT_COMPILED: &[&str] = &["implies"];
+const NOT_COMPILED: &[&str] = &[];
 
 /// `Err` for a property text that is empty or uses one of [`NOT_COMPILED`].
 fn check_operators(expr: &str) -> Result<(), String> {

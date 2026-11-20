@@ -134,7 +134,7 @@ fn command_properties(
         })
         .collect();
     let mut compiled = nl
-        .compile_external_properties(design, &external, opts)
+        .compile_external_properties_with_trees(comp.trees(), design, &external, opts)
         .into_iter();
     properties
         .iter()
@@ -384,7 +384,7 @@ fn reset_value(
         return Err(said(vec!["not a boolean expression".into()]));
     };
     let pairs = nl
-        .lower_external_property(design, &arena, &prop, false)
+        .lower_external_property_with_trees(comp.trees(), design, &arena, &prop, false)
         .map_err(|ds| said(ds.into_iter().map(|d| d.message).collect()))?;
     pairs
         .into_iter()
@@ -752,6 +752,7 @@ pub fn compile(req: &Request) -> Design {
             st.modules = modules.len();
             st
         }),
+        scope_names: collect_scope_names(comp.trees(), e),
     }
 }
 
@@ -848,7 +849,7 @@ fn signals(e: &ElaboratedDesign) -> Vec<Signal> {
         })
         .collect();
     for i in &e.instances {
-        for (name, _, _, ty) in &i.enum_consts {
+        for (_, name, _, ty) in &i.enum_consts {
             out.push(Signal {
                 path: format!("{}.{name}", i.path),
                 width: ty.bit_width().unwrap_or(0) as u64,
@@ -856,6 +857,123 @@ fn signals(e: &ElaboratedDesign) -> Vec<Signal> {
             });
         }
     }
+    out
+}
+
+fn item_decl_name(t: &svlang::Tree, node: svlang::NodeId) -> Option<String> {
+    let n = t.child(node, svlang::SyntaxKind::Name)?;
+    let last = *t.token_range(n).last()?;
+    let raw = &*t.tokens[last as usize].text;
+    Some(raw.strip_prefix('\\').unwrap_or(raw).to_string())
+}
+
+fn pkg_exported_names<'a>(
+    e: &'a ElaboratedDesign,
+    pkg_name: &'a str,
+    visited: &mut std::collections::HashSet<&'a str>,
+    out: &mut Vec<String>,
+) {
+    if !visited.insert(pkg_name) {
+        return;
+    }
+    let Some(p) = (pkg_name == "$unit")
+        .then_some(&e.unit_scope)
+        .or_else(|| e.packages.get(pkg_name))
+    else {
+        return;
+    };
+    for (n, _, _, _) in &p.params {
+        out.push(n.clone());
+    }
+    for (n, _, _) in &p.enum_consts {
+        out.push(n.clone());
+    }
+    for (n, _) in &p.typedefs {
+        out.push(n.clone());
+    }
+    for (n, _, _, _, _) in &p.subroutines {
+        out.push(n.clone());
+    }
+    for (n, _, _, _) in &p.array_params {
+        out.push(n.clone());
+    }
+    for (imp_pkg, imp_item) in &p.imports {
+        let mut sub = Vec::new();
+        pkg_exported_names(e, imp_pkg, visited, &mut sub);
+        for n in sub {
+            if imp_item.as_deref().is_none_or(|x| x == n) {
+                out.push(n);
+            }
+        }
+    }
+}
+
+fn collect_scope_names(trees: &[svlang::Tree], e: &ElaboratedDesign) -> Vec<String> {
+    use svlang::ElabItemKind;
+    let mut out = Vec::new();
+    for pkg_name in e.packages.keys() {
+        out.push(format!("$pkg:{pkg_name}"));
+        let mut names = Vec::new();
+        let mut vis = std::collections::HashSet::new();
+        pkg_exported_names(e, pkg_name, &mut vis, &mut names);
+        for n in names {
+            out.push(format!("$pkg:{pkg_name}::{n}"));
+        }
+    }
+    let mut unit_names = Vec::new();
+    {
+        let mut vis = std::collections::HashSet::new();
+        pkg_exported_names(e, "$unit", &mut vis, &mut unit_names);
+    }
+    for n in &unit_names {
+        out.push(format!("$pkg:$unit::{n}"));
+    }
+    for i in &e.instances {
+        for (n, _) in &i.params {
+            out.push(format!("{}.{n}", i.path));
+        }
+        for (n, _) in &i.type_params {
+            out.push(format!("{}.{n}", i.path));
+        }
+        for (_, n, _) in &i.typedefs {
+            out.push(format!("{}.{n}", i.path));
+        }
+        for (_, n, _, _) in &i.enum_consts {
+            out.push(format!("{}.{n}", i.path));
+        }
+        for item in &i.items {
+            if matches!(
+                item.kind,
+                ElabItemKind::FunctionDecl
+                    | ElabItemKind::TaskDecl
+                    | ElabItemKind::LetDecl
+                    | ElabItemKind::SequenceDecl
+                    | ElabItemKind::PropertyDecl
+                    | ElabItemKind::ClockingDecl
+            ) {
+                if let Some(t) = trees.get(item.tree) {
+                    if let Some(n) = item_decl_name(t, item.node) {
+                        out.push(format!("{}.{n}", i.path));
+                    }
+                }
+            }
+        }
+        for (_, imp_pkg, imp_item) in &i.imports {
+            let mut names = Vec::new();
+            let mut vis = std::collections::HashSet::new();
+            pkg_exported_names(e, imp_pkg, &mut vis, &mut names);
+            for n in names {
+                if imp_item.as_deref().is_none_or(|x| x == n) {
+                    out.push(format!("{}.{n}", i.path));
+                }
+            }
+        }
+        for n in &unit_names {
+            out.push(format!("{}.{n}", i.path));
+        }
+    }
+    out.sort();
+    out.dedup();
     out
 }
 
