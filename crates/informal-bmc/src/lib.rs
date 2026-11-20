@@ -9,6 +9,7 @@
 pub mod certificate;
 pub mod certify;
 pub mod cnf;
+pub mod deadend;
 pub mod ic3;
 pub mod invariant;
 pub mod klive;
@@ -1455,6 +1456,8 @@ impl Default for Ic3Mt {
                         Config {
                             houdini_every: 4,
                             derive: true,
+                            dynamic_order: true,
+                            stall_push: true,
                             ..d
                         },
                     )
@@ -1466,6 +1469,7 @@ impl Default for Ic3Mt {
                             max_ctg_depth: 0,
                             reverse_drop: true,
                             parent_lemma: true,
+                            dynamic_order: true,
                             ..d
                         },
                     )
@@ -1478,6 +1482,8 @@ impl Default for Ic3Mt {
                         reverse_drop: true,
                         max_ctps: 3,
                         parent_lemma: true,
+                        exctg: true,
+                        stall_push: true,
                         ..d
                     },
                 ),
@@ -1630,6 +1636,71 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
         Arc::new(Ic3Mt::default()),
         Arc::new(klive::KLive),
     ]
+}
+
+/// Structural feature-driven portfolio selector over `engines` for a Btor2 model:
+/// - Liveness targets (`justice` > 0): keeps `informal-klive` and liveness-capable engines.
+/// - Array models (`array_states` > 0): drops pure bit-blasted AIG engines so word-level /
+///   SMT engines get all threads without wasted bit-blasting failures.
+/// - Purely combinational models (`states` == 0): keeps 1-step BMC (`informal-bmc`),
+///   `informal-kind`, and external SMT engines, avoiding multi-worker IC3 thread spin-up.
+pub fn select_for_btor(
+    engines: &[Arc<dyn Engine>],
+    btor_text: &str,
+    explicit_filter: bool,
+) -> Vec<Arc<dyn Engine>> {
+    let Ok(m) = informal_ir::parse(btor_text) else {
+        return engines.to_vec();
+    };
+    let f = informal_ir::Features::of(&m);
+    if f.justice > 0 {
+        let out: Vec<_> = engines
+            .iter()
+            .filter(|e| {
+                (e.name().starts_with("informal-") && !e.name().contains("wbmc"))
+                    || e.capabilities().liveness
+            })
+            .cloned()
+            .collect();
+        return if out.is_empty() {
+            engines.to_vec()
+        } else {
+            out
+        };
+    }
+
+    let base: Vec<_> = engines
+        .iter()
+        .filter(|e| e.name() != "informal-klive")
+        .cloned()
+        .collect();
+    if explicit_filter {
+        return base;
+    }
+    if f.array_states > 0 {
+        let arr: Vec<_> = base
+            .iter()
+            .filter(|e| !e.name().starts_with("informal-") || e.name().contains("wbmc"))
+            .cloned()
+            .collect();
+        if !arr.is_empty() {
+            return arr;
+        }
+    }
+    if f.states == 0 {
+        let comb: Vec<_> = base
+            .iter()
+            .filter(|e| {
+                matches!(e.name(), "informal-bmc" | "informal-kind")
+                    || !e.name().starts_with("informal-")
+            })
+            .cloned()
+            .collect();
+        if !comb.is_empty() {
+            return comb;
+        }
+    }
+    base
 }
 
 #[cfg(test)]

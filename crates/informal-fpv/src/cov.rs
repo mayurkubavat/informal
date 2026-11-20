@@ -347,6 +347,31 @@ fn measure_task_coi(
 
     let mut seen: HashSet<u32> = HashSet::new();
     let mut covered_syms: HashSet<String> = HashSet::new();
+    let all_have_proof_cores = prove_based_only
+        && has_proven
+        && s.props
+            .iter()
+            .filter(|p| {
+                p.task == task
+                    && p.kind == Kind::Assert
+                    && p.enabled
+                    && matches!(p.status, Status::Proven { .. })
+            })
+            .all(|p| p.proof_core.is_some());
+    if all_have_proof_cores {
+        for p in s.props.iter().filter(|p| {
+            p.task == task
+                && p.kind == Kind::Assert
+                && p.enabled
+                && matches!(p.status, Status::Proven { .. })
+        }) {
+            if let Some(pc) = &p.proof_core {
+                covered_syms.extend(pc.states.iter().cloned());
+                covered_syms.extend(pc.inputs.iter().cloned());
+            }
+        }
+        todo.clear();
+    }
     while let Some(id) = todo.pop() {
         if !seen.insert(id) {
             continue;

@@ -59,6 +59,7 @@ fn schema(name: &str) -> (&'static str, Value) {
 const STATUS: &[&str] = &[
     "unprocessed",
     "proven",
+    "bounded_proven",
     "cex",
     "covered",
     "unreachable",

@@ -122,27 +122,29 @@ passes on a different setup without saying so.
 | `clock clk [-factor N] [-phase P]` | `create_clock clk -period N` | A clock (posedge); the first one declared is the primary clock. `-factor` and `-phase` relate several clocks (see Known gaps); `-both_edges` is accepted and not needed |
 | `reset -expression {!rst_n}` (or `-expr`) | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
 | — | `sim_run -stable`, `sim_save_reset` | Accepted (reset is applied by the model) |
-| `assert / assume / cover -name N {expr}` | `fvassert / fvassume / fvcover N -expr {expr}` | Add a property |
+| `assert / assume / cover -name N [-bound K] {expr}` | `fvassert / fvassume / fvcover N -expr {expr}` | Add a property (`-bound K` caps assertions/covers to `K` steps, reporting `bounded_proven` if unviolated up to `K`) |
 | `assert -env` | — | Add as assumption |
 | `assert -disable/-enable pattern` | `fvdisable / fvenable pattern` | Glob patterns. A property of the RTL can be named without its path (`a_never` for `top.a_never`) when that names one property |
 | `assert -disable/-enable/-remove -regexp {re}` | — | Regular expressions, matched anywhere in the name as Tcl's `regexp` does (anchor with `^` and `$`) |
-| `prove -all`, `prove -property {names}`, `prove -task T` | `check_fv [-property {names}]` | Prove; prints the report, returns a count summary. `-all` (or nothing) proves the current task; `-task T` that task (see Tasks below) |
+| `prove -all [-bound K] [-with_proof_core]`, `prove -property {names}`, `prove -task T` | `check_fv [-property {names}]` | Prove; prints the report, returns a count summary. `-bound K` caps BMC depth; `-with_proof_core` extracts minimal needed assumptions and state support |
 | `set_prove_time_limit 1h`, `set_prove_per_property_time_limit 1h` | `set_fml_var fml_max_time 1H` | Per-property time limit; units `ms`, `s`, `m`, `h`, `d` |
 | `set_engine_mode {Ht B N}` | — | Mapped to informal engines (Ht/Hp → `ric3-ic3`, `abc-pdr`; B → `ric3-bmc`; N → `ric3`); prints the engines it picked |
 | `get_property_list [-task T] -include {type assert status proven}` | `get_props -type assert -status proven` | Tcl list of names; with `-regexp`, a `name` value is a regular expression. Keys: `type`, `status`, `name`, `disabled` (0 or 1), `task` |
-| `get_status name` | — | `proven`, `cex`, `covered`, `unreachable`, `undetermined`, `error`, `unprocessed` |
+| `get_status name` | — | `proven`, `bounded_proven`, `cex`, `covered`, `unreachable`, `undetermined`, `error`, `unprocessed` |
 | `report [-task T] [-csv] [-file F [-force]]` | `report_fv -list` | Property table, or comma-separated values; `-file` writes it there; `-task` keeps one task's properties |
 | `task -create T ...`, `task -edit T ...`, `task -set T`, `task -list`, `get_task_list`, `task -delete T` | — | Tasks: see below |
 | `get_design_info [-json]`, `report -design` | — | What the design holds and the size of the current task's model: see Design and proof statistics |
 | `get_design_info -list instance\|memory\|clock\|reset [-filter P [-regexp]]` | — | Names of instances, memories, clocks or asynchronous resets found in the design |
-| `get_property_info P [-json] [-cone]`, `report -detail [-property P] [-task T]`, `get_stats [-task T]` | — | What the last prove measured per property: see Design and proof statistics |
+| `get_property_info P [-json] [-cone] [-proof_core]`, `report -detail [-property P] [-task T]`, `get_stats [-task T]` | — | What the last prove measured per property (plus COI or minimal needed-assumption proof core): see Design and proof statistics |
 | `assert/assume/cover -task T ...`, `stopat -task T ...` | — | Add to task T instead of the current task |
 | `visualize -violation -property P`, `visualize -cover -property P` | — | Returns the VCD that prove wrote for a CEX or a cover, and opens it with `$INFORMAL_WAVE_VIEWER` (for example `surfer` or `gtkwave`) when that is set |
 | `get_version`, `echo words` | `get_version`, `echo words` | The informal version; print a line |
-| `check_assumptions [-depth N] [-conflict]` | — | Whether the assumptions and reset allow traces of N steps; returns how many they allow, or with `-conflict` the assumptions that conflict (also run before every prove: docs/vacuity.md) |
+| `check_assumptions [-depth N] [-conflict] [-dead_end]` | — | Whether the assumptions and reset allow traces of N steps (`-conflict` returns minimal conflicting assumptions; `-dead_end` runs 2QBF trap-state detection) |
 | `set_prove_cache [on\|off]`, `set_prove_cache_path [dir]`, `set_prove_cache_mode [read_write\|read_only\|write_only]` | `set_prove_cache ...` | Content-addressed SHA-256 proof cache of `proven` and `unreachable` verdicts across runs |
 | `check_conn -load <csv> [-task T]`, `check_conn -prove`, `check_conn -report`, `check_conn -list` | `check_conn ...` | Formal connectivity verification from OpenTitan/JasperGold `CONNECTION`+`CONDITION`+`LATENCY` CSVs into task `Connectivity` (or `-task T`) |
 | `check_cov -init [-model ...]`, `check_cov -waiver -add ...`, `check_cov -measure`, `check_cov -report [-html] [-report_file F]` | `check_cov ...` | Formal COI observability coverage, branch/toggle UNR dead-code detection, functional covers, and waivers |
+| `check_xprop -init [-targets ...]`, `check_xprop -waiver -add ...`, `check_xprop -prove`, `check_xprop -report` | `check_xprop ...` | Exact 2-copy self-composition X-propagation verification over reset-less flops, X literals, and undriven nets |
+| `check_spv -create -from <S> -to <O> [-cond <C>]`, `check_spv -prove`, `check_spv -report`, `check_spv -list` | `check_spv ...` | 2-safety non-interference / security path taint verification catching direct and multi-cycle covert storage channels |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |
 

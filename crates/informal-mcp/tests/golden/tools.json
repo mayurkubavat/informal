@@ -511,6 +511,7 @@
           "enum": [
             "unprocessed",
             "proven",
+            "bounded_proven",
             "cex",
             "covered",
             "unreachable",
@@ -596,6 +597,7 @@
                 "enum": [
                   "unprocessed",
                   "proven",
+                  "bounded_proven",
                   "cex",
                   "covered",
                   "unreachable",
@@ -733,6 +735,7 @@
               "enum": [
                 "unprocessed",
                 "proven",
+                "bounded_proven",
                 "cex",
                 "covered",
                 "unreachable",
@@ -1145,6 +1148,7 @@
               "enum": [
                 "unprocessed",
                 "proven",
+                "bounded_proven",
                 "cex",
                 "covered",
                 "unreachable",
@@ -1339,6 +1343,7 @@
                 "enum": [
                   "unprocessed",
                   "proven",
+                  "bounded_proven",
                   "cex",
                   "covered",
                   "unreachable",

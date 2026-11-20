@@ -7,11 +7,15 @@ pub mod cache;
 pub mod compat;
 pub mod conn;
 pub mod cov;
+pub mod miter;
 pub mod progress;
+pub mod proof_core;
 pub mod session;
+pub mod spv;
 pub mod stats;
 pub mod trace;
 pub mod worker;
+pub mod xprop;
 
 pub use compat::{detect_flavor, Flavor, Shell};
 pub use progress::{EngineLine, ProgressKind, PropProgress, ProveProgress, ProveSink};

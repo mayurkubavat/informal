@@ -271,7 +271,19 @@ fn build_dag(g: &Aig, stop: &dyn Fn() -> bool) -> Template {
         let (dp, dn): (Vec<usize>, Vec<usize>) = def
             .iter()
             .partition(|&&c| clauses[c].as_ref().unwrap().contains(&(v as i32)));
+        // Bound elimination blowup: skip variables with > 8 positive or > 8
+        // negative occurrences, and never grow total literal count.
+        if dp.len() + up.len() > 8 || dn.len() + un.len() > 8 {
+            continue;
+        }
+        let orig_lits: usize = def
+            .iter()
+            .chain(&up)
+            .chain(&un)
+            .map(|&c| clauses[c].as_ref().unwrap().len())
+            .sum();
         let mut res: Vec<Vec<TLit>> = Vec::new();
+        let mut res_lits = 0usize;
         let mut ok = true;
         // `resolve(a, b, v)` wants `v` in `a` and `-v` in `b`.
         'outer: for (ps, ns) in [(&dp, &un), (&up, &dn)] {
@@ -282,8 +294,9 @@ fn build_dag(g: &Aig, stop: &dyn Fn() -> bool) -> Template {
                         clauses[q].as_ref().unwrap(),
                         v as i32,
                     ) {
+                        res_lits += r.len();
                         res.push(r);
-                        if res.len() > cost {
+                        if res.len() > cost || res_lits > orig_lits + MAX_CLAUSE {
                             ok = false;
                             break 'outer;
                         }
@@ -295,6 +308,10 @@ fn build_dag(g: &Aig, stop: &dyn Fn() -> bool) -> Template {
             continue;
         }
         let res = subsume(res);
+        let kept_lits: usize = res.iter().map(Vec::len).sum();
+        if kept_lits > orig_lits {
+            continue;
+        }
         for &c in def.iter().chain(&up).chain(&un) {
             if clauses[c].take().is_some() {
                 live_cls -= 1;

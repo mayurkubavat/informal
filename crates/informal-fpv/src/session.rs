@@ -52,6 +52,11 @@ pub enum Status {
         engine: String,
         ms: u128,
     },
+    BoundedProven {
+        engine: String,
+        bound: u32,
+        ms: u128,
+    },
     Cex {
         engine: String,
         depth: Option<u32>,
@@ -80,6 +85,7 @@ impl Status {
         match self {
             Status::Unprocessed => "unprocessed",
             Status::Proven { .. } => "proven",
+            Status::BoundedProven { .. } => "bounded_proven",
             Status::Cex { .. } => "cex",
             Status::Covered { .. } => "covered",
             Status::Unreachable { .. } => "unreachable",
@@ -142,6 +148,12 @@ pub struct Property {
     /// {witness}` is enabled and a proven assertion's witness cover is hit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witness_trace: Option<String>,
+    /// Optional bounded-proof depth cap (`assert -bound K`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound: Option<u32>,
+    /// Minimal proof core & needed assumptions (`prove -with_proof_core`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_core: Option<crate::proof_core::ProofCore>,
     /// What the last prove measured for this property (times, depth,
     /// invariant size, certificate): `None` before a prove, and when no
     /// engine ran on it.
@@ -163,6 +175,7 @@ impl Property {
         self.status = Status::Unprocessed;
         self.trace = None;
         self.witness_trace = None;
+        self.proof_core = None;
         self.engines.clear();
         self.under_ai.clear();
         self.vacuity = None;
@@ -388,6 +401,18 @@ pub struct Session {
     /// Formal coverage & UNR state (`check_cov`).
     #[serde(default)]
     pub cov: crate::cov::CovState,
+    /// Formal X-propagation state (`check_xprop`).
+    #[serde(default)]
+    pub xprop: crate::xprop::XpropState,
+    /// Formal Security Path Verification rules (`check_spv`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spv: Vec<crate::spv::SpvRule>,
+    /// Per-run bound cap set during `prove -bound K`.
+    #[serde(skip)]
+    pub prove_bound: Option<u32>,
+    /// Extract minimal proof cores during `prove -with_proof_core`.
+    #[serde(skip)]
+    pub with_proof_core: bool,
 }
 
 /// What the environment check found (docs/vacuity.md).
@@ -448,6 +473,10 @@ impl Session {
             prove_cache_dir: None,
             prove_cache_mode: crate::cache::CacheMode::default(),
             cov: crate::cov::CovState::default(),
+            xprop: crate::xprop::XpropState::default(),
+            spv: Vec::new(),
+            prove_bound: None,
+            with_proof_core: false,
         }
     }
 
@@ -543,6 +572,8 @@ impl Session {
             witness_trace: None,
             task,
             copy_of: None,
+            bound: None,
+            proof_core: None,
             stats: None,
         });
         Ok(name)
@@ -1006,6 +1037,8 @@ impl Session {
                 witness_trace: None,
                 task: EMBEDDED.to_string(),
                 copy_of: None,
+                bound: None,
+                proof_core: None,
                 stats: None,
             });
         }
@@ -1319,6 +1352,32 @@ impl Session {
             Verdict::Unknown { reason } if reason.starts_with("bound") => Some(false),
             Verdict::Unknown { .. } => None,
         }
+    }
+
+    /// Model steps held in reset at the start of each trace (`1` for single-clock,
+    /// `tick_reset().steps` for multi-edge/multi-clock models).
+    pub fn reset_step_count(&self) -> u32 {
+        if self.reset.is_none() {
+            return 0;
+        }
+        let tr = self.tick_reset();
+        tr.steps.max(1)
+    }
+
+    /// Run 2QBF dead-end / trap-state detection on the current task's environment
+    /// up to `depth` steps (`check_assumptions -dead_end`).
+    pub fn dead_end_now(
+        &mut self,
+        depth: u32,
+    ) -> anyhow::Result<Option<informal_bmc::deadend::DeadEnd>> {
+        if !self.elaborated {
+            self.elaborate(None)?;
+        }
+        self.check_reset_and_clocks().map_err(|e| anyhow!(e))?;
+        let task = self.current_task.clone();
+        let btor = self.task_model(&task).map_err(|e| anyhow!(e))?;
+        let timeout = self.time_limit.min(Duration::from_secs(60));
+        informal_bmc::deadend::find_dead_end(&btor, depth, timeout).map_err(|e| anyhow!(e))
     }
 
     /// Elaborate and lower if needed, then run the environment check to
@@ -1713,6 +1772,19 @@ impl Session {
                 }
             }
         }
+        if self.with_proof_core && !conflict {
+            for &i in &targets[..reached] {
+                if self.stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                if matches!(
+                    self.props[i].status,
+                    Status::Proven { .. } | Status::Unreachable { .. }
+                ) {
+                    self.props[i].proof_core = crate::proof_core::compute_proof_core(self, i).ok();
+                }
+            }
+        }
         stopped
     }
 
@@ -2054,30 +2126,10 @@ impl Session {
                 .filter(|l| l.split_whitespace().nth(1) == Some(op))
                 .count()
         };
-        let liveness = has("justice") > 0;
         let bads = has("bad") + has("justice");
-        // A liveness property is a `justice` line, which informal's own
-        // engines read as a safety property (liveness to safety, when the
-        // model is loaded). An external engine reads the file itself.
-        let filtered: Vec<Arc<dyn Engine>>;
-        let engines = if liveness {
-            filtered = engines
-                .iter()
-                .filter(|e| {
-                    (e.name().starts_with("informal-") && !e.name().contains("wbmc"))
-                        || e.capabilities().liveness
-                })
-                .cloned()
-                .collect();
-            &filtered[..]
-        } else {
-            filtered = engines
-                .iter()
-                .filter(|e| e.name() != "informal-klive")
-                .cloned()
-                .collect();
-            &filtered[..]
-        };
+        let filtered =
+            informal_bmc::select_for_btor(engines, &text, !self.engine_filter.is_empty());
+        let engines = &filtered[..];
         if bads == 0 {
             // The front end folded the check to a constant true.
             let status = match kind {
@@ -2091,6 +2143,74 @@ impl Session {
                 },
             };
             return (status, None, Vec::new(), None);
+        }
+        if let Some(bound) = self.props[i].bound.or(self.prove_bound) {
+            let bmc_eng: Arc<dyn Engine> = Arc::new(informal_bmc::Bmc {
+                max_depth: Some(bound as usize),
+                step: 1,
+            });
+            let bounded_engines = [bmc_eng];
+            let req = CheckRequest {
+                model: model.to_path_buf(),
+                format: ModelFormat::Btor2,
+                timeout: self.time_limit,
+            };
+            let before = crate::stats::Usage::now();
+            let o = portfolio::run_until(&bounded_engines, &req, None, Some(self.stop.as_ref()));
+            let usage = before.zip(crate::stats::Usage::now());
+            let verdict = o
+                .winner
+                .as_ref()
+                .map(|w| w.verdict.clone())
+                .or_else(|| {
+                    o.runs
+                        .first()
+                        .and_then(|r| r.as_ref().ok())
+                        .map(|r| r.verdict.clone())
+                })
+                .unwrap_or_else(|| portfolio::verdict(&o));
+            let ms = o.wall_ms;
+            let mut status = match (&verdict, kind) {
+                (Verdict::Safe, Kind::Cover) => Status::Unreachable {
+                    engine: "informal-bmc".into(),
+                    ms,
+                },
+                (Verdict::Safe, _) => Status::Proven {
+                    engine: "informal-bmc".into(),
+                    ms,
+                },
+                (Verdict::Unsafe { depth }, Kind::Cover) => Status::Covered {
+                    engine: "informal-bmc".into(),
+                    depth: *depth,
+                    ms,
+                },
+                (Verdict::Unsafe { depth }, _) => Status::Cex {
+                    engine: "informal-bmc".into(),
+                    depth: *depth,
+                    ms,
+                },
+                (Verdict::Unknown { reason }, Kind::Assert) if reason.starts_with("bound") => {
+                    Status::BoundedProven {
+                        engine: "informal-bmc".into(),
+                        bound,
+                        ms,
+                    }
+                }
+                (Verdict::Unknown { reason }, _) => Status::Undetermined {
+                    reason: reason.clone(),
+                },
+            };
+            let mut trace = None;
+            if let Status::Cex { depth, .. } | Status::Covered { depth, .. } = &mut status {
+                let witness = o.winner.as_ref().and_then(|w| w.witness.as_deref());
+                if let Ok((path, d)) = self.write_trace(&self.props[i].name, model, witness, *depth)
+                {
+                    depth.get_or_insert(d as u32);
+                    trace = Some(path);
+                }
+            }
+            let stats = crate::stats::ProofStats::of_run(&status, &o.profile, ms, None, usage);
+            return (status, trace, o.profile, Some(stats));
         }
         let cache_ctx = if self.prove_cache && self.certificates.is_none() {
             let dir = self
@@ -2355,6 +2475,10 @@ impl Session {
                 Status::Proven { engine, ms } | Status::Unreachable { engine, ms } => {
                     (engine.clone(), format!("{:.2} s", *ms as f64 / 1000.0))
                 }
+                Status::BoundedProven { engine, bound, ms } => (
+                    engine.clone(),
+                    format!("bound {bound} in {:.2} s", *ms as f64 / 1000.0),
+                ),
                 Status::Cex { engine, depth, ms } | Status::Covered { engine, depth, ms } => (
                     engine.clone(),
                     format!(
@@ -2466,7 +2590,7 @@ fn has_target(btor: &str, name: &str) -> bool {
 }
 
 /// Drop named `constraint` and `fair` lines whose symbol is in `drop_syms`.
-fn drop_assumptions(btor: &str, drop_syms: &[String]) -> String {
+pub(crate) fn drop_assumptions(btor: &str, drop_syms: &[String]) -> String {
     btor.lines()
         .filter(|l| {
             let mut w = l.split_whitespace();

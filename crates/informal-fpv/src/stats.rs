@@ -150,6 +150,7 @@ impl ProofStats {
     ) -> ProofStats {
         let engine = match status {
             Status::Proven { engine, .. }
+            | Status::BoundedProven { engine, .. }
             | Status::Unreachable { engine, .. }
             | Status::Cex { engine, .. }
             | Status::Covered { engine, .. } => Some(engine.clone()),
@@ -165,6 +166,7 @@ impl ProofStats {
             Certificate::Trace { .. } => None,
         });
         let (depth, depth_kind) = match (status, winner_certificate) {
+            (Status::BoundedProven { bound, .. }, _) => (Some(*bound), Some("bound")),
             (Status::Cex { depth, .. } | Status::Covered { depth, .. }, _) => {
                 (*depth, depth.map(|_| "trace"))
             }
@@ -410,12 +412,32 @@ impl Session {
     /// `get_property_info`: everything known about property `i`, with its
     /// cone of influence when `cone` is asked for (it lowers the design).
     pub fn property_info(&self, i: usize, with_cone: bool) -> PropertyInfo {
+        self.property_info_ext(i, with_cone, false)
+    }
+
+    pub fn property_info_ext(
+        &self,
+        i: usize,
+        with_cone: bool,
+        with_proof_core: bool,
+    ) -> PropertyInfo {
         let p = &self.props[i];
         let cone =
             (with_cone && p.kind != Kind::Assume && self.elaborated && !self.dry_run).then(|| {
                 self.model_for(i)
                     .and_then(|m| cone(&m, &self.check_name(i)))
             });
+        let proof_core = if let Some(pc) = &p.proof_core {
+            Some(pc.clone())
+        } else if with_proof_core
+            && matches!(p.status, Status::Proven { .. } | Status::Unreachable { .. })
+            && self.elaborated
+            && !self.dry_run
+        {
+            crate::proof_core::compute_proof_core(self, i).ok()
+        } else {
+            None
+        };
         PropertyInfo {
             name: p.name.clone(),
             kind: p.kind.label(),
@@ -432,6 +454,7 @@ impl Session {
             engines: p.engines.clone(),
             cone: cone.as_ref().and_then(|c| c.as_ref().ok().copied()),
             cone_error: cone.and_then(|c| c.err()),
+            proof_core,
         }
     }
 }
@@ -456,6 +479,8 @@ pub struct PropertyInfo {
     pub cone: Option<Cone>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cone_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_core: Option<crate::proof_core::ProofCore>,
 }
 
 fn ms(v: u64) -> String {
@@ -544,6 +569,27 @@ impl PropertyInfo {
             )),
             (None, Some(e)) => rows.push(("cone of influence", format!("not computed: {e}"))),
             _ => {}
+        }
+        if let Some(pc) = &self.proof_core {
+            rows.push((
+                "proof core states",
+                if pc.states.is_empty() {
+                    "none".into()
+                } else {
+                    pc.states.join(", ")
+                },
+            ));
+            rows.push((
+                "needed assumes",
+                if pc.needed_assumptions.is_empty() {
+                    "none".into()
+                } else {
+                    pc.needed_assumptions.join(", ")
+                },
+            ));
+            if !pc.unused_assumptions.is_empty() {
+                rows.push(("unused assumes", pc.unused_assumptions.join(", ")));
+            }
         }
         let mut out = String::new();
         for (k, v) in rows {

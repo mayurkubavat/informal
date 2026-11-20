@@ -473,8 +473,84 @@ fn model(
             steps: reset_steps,
         });
     }
-    let m = btor2::write(&nl, &options).map_err(|e| vec![e.to_string()])?;
+    let mut m = btor2::write(&nl, &options).map_err(|e| vec![e.to_string()])?;
+    if req.trace_outputs {
+        append_alias_trace_outputs(&nl, &mut m.btor2);
+    }
     Ok((m, properties))
+}
+
+/// Emits `output <nid> <alias>` lines in the trace section for nets/ports in
+/// `nl.traces` that alias an `input` or `state` node under a different name
+/// (e.g. `assign out_port = reg_q;`), which `svlang::btor2` omits because the
+/// underlying value is already a named register or primary input.
+fn append_alias_trace_outputs(nl: &Netlist, btor2: &mut String) {
+    use std::collections::{HashMap, HashSet};
+    use std::fmt::Write as _;
+    use svlang::netlist::ValueKind;
+
+    let sym_clean = |s: &str| -> String {
+        s.chars()
+            .map(|c| if c.is_whitespace() { '_' } else { c })
+            .collect()
+    };
+
+    let mut max_id = 0u32;
+    let mut sym_to_nid: HashMap<String, u32> = HashMap::new();
+    let mut emitted: HashSet<String> = HashSet::new();
+    for line in btor2.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with(';') {
+            continue;
+        }
+        let mut toks = trimmed.split_whitespace();
+        let Some(id_tok) = toks.next() else { continue };
+        let Ok(nid) = id_tok.parse::<u32>() else {
+            continue;
+        };
+        max_id = max_id.max(nid);
+        let Some(op) = toks.next() else { continue };
+        match op {
+            "input" | "state" => {
+                let _sort = toks.next();
+                if let Some(sym) = toks.next() {
+                    sym_to_nid.insert(sym.to_string(), nid);
+                    emitted.insert(sym.to_string());
+                }
+            }
+            "output" => {
+                let _arg = toks.next();
+                if let Some(sym) = toks.next() {
+                    emitted.insert(sym.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut aliases: Vec<(String, u32)> = Vec::new();
+    for t in &nl.traces {
+        let alias = sym_clean(&t.name);
+        if emitted.contains(&alias) {
+            continue;
+        }
+        let canon = match nl.value(t.value).kind {
+            ValueKind::Input(i) => Some(sym_clean(&nl.inputs[i].name)),
+            ValueKind::StateOut(s) => Some(sym_clean(&nl.states[s.0 as usize].name)),
+            _ => None,
+        };
+        if let Some(c) = canon.filter(|c| c != &alias) {
+            if let Some(&nid) = sym_to_nid.get(&c) {
+                aliases.push((alias, nid));
+            }
+        }
+    }
+    aliases.sort_by(|a, b| a.0.cmp(&b.0));
+    aliases.dedup_by(|a, b| a.0 == b.0);
+    for (alias, nid) in aliases {
+        max_id += 1;
+        let _ = writeln!(btor2, "{max_id} output {nid} {alias}");
+    }
 }
 
 /// Elaborate and lower the design to a Btor2 model. Every labelled

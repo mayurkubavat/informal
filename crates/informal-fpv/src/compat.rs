@@ -928,6 +928,8 @@ const COMMON: &[(&str, Body)] = &[
     ("set_prove_cache_mode", set_prove_cache_mode),
     ("check_conn", check_conn),
     ("check_cov", check_cov),
+    ("check_xprop", check_xprop),
+    ("check_spv", check_spv),
 ];
 
 const JG: &[(&str, Body)] = &[
@@ -1145,10 +1147,11 @@ const JG: &[(&str, Body)] = &[
                 ("-property", 1),
                 ("-time_limit", 1),
                 ("-task", 1),
+                ("-bound", 1),
+                ("-with_proof_core", 0),
             ],
             &[
                 ("-bg", 0),
-                ("-with_proof_core", 0),
                 ("-engine_mode", 1),
                 ("-per_property_time_limit", 1),
                 ("-dump_trace", 0),
@@ -1159,6 +1162,12 @@ const JG: &[(&str, Body)] = &[
         if let Some(t) = a.val("-time_limit") {
             s.time_limit = parse_duration(t)?;
         }
+        let run_bound = match a.val("-bound") {
+            None => None,
+            Some(v) => Some(v.parse::<u32>().ok().filter(|&n| n >= 1).ok_or_else(|| {
+                format!("prove -bound: positive cycle bound expected, not `{v}`")
+            })?),
+        };
         let task = a.val("-task").map(|t| s.task_name(t)).transpose()?;
         let which: Vec<String> = a.all("-property").flatten().cloned().collect();
         let which = match (&task, which.is_empty()) {
@@ -1178,7 +1187,14 @@ const JG: &[(&str, Body)] = &[
             (_, true) => Vec::new(),
             (t, false) => select_in(s, t.as_deref(), &which)?,
         };
-        prove_and_report(s, &which)
+        let saved_bound = s.prove_bound;
+        let saved_pc = s.with_proof_core;
+        s.prove_bound = run_bound;
+        s.with_proof_core = a.flag("-with_proof_core");
+        let res = prove_and_report(s, &which);
+        s.prove_bound = saved_bound;
+        s.with_proof_core = saved_pc;
+        res
     }),
     ("get_property_list", |s, a| {
         let a = Args::parse(
@@ -1403,11 +1419,15 @@ fn get_design_info(s: &mut Session, a: &[String]) -> Result<Value, String> {
     Ok(text.into())
 }
 
-/// `get_property_info <name> [-json] [-cone]`: what the last prove
-/// measured for one property; `-cone` adds its cone of influence (it
-/// lowers the design).
+/// `get_property_info <name> [-json] [-cone] [-proof_core]`: what the last
+/// prove measured for one property; `-cone` adds its cone of influence and
+/// `-proof_core` computes its minimal needed-assumption & state core.
 fn get_property_info(s: &mut Session, a: &[String]) -> Result<Value, String> {
-    let a = Args::parse(a, &[("-json", 0), ("-cone", 0), ("-task", 1)], &[])?;
+    let a = Args::parse(
+        a,
+        &[("-json", 0), ("-cone", 0), ("-proof_core", 0), ("-task", 1)],
+        &[],
+    )?;
     let [name] = a.pos.as_slice() else {
         return Err("get_property_info: name one property".into());
     };
@@ -1421,7 +1441,7 @@ fn get_property_info(s: &mut Session, a: &[String]) -> Result<Value, String> {
             ))
         }
     };
-    let info = s.property_info(i, a.flag("-cone"));
+    let info = s.property_info_ext(i, a.flag("-cone"), a.flag("-proof_core"));
     if a.flag("-json") {
         return serde_json::to_string_pretty(&info)
             .map(Value::from)
@@ -1430,12 +1450,12 @@ fn get_property_info(s: &mut Session, a: &[String]) -> Result<Value, String> {
     Ok(info.text().into())
 }
 
-/// `check_assumptions [-depth N]`: the environment check on its own (it
-/// also runs before every prove): whether the assumptions and the reset
-/// allow traces of N model steps. Returns the number of steps they allow.
-/// `-conflict` is what it checks; `-dead_end` is not done yet.
+/// `check_assumptions [-depth N] [-conflict] [-dead_end]`: checks whether
+/// the assumptions and reset allow traces of N model steps (`-conflict`
+/// returns the minimal conflicting assumption core) or reach a trap state
+/// from which no next input satisfies the assumptions (`-dead_end`).
 fn check_assumptions(s: &mut Session, a: &[String]) -> Result<Value, String> {
-    let a = Args::parse(a, &[("-depth", 1), ("-conflict", 0)], &[])?;
+    let a = Args::parse(a, &[("-depth", 1), ("-conflict", 0), ("-dead_end", 0)], &[])?;
     let depth = match a.val("-depth") {
         None => s.environment_depth.max(1),
         Some(v) => v
@@ -1446,6 +1466,28 @@ fn check_assumptions(s: &mut Session, a: &[String]) -> Result<Value, String> {
     };
     if s.dry_run {
         return Ok(().into());
+    }
+    if a.flag("-dead_end") {
+        let de = s
+            .dead_end_now(depth)
+            .map_err(|e| format!("check_assumptions -dead_end: {e}"))?;
+        return match de {
+            None => Ok(Value::from("alive")),
+            Some(found) => {
+                let bits: Vec<String> = found
+                    .trap_state
+                    .iter()
+                    .map(|(n, b)| format!("{n}={}", u8::from(*b)))
+                    .collect();
+                let desc = if bits.is_empty() {
+                    format!("dead_end at step {}", found.depth)
+                } else {
+                    format!("dead_end at step {}: {}", found.depth, bits.join(", "))
+                };
+                s.log(&format!("DEAD-END ENVIRONMENT: {desc}"));
+                Ok(Value::from(desc))
+            }
+        };
     }
     let env = s
         .environment_now(depth)
@@ -1808,6 +1850,256 @@ fn check_cov(s: &mut Session, a: &[String]) -> Result<Value, String> {
     Err("check_cov: expected -init, -waiver, -measure, -list or -report".into())
 }
 
+fn check_xprop(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[
+            ("-init", 0),
+            ("-targets", 1),
+            ("-type", 1),
+            ("-x_source", 1),
+            ("-to", 1),
+            ("-waiver", 0),
+            ("-add", 0),
+            ("-source", 0),
+            ("-instance", 1),
+            ("-comment", 1),
+            ("-clear", 0),
+            ("-list", 0),
+            ("-prove", 0),
+            ("-report", 0),
+            ("-task", 1),
+            ("-time_limit", 1),
+            ("-file", 1),
+            ("-force", 0),
+        ],
+        &[("-bg", 0), ("-silent", 0)],
+    )?;
+    if a.flag("-clear") && !a.flag("-waiver") {
+        s.xprop = crate::xprop::XpropState::default();
+        return Ok(().into());
+    }
+    if a.flag("-waiver") {
+        if a.flag("-clear") {
+            s.xprop.waivers.clear();
+            return Ok(().into());
+        }
+        if a.flag("-list") && !a.flag("-add") {
+            let list: Vec<String> = s
+                .xprop
+                .waivers
+                .iter()
+                .map(|w| format!("{}: {}", w.id, w.pattern))
+                .collect();
+            return Ok(Value::List(list));
+        }
+        if a.flag("-add") {
+            let pat = a
+                .val("-instance")
+                .or_else(|| a.pos.first().map(String::as_str))
+                .ok_or("check_xprop -waiver -add: -instance <pattern> required")?;
+            let id = s.xprop.waivers.last().map_or(1, |w| w.id + 1);
+            s.xprop.waivers.push(crate::xprop::XpropWaiver {
+                id,
+                pattern: pat.to_string(),
+                source_only: a.flag("-source"),
+                comment: a.val("-comment").map(String::from),
+            });
+            s.xprop.reapply_sink_waivers();
+            return Ok(id.to_string().into());
+        }
+        return Err("check_xprop -waiver: expected -add, -list or -clear".into());
+    }
+    if a.flag("-init") {
+        let cats: Vec<String> = a
+            .all("-targets")
+            .chain(a.all("-type"))
+            .flat_map(|v| {
+                v[0].split(|c: char| c.is_whitespace() || c == ',')
+                    .filter(|x| !x.is_empty())
+                    .map(|x| x.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let x_sources: Vec<String> = a
+            .all("-x_source")
+            .flat_map(|v| {
+                v[0].split_whitespace()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let explicit_targets: Vec<String> = a
+            .all("-to")
+            .flat_map(|v| {
+                v[0].split_whitespace()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        s.xprop = crate::xprop::XpropState {
+            initialized: true,
+            categories: cats,
+            x_sources,
+            explicit_targets,
+            waivers: Vec::new(),
+            items: Vec::new(),
+        };
+        if !a.flag("-prove") && !a.flag("-report") && !a.flag("-list") {
+            return Ok(().into());
+        }
+    } else {
+        for v in a.all("-x_source") {
+            for w in v[0].split_whitespace() {
+                s.xprop.x_sources.push(w.to_string());
+            }
+        }
+        for v in a.all("-to") {
+            for w in v[0].split_whitespace() {
+                s.xprop.explicit_targets.push(w.to_string());
+            }
+        }
+    }
+    if a.flag("-prove") {
+        let timeout = a.val("-time_limit").map(parse_duration).transpose()?;
+        if !s.dry_run {
+            crate::xprop::prove(s, a.val("-task"), timeout)?;
+        }
+        if !a.flag("-report") && !a.flag("-list") {
+            return Ok(().into());
+        }
+    }
+    if a.flag("-list") {
+        let names: Vec<String> = s.xprop.items.iter().map(|i| i.name.clone()).collect();
+        return Ok(Value::List(names));
+    }
+    if a.flag("-report") {
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let text = crate::xprop::format_report(&s.xprop);
+        if let Some(f) = a.val("-file") {
+            let path = Path::new(f);
+            if path.exists() && !a.flag("-force") {
+                return Err(format!(
+                    "check_xprop: {f} exists; add -force to overwrite it"
+                ));
+            }
+            std::fs::write(path, &text).map_err(|e| format!("check_xprop: {f}: {e}"))?;
+        } else {
+            print!("{text}");
+        }
+        return Ok(text.into());
+    }
+    Err("check_xprop: expected -init, -waiver, -prove, -list, -report or -clear".into())
+}
+
+fn check_spv(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[
+            ("-create", 0),
+            ("-name", 1),
+            ("-from", 1),
+            ("-to", 1),
+            ("-cond", 1),
+            ("-precond", 1),
+            ("-task", 1),
+            ("-prove", 0),
+            ("-report", 0),
+            ("-list", 0),
+            ("-clear", 0),
+            ("-time_limit", 1),
+            ("-file", 1),
+            ("-force", 0),
+        ],
+        &[("-bg", 0), ("-silent", 0)],
+    )?;
+    if a.flag("-clear") {
+        s.spv.clear();
+        return Ok(().into());
+    }
+    if a.flag("-create") {
+        let from: Vec<String> = a
+            .all("-from")
+            .flat_map(|v| {
+                v[0].split_whitespace()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let to: Vec<String> = a
+            .all("-to")
+            .flat_map(|v| {
+                v[0].split_whitespace()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if from.is_empty() || to.is_empty() {
+            return Err(
+                "check_spv -create: both -from <secret> and -to <observable> are required".into(),
+            );
+        }
+        let task = match a.val("-task") {
+            Some(t) => s.task_name(t)?,
+            None => s.current_task.clone(),
+        };
+        let name = match a.val("-name") {
+            Some(n) => n.to_string(),
+            None => format!("spv_{}", s.spv.len() + 1),
+        };
+        if s.spv.iter().any(|r| r.name == name) {
+            return Err(format!("check_spv: rule `{name}` already exists"));
+        }
+        let cond = a
+            .val("-cond")
+            .or_else(|| a.val("-precond"))
+            .map(String::from);
+        s.spv.push(crate::spv::SpvRule {
+            name: name.clone(),
+            task,
+            from,
+            to,
+            cond,
+            status: crate::spv::SpvStatus::Unprocessed,
+            engine: None,
+            ms: 0,
+        });
+        return Ok(name.into());
+    }
+    if a.flag("-prove") {
+        let timeout = a.val("-time_limit").map(parse_duration).transpose()?;
+        if !s.dry_run {
+            crate::spv::prove_spv(s, a.val("-name"), timeout)?;
+        }
+        if !a.flag("-report") && !a.flag("-list") {
+            return Ok(().into());
+        }
+    }
+    if a.flag("-list") {
+        let names: Vec<String> = s.spv.iter().map(|r| r.name.clone()).collect();
+        return Ok(Value::List(names));
+    }
+    if a.flag("-report") {
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let text = crate::spv::format_report(&s.spv);
+        if let Some(f) = a.val("-file") {
+            let path = Path::new(f);
+            if path.exists() && !a.flag("-force") {
+                return Err(format!("check_spv: {f} exists; add -force to overwrite it"));
+            }
+            std::fs::write(path, &text).map_err(|e| format!("check_spv: {f}: {e}"))?;
+        } else {
+            print!("{text}");
+        }
+        return Ok(text.into());
+    }
+    Err("check_spv: expected -create, -prove, -list, -report or -clear".into())
+}
+
 /// `visualize -violation|-cover -property P`: the trace of a CEX or cover,
 /// as the VCD file prove wrote. It is opened with the program named by
 /// INFORMAL_WAVE_VIEWER (`surfer`, `gtkwave`) when that is set; the path is
@@ -1932,9 +2224,17 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
         });
         return Ok(().into());
     }
-    if a.flag("-bound") {
-        return Err(format!("{}: -bound is not supported yet", a.cmd));
-    }
+    let bound = match a.val("-bound") {
+        None => None,
+        Some(v) => {
+            if kind == Kind::Assume {
+                return Err("assume: -bound is not supported on assumptions".into());
+            }
+            Some(v.parse::<u32>().ok().filter(|&n| n >= 1).ok_or_else(|| {
+                format!("{}: -bound expects a positive integer, not `{v}`", a.cmd)
+            })?)
+        }
+    };
     if a.flag("-regexp") {
         return Err(format!(
             "{}: -regexp selects properties with -enable, -disable or -remove",
@@ -1957,7 +2257,13 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
         kind
     };
     let task = task.unwrap_or_else(|| s.current_task.clone());
-    add_props(s, &task, kind, a.val("-name").map(String::from), &expr)
+    let created = add_props(s, &task, kind, a.val("-name").map(String::from), &expr)?;
+    if let (Some(b), Value::Str(ref pname)) = (bound, &created) {
+        if let Some(p) = s.props.iter_mut().find(|p| &p.name == pname) {
+            p.bound = Some(b);
+        }
+    }
+    Ok(created)
 }
 
 const VCF: &[(&str, Body)] = &[
@@ -2324,7 +2630,7 @@ mod tests {
                  assert -name p_$p -frob {req |=> gnt}\n\
                  assert -name q_$p {req |=> gnt}\n\
              }\n\
-             check_spv -create\n\
+             check_cdc -create\n\
              prove -all -bg\n\
              include sub.tcl\n\
              set f [open written.txt w]; puts $f x; close $f\n\
@@ -2353,7 +2659,7 @@ mod tests {
                 (Ignored, 3, "elaborate"),
                 (Error, 5, "assert"),
                 (Error, 5, "assert"),
-                (Unknown, 9, "check_spv"),
+                (Unknown, 9, "check_cdc"),
                 (Ignored, 10, "prove"),
                 (Unknown, 1, "blackbox_assistant"),
                 (Ignored, 12, "open"),

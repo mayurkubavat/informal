@@ -85,6 +85,15 @@ pub struct Config {
     /// H2b: instead, run Houdini when the lemmas in the frames have
     /// doubled since its last run (and number at least 100).
     pub houdini_grow: bool,
+    /// DynAMic: order MIC literal drops by per-literal drop-failure EMA
+    /// (lowest failure rate first).
+    pub dynamic_order: bool,
+    /// EXCTG: on a failed drop whose CTG join hits init/empty, try literal
+    /// replacement with a distinguishing literal of the CTG state.
+    pub exctg: bool,
+    /// Stall-aware propagation: once a frame already kept a lemma (cannot
+    /// empty this round) and 48 consecutive pushes fail, defer tail pushes.
+    pub stall_push: bool,
 }
 
 impl Default for Config {
@@ -127,6 +136,9 @@ impl Default for Config {
                 .and_then(|x| x.parse().ok())
                 .unwrap_or(0),
             houdini_grow: std::env::var("INFORMAL_IC3_HOUDINI").is_ok_and(|x| x == "grow"),
+            dynamic_order: std::env::var_os("INFORMAL_IC3_DYNAMIC").is_some(),
+            exctg: std::env::var_os("INFORMAL_IC3_EXCTG").is_some(),
+            stall_push: std::env::var_os("INFORMAL_IC3_STALL_PUSH").is_some(),
         }
     }
 }
@@ -336,6 +348,9 @@ pub struct Ic3<'g> {
     pub stats_drop_skipped: usize,
     /// Per literal: (failed drops in a row, skips since the last try).
     drop_hist: Vec<(u32, u32)>,
+    /// DynAMic per-literal drop-failure EMA in `[0.0, 1.0]`.
+    drop_ema: Vec<f64>,
+    pub stats_exctg: usize,
     pub stats_queries: usize,
     pub stats_query_time: std::time::Duration,
     pub stats_lift_time: std::time::Duration,
@@ -456,6 +471,8 @@ impl<'g> Ic3<'g> {
             stats_drop_fail_streak: 0,
             stats_drop_skipped: 0,
             drop_hist: Vec::new(),
+            drop_ema: Vec::new(),
+            stats_exctg: 0,
             stats_queries: 0,
             stats_query_time: Default::default(),
             stats_lift_time: Default::default(),
@@ -1304,7 +1321,17 @@ impl<'g> Ic3<'g> {
     /// retried; otherwise the candidate shrinks to what it shares with it.
     fn generalize(&mut self, mut cube: Cube, i: usize, depth: usize, ctx: &RunContext) -> Cube {
         let mut order = cube.clone();
-        if self.cfg.activity_order {
+        if self.cfg.dynamic_order {
+            let ema = &self.drop_ema;
+            if self.cfg.reverse_drop {
+                order.reverse();
+            }
+            order.sort_by(|&a, &b| {
+                let fa = ema.get(a as usize).copied().unwrap_or(0.25);
+                let fb = ema.get(b as usize).copied().unwrap_or(0.25);
+                fa.total_cmp(&fb)
+            });
+        } else if self.cfg.activity_order {
             // Least active first; reverse_drop breaks ties the other way.
             let act = &self.act;
             if self.cfg.reverse_drop {
@@ -1352,6 +1379,9 @@ impl<'g> Ic3<'g> {
             if self.drop_hist.len() <= l as usize {
                 self.drop_hist.resize(l as usize + 1, (0, 0));
             }
+            if self.drop_ema.len() <= l as usize {
+                self.drop_ema.resize(l as usize + 1, 0.25);
+            }
             let (streak, skips) = self.drop_hist[l as usize];
             if self.cfg.drop_skip > 0 && streak >= self.cfg.drop_skip && skips < 15 {
                 self.drop_hist[l as usize].1 += 1;
@@ -1360,14 +1390,28 @@ impl<'g> Ic3<'g> {
             }
             let mut cand = cube.clone();
             cand.remove(pos);
-            if let Some(core) = self.ctg_down(cand, i, depth, ctx) {
+            if let Some(core) = self.ctg_down(cand.clone(), i, depth, ctx) {
                 cube = core;
                 self.stats_drop_ok += 1;
                 self.drop_hist[l as usize] = (0, 0);
+                self.drop_ema[l as usize] *= 0.85;
+            } else if self.cfg.exctg && depth == 0 && cand.len() >= 2 {
+                if let Some(ex) = self.try_exctg(&cand, l, i) {
+                    cube = ex;
+                    self.stats_exctg += 1;
+                    self.drop_hist[l as usize] = (0, 0);
+                    self.drop_ema[l as usize] *= 0.9;
+                } else {
+                    self.stats_drop_fail += 1;
+                    self.stats_drop_fail_streak += (streak >= 20) as usize;
+                    self.drop_hist[l as usize] = (streak.saturating_add(1), 0);
+                    self.drop_ema[l as usize] = 0.85 * self.drop_ema[l as usize] + 0.15;
+                }
             } else {
                 self.stats_drop_fail += 1;
                 self.stats_drop_fail_streak += (streak >= 20) as usize;
                 self.drop_hist[l as usize] = (streak.saturating_add(1), 0);
+                self.drop_ema[l as usize] = 0.85 * self.drop_ema[l as usize] + 0.15;
             }
         }
         if depth == 0 {
@@ -1485,6 +1529,50 @@ impl<'g> Ic3<'g> {
         r
     }
 
+    /// EXCTG literal-replacement generalization: when `cand = cube \ {dropped}`
+    /// is not inductive at `i`, look for an existing lemma at `i` that shares
+    /// `cand` except for a single replacement literal `m` (`var(m) != var(dropped)`),
+    /// or a high-activity latch literal that separates `cand` from init and
+    /// shrinks `cand` via its UNSAT core.
+    fn try_exctg(&mut self, cand: &[Lit], dropped: Lit, i: usize) -> Option<Cube> {
+        let mut repl: Option<Lit> = None;
+        for lemma in &self.frames[i] {
+            if lemma.len() != cand.len() + 1 {
+                continue;
+            }
+            let mut diff = None;
+            let mut sub_ok = true;
+            for &ll in lemma {
+                if cand.binary_search(&ll).is_err() {
+                    if diff.is_none() && var(ll) != var(dropped) {
+                        diff = Some(ll);
+                    } else {
+                        sub_ok = false;
+                        break;
+                    }
+                }
+            }
+            if sub_ok {
+                if let Some(d) = diff {
+                    repl = Some(neg(d));
+                    break;
+                }
+            }
+        }
+        let m = repl?;
+        if cand.iter().any(|&x| var(x) == var(m)) {
+            return None;
+        }
+        let mut trial = cand.to_vec();
+        trial.push(m);
+        trial.sort_unstable();
+        if self.intersects_init(&trial) {
+            return None;
+        }
+        let core = self.relative_inductive(&trial, i, false).ok()?;
+        (core.len() < cand.len() + 1 && !self.intersects_init(&core)).then_some(core)
+    }
+
     /// Block a bad cube found at the top frame; `Err(depth)` on a real
     /// counterexample, `Ok(false)` when stopped.
     fn block(&mut self, cube: Cube, ctx: &RunContext) -> Result<bool, usize> {
@@ -1583,8 +1671,17 @@ impl<'g> Ic3<'g> {
             let mut lemmas: std::collections::VecDeque<Cube> =
                 std::mem::take(&mut self.frames[i]).into();
             let mut stay = Vec::new();
+            let mut consec_fails = 0usize;
             while let Some(c) = lemmas.pop_front() {
                 if ctx.should_stop() {
+                    stay.push(c);
+                    continue;
+                }
+                if self.cfg.stall_push
+                    && !stay.is_empty()
+                    && consec_fails >= 48
+                    && lemmas.len() > 64
+                {
                     stay.push(c);
                     continue;
                 }
@@ -1606,12 +1703,14 @@ impl<'g> Ic3<'g> {
                     ));
                 }
                 if pushed {
+                    consec_fails = 0;
                     self.level_of.insert(c.clone(), i + 1);
                     self.publish(&c, i + 1);
                     let clause: Vec<i32> = c.iter().map(|&l| -t(l)).collect();
                     self.add_frame_clause(i + 1, &clause);
                     self.frames[i + 1].push(c);
                 } else {
+                    consec_fails += 1;
                     stay.push(c);
                 }
             }

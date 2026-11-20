@@ -1276,6 +1276,11 @@ fn prop_view(p: &Property, full: bool) -> Value {
             v.insert("engine".into(), json!(engine));
             v.insert("time_ms".into(), json!(*ms as u64));
         }
+        Status::BoundedProven { engine, bound, ms } => {
+            v.insert("engine".into(), json!(engine));
+            v.insert("depth".into(), json!(bound));
+            v.insert("time_ms".into(), json!(*ms as u64));
+        }
         Status::Cex { engine, depth, ms } | Status::Covered { engine, depth, ms } => {
             v.insert("engine".into(), json!(engine));
             v.insert("time_ms".into(), json!(*ms as u64));

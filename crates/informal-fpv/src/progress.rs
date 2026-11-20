@@ -116,6 +116,11 @@ pub fn from_status(name: &str, kind: &'static str, s: &Status) -> PropProgress {
             p.engine = Some(engine.clone());
             p.ms = Some(*ms);
         }
+        Status::BoundedProven { engine, bound, ms } => {
+            p.engine = Some(engine.clone());
+            p.depth = Some(*bound);
+            p.ms = Some(*ms);
+        }
         Status::Cex { engine, depth, ms } | Status::Covered { engine, depth, ms } => {
             p.engine = Some(engine.clone());
             p.depth = *depth;
