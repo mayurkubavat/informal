@@ -101,20 +101,15 @@ pub struct Design {
     /// Design browser). One root per top instance.
     #[serde(default)]
     pub hierarchy: Vec<Scope>,
-    /// The properties written in the RTL: the concurrent ones, and the
-    /// immediate assertions that have a label of their own (empty when the
-    /// design cannot be lowered: see `not_lowered`).
+    /// The properties written in the RTL: concurrent properties and
+    /// procedural immediate assertions and covers (empty when the design
+    /// cannot be lowered: see `not_lowered`).
     #[serde(default)]
     pub properties: Vec<RtlProperty>,
     /// Why the design has no model, when it compiles and does not lower:
     /// one line for each construct the front end does not model.
     #[serde(default)]
     pub not_lowered: Vec<String>,
-    /// Immediate assertions and covers that cannot be listed as properties,
-    /// with the reason (no label, or a label used more than once). They are
-    /// not checked; saying so is the caller's job.
-    #[serde(default)]
-    pub unlisted_checks: Vec<String>,
     /// What the design holds, counted on its netlist as elaborated (before
     /// black boxes, cut points and properties): `None` when it does not
     /// lower.

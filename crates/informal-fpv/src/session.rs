@@ -911,18 +911,6 @@ impl Session {
         for t in others {
             let _ = self.copy_into(&t, &design_assumes);
         }
-        if !d.unlisted_checks.is_empty() {
-            self.log(&format!(
-                "NOT CHECKED: {} immediate assertion(s) or cover(s) in the RTL are not in the property table (give each a label of its own, `name: assert (...)`):",
-                d.unlisted_checks.len()
-            ));
-            for line in d.unlisted_checks.iter().take(20) {
-                self.log(&format!("  {line}"));
-            }
-            if d.unlisted_checks.len() > 20 {
-                self.log(&format!("  ... and {} more", d.unlisted_checks.len() - 20));
-            }
-        }
         self.elab = Some(d);
         std::fs::create_dir_all(&self.workdir)?;
         let tree = self.workdir.join("design.hierarchy.json");

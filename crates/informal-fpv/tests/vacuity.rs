@@ -168,3 +168,66 @@ fn conflict_set_leaves_out_bystanders() {
     sh.eval("assume -disable m_stop").unwrap();
     assert_eq!(sh.eval("check_assumptions -conflict").unwrap(), "");
 }
+
+#[test]
+fn immediate_precondition_covers_and_named_assumption_conflicts() {
+    let engines = informal_bmc::engines();
+    if engines.is_empty() {
+        informal_engine::tool_missing("needs the in-house engines (CaDiCaL)");
+        return;
+    }
+    let work = std::env::temp_dir().join(format!("informal-vacuity-imm-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let sv = work.join("imm_vac.sv");
+    std::fs::write(
+        &sv,
+        "module imm_vac(input logic clk, rst, req, output logic gnt);\n\
+           always_ff @(posedge clk) gnt <= rst ? 1'b0 : req;\n\
+           always_comb begin\n\
+             if (!rst && gnt) a_reachable: assert (gnt);\n\
+             if (req && !req) a_dead: assert (gnt);\n\
+             if (gnt && !gnt) a_err: $error(\"impossible\");\n\
+           end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let sh = Shell::new(Session::new(engines.clone(), work.join("run1")), Flavor::Jg);
+    sh.eval(&format!(
+        "analyze -sv12 {{{}}}; elaborate -top imm_vac; clock clk; reset -expression {{rst}}; prove -all",
+        sv.display()
+    ))
+    .unwrap();
+    assert_eq!(
+        a_le(&sh, "imm_vac.a_reachable"),
+        ("proven", Some(Vacuity::NonVacuous))
+    );
+    assert_eq!(
+        a_le(&sh, "imm_vac.a_dead"),
+        ("proven", Some(Vacuity::Vacuous))
+    );
+    // `$error` reachability check (`expr == 1'b0`) must not be downgraded to vacuous when proven unreachable.
+    assert_eq!(a_le(&sh, "imm_vac.a_err"), ("proven", None));
+
+    // Unlabelled immediate `assume` statements carry hierarchical names in conflict cores.
+    let sv_conf = work.join("imm_conf.sv");
+    std::fs::write(
+        &sv_conf,
+        "module imm_conf(input logic clk, rst, a);\n\
+           always @(posedge clk) begin\n\
+             assume (a);\n\
+             assume (!a);\n\
+           end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let sh2 = Shell::new(Session::new(engines, work.join("run2")), Flavor::Jg);
+    sh2.eval(&format!(
+        "analyze -sv12 {{{}}}; elaborate -top imm_conf; clock clk; reset -expression {{rst}}",
+        sv_conf.display()
+    ))
+    .unwrap();
+    assert_eq!(
+        sh2.eval("check_assumptions -depth 5 -conflict").unwrap(),
+        "imm_conf._assume_1 imm_conf._assume_2"
+    );
+}

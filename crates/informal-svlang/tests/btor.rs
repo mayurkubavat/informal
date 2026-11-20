@@ -39,7 +39,7 @@ fn counter_with_async_reset_and_labelled_assert() {
          endmodule\n",
     );
     assert_eq!(lines(&b, "state").len(), 1);
-    assert!(lines(&b, "bad").iter().any(|l| l.ends_with(" p_le")));
+    assert!(lines(&b, "bad").iter().any(|l| l.ends_with(" cnt.p_le")));
     // The reset acts synchronously: the next state picks the reset value.
     assert!(!lines(&b, "ite").is_empty());
 }
@@ -140,6 +140,7 @@ fn properties_in_the_rtl_come_with_their_text_and_place() {
         &f,
         "module tx_child(input logic clk, input logic a);\n\
            assert property (@(posedge clk) a |=> !a);\n\
+           always @(posedge clk) assert (a == a);\n\
          endmodule\n\
          module tx(input logic clk, rst, req, output logic gnt);\n\
            always_ff @(posedge clk) gnt <= rst ? 1'b0 : req;\n\
@@ -147,6 +148,7 @@ fn properties_in_the_rtl_come_with_their_text_and_place() {
            a_next: assert property (disable iff (rst)\n\
                                     req |=> gnt);\n\
            always @(posedge clk) if (req) c_in: cover property (gnt ##1 gnt);\n\
+           always_comb a_imm: assert #0 (gnt == gnt);\n\
            tx_child u(.clk(clk), .a(gnt));\n\
          endmodule\n",
     )
@@ -165,9 +167,11 @@ fn properties_in_the_rtl_come_with_their_text_and_place() {
     assert_eq!(
         got,
         [
-            ("tx.a_next", Some("disable iff (rst) req |=> gnt"), Some(7)),
-            ("tx.c_in", Some("gnt ##1 gnt"), Some(9)),
-            ("tx.u._assert_1", Some("@(posedge clk) a |=> !a"), Some(2)),
+            ("tx.a_next", Some("disable iff (rst) req |=> gnt"), Some(8)),
+            ("tx.c_in", Some("gnt ##1 gnt"), Some(10)),
+            ("tx.u._assert_2", Some("@(posedge clk) a |=> !a"), Some(2)),
+            ("tx.a_imm", Some("gnt == gnt"), Some(11)),
+            ("tx.u._assert_1", Some("a == a"), Some(3)),
         ]
     );
 }

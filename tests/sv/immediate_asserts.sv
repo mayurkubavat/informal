@@ -4,9 +4,9 @@
 // so `prove -all` ran nothing and said nothing.)
 //% clock clk
 //% reset -expression {!rst_n}
-//= a_le9 proven
-//= a_never9 cex
-//= c_five covered
+//= immediate_asserts.a_le9 proven
+//= immediate_asserts.a_never9 cex
+//= immediate_asserts.c_five covered
 module immediate_asserts(input logic clk, input logic rst_n, output logic [3:0] q);
   always_ff @(posedge clk) if (!rst_n) q <= 4'd0; else q <= (q == 4'd9) ? 4'd0 : q + 4'd1;
   always_ff @(posedge clk) begin

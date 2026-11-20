@@ -208,6 +208,53 @@ fn property_text(source: &str, line: u32, column: u32) -> Option<String> {
     None
 }
 
+/// The checked expression of an immediate assertion, cover or severity task
+/// starting at `line` and `column` (both from 1, the column in bytes) of
+/// `source`, collapsed onto one line.
+fn immediate_text(source: &str, line: u32, column: u32) -> Option<String> {
+    let start: usize = source
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)? as usize)
+        .map(str::len)
+        .sum::<usize>()
+        + column.checked_sub(1)? as usize;
+    let rest = source.get(start..)?;
+    let end = rest.find(';').unwrap_or(rest.len());
+    let stmt = &rest[..end];
+    if let Some(kw) = ["assert", "assume", "cover"]
+        .iter()
+        .filter_map(|k| stmt.find(k).map(|i| i + k.len()))
+        .min()
+    {
+        let open = kw + stmt[kw..].find('(')?;
+        let between = stmt[kw..open].trim();
+        if !between.is_empty() && between != "#0" && between != "final" {
+            return None;
+        }
+        let mut depth = 0usize;
+        for (i, c) in stmt[open..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let inner = &stmt[open + 1..open + i];
+                        let one_line = inner.split_whitespace().collect::<Vec<_>>().join(" ");
+                        return (!one_line.is_empty()).then_some(one_line);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
+    if stmt.trim_start().starts_with("$error") || stmt.trim_start().starts_with("$fatal") {
+        let one_line = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+        return (!one_line.is_empty()).then_some(one_line);
+    }
+    None
+}
+
 fn rtl_properties(
     nl: &mut Netlist,
     skip_cycles: u32,
@@ -261,72 +308,55 @@ fn rtl_properties(
         .collect()
 }
 
-/// Adds the labelled immediate assertions and covers of `nl` to `listed`,
-/// under the name their target has in the model (the label), and returns a
-/// line for each one that cannot be listed: it has no label, or its label
-/// is used by another check or property, so the model's targets could not
-/// be told apart. An immediate assumption is a constraint of the model
-/// whether or not it has a name, so it is neither listed nor reported.
-fn immediate_checks(nl: &Netlist, listed: &mut Vec<RtlProperty>) -> Vec<String> {
+/// Adds the immediate assertions, assumptions and covers of `nl` to `listed`
+/// under their unique full hierarchical names
+/// (`<inst>.[<scope>.]<label_or__kind_n>`). Related vacuity/witness covers
+/// (`<name>:precondition`, `<name>:witness`) are skipped.
+fn immediate_checks(nl: &Netlist, listed: &mut Vec<RtlProperty>) {
     use svlang::netlist::CheckKind;
-    let place = |c: &svlang::netlist::Check| {
+    let mut sources: std::collections::HashMap<u32, Option<String>> = Default::default();
+    let mut text_of = |loc: svlang::semantic::Loc| -> Option<String> {
+        if loc.expansion.is_some() {
+            return None;
+        }
+        let source = sources
+            .entry(loc.file)
+            .or_insert_with(|| {
+                let path = nl.files.get(loc.file as usize)?;
+                std::fs::read_to_string(path).ok()
+            })
+            .as_deref()?;
+        immediate_text(source, loc.line, loc.column)
+    };
+    for c in &nl.checks {
+        if !c.immediate {
+            continue;
+        }
+        let Some(name) = c.label.as_deref().filter(|l| !l.contains(':')) else {
+            continue;
+        };
         let file = nl
             .files
             .get(c.loc.file as usize)
             .filter(|f| !f.is_empty())
             .cloned();
-        (file, (c.loc.line > 0).then_some(c.loc.line))
-    };
-    let at = |c: &svlang::netlist::Check| match place(c) {
-        (Some(f), Some(l)) => format!("{f}:{l}"),
-        (Some(f), None) => f,
-        _ => "the design".into(),
-    };
-    // The name of an immediate check's target: its label without the scope.
-    let short = |c: &svlang::netlist::Check| {
-        c.label
-            .as_deref()
-            .map(|l| l.rsplit('.').next().unwrap_or(l).to_string())
-    };
-    let checks: Vec<&svlang::netlist::Check> = nl
-        .checks
-        .iter()
-        .filter(|c| c.immediate && c.kind != CheckKind::Assume)
-        .collect();
-    let mut uses: std::collections::HashMap<String, usize> = Default::default();
-    for name in checks.iter().filter_map(|c| short(c)) {
-        *uses.entry(name).or_default() += 1;
-    }
-    let mut unlisted = Vec::new();
-    for c in checks {
-        let what = if c.kind == CheckKind::Cover {
-            "cover"
-        } else {
-            "assert"
-        };
-        match short(c) {
-            None => unlisted.push(format!("{}: immediate {what} with no label", at(c))),
-            Some(name) if uses[&name] > 1 || listed.iter().any(|p| p.name == name) => unlisted
-                .push(format!(
-                    "{}: immediate {what} `{name}`: another check or property has that name",
-                    at(c)
-                )),
-            Some(name) => {
-                let (file, line) = place(c);
-                listed.push(RtlProperty {
-                    name,
-                    kind: what.into(),
-                    unsupported: None,
-                    error: None,
-                    liveness: false,
-                    text: None,
-                    file,
-                    line,
-                });
+        let line = (c.loc.line > 0).then_some(c.loc.line);
+        listed.push(RtlProperty {
+            name: name.to_string(),
+            kind: match c.kind {
+                CheckKind::Assert => "assert",
+                CheckKind::Assume => "assume",
+                CheckKind::Cover => "cover",
             }
-        }
+            .into(),
+            unsupported: None,
+            error: None,
+            liveness: false,
+            text: text_of(c.loc),
+            file,
+            line,
+        });
     }
-    unlisted
 }
 
 /// The value of the reset condition `text`, an expression in the top
@@ -554,8 +584,7 @@ pub fn compile(req: &Request) -> Design {
     let ok = !diagnostics.iter().any(|d| d.severity == "error");
     // A design that does not lower has no properties to list, and says why:
     // an empty table must never be mistaken for a design with nothing to prove.
-    let (mut properties, mut not_lowered, mut unlisted_checks) =
-        (Vec::new(), Vec::new(), Vec::new());
+    let (mut properties, mut not_lowered) = (Vec::new(), Vec::new());
     let mut stats = None;
     if ok {
         let config = LowerConfig {
@@ -568,7 +597,7 @@ pub fn compile(req: &Request) -> Design {
             LowerOutcome::Lowered(mut nl) => {
                 stats = Some(design_stats(&nl));
                 properties = rtl_properties(&mut nl, 0, &[], false);
-                unlisted_checks = immediate_checks(&nl, &mut properties);
+                immediate_checks(&nl, &mut properties);
             }
             LowerOutcome::Unsupported(ds) => {
                 not_lowered = ds
@@ -597,7 +626,6 @@ pub fn compile(req: &Request) -> Design {
         hierarchy: e.scope_tree().iter().map(scope).collect(),
         properties,
         not_lowered,
-        unlisted_checks,
         stats: stats.map(|mut st| {
             st.instances = e
                 .instances
@@ -761,7 +789,20 @@ fn fold(n: &ScopeNode, prefix: &str, out: &mut Scope) {
 
 #[cfg(test)]
 mod tests {
-    use super::property_text;
+    use super::{immediate_text, property_text};
+
+    #[test]
+    fn the_text_of_an_immediate_check_is_extracted() {
+        let src = "module m;\n  a_x: assert (a &&\n    b);\n  assert #0 (c == d);\n  assert final (e);\n  cover (f || g);\n  $error(\"bad\");\nendmodule\n";
+        assert_eq!(immediate_text(src, 2, 3).as_deref(), Some("a && b"));
+        assert_eq!(immediate_text(src, 4, 3).as_deref(), Some("c == d"));
+        assert_eq!(immediate_text(src, 5, 3).as_deref(), Some("e"));
+        assert_eq!(immediate_text(src, 6, 3).as_deref(), Some("f || g"));
+        assert_eq!(
+            immediate_text(src, 7, 3).as_deref(),
+            Some("$error(\"bad\")")
+        );
+    }
 
     #[test]
     fn the_text_of_a_property_is_what_its_parentheses_hold() {
