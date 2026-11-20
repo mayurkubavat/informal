@@ -114,10 +114,10 @@ passes on a different setup without saying so.
 | JasperGold | VC Formal | informal behaviour |
 | --- | --- | --- |
 | `clear -all` | (new session) | Forget design and properties |
-| `analyze -sv12 [-f F] [+define+X] [+incdir+D] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources; VHDL is an error for now |
+| `analyze -sv12 [-f F] [+define+X] [+incdir+D] [-bbox_m {M ...}] files` | `analyze -format sverilog [-vcs {...}] files` | Collect sources (and optional black-box modules); VHDL is an error for now |
 | `elaborate -top T [-parameter P V]` | `elaborate T [-vcs {-pvalue+P=V}]`, `read_file -top T -vcs {...}` | Elaborate with svlang; top guessed when omitted |
 | `elaborate ... -no_preconditions`, `-create_related_covers {precondition witness}` | — | Leave out, or ask for, precondition vacuity covers and witness covers (`<name>:witness` VCD traces) run after every prove (docs/vacuity.md) |
-| `elaborate ... -bbox_m {M ...} -bbox_i {path ...}` | `set_blackbox -designs {M ...} -cells {path ...}` | Black boxes: ports kept, contents not modelled, outputs free (see below) |
+| `elaborate ... -bbox_m {M ...} -bbox_i {path ...} [-bbox_mul W] [-bbox_a N]` | `set_blackbox -designs {M ...} -cells {path ...}` | Black boxes (with or without RTL source) and complexity auto-boxing of wide multipliers (`>= W` bits) and memories (`>= N` words); outputs are free cuts (see below) |
 | `stopat sig ...`, `stopat -clear [sig ...]`, `stopat -list` | `snip_driver sig ...` | Cut points: each signal is cut from its drivers and is free on every step (see below) |
 | `clock clk [-factor N] [-phase P]` | `create_clock clk -period N` | A clock (posedge); the first one declared is the primary clock. `-factor` and `-phase` relate several clocks (see Known gaps); `-both_edges` is accepted and not needed |
 | `reset -expression {!rst_n}` (or `-expr`) | `create_reset rst_n -sense low` | Reset held in cycle 0, released after |
@@ -140,6 +140,9 @@ passes on a different setup without saying so.
 | `visualize -violation -property P`, `visualize -cover -property P` | — | Returns the VCD that prove wrote for a CEX or a cover, and opens it with `$INFORMAL_WAVE_VIEWER` (for example `surfer` or `gtkwave`) when that is set |
 | `get_version`, `echo words` | `get_version`, `echo words` | The informal version; print a line |
 | `check_assumptions [-depth N] [-conflict]` | — | Whether the assumptions and reset allow traces of N steps; returns how many they allow, or with `-conflict` the assumptions that conflict (also run before every prove: docs/vacuity.md) |
+| `set_prove_cache [on\|off]`, `set_prove_cache_path [dir]`, `set_prove_cache_mode [read_write\|read_only\|write_only]` | `set_prove_cache ...` | Content-addressed SHA-256 proof cache of `proven` and `unreachable` verdicts across runs |
+| `check_conn -load <csv> [-task T]`, `check_conn -prove`, `check_conn -report`, `check_conn -list` | `check_conn ...` | Formal connectivity verification from OpenTitan/JasperGold `CONNECTION`+`CONDITION`+`LATENCY` CSVs into task `Connectivity` (or `-task T`) |
+| `check_cov -init [-model ...]`, `check_cov -waiver -add ...`, `check_cov -measure`, `check_cov -report [-html] [-report_file F]` | `check_cov ...` | Formal COI observability coverage, branch/toggle UNR dead-code detection, functional covers, and waivers |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |
 
@@ -400,8 +403,9 @@ last result, the ranked list of what the shell should learn next.
   out-of-range read is a free value.
 - `initial` blocks: constant assignments to whole registers give their
   starting values; anything else in them is ignored with a note.
-- Black boxes need the boxed module's source to elaborate (a module with
-  no source at all is still an error); `-bbox_mul` and `-bbox_a` (box
-  wide multipliers and arrays automatically) are ignored with a note.
+- Source-less black boxes (`-bbox_m` when the module's `.sv` source is absent)
+  infer port direction from parent signal drivers (undriven connected signals
+  become free cuts; wildcard `.*` connections on source-less stubs require a
+  module header).
 - Tasks: `prove -bg` runs in the foreground, so tasks are proved one
   after the other.

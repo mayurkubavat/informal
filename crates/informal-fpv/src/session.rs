@@ -295,8 +295,18 @@ pub struct Design {
     /// keep their ports, nothing inside them is modelled, and their outputs
     /// are free on every step.
     pub bbox: Vec<String>,
+    /// Black boxes added on `analyze -bbox_m` (persisting across `elaborate`
+    /// until `analyze -clear` or `clear`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub analyze_bbox: Vec<String>,
     /// Black boxes by instance path from the top module (`-bbox_i`).
     pub bbox_instances: Vec<String>,
+    /// Complexity auto-boxing width threshold for multipliers/dividers (`elaborate -bbox_mul`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbox_mul: Option<u32>,
+    /// Complexity auto-boxing word-count threshold for memories (`elaborate -bbox_a`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbox_a: Option<usize>,
     /// `set_lowering skip_initial_checks on`: time-zero checks of signals in
     /// `initial` blocks are left out of the model, not reported as
     /// unsupported.
@@ -370,6 +380,14 @@ pub struct Session {
     /// Cover `<name>:witness` (antecedent + consequent) for every proven
     /// assertion after a prove (`elaborate -create_related_covers {witness}`).
     pub witnesses: bool,
+    /// Content-addressed proof cache (`set_prove_cache`).
+    pub prove_cache: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prove_cache_dir: Option<PathBuf>,
+    pub prove_cache_mode: crate::cache::CacheMode,
+    /// Formal coverage & UNR state (`check_cov`).
+    #[serde(default)]
+    pub cov: crate::cov::CovState,
 }
 
 /// What the environment check found (docs/vacuity.md).
@@ -426,6 +444,10 @@ impl Session {
             environment: None,
             preconditions: true,
             witnesses: false,
+            prove_cache: false,
+            prove_cache_dir: None,
+            prove_cache_mode: crate::cache::CacheMode::default(),
+            cov: crate::cov::CovState::default(),
         }
     }
 
@@ -437,11 +459,19 @@ impl Session {
         let (stop, sink, dry_run) = (self.stop.clone(), self.sink.take(), self.dry_run);
         let certificates = self.certificates.take();
         let (depth, pre, wit) = (self.environment_depth, self.preconditions, self.witnesses);
+        let (pc, pc_dir, pc_mode) = (
+            self.prove_cache,
+            self.prove_cache_dir.take(),
+            self.prove_cache_mode,
+        );
         *self = Session::new(engines, workdir);
         self.certificates = certificates;
         self.environment_depth = depth;
         self.preconditions = pre;
         self.witnesses = wit;
+        self.prove_cache = pc;
+        self.prove_cache_dir = pc_dir;
+        self.prove_cache_mode = pc_mode;
         self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
@@ -884,6 +914,9 @@ impl Session {
             incdirs: self.design.incdirs.clone(),
             top: self.design.top.clone(),
             params: self.design.params.clone(),
+            black_box_modules: self.design.bbox.clone(),
+            bbox_mul_width: self.design.bbox_mul,
+            bbox_array_words: self.design.bbox_a,
             trace_outputs: false,
             skip_initial_checks: self.design.skip_initial_checks,
             isunknown_is_false: self.design.isunknown_is_false,
@@ -1431,6 +1464,10 @@ impl Session {
         }
     }
 
+    pub(crate) fn active_engines(&self) -> Vec<Arc<dyn Engine>> {
+        self.engines()
+    }
+
     fn engines(&self) -> Vec<Arc<dyn Engine>> {
         let picked: Vec<_> = self
             .engines
@@ -1828,6 +1865,24 @@ impl Session {
     /// Nothing is guessed: a guess would turn a typo into a free signal
     /// (D13).
     fn lower(&self, task: &str) -> Result<(String, Vec<informal_svlang::RtlProperty>), String> {
+        self.lower_opts(task, false, false)
+    }
+
+    pub(crate) fn lower_for_coverage(
+        &self,
+        task: &str,
+        branch_covers: bool,
+        toggle_covers: bool,
+    ) -> Result<(String, Vec<informal_svlang::RtlProperty>), String> {
+        self.lower_opts(task, branch_covers, toggle_covers)
+    }
+
+    fn lower_opts(
+        &self,
+        task: &str,
+        branch_covers: bool,
+        toggle_covers: bool,
+    ) -> Result<(String, Vec<informal_svlang::RtlProperty>), String> {
         let req = informal_svlang::Request {
             files: self.design.files.clone(),
             defines: self.design.defines.clone(),
@@ -1853,13 +1908,27 @@ impl Session {
                 .map(|c| (c.signal.clone(), c.factor, c.phase))
                 .collect(),
             cover_targets: true,
-            precondition_covers: self.preconditions,
-            witness_covers: self.witnesses,
+            precondition_covers: self.preconditions && !branch_covers && !toggle_covers,
+            witness_covers: self.witnesses && !branch_covers && !toggle_covers,
+            bbox_mul_width: self.design.bbox_mul,
+            bbox_array_words: self.design.bbox_a,
+            branch_covers,
+            toggle_covers,
             reset: self.reset.clone(),
             tick: self.tick_reset(),
             skip_initial_checks: self.design.skip_initial_checks,
             isunknown_is_false: self.design.isunknown_is_false,
         };
+        if let Some(w) = req.bbox_mul_width {
+            self.log(&format!(
+                "elaborate -bbox_mul {w}: variable-by-variable multipliers/dividers of width >= {w} are free cuts in this model"
+            ));
+        }
+        if let Some(n) = req.bbox_array_words {
+            self.log(&format!(
+                "elaborate -bbox_a {n}: memories of >= {n} words have free read ports in this model"
+            ));
+        }
         // What the user chose to leave out is said with every model.
         if req.skip_initial_checks {
             self.log("set_lowering skip_initial_checks is on: assertions in initial blocks that check a signal at time zero are left out of this model");
@@ -2023,6 +2092,22 @@ impl Session {
             };
             return (status, None, Vec::new(), None);
         }
+        let cache_ctx = if self.prove_cache && self.certificates.is_none() {
+            let dir = self
+                .prove_cache_dir
+                .clone()
+                .unwrap_or_else(|| self.workdir.join("prove_cache"));
+            let key = crate::cache::cache_key(kind, &text);
+            if self.prove_cache_mode.can_read() {
+                if let Some((cached_status, cached_stats)) = crate::cache::lookup(&dir, &key, kind)
+                {
+                    return (cached_status, None, Vec::new(), Some(cached_stats));
+                }
+            }
+            Some((dir, key))
+        } else {
+            None
+        };
         let req = CheckRequest {
             model: model.to_path_buf(),
             format: ModelFormat::Btor2,
@@ -2134,6 +2219,11 @@ impl Session {
         let mut stats =
             crate::stats::ProofStats::of_run(&status, &runs, o.wall_ms, winner_cert, usage);
         stats.certificate = certificate;
+        if let Some((dir, key)) = cache_ctx {
+            if self.prove_cache_mode.can_write() {
+                crate::cache::store(&dir, &key, kind, &status, Some(&stats));
+            }
+        }
         (status, trace, runs, Some(stats))
     }
 
@@ -2399,7 +2489,7 @@ fn drop_assumptions(btor: &str, drop_syms: &[String]) -> String {
 /// The model with `keep` as its only target. Fairness lines only matter to
 /// a liveness target, so they go with the others when `keep` is a `bad`
 /// (an external engine may not read them).
-fn only_target(btor: &str, keep: &str) -> String {
+pub(crate) fn only_target(btor: &str, keep: &str) -> String {
     let liveness = btor
         .lines()
         .any(|l| target_of(l) == Some(("justice", keep)));
@@ -2467,7 +2557,7 @@ pub fn qualify(task: &str, name: &str) -> String {
 
 /// A property's name as its target line in the model has it: a Btor2
 /// symbol has no white space.
-fn target_name(name: &str) -> String {
+pub(crate) fn target_name(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_whitespace() { '_' } else { c })
         .collect()

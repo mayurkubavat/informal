@@ -3,7 +3,10 @@
 //! engine portfolio, and Tcl command sets compatible with JasperGold and
 //! VC Formal scripts.
 
+pub mod cache;
 pub mod compat;
+pub mod conn;
+pub mod cov;
 pub mod progress;
 pub mod session;
 pub mod stats;

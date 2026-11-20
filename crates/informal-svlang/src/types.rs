@@ -221,7 +221,15 @@ impl Design {
             self.instances
                 .iter()
                 .filter_map(|i| i.path.strip_prefix(&prefix))
-                .filter(|n| !n.contains('.')),
+                .filter_map(|n| n.split(['.', '[']).next())
+                .filter(|n| !n.is_empty()),
+        );
+        known.extend(
+            self.signals
+                .iter()
+                .filter_map(|s| s.path.strip_prefix(&prefix))
+                .filter_map(|n| n.split(['.', '[']).next())
+                .filter(|n| !n.is_empty()),
         );
         let b = expr.as_bytes();
         let mut out = Vec::new();
@@ -333,6 +341,15 @@ pub struct Request {
     /// target `<name>:witness` of a checked attempt where the consequent
     /// holds (`elaborate -create_related_covers {witness}`).
     pub witness_covers: bool,
+    /// Model only: box variable-by-variable multipliers/dividers of width
+    /// `>= W` (`elaborate -bbox_mul W`).
+    pub bbox_mul_width: Option<u32>,
+    /// Model only: box memories with `>= N` words (`elaborate -bbox_a N`).
+    pub bbox_array_words: Option<usize>,
+    /// Model only: synthesize branch true/false covers (`check_cov`).
+    pub branch_covers: bool,
+    /// Model only: synthesize register rise/fall toggle covers (`check_cov`).
+    pub toggle_covers: bool,
 }
 
 /// How long the reset lasts in a model that drives the clocks, where one

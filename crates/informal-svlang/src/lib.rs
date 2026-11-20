@@ -41,6 +41,9 @@ fn driver(req: &Request) -> svlang::Driver {
     for f in &req.files {
         d = d.add_file(f.clone());
     }
+    if !req.black_box_modules.is_empty() {
+        d = d.black_box_modules(req.black_box_modules.clone());
+    }
     d
 }
 
@@ -403,6 +406,12 @@ fn model(
     clock_skips: &[(String, bool, u32)],
 ) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
     let mut nl = base.clone();
+    if req.branch_covers {
+        nl.add_branch_covers(skip_cycles);
+    }
+    if req.toggle_covers {
+        nl.add_toggle_covers(skip_cycles);
+    }
     let mut properties = rtl_properties(
         &mut nl,
         skip_cycles,
@@ -496,6 +505,8 @@ pub fn lower(req: &Request) -> Lowered {
         black_box_instances: req.black_box_instances.clone(),
         skip_initial_checks: req.skip_initial_checks,
         isunknown_is_false: req.isunknown_is_false,
+        bbox_mul_width: req.bbox_mul_width,
+        bbox_array_words: req.bbox_array_words,
         ..LowerConfig::default()
     };
     let base = match comp.lower_netlist(&config) {
@@ -601,13 +612,25 @@ pub fn compile(req: &Request) -> Design {
     let (mut properties, mut not_lowered) = (Vec::new(), Vec::new());
     let mut stats = None;
     if ok {
+        let mut stub_modules: Vec<String> = elab
+            .design
+            .instances
+            .iter()
+            .filter(|i| i.is_blackbox_stub)
+            .map(|i| i.definition.clone())
+            .collect();
+        stub_modules.sort();
+        stub_modules.dedup();
         let config = LowerConfig {
             top: req.top.clone(),
+            black_box_modules: stub_modules,
             skip_initial_checks: req.skip_initial_checks,
             isunknown_is_false: req.isunknown_is_false,
+            bbox_mul_width: req.bbox_mul_width,
+            bbox_array_words: req.bbox_array_words,
             ..LowerConfig::default()
         };
-        match comp.lower_netlist(&config) {
+        match svlang::netlist::lower_design(comp.trees(), &elab.design, &config) {
             LowerOutcome::Lowered(mut nl) => {
                 stats = Some(design_stats(&nl));
                 properties = rtl_properties(&mut nl, 0, &[], false, false);
