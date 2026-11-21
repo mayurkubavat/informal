@@ -125,6 +125,8 @@ reply (`tools/list`).
 | | `fv_complexity` | COI state bits, wide arithmetic hotspots, memories, and blackbox candidates (`get_fv_complexity`) | no |
 | Traces & Cone | `trace_get` | A counterexample or cover trace: values per signal and frame, chosen signals, a frame window | no |
 | | `why_cex` | Dynamic backward causal slice of a `cex` or `covered` trace from failure cycle `T` to `0` (active mux arms, controlling boolean inputs, register transitions) | no |
+| | `cex_diagnose` | Single-call CEX root-cause dossier: fuses `property_get`, `why_cex`, trimmed trace on active causal signals, primary-input vs DUT-state signal roles, RTL driver snippets, `formal_lint`, and a triage hint | no |
+| | `convergence_diagnose` | Single-call proof-convergence dossier for `undetermined`/slow properties: engine telemetry, COI counts, `fv_complexity` hotspots, active assumptions/cutpoints, and ranked tactics | no |
 | | `schematic_get` | Bounded, port-aware RTL netlist schematic subgraph in the COI of a property, annotated with active `why_cex` paths and complexity hotspots | no |
 | Workbench UI | `open_workbench` | Open or refresh the embedded MCP App (`ui://informal/workbench.html`, `text/html;profile=mcp-app`) in an IDE side pane or global view | no |
 | Prove | `prove` | Run the engines on named properties, or on one task's, with a time limit; each one's result | statuses only |
@@ -138,7 +140,8 @@ reply (`tools/list`).
 | | `check_sec` | Dual-design sequential (`SEC`, optional `latency`) and combinational keypoint (`LEC`) equivalence checking | yes |
 | | `check_csr` | Automated CSR / RAL formal verification from OpenTitan HJSON, CSV, or UVM `uvm_reg_block` `.sv` (`CSR` task) | yes |
 | | `check_protocol` | 1-command formal bus VIP SVA generator for `tlul`, `axi4lite`, and `apb` (`Protocol` task) | yes |
-| Proposals | `proposal_add` | Propose an assumption, helper assertion, cover or cut point | yes, by mode |
+| Proposals | `proposal_validate` | Zero-side-effect scratch-task soundness oracle: checks syntax, `SV-FPV-001` DUT-output assumption hygiene, environment consistency + UNSAT conflict core, 2QBF dead-end freedom, cover non-regression, vacuity, and target impact before `proposal_add` | no |
+| | `proposal_add` | Propose an assumption, helper assertion, cover or cut point | yes, by mode |
 | | `proposal_list` | Every proposal and its state | no |
 | | `proposal_undo` | Withdraw or remove proposals, one or all; results that stood on them are reset | yes |
 | Escape hatch | `tcl_eval` | Evaluate a Tcl command in the session's shell | yes, by mode |
@@ -159,6 +162,7 @@ window, never the session.
 | `gui_toggle_why_cex` | Show or hide the `Why CEX` causal slice bar and optional `slice_only` lane filter |
 | `gui_annotate_trace` | Pin or clear AI callout badges onto `(signal, frame)` waveform cells |
 | `gui_present_walkthrough` | Present, step, or dismiss an interactive multi-step CEX root-cause walkthrough bar |
+| `gui_present_cex` | Atomic single-call CEX visual presentation: switches to `cex-debug`, opens trace, enables `Why CEX`, pins callouts, and starts the walkthrough bar (auto-synthesizing steps/callouts from `why_cex` if omitted) |
 | `gui_open_schematic` | Open the interactive COI & causal schematic viewer for a property |
 | `gui_capture_view` | Render deterministic standalone SVG / snapshot of the active waveform, schematic, or window into `window.capture` |
 
@@ -168,11 +172,18 @@ proven"). In a design on both clock edges or with several clocks the
 window counts clock cycles where `trace_get` counts model steps, so a
 frame number does not carry over there.
 
+### MCP Prompts
+
+The server also advertises `prompts` (`prompts/list`, `prompts/get`) with
+live-session-hydrated verification playbooks: `triage_cex`,
+`close_undetermined`, `spec_to_sva`, and `audit_signoff`.
+
 A tool that fails answers with `isError` and
-`{"schema": "informal.error/1", "code": ..., "message": ...}`. Codes:
-`arguments`, `not_found`, `busy`, `mode`, `rejected` (the session or the
-window refused it, with its reason), `no_trace`, `path`, `no_gui`,
-`internal`.
+`{"schema": "informal.error/1", "code": ..., "message": ...}`, plus optional
+Poka-Yoke recovery fields (`hint`, `suggested_tool`, `candidates`) when
+applicable. Codes: `arguments`, `not_found`, `busy`, `mode`, `rejected`
+(the session or the window refused it, with its reason), `no_trace`,
+`path`, `no_gui`, `internal`.
 
 ### A property in a reply
 
@@ -235,7 +246,9 @@ frames come in one reply.
 - One request at a time: while a prove, a script or a Tcl command runs,
   other tools answer `busy`; `prove_status`, `prove_stop`, `session_log` and
   the protocol's cancellation and progress notifications work meanwhile.
-- No check yet that an AI-added assumption over-constrains the design or
-  makes a proof vacuous (planned).
+- Pre-proposal soundness checks (`proposal_validate`) validate assumptions,
+  helper lemmas, covers, and cut points in a scratch task before
+  `proposal_add`; `proposal_add` itself remains lightweight unless preceded
+  by `proposal_validate`.
 - The app's own Ask mode uses the tools that read (`docs/ui/ask-mode.md`);
   it does not prove or propose.

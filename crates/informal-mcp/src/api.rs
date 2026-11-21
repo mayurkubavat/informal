@@ -2,14 +2,14 @@
 //! one versioned JSON reply about the FPV session, or changes it in the
 //! way its mode allows (decision D17).
 
-use crate::{cone, vcd};
+use crate::{cone, diagnose, vcd};
 use informal_engine::Engine;
 use informal_fpv::session::glob;
 use informal_fpv::{
     detect_flavor, Flavor, Kind, Property, ProveProgress, ProveSink, Session, Shell, Status, Worker,
 };
 use serde_json::{json, Map, Value};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -59,16 +59,58 @@ pub trait Gui: Send + Sync {
 
 /// Why a tool call gave no reply. `code` is one of `arguments`, `not_found`,
 /// `busy`, `mode`, `rejected`, `no_trace`, `path`, `no_gui`, `internal`.
+/// Optional Poka-Yoke fields (`hint`, `suggested_tool`, `candidates`) guide
+/// agents directly to the right recovery step without trial-and-error loops.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiError {
     pub code: &'static str,
     pub message: String,
+    pub hint: Option<String>,
+    pub suggested_tool: Option<&'static str>,
+    pub candidates: Vec<String>,
+}
+
+impl ApiError {
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn with_tool(mut self, tool: &'static str) -> Self {
+        self.suggested_tool = Some(tool);
+        self
+    }
+
+    pub fn with_candidates(mut self, candidates: Vec<String>) -> Self {
+        self.candidates = candidates;
+        self
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut obj = Map::new();
+        obj.insert("schema".into(), json!("informal.error/1"));
+        obj.insert("code".into(), json!(self.code));
+        obj.insert("message".into(), json!(self.message));
+        if let Some(hint) = &self.hint {
+            obj.insert("hint".into(), json!(hint));
+        }
+        if let Some(tool) = self.suggested_tool {
+            obj.insert("suggested_tool".into(), json!(tool));
+        }
+        if !self.candidates.is_empty() {
+            obj.insert("candidates".into(), json!(self.candidates));
+        }
+        Value::Object(obj)
+    }
 }
 
 fn err(code: &'static str, message: impl Into<String>) -> ApiError {
     ApiError {
         code,
         message: message.into(),
+        hint: None,
+        suggested_tool: None,
+        candidates: Vec::new(),
     }
 }
 
@@ -272,13 +314,77 @@ impl Api {
     /// [`Api::begin_long`].
     pub fn is_long(tool: &str, args: &Value) -> bool {
         match tool {
-            "session_open" | "tcl_eval" => true,
+            "session_open" | "tcl_eval" | "proposal_validate" => true,
             "prove" => args.get("wait").and_then(Value::as_bool).unwrap_or(true),
             "check_cov" => args.get("action").and_then(Value::as_str) == Some("measure"),
             "check_conn" | "check_xprop" | "check_spv" | "check_sec" | "check_csr"
             | "check_protocol" => args.get("action").and_then(Value::as_str) == Some("prove"),
             _ => false,
         }
+    }
+
+    /// Lightweight live session snapshot for hydrating MCP `prompts/get`
+    /// without blocking when a long prove is running.
+    pub fn prompt_context(&self) -> Value {
+        let mut ctx = json!({
+            "mode": self.opts.mode.label(),
+            "has_gui": self.has_gui(),
+            "top": "(not elaborated)",
+            "clocks": "none",
+            "reset": "none",
+            "inputs": "(unknown)",
+            "outputs": "(unknown)",
+            "cex_properties": "none",
+            "undetermined_properties": "none",
+        });
+        if self.state.is_busy() {
+            return ctx;
+        }
+        if let Ok(live) = self.on_shell(false, |sh| {
+            let s = sh.session.borrow();
+            let top = s.design.top.as_deref().unwrap_or("(not elaborated)").to_string();
+            let clocks = if s.clocks.is_empty() {
+                "none".to_string()
+            } else {
+                s.clocks
+                    .iter()
+                    .map(|c| format!("{} ({})", c.signal, c.edge))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let reset = s.reset.clone().unwrap_or_else(|| "none".into());
+            let (ins, outs, _) = diagnose::top_ports(&s.design.hierarchy);
+            let cex: Vec<String> = s
+                .props
+                .iter()
+                .filter(|p| matches!(p.status, Status::Cex { .. }))
+                .map(|p| p.name.clone())
+                .take(12)
+                .collect();
+            let undet: Vec<String> = s
+                .props
+                .iter()
+                .filter(|p| matches!(p.status, Status::Undetermined { .. }))
+                .map(|p| p.name.clone())
+                .take(12)
+                .collect();
+            json!({
+                "top": top,
+                "clocks": clocks,
+                "reset": reset,
+                "inputs": if ins.is_empty() { "(none)".into() } else { ins.join(", ") },
+                "outputs": if outs.is_empty() { "(none)".into() } else { outs.join(", ") },
+                "cex_properties": if cex.is_empty() { "none".into() } else { cex.join(", ") },
+                "undetermined_properties": if undet.is_empty() { "none".into() } else { undet.join(", ") },
+            })
+        }) {
+            if let (Some(dst), Some(src)) = (ctx.as_object_mut(), live.as_object()) {
+                for (k, v) in src {
+                    dst.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        ctx
     }
 
     /// Reserve the shell thread for a long call, or say it is busy.
@@ -309,6 +415,8 @@ impl Api {
             "design_source" => self.design_source(args),
             "trace_get" => self.trace_get(args),
             "why_cex" => self.why_cex(args),
+            "cex_diagnose" => self.cex_diagnose(args),
+            "convergence_diagnose" => self.convergence_diagnose(args),
             "open_workbench" => self.open_workbench(args),
             "schematic_get" => self.schematic_get(args),
             "formal_lint" => self.formal_lint(args),
@@ -360,6 +468,7 @@ impl Api {
             "session_open" => self.session_open(args),
             "tcl_eval" => self.tcl_eval(args),
             "prove" => self.prove(args),
+            "proposal_validate" => self.proposal_validate(args),
             "check_cov" => self.check_cov(args, true),
             "check_conn" => self.check_conn(args, true),
             "check_xprop" => self.check_xprop(args, true),
@@ -370,7 +479,9 @@ impl Api {
             _ => Err(err("not_found", format!("no long tool named {tool}"))),
         };
         drop(long);
-        self.changed(tool);
+        if tool != "proposal_validate" {
+            self.changed(tool);
+        }
         reply
     }
 
@@ -400,7 +511,11 @@ impl Api {
             return Err(err(
                 "path",
                 format!("{path} is outside {}", self.opts.root.display()),
-            ));
+            )
+            .with_hint(format!(
+                "Pass a path below `{}` (or start informal mcp with a broader `--root`).",
+                self.opts.root.display()
+            )));
         }
         Ok(p)
     }
@@ -685,14 +800,7 @@ impl Api {
             let i = find(&s, &name)?;
             let p = &s.props[i];
             let Some(path) = &p.trace else {
-                return Err(err(
-                    "no_trace",
-                    format!(
-                        "{} has no trace: its status is {} (a trace comes with cex or covered)",
-                        p.name,
-                        p.status.word()
-                    ),
-                ));
+                return Err(no_trace_err(p));
             };
             let text = std::fs::read_to_string(path)
                 .map_err(|e| err("internal", format!("{path}: {e}")))?;
@@ -792,14 +900,7 @@ impl Api {
             let target_name = if let Ok(i) = find(&s, &name) {
                 let p = &s.props[i];
                 if p.trace.is_none() {
-                    return Err(err(
-                        "no_trace",
-                        format!(
-                            "{} has no trace: its status is {} (a trace comes with cex or covered)",
-                            p.name,
-                            p.status.word()
-                        ),
-                    ));
+                    return Err(no_trace_err(p));
                 }
                 p.name.clone()
             } else if let Some(chk) = s
@@ -853,6 +954,297 @@ impl Api {
             "active_slice_signals": rep.active_slice_signals,
             "active_signals": rep.active_signals,
             "events": events,
+        }))
+    }
+
+    /// High-signal single-call CEX dossier: fuses property status, backward
+    /// `why_cex` causal slice, trimmed trace on active signals only, primary
+    /// input vs DUT state roles, RTL driver snippets, and formal-lint hits.
+    fn cex_diagnose(&self, args: &Value) -> Reply {
+        let name = req_str(args, "name")?;
+        let window = opt_u64(args, "window")?.unwrap_or(6).min(32) as usize;
+        let max_events = opt_u64(args, "max_events")?.unwrap_or(24).min(64) as usize;
+        let ctx_lines = opt_u64(args, "source_context_lines")?.unwrap_or(4).min(12) as usize;
+
+        let (prop_clone, view, rep, vcd_text, scopes, sv_req, rst) =
+            self.on_shell(false, move |sh| {
+                let s = sh.session.borrow();
+                let i = find(&s, &name)?;
+                let p = &s.props[i];
+                let Some(path) = &p.trace else {
+                    return Err(no_trace_err(p));
+                };
+                let rep = informal_fpv::why_cex::slice_property_cex(&s, &p.name, max_events)
+                    .map_err(|e| err("internal", e))?;
+                let vcd_text = std::fs::read_to_string(path)
+                    .map_err(|e| err("internal", format!("{path}: {e}")))?;
+                let sv_req = informal_svlang::Request {
+                    files: s.design.files.clone(),
+                    defines: s.design.defines.clone(),
+                    incdirs: s.design.incdirs.clone(),
+                    top: s.design.top.clone(),
+                    params: s.design.params.clone(),
+                    black_box_modules: s.design.bbox.clone(),
+                    ..Default::default()
+                };
+                Ok((
+                    p.clone(),
+                    prop_view(p, false),
+                    rep,
+                    vcd_text,
+                    s.design.hierarchy.clone(),
+                    sv_req,
+                    s.reset.clone(),
+                ))
+            })??;
+
+        let mut signal_roles = BTreeMap::new();
+        for sig in &rep.active_signals {
+            signal_roles.insert(
+                sig.clone(),
+                diagnose::classify_signal_role(sig, &scopes).to_string(),
+            );
+        }
+
+        let trace = vcd::parse(&vcd_text).map_err(|e| err("internal", e))?;
+        let end = trace.frames.saturating_sub(1);
+        let last = rep.failure_frame.min(end);
+        let first = last.saturating_sub(window);
+        let matches_active = |vcd_sig: &str| {
+            rep.active_signals.iter().any(|a| {
+                a == vcd_sig
+                    || vcd_sig.ends_with(&format!(".{a}"))
+                    || a.ends_with(&format!(".{vcd_sig}"))
+            })
+        };
+        let mut trace_signals: Vec<Value> = trace
+            .signals
+            .iter()
+            .filter(|s| !s.name.starts_with("informal.") && matches_active(&s.name))
+            .take(24)
+            .map(|s| {
+                let role = diagnose::classify_signal_role(&s.name, &scopes);
+                json!({
+                    "name": s.name,
+                    "width": s.width,
+                    "role": role,
+                    "values": s.values[first..=last].iter().map(|b| vcd::value(b)).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        if trace_signals.is_empty() {
+            trace_signals = trace
+                .signals
+                .iter()
+                .filter(|s| !s.name.starts_with("informal."))
+                .take(12)
+                .map(|s| {
+                    let role = diagnose::classify_signal_role(&s.name, &scopes);
+                    json!({
+                        "name": s.name,
+                        "width": s.width,
+                        "role": role,
+                        "values": s.values[first..=last].iter().map(|b| vcd::value(b)).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+        }
+
+        // Prioritize DUT state/outputs first when pulling RTL driver snippets.
+        let mut driver_targets: Vec<&String> = rep.active_signals.iter().collect();
+        driver_targets.sort_by_key(|s| match signal_roles.get(*s).map(String::as_str) {
+            Some("dut_output" | "internal_state") => 0,
+            Some("primary_input") => 1,
+            _ => 2,
+        });
+        let mut driver_snippets = Vec::new();
+        for sig in driver_targets.into_iter().take(6) {
+            if let Ok(nav) = informal_svlang::assist::navigate_signal(&sv_req, sig) {
+                let refs = if !nav.drivers.is_empty() {
+                    &nav.drivers
+                } else {
+                    &nav.declarations
+                };
+                let mut entries = Vec::new();
+                for r in refs.iter().take(2) {
+                    let mut entry = json!({
+                        "file": r.file,
+                        "line": r.line,
+                        "role": r.role,
+                        "kind": r.kind,
+                    });
+                    if let Some(sn) = diagnose::read_snippet(&r.file, r.line as usize, ctx_lines) {
+                        entry["snippet"] = sn["snippet"].clone();
+                    } else {
+                        entry["snippet"] = json!(r.snippet);
+                    }
+                    entries.push(entry);
+                }
+                if !entries.is_empty() {
+                    driver_snippets.push(json!({
+                        "signal": sig,
+                        "role": signal_roles.get(sig).cloned().unwrap_or_else(|| "unknown".into()),
+                        "drivers": entries,
+                    }));
+                }
+            }
+        }
+
+        let lint_raw =
+            informal_svlang::assist::lint_formal_ready(&sv_req, rst.as_deref()).unwrap_or_default();
+        let lint_rules: Vec<String> = lint_raw.iter().map(|f| f.rule.clone()).collect();
+        let lint_findings: Vec<Value> = lint_raw
+            .into_iter()
+            .take(8)
+            .map(|f| {
+                json!({
+                    "rule": f.rule,
+                    "severity": f.severity,
+                    "file": f.file,
+                    "line": f.line,
+                    "message": f.message,
+                    "has_quick_fix": !f.fixes.is_empty(),
+                })
+            })
+            .collect();
+
+        let events: Vec<Value> = rep
+            .events
+            .iter()
+            .map(|ev| {
+                let mut o = Map::new();
+                o.insert("frame".into(), json!(ev.frame));
+                o.insert("signal".into(), json!(ev.signal));
+                o.insert("kind".into(), json!(ev.kind));
+                o.insert("width".into(), json!(ev.width));
+                o.insert("value".into(), json!(ev.value));
+                if let Some(prev) = &ev.prev_value {
+                    o.insert("prev_value".into(), json!(prev));
+                }
+                o.insert("reason".into(), json!(ev.reason));
+                Value::Object(o)
+            })
+            .collect();
+
+        let triage_hint =
+            diagnose::cex_triage_hint(&prop_clone, &rep.active_signals, &signal_roles, &lint_rules);
+
+        Ok(json!({
+            "schema": "informal.cex_diagnose/1",
+            "property": view,
+            "causal_slice": {
+                "failure_frame": rep.failure_frame,
+                "total_frames": rep.total_frames,
+                "static_cone_signals": rep.static_cone_signals,
+                "active_slice_signals": rep.active_slice_signals,
+                "active_signals": rep.active_signals,
+                "events": events,
+            },
+            "active_trace": {
+                "unit": if trace.steps { "model_step" } else { "cycle" },
+                "first": first,
+                "last": last,
+                "signals": trace_signals,
+            },
+            "signal_roles": signal_roles,
+            "driver_snippets": driver_snippets,
+            "lint_findings": lint_findings,
+            "triage_hint": triage_hint,
+        }))
+    }
+
+    /// High-signal single-call proof-convergence dossier for `undetermined` or
+    /// slow properties: engine telemetry, COI register/input counts,
+    /// `fv_complexity` hotspots, active assumptions/cutpoints, and ranked tactics.
+    fn convergence_diagnose(&self, args: &Value) -> Reply {
+        let name = req_str(args, "name")?;
+        let (prop_clone, view, model_opt, complexity, assumptions, cut_points) =
+            self.on_shell(false, move |sh| {
+                let (prop_clone, view, model_opt, assumptions, cut_points, target_name) = {
+                    let s = sh.session.borrow();
+                    let idx = find(&s, &name)?;
+                    let p = &s.props[idx];
+                    if p.kind == Kind::Assume {
+                        return Err(err(
+                            "rejected",
+                            "an assumption is not a verification target and has no convergence profile",
+                        )
+                        .with_tool("property_list")
+                        .with_hint("Call convergence_diagnose on an assert or cover property."));
+                    }
+                    let task = p.task.clone();
+                    let assumptions: Vec<String> = s
+                        .props
+                        .iter()
+                        .filter(|q| q.enabled && q.kind == Kind::Assume && q.task == task)
+                        .map(|q| q.name.clone())
+                        .collect();
+                    let cut_points = s.stopats_of(&task).to_vec();
+                    let model_opt = s.model_for(idx).ok();
+                    (
+                        p.clone(),
+                        prop_view(p, true),
+                        model_opt,
+                        assumptions,
+                        cut_points,
+                        p.name.clone(),
+                    )
+                };
+                let cmd = format!("get_fv_complexity -json {{{target_name}}}");
+                let complexity = sh
+                    .eval(&cmd)
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .unwrap_or_else(|| json!({}));
+                Ok((
+                    prop_clone,
+                    view,
+                    model_opt,
+                    complexity,
+                    assumptions,
+                    cut_points,
+                ))
+            })??;
+
+        let cone_sigs = model_opt
+            .as_deref()
+            .and_then(|m| cone::cone(m).ok())
+            .unwrap_or_default();
+        let inputs = cone_sigs
+            .iter()
+            .filter(|c| !c.helper && c.kind == "input")
+            .count();
+        let registers: Vec<Value> = cone_sigs
+            .iter()
+            .filter(|c| !c.helper && c.kind == "register")
+            .map(|c| json!({"name": c.name, "width": c.width, "distance": c.distance}))
+            .collect();
+        let reg_count = registers.len();
+        let total_signals = cone_sigs.iter().filter(|c| !c.helper).count();
+        let sample_registers: Vec<Value> = registers.into_iter().take(24).collect();
+
+        let recommendations = diagnose::convergence_recommendations(
+            &prop_clone,
+            reg_count,
+            inputs,
+            &complexity,
+            assumptions.len(),
+            cut_points.len(),
+        );
+
+        Ok(json!({
+            "schema": "informal.convergence_diagnose/1",
+            "property": view,
+            "cone": {
+                "inputs": inputs,
+                "registers": reg_count,
+                "total_signals": total_signals,
+                "sample_registers": sample_registers,
+            },
+            "complexity": complexity,
+            "assumptions_in_force": assumptions,
+            "cut_points_in_force": cut_points,
+            "recommendations": recommendations,
         }))
     }
 
@@ -1720,6 +2112,426 @@ impl Api {
 
     // ---------------------------------------------------------- proposals
 
+    /// Zero-side-effect scratch-task soundness oracle: tests a candidate
+    /// `assume`, `assert` (helper lemma), `cover`, or `cut_point` in an
+    /// isolated temporary task before calling `proposal_add`.
+    fn proposal_validate(&self, args: &Value) -> Reply {
+        static VALIDATE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let kind = req_str(args, "kind")?;
+        let name = opt_str(args, "name")?;
+        let text = match kind.as_str() {
+            "assume" | "assert" | "cover" => req_str(args, "expr")?,
+            "cut_point" => req_str(args, "signal")?,
+            _ => {
+                return Err(err(
+                    "arguments",
+                    "kind must be assume, assert, cover or cut_point",
+                )
+                .with_hint("Pass `expr` for assume/assert/cover, or `signal` for cut_point."))
+            }
+        };
+        let explicit_targets = args.get("targets").is_some() && !args["targets"].is_null();
+        let req_targets = strings(args, "targets")?;
+        let check_covers = opt_bool(args, "check_covers")?
+            .unwrap_or(matches!(kind.as_str(), "assume" | "cut_point"));
+        let check_dead_end = opt_bool(args, "check_dead_end")?.unwrap_or(kind == "assume");
+        let depth = opt_u64(args, "depth")?.unwrap_or(20).clamp(1, 100) as u32;
+        let max_s = self.opts.max_time.as_secs_f64();
+        let limit_s = opt_f64(args, "time_limit_s")?
+            .unwrap_or(15.0)
+            .clamp(1.0, max_s);
+        let limit = Duration::from_secs_f64(limit_s);
+        let seq = VALIDATE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let scratch = format!("__validate_{seq}");
+
+        self.on_shell(true, move |sh| {
+            let mut s = sh.session.borrow_mut();
+            if !s.elaborated {
+                return Err(err("rejected", "no design is elaborated")
+                    .with_tool("session_open")
+                    .with_hint("Open and elaborate a design with session_open first."));
+            }
+            let probe = Proposal {
+                id: 0,
+                kind: kind.clone(),
+                name: name.clone(),
+                text: text.clone(),
+                rationale: String::new(),
+                state: "pending".into(),
+                error: None,
+            };
+            check(&s, &probe)?;
+
+            let overconstraint_warnings = if kind == "assume" {
+                diagnose::assume_overconstraint_warnings(&text, &s.design.hierarchy)
+            } else {
+                Vec::new()
+            };
+
+            let prev_task = s.current_task.clone();
+            let prev_limit = s.time_limit;
+            let prev_env = s.environment.clone();
+            let prev_sink = s.sink.take();
+            let prev_assumed_len = s.assumed_from_assert.len();
+            s.stop.store(false, Ordering::SeqCst);
+
+            let outcome = (|| -> Reply {
+                // Resolve targets & covers in the active task before creating scratch.
+                let mut target_indices = Vec::new();
+                if explicit_targets {
+                    for tname in &req_targets {
+                        let idx = find(&s, tname)?;
+                        if s.props[idx].kind == Kind::Assume {
+                            return Err(err(
+                                "rejected",
+                                format!("target `{tname}` is an assumption, not an assert/cover"),
+                            )
+                            .with_tool("property_list"));
+                        }
+                        target_indices.push(idx);
+                    }
+                } else {
+                    target_indices = s
+                        .props
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| {
+                            p.enabled
+                                && p.task == prev_task
+                                && p.kind == Kind::Assert
+                                && matches!(
+                                    p.status,
+                                    Status::Cex { .. } | Status::Undetermined { .. }
+                                )
+                        })
+                        .map(|(i, _)| i)
+                        .take(6)
+                        .collect();
+                }
+
+                let cover_indices: Vec<usize> = if check_covers {
+                    s.props
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, p)| {
+                            p.enabled
+                                && p.task == prev_task
+                                && p.kind == Kind::Cover
+                                && !target_indices.contains(i)
+                        })
+                        .map(|(i, _)| i)
+                        .take(8)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                let assume_indices: Vec<usize> = s
+                    .props
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.enabled && p.task == prev_task && p.kind == Kind::Assume)
+                    .map(|(i, _)| i)
+                    .collect();
+
+                let target_meta: Vec<(String, String)> = target_indices
+                    .iter()
+                    .map(|&i| (s.props[i].name.clone(), s.props[i].status.word().to_string()))
+                    .collect();
+                let cover_meta: Vec<(String, String)> = cover_indices
+                    .iter()
+                    .map(|&i| (s.props[i].name.clone(), s.props[i].status.word().to_string()))
+                    .collect();
+
+                s.create_task(&scratch).map_err(|e| err("internal", e))?;
+                s.copy_stopats(&prev_task, &scratch)
+                    .map_err(|e| err("internal", e))?;
+                if !assume_indices.is_empty() {
+                    s.copy_into(&scratch, &assume_indices)
+                        .map_err(|e| err("internal", e))?;
+                }
+                let scratch_targets = if !target_indices.is_empty() {
+                    s.copy_into(&scratch, &target_indices)
+                        .map_err(|e| err("internal", e))?
+                } else {
+                    Vec::new()
+                };
+                let scratch_covers = if !cover_indices.is_empty() {
+                    s.copy_into(&scratch, &cover_indices)
+                        .map_err(|e| err("internal", e))?
+                } else {
+                    Vec::new()
+                };
+
+                s.set_task(&scratch).map_err(|e| err("internal", e))?;
+                s.time_limit = limit;
+
+                // Apply candidate in scratch task only.
+                let cand_name: Option<String> = match kind.as_str() {
+                    "cut_point" => {
+                        s.add_ai_cut_point(&text).map_err(|e| err("rejected", e))?;
+                        None
+                    }
+                    "assume" => Some(
+                        s.add_property_in(&scratch, Kind::Assume, name.clone(), &text)
+                            .map_err(|e| err("rejected", e))?,
+                    ),
+                    "cover" => Some(
+                        s.add_property_in(&scratch, Kind::Cover, name.clone(), &text)
+                            .map_err(|e| err("rejected", e))?,
+                    ),
+                    _ => Some(
+                        s.add_property_in(&scratch, Kind::Assert, name.clone(), &text)
+                            .map_err(|e| err("rejected", e))?,
+                    ),
+                };
+
+                // 1. Environment consistency + 2QBF dead-end check for assumptions.
+                let mut env_conflict = false;
+                let mut env_allowed: Option<u32> = None;
+                let mut conflict_set: Vec<String> = Vec::new();
+                let mut dead_end_val = json!({"checked": false, "found": false});
+                if kind == "assume" {
+                    if let Ok(env) = s.environment_now(depth) {
+                        env_conflict = env.conflict();
+                        env_allowed = env.allowed;
+                        conflict_set = env.conflict_set;
+                    }
+                    if !env_conflict && check_dead_end {
+                        match s.dead_end_now(depth.min(10)) {
+                            Ok(Some(de)) => {
+                                dead_end_val = json!({
+                                    "checked": true,
+                                    "found": true,
+                                    "depth": de.depth,
+                                    "trap_state": de.trap_state.iter().take(16).map(|(sig, val)| json!({"signal": sig, "value": val})).collect::<Vec<_>>(),
+                                });
+                            }
+                            Ok(None) => {
+                                dead_end_val = json!({"checked": true, "found": false});
+                            }
+                            Err(e) => {
+                                dead_end_val = json!({"checked": false, "found": false, "error": e.to_string()});
+                            }
+                        }
+                    }
+                }
+                let dead_end_found = dead_end_val["found"].as_bool().unwrap_or(false);
+
+                // 2. If candidate is an assert or cover, prove it directly first.
+                let mut candidate_result = Value::Null;
+                let mut cand_ok = true;
+                let mut cand_vacuous = false;
+                let mut cand_promoted = false;
+                if let Some(ref cname) = cand_name {
+                    if matches!(kind.as_str(), "assert" | "cover") {
+                        if let Some(cidx) = s.props.iter().position(|p| p.name == *cname) {
+                            let _ = s.prove(&[cidx]);
+                            let cp = &s.props[cidx];
+                            cand_vacuous = cp.vacuity.is_some_and(|v| v.is_vacuous());
+                            cand_ok = match kind.as_str() {
+                                "assert" => {
+                                    matches!(cp.status, Status::Proven { .. }) && !cand_vacuous
+                                }
+                                "cover" => matches!(cp.status, Status::Covered { .. }),
+                                _ => true,
+                            };
+                            candidate_result = prop_view(cp, false);
+                            // For a proven non-vacuous helper assertion, test promoting it to
+                            // see if it closes the requested/failing target assertions!
+                            if kind == "assert"
+                                && cand_ok
+                                && !scratch_targets.is_empty()
+                                && s.assume_from_assert(&scratch, &[cidx], None).is_ok()
+                            {
+                                cand_promoted = true;
+                            }
+                        }
+                    }
+                }
+
+                // 3. Prove targets & cover regression in the scratch task.
+                let should_check_impact = !env_conflict
+                    && !dead_end_found
+                    && (matches!(kind.as_str(), "assume" | "cut_point")
+                        || (kind == "assert" && cand_promoted));
+
+                let mut newly_proven = Vec::new();
+                let mut vacuous_assertions = Vec::new();
+                let mut still_failing = Vec::new();
+                let mut target_results = Vec::new();
+                let mut lost_covers = Vec::new();
+                let mut cover_results = Vec::new();
+
+                if should_check_impact {
+                    let mut prove_idxs = Vec::new();
+                    for sn in &scratch_targets {
+                        if let Some(i) = s.props.iter().position(|p| p.name == *sn) {
+                            prove_idxs.push(i);
+                        }
+                    }
+                    if matches!(kind.as_str(), "assume" | "cut_point") {
+                        for sn in &scratch_covers {
+                            if let Some(i) = s.props.iter().position(|p| p.name == *sn) {
+                                prove_idxs.push(i);
+                            }
+                        }
+                    }
+                    if !prove_idxs.is_empty() {
+                        let _ = s.prove(&prove_idxs);
+                    }
+                    for ((orig_name, orig_status), sn) in
+                        target_meta.iter().zip(scratch_targets.iter())
+                    {
+                        if let Some(p) = s.props.iter().find(|p| p.name == *sn) {
+                            let new_status = p.status.word().to_string();
+                            let vac = p.vacuity.is_some_and(|v| v.is_vacuous());
+                            if matches!(p.status, Status::Proven { .. }) {
+                                if vac {
+                                    vacuous_assertions.push(orig_name.clone());
+                                } else if orig_status != "proven" {
+                                    newly_proven.push(orig_name.clone());
+                                }
+                            } else if matches!(
+                                p.status,
+                                Status::Cex { .. } | Status::Undetermined { .. } | Status::Error { .. }
+                            ) {
+                                still_failing.push(orig_name.clone());
+                            }
+                            target_results.push(json!({
+                                "name": orig_name,
+                                "before": orig_status,
+                                "after": new_status,
+                                "vacuity": p.vacuity.map(|v| v.word()).unwrap_or("not checked"),
+                            }));
+                        }
+                    }
+                    if matches!(kind.as_str(), "assume" | "cut_point") {
+                        for ((orig_name, orig_status), sn) in
+                            cover_meta.iter().zip(scratch_covers.iter())
+                        {
+                            if let Some(p) = s.props.iter().find(|p| p.name == *sn) {
+                                let new_status = p.status.word().to_string();
+                                if matches!(p.status, Status::Unreachable { .. })
+                                    && orig_status != "unreachable"
+                                {
+                                    lost_covers.push(orig_name.clone());
+                                }
+                                cover_results.push(json!({
+                                    "name": orig_name,
+                                    "before": orig_status,
+                                    "after": new_status,
+                                }));
+                            }
+                        }
+                    }
+                }
+
+                // 4. Score verdict + Poka-Yoke next_step guidance.
+                let cand_hard_fail = match kind.as_str() {
+                    "assert" => {
+                        !cand_ok
+                            && matches!(
+                                candidate_result["status"].as_str(),
+                                Some("cex" | "error")
+                            )
+                            || cand_vacuous
+                    }
+                    "cover" => matches!(
+                        candidate_result["status"].as_str(),
+                        Some("unreachable" | "error")
+                    ),
+                    _ => false,
+                };
+                let verdict = if env_conflict
+                    || dead_end_found
+                    || !vacuous_assertions.is_empty()
+                    || !lost_covers.is_empty()
+                    || cand_hard_fail
+                {
+                    "reject"
+                } else if !overconstraint_warnings.is_empty()
+                    || (kind == "assert" && !cand_ok)
+                    || (!target_meta.is_empty() && newly_proven.is_empty() && kind != "cover")
+                {
+                    "warn"
+                } else {
+                    "pass"
+                };
+
+                let ready_to_propose = verdict != "reject";
+                let next_step = if env_conflict {
+                    format!(
+                        "REJECTED: assumption conflicts with the environment (allowed {:?}/{depth} steps; conflict_set: {:?}). Weaken or discard this assumption — do NOT call proposal_add.",
+                        env_allowed, conflict_set
+                    )
+                } else if dead_end_found {
+                    "REJECTED: 2QBF dead-end check found a trap state where no legal next input satisfies the assumption. Rewrite as a state-free or protocol-legal primary-input constraint.".into()
+                } else if !lost_covers.is_empty() {
+                    format!(
+                        "REJECTED: assumption over-constrains the design and makes cover(s) [{}] unreachable. Weaken the assumption before proposing.",
+                        lost_covers.join(", ")
+                    )
+                } else if !vacuous_assertions.is_empty() || cand_vacuous {
+                    format!(
+                        "REJECTED: vacuous proof detected (vacuous assertions: {:?}). Check antecedent reachability and environment constraints.",
+                        vacuous_assertions
+                    )
+                } else if cand_hard_fail {
+                    format!(
+                        "REJECTED: candidate `{kind}` ended as `{}` (not valid on the RTL). Refine the expression using `cex_diagnose` or `design_source`.",
+                        candidate_result["status"].as_str().unwrap_or("failed")
+                    )
+                } else if verdict == "warn" {
+                    if !overconstraint_warnings.is_empty() {
+                        "WARNING: candidate passed solver checks, but static hygiene flagged DUT output/internal signal usage in `assume`. Prefer constraining primary inputs only, or justify clearly in `proposal_add` rationale.".into()
+                    } else {
+                        "WARNING: candidate did not fail, but did not yet close the target assertions. Refine or combine with another helper lemma / abstraction before calling proposal_add.".into()
+                    }
+                } else {
+                    format!(
+                        "VALID: passed environment, dead-end, vacuity, and cover regression checks (newly_proven: {:?}). Safe to call proposal_add.",
+                        newly_proven
+                    )
+                };
+
+                Ok(json!({
+                    "schema": "informal.validate/1",
+                    "verdict": verdict,
+                    "ready_to_propose": ready_to_propose,
+                    "kind": kind,
+                    "text": text,
+                    "environment": {
+                        "checked": kind == "assume",
+                        "asked_depth": depth,
+                        "allowed_steps": env_allowed,
+                        "conflict": env_conflict,
+                        "conflict_set": conflict_set,
+                    },
+                    "dead_end": dead_end_val,
+                    "overconstraint_warnings": overconstraint_warnings,
+                    "candidate_result": candidate_result,
+                    "newly_proven": newly_proven,
+                    "vacuous_assertions": vacuous_assertions,
+                    "lost_covers": lost_covers,
+                    "still_failing": still_failing,
+                    "target_results": target_results,
+                    "cover_results": cover_results,
+                    "next_step": next_step,
+                }))
+            })();
+
+            // Unconditionally clean up scratch task & restore session state.
+            let _ = s.set_task(&prev_task);
+            let _ = s.delete_task(&scratch);
+            s.time_limit = prev_limit;
+            s.environment = prev_env;
+            s.sink = prev_sink;
+            s.assumed_from_assert.truncate(prev_assumed_len);
+            outcome
+        })?
+    }
+
     fn proposal_add(&self, args: &Value) -> Reply {
         self.changing()?;
         let kind = req_str(args, "kind")?;
@@ -1752,6 +2564,10 @@ impl Api {
             Mode::ReadOnly => Err(err(
                 "mode",
                 "the interface is read-only: nothing can be added or changed",
+            )
+            .with_tool("proposal_validate")
+            .with_hint(
+                "Read-only servers still support cex_diagnose, convergence_diagnose, and zero-side-effect proposal_validate.",
             )),
             _ => Ok(()),
         }
@@ -1941,8 +2757,13 @@ impl Api {
                 "no_gui",
                 "no window is attached: these tools work on a desktop app's session",
             )
+            .with_tool("open_workbench")
+            .with_hint(
+                "Call open_workbench for the embedded MCP App, or launch with `informal mcp --connect` while InFormal.app is running.",
+            )
         })?;
         let action = match tool {
+            "gui_present_cex" => Some(self.gui_present_cex_action(args)?),
             "gui_state" => None,
             "gui_select_property" => {
                 Some(json!({"action": "select_property", "name": req_str(args, "name")?}))
@@ -2024,6 +2845,114 @@ impl Api {
         Ok(reply)
     }
 
+    /// Build the atomic `present_cex` window payload, auto-synthesizing
+    /// walkthrough steps and waveform callouts from `why_cex` when omitted.
+    fn gui_present_cex_action(&self, args: &Value) -> Result<Value, ApiError> {
+        let name = req_str(args, "name")?;
+        let layout_preset = opt_str(args, "layout_preset")?.unwrap_or_else(|| "cex-debug".into());
+        let slice_only = opt_bool(args, "slice_only")?.unwrap_or(false);
+        let capture = opt_bool(args, "capture")?.unwrap_or(false);
+        let title_arg = opt_str(args, "title")?;
+        let steps_arg = args.get("steps").filter(|v| v.is_array()).cloned();
+        let anns_arg = args.get("annotations").filter(|v| v.is_array()).cloned();
+
+        let (prop_name, top_file, why_opt) = self.on_shell(false, move |sh| {
+            let s = sh.session.borrow();
+            let idx = find(&s, &name)?;
+            let p = &s.props[idx];
+            if p.trace.is_none() {
+                return Err(no_trace_err(p));
+            }
+            let top_file = s
+                .design
+                .files
+                .iter()
+                .find(|f| f.ends_with(".sv") || f.ends_with(".svh") || f.ends_with(".v"))
+                .or_else(|| s.design.files.first())
+                .cloned();
+            let why = informal_fpv::why_cex::slice_property_cex(&s, &p.name, 12).ok();
+            Ok((p.name.clone(), top_file, why))
+        })??;
+
+        let title = title_arg.unwrap_or_else(|| format!("Why {prop_name} fails"));
+        let steps = match steps_arg {
+            Some(s) => s,
+            None => match &why_opt {
+                Some(rep) if !rep.events.is_empty() => {
+                    let n = rep.events.len();
+                    let list: Vec<Value> = rep
+                        .events
+                        .iter()
+                        .take(6)
+                        .enumerate()
+                        .map(|(i, ev)| {
+                            let label = if i + 1 == n.min(6) {
+                                format!("Failure @C{}", ev.frame)
+                            } else {
+                                format!("Step {} @C{}", i + 1, ev.frame)
+                            };
+                            let val_txt = match &ev.prev_value {
+                                Some(prev) => format!("{prev} -> {}", ev.value),
+                                None => ev.value.clone(),
+                            };
+                            let mut st = json!({
+                                "label": label,
+                                "note": format!("{} = {} ({})", ev.signal, val_txt, ev.reason.replace('_', " ")),
+                                "property": prop_name,
+                                "frame": ev.frame,
+                                "signals": [ev.signal],
+                            });
+                            if let Some(ref f) = top_file {
+                                st["file"] = json!(f);
+                            }
+                            st
+                        })
+                        .collect();
+                    Value::Array(list)
+                }
+                _ => json!([]),
+            },
+        };
+        let annotations = match anns_arg {
+            Some(a) => a,
+            None => match &why_opt {
+                Some(rep) => {
+                    let list: Vec<Value> = rep
+                        .events
+                        .iter()
+                        .take(4)
+                        .enumerate()
+                        .map(|(i, ev)| {
+                            let is_fail = ev.frame == rep.failure_frame;
+                            json!({
+                                "frame": ev.frame,
+                                "signal": ev.signal,
+                                "label": if is_fail { format!("fail: {}", ev.value) } else { format!("cause #{}: {}", i + 1, ev.value) },
+                                "tone": if is_fail { "danger" } else { "accent" },
+                            })
+                        })
+                        .collect();
+                    Value::Array(list)
+                }
+                None => json!([]),
+            },
+        };
+        let frame =
+            opt_u64(args, "frame")?.or_else(|| why_opt.as_ref().map(|r| r.failure_frame as u64));
+
+        Ok(json!({
+            "action": "present_cex",
+            "name": prop_name,
+            "frame": frame,
+            "layout_preset": layout_preset,
+            "slice_only": slice_only,
+            "title": title,
+            "steps": steps,
+            "annotations": annotations,
+            "capture": capture,
+        }))
+    }
+
     // ---------------------------------------------------------------- tcl
 
     fn tcl_eval(&self, args: &Value) -> Reply {
@@ -2061,6 +2990,33 @@ fn busy() -> ApiError {
         "busy",
         "a prove, a script or a Tcl command is running: wait for it, ask prove_status, or prove_stop",
     )
+    .with_tool("prove_status")
+    .with_hint("Poll prove_status until idle, or call prove_stop to cancel the active run.")
+}
+
+fn no_trace_err(p: &Property) -> ApiError {
+    let base = err(
+        "no_trace",
+        format!(
+            "{} has no trace: its status is {} (a trace comes with cex or covered)",
+            p.name,
+            p.status.word()
+        ),
+    );
+    match &p.status {
+        Status::Unprocessed => base
+            .with_tool("prove")
+            .with_hint("Run prove on this property first; only cex or covered results generate a trace."),
+        Status::Undetermined { .. } => base
+            .with_tool("convergence_diagnose")
+            .with_hint("This property did not converge; call convergence_diagnose to inspect complexity hotspots and abstraction/lemma options."),
+        Status::Proven { .. } | Status::BoundedProven { .. } | Status::Unreachable { .. } => base
+            .with_tool("property_get")
+            .with_hint("This property is proved (no counterexample trace exists); use property_get for proof stats and vacuity."),
+        _ => base
+            .with_tool("property_get")
+            .with_hint("Inspect property_get for status details."),
+    }
 }
 
 /// What applying `p` would reject, without changing the session.
@@ -2069,13 +3025,36 @@ fn check(s: &Session, p: &Proposal) -> Result<(), ApiError> {
         "command" => Ok(()),
         "cut_point" => match s.cut_point(&p.text) {
             Ok(cut) if s.stopats_of(&s.current_task).contains(&cut) => {
-                Err(format!("`{cut}` is already a cut point"))
+                Err(err("rejected", format!("`{cut}` is already a cut point"))
+                    .with_tool("session_summary"))
             }
-            r => r.map(|_| ()),
+            Ok(_) => Ok(()),
+            Err(msg) => {
+                let sigs = diagnose::all_signal_paths(&s.design.hierarchy);
+                let cands = diagnose::closest_matches(&p.text, sigs.iter().map(String::as_str), 3);
+                Err(err("rejected", msg)
+                    .with_tool("design_hierarchy")
+                    .with_hint("Use a signal name from design_hierarchy or property_cone.")
+                    .with_candidates(cands))
+            }
         },
-        _ => s.check_property(p.name.as_deref(), &p.text),
+        _ => s.check_property(p.name.as_deref(), &p.text).map_err(|msg| {
+            let sigs = diagnose::all_signal_paths(&s.design.hierarchy);
+            let mut cands = Vec::new();
+            for id in diagnose::expr_identifiers(&p.text) {
+                for m in diagnose::closest_matches(&id, sigs.iter().map(String::as_str), 2) {
+                    if !cands.contains(&m) {
+                        cands.push(m);
+                    }
+                }
+            }
+            cands.truncate(4);
+            err("rejected", msg)
+                .with_tool("design_hierarchy")
+                .with_hint("Check signal names against design_hierarchy and SVA operator syntax.")
+                .with_candidates(cands)
+        }),
     }
-    .map_err(|e| err("rejected", e))
 }
 
 /// Make the change, tagged AI-added.
@@ -2136,10 +3115,19 @@ fn setup_script(files: &[PathBuf], args: &Value) -> Result<String, ApiError> {
 }
 
 fn find(s: &Session, name: &str) -> Result<usize, ApiError> {
-    s.props
-        .iter()
-        .position(|p| p.name == name)
-        .ok_or_else(|| err("not_found", format!("no property named {name}")))
+    s.props.iter().position(|p| p.name == name).ok_or_else(|| {
+        let cands = diagnose::closest_matches(
+            name,
+            s.props.iter().map(|p| p.name.as_str()),
+            3,
+        );
+        err("not_found", format!("no property named {name}"))
+            .with_tool("property_list")
+            .with_hint(
+                "Call property_list to see valid property names (non-embedded tasks use `task::name`).",
+            )
+            .with_candidates(cands)
+    })
 }
 
 fn origin_of(p: &Property) -> &'static str {

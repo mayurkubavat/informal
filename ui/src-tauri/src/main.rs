@@ -783,6 +783,9 @@ async fn workbench_tool(
         "signal_nav",
         "fv_complexity",
         "why_cex",
+        "cex_diagnose",
+        "convergence_diagnose",
+        "proposal_validate",
         "open_workbench",
     ];
     if !ALLOWED.contains(&tool.as_str()) {

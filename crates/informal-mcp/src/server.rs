@@ -2,7 +2,7 @@
 //! answered from the tools in [`crate::api`]. The transport is any reader
 //! and writer; `informal mcp` uses standard input and output.
 
-use crate::api::{Api, ApiError, Reply};
+use crate::api::{Api, Reply};
 use crate::tools;
 use informal_fpv::{ProgressKind, ProveProgress};
 use serde_json::{json, Value};
@@ -23,14 +23,16 @@ fn read_workbench_html() -> String {
     WORKBENCH_HTML.to_string()
 }
 
-const INSTRUCTIONS: &str = "InFormal is a formal property verification tool for digital designs. \
-These tools read and drive one verification session: open a design with session_open, list its \
-properties, read a failing property's trace with trace_get, read the source with design_source, \
-and run the engines with prove. Every reply is JSON with a `schema` field. Only a prove gives a \
-verdict: what you propose (proposal_add) is tagged AI-added, waits for a person unless the server \
-runs in automatic mode, and a proof found under an AI-added assumption stands on that assumption \
-(`under_ai`). An assumption that is too strong makes proofs meaningless, so propose the weakest \
-one that describes a legal environment.";
+const INSTRUCTIONS: &str = "InFormal is an IEEE 1800 SystemVerilog formal property verification tool. \
+Workflow: open a design with `session_open` (run `formal_lint` early for SV-FPV-001..005 hygiene), \
+run `prove` to settle properties, call `cex_diagnose` first on any `cex` (single-call causal slice + \
+active trace + signal roles + RTL drivers), and call `convergence_diagnose` first on any `undetermined` \
+property. Decision D17: only a `prove` verdict establishes truth; NEVER mask an RTL bug or constrain \
+DUT outputs/internal state inside an `assume`. Always call `proposal_validate` (zero-side-effect scratch \
+task checking environment consistency, 2QBF dead-end freedom, cover non-regression, vacuity, and target \
+impact) BEFORE `proposal_add`. On a desktop window, prefer `gui_present_cex` for an atomic visual \
+walkthrough. Use MCP `prompts/list` for hydrated playbooks (`triage_cex`, `close_undetermined`, \
+`spec_to_sva`, `audit_signoff`).";
 
 type Out = Arc<dyn Fn(&Value) + Send + Sync>;
 
@@ -93,6 +95,7 @@ impl Server {
                         "capabilities": {
                             "tools": {"listChanged": false},
                             "resources": {"listChanged": false},
+                            "prompts": {"listChanged": false},
                         },
                         "serverInfo": {
                             "name": "informal",
@@ -166,6 +169,16 @@ impl Server {
                     }),
                 ));
             }
+            "prompts/list" => (self.out)(&result(id, crate::prompts::list())),
+            "prompts/get" => {
+                let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                let ctx = self.api.prompt_context();
+                match crate::prompts::get(name, &args, &ctx) {
+                    Ok(v) => (self.out)(&result(id, v)),
+                    Err(msg) => (self.out)(&error(id, -32602, &msg)),
+                }
+            }
             "tools/call" => self.call(id, &params),
             _ => (self.out)(&error(id, -32601, &format!("no method {method}"))),
         }
@@ -174,11 +187,15 @@ impl Server {
     fn call(&self, id: Value, params: &Value) {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
-        if !tools::for_mode(self.api.mode(), self.api.has_gui())
-            .iter()
-            .any(|t| t.name == name)
-        {
-            return (self.out)(&error(id, -32602, &format!("unknown tool: {name}")));
+        let available = tools::for_mode(self.api.mode(), self.api.has_gui());
+        if !available.iter().any(|t| t.name == name) {
+            let cands = crate::diagnose::closest_matches(name, available.iter().map(|t| t.name), 3);
+            let msg = if cands.is_empty() {
+                format!("unknown tool: {name}")
+            } else {
+                format!("unknown tool: {name} (did you mean: {}?)", cands.join(", "))
+            };
+            return (self.out)(&error(id, -32602, &msg));
         }
         if !Api::is_long(name, &args) {
             return (self.out)(&result(id, tool_result(self.api.call(name, &args))));
@@ -245,9 +262,9 @@ fn tool_result(reply: Reply) -> Value {
             "structuredContent": v,
             "isError": false,
         }),
-        Err(ApiError { code, message }) => {
-            let e = json!({"schema": "informal.error/1", "code": code, "message": message});
-            json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true})
+        Err(e) => {
+            let v = e.to_json();
+            json!({"content": [{"type": "text", "text": v.to_string()}], "isError": true})
         }
     }
 }

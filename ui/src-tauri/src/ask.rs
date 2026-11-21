@@ -21,6 +21,8 @@ pub const TOOLS: &[&str] = &[
     "design_source",
     "trace_get",
     "why_cex",
+    "cex_diagnose",
+    "convergence_diagnose",
     "schematic_get",
     "formal_lint",
     "signal_nav",
@@ -30,7 +32,7 @@ pub const TOOLS: &[&str] = &[
 ];
 
 /// Added to the system prompt when the model has the tools.
-pub const TOOLS_NOTE: &str = "You can inspect failing traces (trace_get), dynamic backward causal root-cause slices (why_cex), RTL cone schematics (schematic_get), formal-readiness lint (formal_lint), signal drivers/loads (signal_nav), complexity hotspots (fv_complexity), design source (design_source), and what the user sees (gui_state). Look before you explain a failure; say what the values show.";
+pub const TOOLS_NOTE: &str = "Prefer `cex_diagnose` first for any failing (`cex`) or `covered` property (1-call causal slice + trimmed active trace + input/output signal roles + RTL drivers + lint), and `convergence_diagnose` first for any `undetermined` property (engine bounds + complexity hotspots + convergence tactics). You also have `trace_get`, `why_cex`, `schematic_get`, `formal_lint`, `signal_nav`, `fv_complexity`, `design_source`, and `gui_state`. Look before you explain a failure; cite exact cycles and values; never suggest masking an RTL bug with an `assume` on DUT outputs.";
 
 /// [`TOOLS`] as the model is given them, from the AI interface's own
 /// definitions.
@@ -57,7 +59,7 @@ impl ToolHost for Host {
         }
         match self.0.call(name, arguments) {
             Ok(reply) => Ok(reply.to_string()),
-            Err(e) => Err(serde_json::json!({"code": e.code, "message": e.message}).to_string()),
+            Err(e) => Err(e.to_json().to_string()),
         }
     }
 }

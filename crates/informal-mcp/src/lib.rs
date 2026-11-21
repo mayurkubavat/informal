@@ -18,6 +18,8 @@
 
 pub mod api;
 pub mod cone;
+pub mod diagnose;
+pub mod prompts;
 pub mod server;
 pub mod socket;
 pub mod tools;

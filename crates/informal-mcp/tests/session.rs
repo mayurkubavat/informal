@@ -552,7 +552,7 @@ fn window_tools_need_a_window_and_drive_it() {
     api.set_gui(window.clone());
     assert_eq!(
         names(&api).iter().filter(|n| n.starts_with("gui_")).count(),
-        11
+        12
     );
     golden(
         "tools_gui",
@@ -769,7 +769,7 @@ fn an_agent_finds_the_failing_assertion_and_proposes_a_fix() {
     let e = c.rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(e["error"]["code"], -32602);
     c.server
-        .handle(r#"{"jsonrpc":"2.0","id":"y","method":"prompts/list"}"#);
+        .handle(r#"{"jsonrpc":"2.0","id":"y","method":"unknown/method"}"#);
     assert_eq!(
         c.rx.recv_timeout(Duration::from_secs(5)).unwrap()["error"]["code"],
         -32601
@@ -884,4 +884,198 @@ fn mcp_why_cex_and_formal_app_tools_conform_to_schemas() {
     let sec_done = call(&api, "check_sec", json!({"action": "prove"}));
     assert_eq!(sec_done["schema"], "informal.sec/1");
     assert_eq!(sec_done["checks"][0]["status"], "proven");
+}
+
+#[test]
+fn slice1_aci_diagnose_proposal_validate_poka_yoke_and_prompts() {
+    let Some(api) = api(Mode::Propose, "slice1") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/counter/counter.jg.tcl"}),
+    );
+    call(&api, "prove", json!({}));
+
+    // 1. Poka-Yoke errors: typo property name yields fuzzy candidate + suggested_tool + hint.
+    let typo = api
+        .call("property_get", &json!({"name": "a_nevr9"}))
+        .unwrap_err();
+    assert_eq!(typo.code, "not_found");
+    assert_eq!(typo.suggested_tool, Some("property_list"));
+    assert!(typo.hint.is_some());
+    assert!(typo.candidates.iter().any(|c| c == "a_never9"));
+
+    let no_trace = api
+        .call("cex_diagnose", &json!({"name": "a_max"}))
+        .unwrap_err();
+    assert_eq!(no_trace.code, "no_trace");
+    assert_eq!(no_trace.suggested_tool, Some("property_get"));
+    assert!(no_trace.hint.is_some());
+
+    // 2. Single-call `cex_diagnose`: causal slice + trimmed active trace + signal roles + drivers + triage_hint.
+    let diag = call(&api, "cex_diagnose", json!({"name": "a_never9"}));
+    assert_eq!(diag["schema"], "informal.cex_diagnose/1");
+    assert_eq!(diag["property"]["name"], "a_never9");
+    assert_eq!(diag["property"]["status"], "cex");
+    assert!(!diag["causal_slice"]["events"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!diag["active_trace"]["signals"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!diag["driver_snippets"].as_array().unwrap().is_empty());
+    assert!(!diag["triage_hint"].as_str().unwrap().is_empty());
+    let roles = diag["signal_roles"].as_object().unwrap();
+    assert!(roles
+        .values()
+        .any(|v| v == "primary_input" || v == "dut_output"));
+
+    // 3. Single-call `convergence_diagnose`: cone + complexity + ranked recommendations.
+    let conv = call(&api, "convergence_diagnose", json!({"name": "a_max"}));
+    assert_eq!(conv["schema"], "informal.convergence_diagnose/1");
+    assert!(!conv["recommendations"].as_array().unwrap().is_empty());
+
+    // 4. `proposal_validate`: zero-side-effect scratch-task soundness oracle.
+    let summary_before = call(&api, "session_summary", json!({}));
+    let props_before = call(&api, "property_list", json!({}));
+
+    // 4a. Over-constraining assumption (`!en`) kills reachable cover `c_done` -> REJECT.
+    let killed = call(
+        &api,
+        "proposal_validate",
+        json!({"kind": "assume", "expr": "!en", "targets": ["a_never9"], "check_covers": true}),
+    );
+    assert_eq!(killed["schema"], "informal.validate/1");
+    assert_eq!(killed["verdict"], "reject");
+    assert_eq!(killed["ready_to_propose"], false);
+    assert!(killed["lost_covers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "c_done"));
+
+    // 4b. Contradictory assumption (`en && !en`) -> environment conflict -> REJECT.
+    let conflict = call(
+        &api,
+        "proposal_validate",
+        json!({"kind": "assume", "expr": "en && !en", "check_covers": false}),
+    );
+    assert_eq!(conflict["verdict"], "reject");
+    assert_eq!(conflict["environment"]["conflict"], true);
+
+    // 4c. DUT-output constraint in `assume` -> SV-FPV-001 static overconstraint warning.
+    let out_warn = call(
+        &api,
+        "proposal_validate",
+        json!({"kind": "assume", "expr": "q <= 4'd8", "targets": ["a_never9"], "check_covers": false, "check_dead_end": false}),
+    );
+    assert!(out_warn["overconstraint_warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains("SV-FPV-001")));
+
+    // 4d. Sound helper assertion (`q <= 4'd9`) -> PASS.
+    let good_lemma = call(
+        &api,
+        "proposal_validate",
+        json!({"kind": "assert", "name": "h_q_bound", "expr": "q <= 4'd9", "targets": []}),
+    );
+    assert_eq!(good_lemma["verdict"], "pass");
+    assert_eq!(good_lemma["ready_to_propose"], true);
+    assert_eq!(good_lemma["candidate_result"]["status"], "proven");
+
+    // 4e. False assertion (`q != 4'd9`) -> REJECT.
+    let bad_lemma = call(
+        &api,
+        "proposal_validate",
+        json!({"kind": "assert", "name": "h_false", "expr": "q != 4'd9", "targets": []}),
+    );
+    assert_eq!(bad_lemma["verdict"], "reject");
+    assert_eq!(bad_lemma["candidate_result"]["status"], "cex");
+
+    // 4f. Verify ZERO mutation to the real session after all 5 scratch validations!
+    assert_eq!(call(&api, "session_summary", json!({})), summary_before);
+    assert_eq!(call(&api, "property_list", json!({})), props_before);
+
+    // 5. MCP `prompts/list`, hydrated `prompts/get`, and unknown-tool fuzzy suggestion.
+    let (tx, rx) = mpsc::channel::<Value>();
+    let server = Server::new(api.clone(), move |msg| {
+        let _ = tx.send(msg.clone());
+    });
+    server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#);
+    let init = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(init["result"]["capabilities"]["prompts"].is_object());
+
+    server.handle(r#"{"jsonrpc":"2.0","id":2,"method":"prompts/list"}"#);
+    let plist = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let pnames: Vec<&str> = plist["result"]["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["name"].as_str())
+        .collect();
+    assert!(pnames.contains(&"triage_cex"));
+    assert!(pnames.contains(&"close_undetermined"));
+    assert!(pnames.contains(&"spec_to_sva"));
+    assert!(pnames.contains(&"audit_signoff"));
+
+    server.handle(
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "prompts/get",
+            "params": {"name": "spec_to_sva", "arguments": {"requirement": "q never exceeds 9"}}
+        })
+        .to_string(),
+    );
+    let pget = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let ptxt = pget["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(ptxt.contains("counter"));
+    assert!(ptxt.contains("en"));
+    assert!(ptxt.contains("q[3:0]"));
+
+    // Unknown tool suggestion
+    server.handle(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"cex_diagnoze","arguments":{}}}"#);
+    let unk = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(unk["error"]["code"], -32602);
+    assert!(unk["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("cex_diagnose"));
+
+    // 6. `gui_present_cex` dispatches atomic `present_cex` with auto-synthesized steps & annotations.
+    struct RecordingGui(std::sync::Mutex<Vec<Value>>);
+    impl informal_mcp::Gui for RecordingGui {
+        fn state(&self) -> Result<Value, String> {
+            Ok(json!({"selected_property": "a_never9", "view": "trace"}))
+        }
+        fn act(&self, action: &Value) -> Result<Value, String> {
+            self.0.lock().unwrap().push(action.clone());
+            Ok(
+                json!({"selected_property": "a_never9", "view": "trace", "layout_preset": "cex-debug"}),
+            )
+        }
+    }
+    let rec = Arc::new(RecordingGui(std::sync::Mutex::new(Vec::new())));
+    api.set_gui(rec.clone());
+    let presented = call(
+        &api,
+        "gui_present_cex",
+        json!({"name": "a_never9", "slice_only": true}),
+    );
+    assert_eq!(presented["done"], "present_cex");
+    let acts = rec.0.lock().unwrap();
+    assert_eq!(acts.len(), 1);
+    assert_eq!(acts[0]["action"], "present_cex");
+    assert_eq!(acts[0]["layout_preset"], "cex-debug");
+    assert_eq!(acts[0]["slice_only"], true);
+    assert!(!acts[0]["steps"].as_array().unwrap().is_empty());
+    assert!(!acts[0]["annotations"].as_array().unwrap().is_empty());
 }

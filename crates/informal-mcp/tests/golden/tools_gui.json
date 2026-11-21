@@ -1593,6 +1593,190 @@
     }
   },
   {
+    "description": "Preferred single-call desktop visual tour for a `cex` or `covered` property: switches to `cex-debug` (or chosen layout preset), opens the trace at `frame`, activates the `Why CEX` causal slice, pins AI callout badges, and launches the interactive walkthrough bar. Auto-synthesizes steps and callouts from `why_cex` when omitted.",
+    "input": {
+      "properties": {
+        "annotations": {
+          "description": "Optional custom waveform callout badges (auto-generated from why_cex if omitted)",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "capture": {
+          "description": "Also capture a standalone trace SVG into window.capture (default: false)",
+          "type": "boolean"
+        },
+        "frame": {
+          "description": "Optional initial cursor frame (default: failure_frame)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "layout_preset": {
+          "description": "Workspace layout preset (default: cex-debug)",
+          "enum": [
+            "triage",
+            "cex-debug",
+            "signoff",
+            "split"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Property name (status cex or covered)",
+          "type": "string"
+        },
+        "slice_only": {
+          "description": "Filter waveform lanes to active causal signals only (default: false)",
+          "type": "boolean"
+        },
+        "steps": {
+          "description": "Optional custom walkthrough steps (auto-generated from why_cex if omitted)",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Optional walkthrough title (default: Why <name> fails)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "gui_present_cex",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace",
+                "schematic",
+                "apps"
+              ],
+              "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "Render a standalone SVG of the open waveform or schematic (including Why CEX highlights and AI callout badges) into `window.capture` for visual verification or Markdown reports.",
     "input": {
       "properties": {

@@ -1478,8 +1478,176 @@
     }
   },
   {
+    "changes": false,
+    "description": "Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SV-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.",
+    "input": {
+      "properties": {
+        "check_covers": {
+          "description": "Re-check existing covers to detect over-constraint (default: true for assume/cut_point)",
+          "type": "boolean"
+        },
+        "check_dead_end": {
+          "description": "Run 2QBF dead-end trap-state detection on assumptions (default: true for assume)",
+          "type": "boolean"
+        },
+        "depth": 0,
+        "expr": {
+          "description": "Property expression (for assume, assert, or cover)",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "assume",
+            "assert",
+            "cover",
+            "cut_point"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional property name",
+          "type": "string"
+        },
+        "signal": {
+          "description": "Signal path to cut (for cut_point)",
+          "type": "string"
+        },
+        "targets": {
+          "description": "Optional target assertions to test impact on (default: all cex/undetermined assertions in current task)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "time_limit_s": {
+          "description": "Per-property time limit in seconds (default: 15)",
+          "minimum": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "name": "proposal_validate",
+    "output": {
+      "properties": {
+        "candidate_result": {
+          "description": "Prove result of candidate assert/cover itself",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "cover_results": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "dead_end": {
+          "type": "object"
+        },
+        "environment": {
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "assume",
+            "assert",
+            "cover",
+            "cut_point"
+          ],
+          "type": "string"
+        },
+        "lost_covers": {
+          "description": "Existing covers that became unreachable (over-constraint)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "newly_proven": {
+          "description": "Target assertions that became proven and non-vacuous",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "next_step": {
+          "description": "Actionable guidance for the next tool call",
+          "type": "string"
+        },
+        "overconstraint_warnings": {
+          "description": "Static SV-FPV-001 / internal-signal warnings",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ready_to_propose": {
+          "description": "True when verdict is pass or warn",
+          "type": "boolean"
+        },
+        "schema": {
+          "const": "informal.validate/1",
+          "type": "string"
+        },
+        "still_failing": {
+          "description": "Target assertions still cex, undetermined, or error",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target_results": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "text": {
+          "type": "string"
+        },
+        "vacuous_assertions": {
+          "description": "Target assertions whose proof became vacuous",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "verdict": {
+          "description": "pass = sound & effective; warn = check warnings/coverage; reject = unsafe or failed",
+          "enum": [
+            "pass",
+            "warn",
+            "reject"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "verdict",
+        "ready_to_propose",
+        "kind",
+        "text",
+        "environment",
+        "dead_end",
+        "overconstraint_warnings",
+        "newly_proven",
+        "vacuous_assertions",
+        "lost_covers",
+        "still_failing",
+        "next_step"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "changes": true,
-    "description": "Propose an assumption, a helper assertion, a cover (`expr`, SystemVerilog in the top module's scope) or a cut point (`signal`). In propose mode it waits for a person (state pending); in automatic mode it is applied at once, tagged AI-added. A proposal is not a result: prove afterwards, and note that a proof under an AI-added assumption stands on that assumption.",
+    "description": "Propose an assumption, a helper assertion, a cover (`expr`, SystemVerilog in the top module's scope) or a cut point (`signal`). Call `proposal_validate` first to verify soundness, non-vacuity, and cover non-regression. In propose mode it waits for a person (state pending); in automatic mode it is applied at once, tagged AI-added.",
     "input": {
       "properties": {
         "expr": {
@@ -1825,6 +1993,345 @@
         "active_slice_signals",
         "active_signals",
         "events"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Preferred first tool for any `cex` or `covered` property: fuses `property_get`, backward `why_cex` causal slice, trimmed trace on active causal signals only, primary-input vs DUT-output/internal signal role classification, RTL driver source snippets (`signal_nav`), `formal_lint` findings, and a triage hint into one compact reply.",
+    "input": {
+      "properties": {
+        "max_events": {
+          "description": "Maximum causal events (default: 24, max: 64)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Property name (must have status cex or covered)",
+          "type": "string"
+        },
+        "source_context_lines": {
+          "description": "Context lines above/below each RTL driver (default: 4, max: 12)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "description": "Cycles before failure_frame to include in active_trace (default: 6, max: 32)",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "cex_diagnose",
+    "output": {
+      "properties": {
+        "active_trace": {
+          "type": "object"
+        },
+        "causal_slice": {
+          "type": "object"
+        },
+        "driver_snippets": {
+          "description": "RTL driver snippets for top active causal signals",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "lint_findings": {
+          "description": "Formal-readiness lint hits on design RTL",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "property": {
+          "properties": {
+            "copy_of": {
+              "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+              "type": "string"
+            },
+            "depth": 0,
+            "detail": {
+              "description": "Why it is undetermined or in error",
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "engine": "<engine>",
+            "engines": "<engines>",
+            "expr": {
+              "description": "The property as written (SystemVerilog)",
+              "type": "string"
+            },
+            "has_trace": {
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "assert",
+                "assume",
+                "cover"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+              "enum": [
+                "user",
+                "rtl",
+                "ai"
+              ],
+              "type": "string"
+            },
+            "source": {
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file",
+                "line"
+              ],
+              "type": "object"
+            },
+            "stats": "<stats>",
+            "status": {
+              "description": "proven and unreachable are proofs; cex and covered come with a trace",
+              "enum": [
+                "unprocessed",
+                "proven",
+                "bounded_proven",
+                "cex",
+                "covered",
+                "unreachable",
+                "undetermined",
+                "error"
+              ],
+              "type": "string"
+            },
+            "task": {
+              "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+              "type": "string"
+            },
+            "time_ms": 0,
+            "under_ai": {
+              "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "vacuity": {
+              "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "status",
+            "origin",
+            "has_trace"
+          ],
+          "type": "object"
+        },
+        "schema": {
+          "const": "informal.cex_diagnose/1",
+          "type": "string"
+        },
+        "signal_roles": {
+          "description": "Active signal -> primary_input | dut_output | inout | internal_state | unknown",
+          "type": "object"
+        },
+        "triage_hint": {
+          "description": "Deterministic root-cause triage summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "property",
+        "causal_slice",
+        "active_trace",
+        "signal_roles",
+        "driver_snippets",
+        "lint_findings",
+        "triage_hint"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Preferred first tool for `undetermined` or slow properties: fuses per-engine telemetry (`stats`, `max_bound`), COI input/register counts, `fv_complexity` arithmetic/memory/blackbox hotspots, active assumptions/cutpoints, and ranked proof-convergence tactics.",
+    "input": {
+      "properties": {
+        "name": {
+          "description": "Assert or cover property name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "convergence_diagnose",
+    "output": {
+      "properties": {
+        "assumptions_in_force": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "complexity": {
+          "type": "object"
+        },
+        "cone": {
+          "type": "object"
+        },
+        "cut_points_in_force": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "property": {
+          "properties": {
+            "copy_of": {
+              "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+              "type": "string"
+            },
+            "depth": 0,
+            "detail": {
+              "description": "Why it is undetermined or in error",
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "engine": "<engine>",
+            "engines": "<engines>",
+            "expr": {
+              "description": "The property as written (SystemVerilog)",
+              "type": "string"
+            },
+            "has_trace": {
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "assert",
+                "assume",
+                "cover"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+              "enum": [
+                "user",
+                "rtl",
+                "ai"
+              ],
+              "type": "string"
+            },
+            "source": {
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file",
+                "line"
+              ],
+              "type": "object"
+            },
+            "stats": "<stats>",
+            "status": {
+              "description": "proven and unreachable are proofs; cex and covered come with a trace",
+              "enum": [
+                "unprocessed",
+                "proven",
+                "bounded_proven",
+                "cex",
+                "covered",
+                "unreachable",
+                "undetermined",
+                "error"
+              ],
+              "type": "string"
+            },
+            "task": {
+              "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+              "type": "string"
+            },
+            "time_ms": 0,
+            "under_ai": {
+              "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "vacuity": {
+              "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "status",
+            "origin",
+            "has_trace"
+          ],
+          "type": "object"
+        },
+        "recommendations": {
+          "description": "Ranked convergence actions",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.convergence_diagnose/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "property",
+        "cone",
+        "complexity",
+        "assumptions_in_force",
+        "cut_points_in_force",
+        "recommendations"
       ],
       "type": "object"
     }
