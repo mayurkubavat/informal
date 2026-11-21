@@ -365,8 +365,14 @@ function step(run: Run) {
     const n = (run.ran.get(p.name) ?? 0) + 1;
     run.ran.set(p.name, n);
     if (n >= (MOCK_TICKS[p.name] ?? 2)) {
-      const final: PropStatus = mockResults[p.name] ?? { status: "undetermined", reason: "mock" };
       const prop = run.props.find((q) => q.name === p.name)!;
+      const final: PropStatus =
+        mockResults[p.name] ??
+        (p.name.startsWith("Protocol::")
+          ? prop.kind === "cover"
+            ? { status: "covered", engine: "informal-bmc", depth: 2, ms: 32 }
+            : { status: "proven", engine: "informal-kind", ms: 46 }
+          : { status: "undetermined", reason: "mock" });
       prop.status = { ...final };
       prop.trace = MOCK_TRACES[p.name] ?? null;
       prop.engines = (MOCK_ENGINES[p.name] ?? []).map((e) => ({ ...e }));
@@ -818,9 +824,35 @@ export function mockSignalNav(signal: string): SignalNavView {
 
 export function mockLoadTemplate(templateId: string): Reply {
   mockSession.elaborated = true;
+  if (templateId === "axi4lite") {
+    mockSession.design = { files: ["axi_lite_demo.sv"], top: "axi_lite_demo", defines: [], hierarchy: MOCK_HIERARCHY };
+    mockSession.clocks = [{ signal: "clk", edge: "posedge" }];
+    mockSession.reset = "!rst_n";
+    mockSession.tasks = [{ name: "<embedded>", stopats: [] }, { name: "Protocol", stopats: [] }];
+    // Keep `<embedded>` current (0 props) so mock tests enforce UX-1 (`Prove all` must target `Protocol`!).
+    mockSession.current_task = "<embedded>";
+    mockSession.environment = null;
+    mockSession.props = [
+      { name: "Protocol::axi4lite_aw_valid_hold", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assert", expr: "awvalid && !awready |=> awvalid", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_aw_payload_stable", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assert", expr: "awvalid && !awready |=> $stable(awaddr)", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_w_valid_hold", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assert", expr: "wvalid && !wready |=> wvalid", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_w_payload_stable", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assert", expr: "wvalid && !wready |=> $stable(wdata)", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_ar_valid_hold", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assert", expr: "arvalid && !arready |=> arvalid", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_ar_payload_stable", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assert", expr: "arvalid && !arready |=> $stable(araddr)", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::c_axi4lite_wr_txn", task: "Protocol", source: at(MOCK_RTL, 5), kind: "cover", expr: "awvalid && awready", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::c_axi4lite_rd_txn", task: "Protocol", source: at(MOCK_RTL, 5), kind: "cover", expr: "arvalid && arready", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_b_valid_hold", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assume", expr: "bvalid && !bready |=> bvalid", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_b_resp_stable", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assume", expr: "bvalid && !bready |=> $stable(bresp)", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_r_valid_hold", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assume", expr: "rvalid && !rready |=> rvalid", enabled: true, status: { status: "unprocessed" } },
+      { name: "Protocol::axi4lite_r_payload_stable", task: "Protocol", source: at(MOCK_RTL, 5), kind: "assume", expr: "rvalid && !rready |=> $stable(rdata)", enabled: true, status: { status: "unprocessed" } },
+    ];
+    return { ok: true, result: mockSession.props.map((p) => p.name).join(" "), session: mockSession };
+  }
   mockSession.design = { files: [MOCK_RTL], top: "counter", defines: [], hierarchy: MOCK_HIERARCHY };
   mockSession.clocks = [{ signal: "clk", edge: "posedge" }];
   mockSession.reset = "!rst_n";
+  mockSession.tasks = [{ name: "<embedded>", stopats: [] }];
+  mockSession.current_task = "<embedded>";
   mockSession.props = [
     { name: "a_max", source: at(MOCK_SCRIPT, 8), kind: "assert", expr: "q <= 4'd9", enabled: true, status: { status: "unprocessed" } },
     { name: "a_step", source: at(MOCK_SCRIPT, 9), kind: "assert", expr: "en && !done |=> q == $past(q) + 4'd1", enabled: true, status: { status: "unprocessed" } },
@@ -857,7 +889,34 @@ export async function mock(cmd: string, args: Record<string, unknown>): Promise<
   if (cmd === "shell_eval" && /^\s*(prove|check_fv)\b/.test(script)) {
     if (active) return { ok: false, result: "a prove is already running; stop it first", session: mockSession };
     const only = /-property/.test(script) ? names(script) : null;
-    return startProve(mockSession.props.filter((p) => p.kind !== "assume" && p.enabled && (!only || only.includes(p.name))));
+    const taskMatch = script.match(/-task\s+\{?([^\s};]+)\}?/);
+    const explicitTasks = [...script.matchAll(/-task\s+\{?([^\s};]+)\}?/g)].map((m) => m[1]);
+    const targetTask = taskMatch?.[1] ?? null;
+    const curTask = mockSession.current_task ?? "<embedded>";
+    const targets = mockSession.props.filter((p) => {
+      if (p.kind === "assume" || !p.enabled) return false;
+      if (only) return only.includes(p.name);
+      const pt = p.task ?? "<embedded>";
+      if (explicitTasks.length > 0) return explicitTasks.includes(pt);
+      return pt === curTask;
+    });
+    const envTask = targetTask ?? (targets[0]?.task ?? curTask);
+    const assumes = mockSession.props.filter((p) => p.kind === "assume" && p.enabled && (p.task ?? "<embedded>") === envTask);
+    if (targets.length > 0 && assumes.length > 0) {
+      mockSession.environment = {
+        task: envTask,
+        asked: 20,
+        allowed: 20,
+        assumptions: assumes.map((a) => a.name),
+        conflict_set: [],
+      };
+    }
+    return startProve(targets);
+  }
+  if (cmd === "shell_eval" && /^\s*task\s+-set\s+/.test(script)) {
+    const t = script.match(/^\s*task\s+-set\s+\{?([^\s}]+)\}?/)?.[1];
+    if (t) mockSession.current_task = t;
+    return { ok: true, result: mockSession.current_task ?? "<embedded>", session: mockSession };
   }
   if (cmd === "shell_source" && String(args.path ?? "").endsWith(PROVE_ON_SOURCE)) {
     if (active) return { ok: false, result: "a prove is already running; stop it first", session: mockSession };

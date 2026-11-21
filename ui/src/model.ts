@@ -28,14 +28,15 @@ export const STATUS_LABEL: Record<ViewStatus, string> = {
   running: "Running",
   unprocessed: "Unprocessed",
   proven: "Proven",
+  bounded_proven: "Bounded",
   cex: "CEX",
   covered: "Covered",
   unreachable: "Unreachable",
   undetermined: "Undetermined",
   error: "Error",
 };
-export const SUMMARY: StatusWord[] = ["proven", "cex", "covered", "unreachable", "undetermined", "error"];
-export const STATUS_ORDER: ViewStatus[] = ["error", "cex", "running", "undetermined", "covered", "unreachable", "proven", "unprocessed"];
+export const SUMMARY: StatusWord[] = ["proven", "bounded_proven", "cex", "covered", "unreachable", "undetermined", "error"];
+export const STATUS_ORDER: ViewStatus[] = ["error", "cex", "running", "undetermined", "covered", "unreachable", "bounded_proven", "proven", "unprocessed"];
 export const KIND_LETTER = { assert: "A", cover: "C", assume: "M" } as const;
 export const TASK = "<embedded>";
 export const taskOf = (p: { task?: string }) => p.task ?? TASK;
@@ -85,6 +86,8 @@ export function bound(p: ViewProp): string {
     case "proven":
     case "unreachable":
       return "∞";
+    case "bounded_proven":
+      return s.bound != null ? `k≤${s.bound}` : s.depth != null ? `k≤${s.depth}` : "bounded";
     case "undetermined":
       return s.reason ?? "";
     case "error":
@@ -128,7 +131,7 @@ export function sortValue(p: ViewProp, k: SortKey): string | number {
     case "name": return p.name;
     case "status": return p.kind === "assume" ? 99 : STATUS_ORDER.indexOf(p.status.status);
     case "engine": return p.status.engine ?? "";
-    case "bound": return p.status.depth ?? (p.status.status === "proven" || p.status.status === "unreachable" ? 1e9 : -1);
+    case "bound": return p.status.bound ?? p.status.depth ?? (p.status.status === "proven" || p.status.status === "unreachable" ? 1e9 : -1);
     case "time": return p.status.ms ?? -1;
     case "cpu": return p.stats?.cpu_ms ?? -1;
     case "memory": return p.stats?.peak_rss_kb ?? -1;

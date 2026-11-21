@@ -9,12 +9,13 @@ import type { TraceAnnotation } from "./traceBin";
 import type { FocusChip, GuiCaptureSnapshot, LayoutPreset, WalkthroughStep } from "./store/workbenchStore";
 
 export type StatusWord =
-  | "unprocessed" | "proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
+  | "unprocessed" | "proven" | "bounded_proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
 
 export interface PropStatus {
   status: StatusWord;
   engine?: string;
   depth?: number | null;
+  bound?: number | null;
   ms?: number;
   reason?: string;
   message?: string;
@@ -395,6 +396,14 @@ export interface SignalNavView {
   loads: SignalRefView[];
 }
 
+export interface EnvironmentView {
+  task: string;
+  asked: number;
+  allowed: number | null;
+  assumptions: string[];
+  conflict_set: string[];
+}
+
 export interface SessionView {
   // `hierarchy`: the scope tree after elaboration; empty or absent with
   // a session elaborated without a SystemVerilog front end (the Design tab then scans the top file's ports).
@@ -407,6 +416,7 @@ export interface SessionView {
   // backends: one task).
   tasks?: { name: string; stopats: string[] }[];
   current_task?: string;
+  environment?: EnvironmentView | null;
   time_limit: { secs: number; nanos: number };
   workdir: string;
   cov?: CovStateView;
@@ -470,11 +480,30 @@ export interface EngineLine {
 }
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const httpBridge =
+  typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("bridge")
+    : null;
+
+async function bridgeRpc<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${httpBridge}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cmd, args }),
+  });
+  if (!res.ok) {
+    throw new Error(`bridge ${cmd}: HTTP ${res.status} ${await res.text()}`);
+  }
+  return (await res.json()) as T;
+}
 
 async function call(cmd: string, args: Record<string, unknown> = {}): Promise<Reply> {
   if (inTauri) {
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<Reply>(cmd, args);
+  }
+  if (httpBridge) {
+    return bridgeRpc<Reply>(cmd, args);
   }
   return mock(cmd, args);
 }
@@ -500,12 +529,16 @@ async function invokeOr<T>(cmd: string, args: Record<string, unknown>, mocked: (
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<T>(cmd, args);
   }
+  if (httpBridge) {
+    return bridgeRpc<T>(cmd, args);
+  }
   await new Promise((r) => setTimeout(r, 0));
   return mocked();
 }
 
 export const backend = {
   inTauri,
+  inRealBridge: Boolean(httpBridge),
   inMcpApp: isMcpAppSurface,
   snapshot: async (): Promise<Reply> => {
     if (isMcpAppSurface) {
@@ -524,7 +557,7 @@ export const backend = {
   // The Design Info panel: the design's counts and the current task's
   // model size. Builds the model, so it is asked for, not polled.
   designInfo: async (): Promise<DesignInfo> => {
-    if (!inTauri) return mockDesignInfo();
+    if (!inTauri && !httpBridge) return mockDesignInfo();
     const r = await call("shell_eval", { script: "get_design_info -json" });
     if (!r.ok) throw new Error(r.result);
     return JSON.parse(r.result) as DesignInfo;

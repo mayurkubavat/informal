@@ -1220,7 +1220,36 @@ const JG: &[(&str, Body)] = &[
                 }
                 members
             }
-            (_, true) => Vec::new(),
+            (_, true) => {
+                if !s.dry_run {
+                    let cur_has_any = s
+                        .props
+                        .iter()
+                        .any(|p| p.enabled && p.kind != Kind::Assume && p.task == s.current_task);
+                    if !cur_has_any {
+                        let mut other_tasks: Vec<String> = s
+                            .tasks
+                            .iter()
+                            .map(|t| t.name.clone())
+                            .filter(|t| {
+                                t != &s.current_task
+                                    && s.props.iter().any(|p| {
+                                        p.enabled && p.kind != Kind::Assume && p.task == *t
+                                    })
+                            })
+                            .collect();
+                        other_tasks.dedup();
+                        if let Some(first) = other_tasks.first() {
+                            s.log(&format!(
+                                "note: current task `{}` has 0 provable properties; non-empty task(s): {} (use `prove -task {first}` or `task -set {first}`)",
+                                s.current_task,
+                                other_tasks.join(", ")
+                            ));
+                        }
+                    }
+                }
+                Vec::new()
+            }
             (t, false) => select_in(s, t.as_deref(), &which)?,
         };
         let saved_bound = s.prove_bound;
@@ -3661,5 +3690,48 @@ mod tests {
         );
         let vcf_a = vcf.eval("help analyze").unwrap();
         assert!(vcf_a.contains("analyze [vcf]"), "{vcf_a}");
+    }
+
+    #[test]
+    fn prove_all_logs_hint_when_current_task_is_empty_but_named_task_has_properties() {
+        use crate::progress::{ProveProgress, ProveSink};
+        use std::sync::{Arc, Mutex};
+
+        struct Capture(Arc<Mutex<Vec<String>>>);
+        impl ProveSink for Capture {
+            fn progress(&self, _: &ProveProgress) {}
+            fn line(&self, text: &str, _: bool) {
+                self.0.lock().unwrap().push(text.to_string());
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("informal-empty-task-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sv = dir.join("top.sv");
+        std::fs::write(
+            &sv,
+            "module top(input logic clk, input logic rst_n, output logic y); assign y = 1'b1; endmodule\n",
+        )
+        .unwrap();
+        let sh = shell(Flavor::Jg);
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        sh.session.borrow_mut().sink = Some(Arc::new(Capture(lines.clone())));
+        sh.eval(&format!(
+            "analyze -sv {{{}}}; elaborate -top top; clock clk; reset -expression {{!rst_n}}",
+            sv.display()
+        ))
+        .unwrap();
+        sh.eval("task -create Protocol").unwrap();
+        sh.eval("assert -task Protocol -name a_ok {y == 1'b1}")
+            .unwrap();
+        // `<embedded>` is still current with 0 properties
+        let _ = sh.eval("prove -all").unwrap();
+        let log = lines.lock().unwrap().join("\n");
+        assert!(
+            log.contains("current task `<embedded>` has 0 provable properties")
+                && log.contains("Protocol"),
+            "expected empty-task hint in session log, got: {log}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

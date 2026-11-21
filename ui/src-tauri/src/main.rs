@@ -205,7 +205,7 @@ async fn shell_source(w: State<'_, Worker>, path: String) -> Result<Reply, Strin
                      endmodule\n",
                 );
                 format!(
-                    "clear -all; analyze -sv12 {{{}}}; elaborate -top axi_lite_demo; clock clk; reset -expression {{!rst_n}}; check_protocol -create -protocol axi4lite -role master",
+                    "clear -all; analyze -sv12 {{{}}}; elaborate -top axi_lite_demo; clock clk; reset -expression {{!rst_n}}; check_protocol -create -protocol axi4lite -role master; task -set Protocol",
                     sv.display()
                 )
             }
@@ -236,7 +236,7 @@ async fn shell_source(w: State<'_, Worker>, path: String) -> Result<Reply, Strin
                      status,0x04,RO,0xa5,status_q,wr_en,addr,wr_data\n",
                 );
                 format!(
-                    "clear -all; analyze -sv12 {{{}}}; elaborate -top csr_demo; clock clk; reset -expression {{!rst_n}}; check_csr -load {{{}}}",
+                    "clear -all; analyze -sv12 {{{}}}; elaborate -top csr_demo; clock clk; reset -expression {{!rst_n}}; check_csr -load {{{}}}; task -set CSR",
                     sv.display(),
                     csv.display()
                 )

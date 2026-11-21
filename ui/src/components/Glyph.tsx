@@ -7,6 +7,8 @@ export function Glyph({ k }: { k: string }) {
   switch (k) {
     case "proven":
       return <svg {...props}><path d="M2.5 6.3l2.3 2.3 4.7-5" /></svg>;
+    case "bounded_proven":
+      return <svg {...props}><circle cx="6" cy="6" r="4.3" strokeDasharray="3 1.5" /><path d="M3.6 6.2l1.7 1.7 3.2-3.4" /></svg>;
     case "cex":
       return <svg {...props}><path d="M3 3l6 6M9 3l-6 6" /></svg>;
     case "covered":

@@ -1,0 +1,281 @@
+{
+  "design": {
+    "files": [
+      "axi_lite_demo.sv"
+    ],
+    "defines": [],
+    "incdirs": [],
+    "top": "axi_lite_demo",
+    "params": [],
+    "bbox": [],
+    "bbox_instances": [],
+    "skip_initial_checks": false,
+    "isunknown_is_false": false,
+    "hierarchy": []
+  },
+  "elaborated": true,
+  "clocks": [
+    {
+      "signal": "clk",
+      "edge": "posedge",
+      "factor": 1,
+      "phase": 0
+    }
+  ],
+  "reset": "!rst_n",
+  "props": [
+    {
+      "name": "Protocol::a_aw_stable",
+      "kind": "assert",
+      "expr": "awvalid && !awready |=> $stable(awaddr)",
+      "enabled": true,
+      "status": {
+        "status": "proven",
+        "engine": "informal-kind",
+        "ms": 46
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "vacuity": "non-vacuous",
+      "task": "Protocol",
+      "stats": {
+        "engine": "informal-kind",
+        "wall_ms": 46,
+        "cpu_ms": 52,
+        "peak_rss_kb": 14200,
+        "depth": 2,
+        "depth_kind": "k",
+        "invariant_clauses": 4,
+        "evidence": "k-induction"
+      }
+    },
+    {
+      "name": "Protocol::a_bounded_20",
+      "kind": "assert",
+      "expr": "wvalid && !wready |=> $stable(wdata)",
+      "enabled": true,
+      "status": {
+        "status": "bounded_proven",
+        "engine": "informal-bmc",
+        "bound": 20,
+        "ms": 115
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "task": "Protocol",
+      "bound": 20
+    },
+    {
+      "name": "Protocol::a_bad_hold",
+      "kind": "assert",
+      "expr": "arvalid |=> !arvalid",
+      "enabled": true,
+      "status": {
+        "status": "cex",
+        "engine": "informal-bmc",
+        "depth": 3,
+        "ms": 18
+      },
+      "trace": "informal_work/a_bad_hold.vcd",
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "task": "Protocol"
+    },
+    {
+      "name": "Protocol::c_wr_txn",
+      "kind": "cover",
+      "expr": "awvalid && awready",
+      "enabled": true,
+      "status": {
+        "status": "covered",
+        "engine": "informal-bmc",
+        "depth": 2,
+        "ms": 14
+      },
+      "trace": "informal_work/c_wr_txn.vcd",
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "task": "Protocol"
+    },
+    {
+      "name": "Protocol::c_illegal",
+      "kind": "cover",
+      "expr": "bvalid && !bready && bready",
+      "enabled": true,
+      "status": {
+        "status": "unreachable",
+        "engine": "informal-ic3",
+        "ms": 21
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "task": "Protocol"
+    },
+    {
+      "name": "Protocol::a_timeout",
+      "kind": "assert",
+      "expr": "##[1:1000] bvalid",
+      "enabled": true,
+      "status": {
+        "status": "undetermined",
+        "reason": "timeout"
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "task": "Protocol"
+    },
+    {
+      "name": "Protocol::a_unsupported",
+      "kind": "assert",
+      "expr": "bad_expr",
+      "enabled": true,
+      "status": {
+        "status": "error",
+        "message": "unsupported construct"
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "task": "Protocol"
+    },
+    {
+      "name": "Protocol::a_pending",
+      "kind": "assert",
+      "expr": "arvalid && !arready |=> arvalid",
+      "enabled": true,
+      "status": {
+        "status": "unprocessed"
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "task": "Protocol"
+    },
+    {
+      "name": "Protocol::m_b_valid_hold",
+      "kind": "assume",
+      "expr": "bvalid && !bready |=> bvalid",
+      "enabled": true,
+      "status": {
+        "status": "unprocessed"
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "ai": true,
+      "task": "Protocol"
+    },
+    {
+      "name": "Protocol::a_under_ai_check",
+      "kind": "assert",
+      "expr": "bready",
+      "enabled": true,
+      "status": {
+        "status": "proven",
+        "engine": "informal-kind",
+        "ms": 12
+      },
+      "trace": null,
+      "source": {
+        "file": "axi_lite_demo.sv",
+        "line": 12
+      },
+      "rtl": false,
+      "engines": [],
+      "under_ai": [
+        "Protocol::m_b_valid_hold"
+      ],
+      "vacuity": "vacuous",
+      "task": "Protocol"
+    }
+  ],
+  "tasks": [
+    {
+      "name": "<embedded>",
+      "stopats": []
+    },
+    {
+      "name": "Protocol",
+      "stopats": []
+    }
+  ],
+  "current_task": "<embedded>",
+  "time_limit": {
+    "secs": 3600,
+    "nanos": 0
+  },
+  "engine_filter": [],
+  "workdir": "/Users/mkubavat/Silicon/git/informal/crates/informal-fpv/informal_work",
+  "hierarchy": [],
+  "frontend": "",
+  "environment_depth": 20,
+  "environment": {
+    "task": "Protocol",
+    "asked": 20,
+    "allowed": 20,
+    "assumptions": [
+      "Protocol::m_b_valid_hold"
+    ],
+    "conflict_set": []
+  },
+  "preconditions": true,
+  "witnesses": false,
+  "prove_cache": false,
+  "prove_cache_mode": "read_write",
+  "cov": {
+    "initialized": false,
+    "models": [],
+    "prove_based": false,
+    "waivers": [],
+    "items": [],
+    "measured": false
+  },
+  "xprop": {
+    "initialized": false,
+    "categories": [],
+    "x_sources": [],
+    "explicit_targets": [],
+    "waivers": [],
+    "items": []
+  }
+}

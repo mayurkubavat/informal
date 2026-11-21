@@ -9,10 +9,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, type AiStatus, type DesignInfo as DesignInfoData, EngineLine, Flavor, type FormalLintFindingView, type FormalQuickFixView, type GuiRequest, type GuiState, ProveProgress, Reply, type SchematicGraphView, SessionView, type WhyCexReport } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
-  bound, clock, designScopes, memText, OPTIONAL_COLS, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, sourceFile, sourceLine, statusKey, taskOf, time, traceOf, withProgress,
+  bound, clock, designScopes, memText, OPTIONAL_COLS, SURFER_MISSING, isProveCmd, parsePorts, STATUS_LABEL, sourceFile, sourceLine, taskOf, time, traceOf, withProgress,
   type BottomTab, type Center, type ColKey, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useWorkbenchStore, type LayoutPreset, type WalkthroughStep } from "./store/workbenchStore";
+import {
+  activeFilterChips,
+  findNewlyHiddenProved,
+  guidedNextAction,
+  resolveProveAll,
+  selectAndReveal,
+  summarySegments,
+  taskEnvSummary,
+  visibleProps,
+  type HiddenVerdictNotice,
+} from "./store/workbenchController";
 import { resolveSvgPalette } from "./svgTheme";
 import { useTheme } from "./useTheme";
 import { BOTTOM_DEFAULT, clampBottom, clampLeft, LEFT_MAX, LEFT_MIN, useLayout } from "./useLayout";
@@ -93,6 +104,8 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
   // The task the table shows (the task tree's selection); null: every task.
   const [taskFilter, setTaskFilter] = useState<string | null>(null);
+  const [hiddenNotice, setHiddenNotice] = useState<HiddenVerdictNotice | null>(null);
+  const [hintDismissed, setHintDismissed] = useState(false);
   // Text of files read for the source view and the design tree, by path.
   const [texts, setTexts] = useState<Record<string, string>>({});
   // The property shown in the trace tab (null: no trace tab), its binary IFTR stream, and raw VCD text.
@@ -252,9 +265,11 @@ export default function App() {
         const r = await f();
         apply(r);
         note(r.ok, r.result);
+        return r;
       } catch (e) {
         setLog((l) => [...l, { kind: "err", text: String(e) }]);
         note(false, String(e));
+        return null;
       } finally {
         if (!isProve) {
           setPending((n) => n - 1);
@@ -398,11 +413,23 @@ export default function App() {
       setLog((l) => [...l, { kind: "in", text: cmd }, { kind: "err", text: "a prove is already running; stop it first (Esc)" }]);
       return;
     }
+    const beforeProps = (session?.props ?? []).map((p) => ({ ...p, status: { ...p.status } }));
     provingRef.current = true;
     setProving(true);
     setProgress(null);
+    setHiddenNotice(null);
     try {
-      await run(() => backend.evalTcl(cmd), cmd, true);
+      const r = await run(() => backend.evalTcl(cmd), cmd, true);
+      if (r?.session?.props) {
+        const availTasks = r.session.tasks?.map((t) => t.name);
+        const notice = findNewlyHiddenProved(
+          beforeProps,
+          r.session.props,
+          { statusFilter, taskFilter, filter },
+          availTasks,
+        );
+        setHiddenNotice(notice);
+      }
     } finally {
       provingRef.current = false;
       setProving(false);
@@ -498,19 +525,35 @@ export default function App() {
   const tasks = session?.tasks?.map((t) => t.name);
   // A task that is gone (task -delete) no longer filters.
   const shownTask = taskFilter && (tasks ?? []).includes(taskFilter) ? taskFilter : null;
-  const props = allProps.filter(
-    (p) =>
-      matches(p, filter) &&
-      (!shownTask || taskOf(p) === shownTask) &&
-      (!statusFilter || statusKey(p) === statusFilter || (statusFilter !== "assume" && p.kind !== "assume" && p.status.status === statusFilter)),
-  );
+  const props = visibleProps(allProps, { filter, statusFilter, taskFilter }, tasks);
   const counts: Partial<Record<ViewStatus, number>> = {};
   for (const p of allProps) if (p.kind !== "assume") counts[p.status.status] = (counts[p.status.status] ?? 0) + 1;
   const assumes = allProps.filter((p) => p.kind === "assume").length;
-  const unprocessed = counts.unprocessed ?? 0;
 
   const current = allProps.find((p) => p.name === selected) ?? null;
-  const proveCmd = flavor === "jg" ? "prove -all" : "check_fv";
+  const provePlan = resolveProveAll(allProps, session?.current_task, shownTask, flavor);
+  const proveCmd = provePlan.cmd ?? (flavor === "jg" ? "prove -all" : "check_fv");
+  const filterChips = activeFilterChips({ statusFilter, taskFilter, filter }, tasks);
+  const summaryPills = summarySegments(allProps);
+  const envSummary = taskEnvSummary(session, allProps, shownTask);
+  const guidedHint = guidedNextAction(allProps, provePlan, running, busy);
+  // UX-2: Selecting a property in Tasks (or a verdict notice) reveals it in PropTable.
+  const selectAndRevealProp = useCallback(
+    (name: string) => {
+      const next = selectAndReveal(
+        { selected, statusFilter, taskFilter, filter },
+        name,
+        allProps,
+        tasks,
+      );
+      setSelected(next.selected);
+      setStatusFilter(next.statusFilter);
+      setTaskFilter(next.taskFilter);
+      setFilter(next.filter);
+      setHiddenNotice(null);
+    },
+    [selected, statusFilter, taskFilter, filter, allProps, tasks],
+  );
   // Braces keep Tcl from reading `gen[0].p` as a command substitution.
   const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${tclWord(n)}` : `check_fv -property {${n}}`);
   // The source view follows the selected property's own file (its script
@@ -1210,7 +1253,7 @@ export default function App() {
     if (infoOpen && !wasOpen.current && idle && session?.elaborated) loadInfo();
     wasOpen.current = infoOpen && (!!session?.elaborated || wasOpen.current);
   }, [infoOpen, idle, session?.elaborated, loadInfo]);
-  const proveAll = () => allProps.length && idle && prove(proveCmd);
+  const proveAll = () => provePlan.cmd && idle && prove(provePlan.cmd);
   const proveSelected = () => current && current.kind !== "assume" && idle && prove(proveOne(current.name));
   const openScriptPath = useCallback(
     (p: string) => {
@@ -1339,14 +1382,6 @@ export default function App() {
         })(),
       ]
     : [];
-
-  const summary = [
-    `${allProps.length} properties`,
-    ...(counts.running ? [`${counts.running} running`] : []),
-    ...SUMMARY.filter((s) => counts[s]).map((s) => `${counts[s]} ${STATUS_LABEL[s].toLowerCase()}`),
-    ...(unprocessed ? [`${unprocessed} unprocessed`] : []),
-    ...(assumes ? [`${assumes} assumed`] : []),
-  ].join(" · ");
 
   // Splitters: drag, arrow keys (16px steps), double-click to reset.
   const drag = (e: React.PointerEvent, onMove: (ev: PointerEvent) => void) => {
@@ -1744,8 +1779,14 @@ export default function App() {
         <ToolBtn title={scriptPath ? `source ${scriptPath}` : "Run script (set a script path first)"} onClick={runScript} disabled={!idle}>
           <ScriptIcon />
         </ToolBtn>
-        <button className="tool tool-text" onClick={proveAll} disabled={!idle || !allProps.length} title={`${proveCmd} (F5)`}>
-          <PlayIcon /> Prove all
+        <button
+          className="tool tool-text"
+          onClick={proveAll}
+          disabled={!idle || !provePlan.cmd}
+          title={provePlan.title}
+          aria-label="Prove all"
+        >
+          <PlayIcon /> Prove all{provePlan.badge ? <span className="prove-target-badge">{provePlan.badge}</span> : null}
         </button>
         <button className="tool tool-text" onClick={stop} disabled={!running || stopping} title="Stop the running prove (Esc)">
           <StopIcon /> {stopping ? "Stopping…" : "Stop"}
@@ -1841,15 +1882,25 @@ export default function App() {
                   counts={counts}
                   assumes={assumes}
                   filter={statusFilter}
-                  onFilter={setStatusFilter}
+                  onFilter={(f) => {
+                    setStatusFilter(f);
+                    setHiddenNotice(null);
+                  }}
                   props={allProps}
                   selected={selected}
-                  onSelect={setSelected}
-                  onOpen={(n) => (traceOf(allProps.find((p) => p.name === n) ?? null) ? openTrace(n) : select(n))}
+                  onSelect={selectAndRevealProp}
+                  onOpen={(n) => {
+                    selectAndRevealProp(n);
+                    if (traceOf(allProps.find((p) => p.name === n) ?? null)) openTrace(n);
+                    else select(n);
+                  }}
                   tasks={tasks}
                   current={session?.current_task}
                   task={shownTask}
-                  onTask={setTaskFilter}
+                  onTask={(t) => {
+                    setTaskFilter(t);
+                    setHiddenNotice(null);
+                  }}
                 />
               ) : (
                 <DesignTree scopes={scopes} files={session?.design.files ?? []} fallback={!hierarchy?.length} onAddSignal={addSignal} />
@@ -1916,19 +1967,70 @@ export default function App() {
                 {centerTabs}
                 {center !== "source" ? (
                   <>
-                    <span className="strip-summary">{summary}</span>
+                    <span className="strip-summary" title="Click a count to filter the property table">
+                      <button
+                        type="button"
+                        className={`summary-pill ${!statusFilter ? "on" : ""}`}
+                        onClick={() => {
+                          setStatusFilter(null);
+                          setHiddenNotice(null);
+                        }}
+                      >
+                        {allProps.length} properties
+                      </button>
+                      {summaryPills.map((seg) => (
+                        <span key={seg.text} style={{ display: "inline-flex", alignItems: "center" }}>
+                          <span className="summary-sep">{" · "}</span>
+                          <button
+                            type="button"
+                            className={`summary-pill tone-${seg.tone} ${statusFilter === seg.filter ? "on" : ""}`}
+                            onClick={() => {
+                              setStatusFilter((cur) => (cur === seg.filter ? null : seg.filter));
+                              setHiddenNotice(null);
+                            }}
+                            title={`Filter by ${seg.text}`}
+                          >
+                            {seg.text}
+                          </button>
+                        </span>
+                      ))}
+                    </span>
                     <span className="spacer" />
-                    {statusFilter && (
-                      <button className="link small" onClick={() => setStatusFilter(null)}>
-                        clear status filter
+                    {(envSummary.assumeCount > 0 || envSummary.state === "conflict") && (
+                      <button
+                        type="button"
+                        className={`env-pill env-${envSummary.state}`}
+                        title={envSummary.detail}
+                        onClick={() => {
+                          setStatusFilter((cur) => (cur === "assume" ? null : "assume"));
+                          setHiddenNotice(null);
+                        }}
+                      >
+                        {envSummary.state === "conflict"
+                          ? "Env: conflict!"
+                          : envSummary.state === "alive"
+                            ? `Env: alive · ${envSummary.assumeCount} assumes`
+                            : `${envSummary.assumeCount} assumes`}
                       </button>
                     )}
-                    {shownTask && (
-                      <button className="link small" onClick={() => setTaskFilter(null)} title={`Showing task ${shownTask} only`}>
-                        all tasks
+                    {filterChips.map((chip) => (
+                      <button
+                        key={chip.kind}
+                        type="button"
+                        className="filter-chip"
+                        aria-label={chip.ariaLabel}
+                        title={chip.title}
+                        onClick={() => {
+                          if (chip.kind === "status") setStatusFilter(null);
+                          else if (chip.kind === "task") setTaskFilter(null);
+                          else setFilter("");
+                          setHiddenNotice(null);
+                        }}
+                      >
+                        {chip.label} <span aria-hidden="true">×</span>
                       </button>
-                    )}
-                    {(filter.trim() || statusFilter || shownTask) && (
+                    ))}
+                    {filterChips.length > 0 && (
                       <span className="filter-count" role="status" aria-live="polite">
                         {props.length} of {allProps.length}
                       </span>
@@ -1964,6 +2066,63 @@ export default function App() {
                   <span className="strip-summary mono">{srcPath}{focusLine ? `:${focusLine}` : ""}</span>
                 )}
               </div>
+              {center !== "source" && hiddenNotice && (
+                <div className="ux-banner tone-verdict" role="status" aria-live="polite">
+                  <span className="ux-banner-text">{hiddenNotice.text}</span>
+                  <button
+                    type="button"
+                    className="btn small"
+                    onClick={() => selectAndRevealProp(hiddenNotice.props[0].name)}
+                  >
+                    Show in table
+                  </button>
+                  <button
+                    type="button"
+                    className="ux-banner-close"
+                    aria-label="Dismiss verdict notice"
+                    onClick={() => setHiddenNotice(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              {center !== "source" && !hiddenNotice && !hintDismissed && !backend.inMcpApp && guidedHint && (
+                <div className={`ux-banner tone-${guidedHint.tone}`} role="status">
+                  <span className="ux-banner-text">{guidedHint.text}</span>
+                  {guidedHint.actionKind === "prove_all" && (
+                    <button
+                      type="button"
+                      className="btn small"
+                      disabled={!idle}
+                      onClick={proveAll}
+                    >
+                      Run proof ({provePlan.count})
+                    </button>
+                  )}
+                  {guidedHint.actionKind === "open_cex" && guidedHint.actionProp && (
+                    <button
+                      type="button"
+                      className="btn small"
+                      onClick={() => {
+                        selectAndRevealProp(guidedHint.actionProp!);
+                        if (traceOf(allProps.find((p) => p.name === guidedHint.actionProp) ?? null)) {
+                          openTrace(guidedHint.actionProp!);
+                        }
+                      }}
+                    >
+                      {guidedHint.actionLabel}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="ux-banner-close"
+                    aria-label="Dismiss guidance"
+                    onClick={() => setHintDismissed(true)}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
               {center !== "source" ? (
                 <PropTable
                   props={props}
