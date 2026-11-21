@@ -496,6 +496,8 @@ fn measure_task_unr(
                 model: model_path.clone(),
                 format: ModelFormat::Btor2,
                 timeout,
+                effort: s.effort,
+                max_depth: s.max_trace_length,
             };
             let selected = informal_bmc::select_for_btor(
                 &safety_engines,

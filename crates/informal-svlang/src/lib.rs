@@ -94,6 +94,35 @@ fn property_options(
     opts
 }
 
+fn antecedent_cover_expr(expr: &svlang::PropExpr) -> Option<svlang::PropExpr> {
+    match expr {
+        svlang::PropExpr::OverlappedImplication { lhs, .. }
+        | svlang::PropExpr::NonOverlappedImplication { lhs, .. } => {
+            Some(svlang::PropExpr::Seq(lhs.clone()))
+        }
+        svlang::PropExpr::Clocked { clock, prop } => Some(svlang::PropExpr::Clocked {
+            clock: clock.clone(),
+            prop: Box::new(antecedent_cover_expr(prop)?),
+        }),
+        _ => None,
+    }
+}
+
+/// Synthesize a `cover property` over the antecedent sequence of an implication
+/// assertion (`lhs |-> rhs` or `lhs |=> rhs`), preserving its clock and
+/// `disable iff`. Used when `svlang`'s built-in `related_cover` omits
+/// `<name>:precondition` (e.g. liveness `s_eventually` / `until` consequents).
+fn precondition_cover_of(p: &svlang::BoundProperty) -> Option<svlang::BoundProperty> {
+    if p.kind != PropKind::Assert {
+        return None;
+    }
+    let expr = antecedent_cover_expr(&p.expr)?;
+    let mut cov = p.clone();
+    cov.kind = PropKind::Cover;
+    cov.expr = expr;
+    Some(cov)
+}
+
 /// Bind the properties given by command in the top module's scope and
 /// compile them into checks named as asked. Each comes back under its name,
 /// with why not when it does not bind or uses an operator svlang does not
@@ -135,9 +164,43 @@ fn command_properties(
             })
         })
         .collect();
-    let mut compiled = nl
-        .compile_external_properties_with_trees(comp.trees(), design, &external, opts)
-        .into_iter();
+    let compiled_vec =
+        nl.compile_external_properties_with_trees(comp.trees(), design, &external, opts);
+    if opts.precondition_covers {
+        let existing: std::collections::HashSet<String> =
+            nl.checks.iter().filter_map(|c| c.label.clone()).collect();
+        let mut cmd_missing: Vec<(&svlang::ExprArena, svlang::BoundProperty, String)> = Vec::new();
+        let mut comp_iter = compiled_vec.iter();
+        for ((name, _), (arena, b)) in properties.iter().zip(arenas.iter().zip(&bound)) {
+            let Ok(p) = b else { continue };
+            let Some(Ok(_)) = comp_iter.next() else {
+                continue;
+            };
+            let pre = format!("{name}:precondition");
+            if existing.contains(&pre) {
+                continue;
+            }
+            if let Some(cov) = precondition_cover_of(p) {
+                cmd_missing.push((arena, cov, pre));
+            }
+        }
+        if !cmd_missing.is_empty() {
+            let ext: Vec<svlang::netlist::ExternalProperty<'_>> = cmd_missing
+                .iter()
+                .map(|(arena, prop, pre)| svlang::netlist::ExternalProperty {
+                    arena,
+                    property: prop,
+                    name: pre.clone(),
+                })
+                .collect();
+            let mut cov_opts = PropertyOptions::default();
+            cov_opts.skip_cycles = opts.skip_cycles;
+            cov_opts.skip_by_clock = opts.skip_by_clock.clone();
+            let _ =
+                nl.compile_external_properties_with_trees(comp.trees(), design, &ext, &cov_opts);
+        }
+    }
+    let mut compiled = compiled_vec.into_iter();
     properties
         .iter()
         .zip(&bound)
@@ -421,6 +484,40 @@ fn model(
         req.precondition_covers,
         req.witness_covers,
     );
+    if req.precondition_covers {
+        let existing: std::collections::HashSet<String> =
+            nl.checks.iter().filter_map(|c| c.label.clone()).collect();
+        let rtl_missing: Vec<(String, svlang::BoundProperty)> = nl
+            .properties
+            .iter()
+            .zip(&nl.property_names)
+            .zip(&properties)
+            .filter_map(|((p, name), listed)| {
+                if listed.unsupported.is_some() || listed.error.is_some() {
+                    return None;
+                }
+                let pre = format!("{name}:precondition");
+                if existing.contains(&pre) {
+                    return None;
+                }
+                Some((pre, precondition_cover_of(p)?))
+            })
+            .collect();
+        if !rtl_missing.is_empty() {
+            let rtl_arena = nl.sva_arena.clone();
+            let ext: Vec<svlang::netlist::ExternalProperty<'_>> = rtl_missing
+                .iter()
+                .map(|(pre, prop)| svlang::netlist::ExternalProperty {
+                    arena: &rtl_arena,
+                    property: prop,
+                    name: pre.clone(),
+                })
+                .collect();
+            let cov_opts = property_options(skip_cycles, clock_skips, false, false);
+            let _ =
+                nl.compile_external_properties_with_trees(comp.trees(), design, &ext, &cov_opts);
+        }
+    }
     // The labelled immediate assertions are targets of the model too, under
     // their labels (the ones that cannot be listed were reported at compile).
     immediate_checks(&nl, &mut properties);

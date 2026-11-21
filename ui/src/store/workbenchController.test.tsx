@@ -41,6 +41,12 @@ describe("Layer 1 — Rust -> TypeScript Session Schema Contract", () => {
       expect(STATUS_LABEL[want]).toBeTruthy();
     }
 
+    // Verify session-level effort, orchestration, total_time_limit, and max_trace_length contract fields
+    expect(CONTRACT_SESSION.effort).toBe("high");
+    expect(CONTRACT_SESSION.orchestration).toBe("auto");
+    expect(CONTRACT_SESSION.total_time_limit?.secs).toBe(900);
+    expect(CONTRACT_SESSION.max_trace_length).toBe(200);
+
     // Verify bounded_proven specifically renders k<=20, engine, and time
     const bp = props.find((p) => p.status.status === "bounded_proven")!;
     expect(statusText(bp)).toBe("Bounded");

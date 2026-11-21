@@ -24,7 +24,8 @@ use crate::unroll::Unroll;
 use crate::{certify, ic3, report_certificate, result, solver, unknown, Checked, FORMATS};
 use informal_aig::{lit_val, neg, var, Aig, Init, Lit, FALSE, TRUE};
 use informal_engine::{
-    Capabilities, Certificate, CheckRequest, Engine, EngineResult, Progress, RunContext, Verdict,
+    Capabilities, Certificate, CheckRequest, Effort, Engine, EngineResult, Progress, RunContext,
+    Verdict,
 };
 use informal_sat::Answer;
 use std::collections::HashMap;
@@ -865,7 +866,12 @@ impl Engine for KLive {
             let now = Instant::now();
             let mut slice = ctx.clone();
             if round < 8 {
-                let cap = Duration::from_millis(300u64.saturating_mul(1u64 << round.min(5)));
+                let base_ms = if matches!(req.effort, Effort::High | Effort::Max) {
+                    600u64
+                } else {
+                    300u64
+                };
+                let cap = Duration::from_millis(base_ms.saturating_mul(1u64 << round.min(5)));
                 slice.deadline = ctx.deadline.min(now + cap);
             }
             let c_make = slice.clone();
@@ -953,11 +959,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("m.btor2");
         std::fs::write(&path, text).unwrap();
-        let req = CheckRequest {
-            model: path,
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(30),
-        };
+        let req = CheckRequest::new(path, ModelFormat::Btor2, Duration::from_secs(30));
         KLive.check(&req, &RunContext::new(req.timeout)).unwrap()
     }
 

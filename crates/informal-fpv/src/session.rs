@@ -16,12 +16,13 @@
 use crate::progress::{ProveSink, Tracker};
 use anyhow::{anyhow, bail};
 use informal_engine::portfolio::EngineRun;
+pub use informal_engine::Effort;
 use informal_engine::{portfolio, CheckRequest, Engine, ModelFormat, Progress, Verdict};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::trace;
 
@@ -39,6 +40,37 @@ impl Kind {
             Kind::Assert => "assert",
             Kind::Assume => "assume",
             Kind::Cover => "cover",
+        }
+    }
+}
+
+/// Multi-property proof scheduling strategy (`set_prove_orchestration`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Orchestration {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl Orchestration {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" | "default" => Ok(Self::Auto),
+            "on" | "true" | "1" | "two_pass" | "twopass" => Ok(Self::On),
+            "off" | "false" | "0" | "single" => Ok(Self::Off),
+            other => Err(format!(
+                "unknown orchestration mode `{other}` (expected `auto`, `on`, or `off`)"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
         }
     }
 }
@@ -352,6 +384,16 @@ pub struct Session {
     /// The task commands without `-task` apply to (`task -set`).
     pub current_task: String,
     pub time_limit: Duration,
+    /// Optional wall-clock limit across an entire `prove` batch (`set_prove_total_time_limit`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_time_limit: Option<Duration>,
+    /// Engine proof effort level (`set_prove_effort`, VCF `set_fml_var fml_effort`).
+    pub effort: Effort,
+    /// Two-pass sweep/converge orchestration mode (`set_prove_orchestration`).
+    pub orchestration: Orchestration,
+    /// Persistent BMC trace unrolling bound (`set_max_trace_length`, VCF `set_fml_var fml_max_depth`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_trace_length: Option<u32>,
     /// Engine names to use; empty means every loaded engine.
     pub engine_filter: Vec<String>,
     pub workdir: PathBuf,
@@ -469,6 +511,10 @@ impl Session {
             tasks: vec![Task::new(EMBEDDED)],
             current_task: EMBEDDED.to_string(),
             time_limit: Duration::from_secs(3600),
+            total_time_limit: None,
+            effort: Effort::Standard,
+            orchestration: Orchestration::Auto,
+            max_trace_length: None,
             engine_filter: Vec::new(),
             workdir,
             engines,
@@ -1205,9 +1251,15 @@ impl Session {
             model: out.clone(),
             format: ModelFormat::Btor2,
             timeout: self.time_limit,
+            effort: self.effort,
+            max_depth: self.max_trace_length,
         };
-        let safety =
-            informal_bmc::select_for_btor(engines, &isolated, !self.engine_filter.is_empty());
+        let safety = informal_bmc::select_for_btor_with_effort(
+            engines,
+            &isolated,
+            !self.engine_filter.is_empty(),
+            self.effort,
+        );
         let o = portfolio::run_until(&safety, &req, None, Some(self.stop.as_ref()));
         let verdict = portfolio::verdict(&o);
         if let (Some(dir), Some(w), true) = (&self.certificates, &o.winner, verdict.is_definitive())
@@ -1267,9 +1319,15 @@ impl Session {
             model: out.clone(),
             format: ModelFormat::Btor2,
             timeout: self.time_limit,
+            effort: self.effort,
+            max_depth: self.max_trace_length,
         };
-        let safety =
-            informal_bmc::select_for_btor(engines, &isolated, !self.engine_filter.is_empty());
+        let safety = informal_bmc::select_for_btor_with_effort(
+            engines,
+            &isolated,
+            !self.engine_filter.is_empty(),
+            self.effort,
+        );
         let o = portfolio::run_until(&safety, &req, None, Some(self.stop.as_ref()));
         let verdict = portfolio::verdict(&o);
         match verdict {
@@ -1429,11 +1487,11 @@ impl Session {
             max_depth: Some(n as usize),
             step: 1,
         };
-        let req = CheckRequest {
-            model: path.clone(),
-            format: ModelFormat::Btor2,
-            timeout: self.time_limit.min(Duration::from_secs(60)),
-        };
+        let req = CheckRequest::new(
+            path.clone(),
+            ModelFormat::Btor2,
+            self.time_limit.min(Duration::from_secs(60)),
+        );
         let r = bmc.check(&req, &informal_engine::RunContext::new(req.timeout));
         let _ = std::fs::remove_file(&path);
         match r.ok()?.verdict {
@@ -1722,6 +1780,7 @@ impl Session {
 
         // Heartbeat for the UI while the loop runs, so elapsed times move
         // between property events.
+        let batch_deadline = self.total_time_limit.map(|d| Instant::now() + d);
         let looping = AtomicBool::new(true);
         let stopped = std::thread::scope(|sc| {
             if let Some(t) = &tracker {
@@ -1743,9 +1802,22 @@ impl Session {
                 if stopped || self.stop.load(Ordering::SeqCst) {
                     stopped = true;
                     self.mark_stopped(members);
+                    base += members.len();
                     continue;
                 }
-                stopped = self.prove_task(task, members, &engines, tracker.as_ref(), base);
+                if batch_deadline.is_some_and(|dl| Instant::now() >= dl) {
+                    self.mark_total_timeout(members, tracker.as_ref(), base);
+                    base += members.len();
+                    continue;
+                }
+                stopped = self.prove_task(
+                    task,
+                    members,
+                    &engines,
+                    tracker.as_ref(),
+                    base,
+                    batch_deadline,
+                );
                 base += members.len();
             }
             looping.store(false, Ordering::SeqCst);
@@ -1770,6 +1842,21 @@ impl Session {
         }
     }
 
+    /// Properties skipped because `total_time_limit` expired.
+    fn mark_total_timeout(&mut self, which: &[usize], tracker: Option<&Tracker>, base: usize) {
+        for (offset, &i) in which.iter().enumerate() {
+            let status = Status::Undetermined {
+                reason: "total time limit".into(),
+            };
+            if let Some(t) = tracker {
+                t.finished(base + offset, &status, &self.props[i].engines);
+            }
+            self.props[i].status = status;
+            self.props[i].trace = None;
+            self.props[i].witness_trace = None;
+        }
+    }
+
     /// Prove `targets`, all of `task`, on that task's model: the
     /// environment check, the per-property loop and the vacuity checks.
     /// `base` is the first target's slot in the tracker. Returns whether a
@@ -1781,6 +1868,7 @@ impl Session {
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
         base: usize,
+        batch_deadline: Option<Instant>,
     ) -> bool {
         let lowered = self.lower(task);
         let mut environment = None;
@@ -1799,7 +1887,7 @@ impl Session {
         for &i in targets {
             self.props[i].under_ai = under_ai.clone();
         }
-        let reached = self.prove_targets(
+        let (reached, stopped_in_loop) = self.prove_targets(
             targets,
             lowered
                 .as_ref()
@@ -1808,10 +1896,13 @@ impl Session {
             engines,
             tracker,
             base,
+            batch_deadline,
         );
         // A Stop that came while the last property finished still counts.
-        let stopped = reached < targets.len() || self.stop.load(Ordering::SeqCst);
-        self.mark_stopped(&targets[reached..]);
+        let stopped = stopped_in_loop || self.stop.load(Ordering::SeqCst);
+        if stopped && reached < targets.len() {
+            self.mark_stopped(&targets[reached..]);
+        }
         // A conflict in the environment empties every proof of this run;
         // otherwise each proven assertion's precondition is covered.
         let conflict = environment.as_ref().is_some_and(Environment::conflict);
@@ -1828,7 +1919,9 @@ impl Session {
         }
         if let (Ok((btor, _)), false, true) = (&lowered, conflict, self.preconditions) {
             for &i in &targets[..reached] {
-                if self.stop.load(Ordering::SeqCst) {
+                if self.stop.load(Ordering::SeqCst)
+                    || batch_deadline.is_some_and(|dl| Instant::now() >= dl)
+                {
                     break;
                 }
                 let proven = matches!(self.props[i].status, Status::Proven { .. });
@@ -1849,9 +1942,12 @@ impl Session {
                 ));
             }
         }
-        if let (Ok((btor, _)), false, true) = (&lowered, conflict, self.witnesses) {
+        let run_witnesses = self.witnesses || self.effort == Effort::Max;
+        if let (Ok((btor, _)), false, true) = (&lowered, conflict, run_witnesses) {
             for &i in &targets[..reached] {
-                if self.stop.load(Ordering::SeqCst) {
+                if self.stop.load(Ordering::SeqCst)
+                    || batch_deadline.is_some_and(|dl| Instant::now() >= dl)
+                {
                     break;
                 }
                 let proven = matches!(self.props[i].status, Status::Proven { .. });
@@ -1864,9 +1960,12 @@ impl Session {
                 }
             }
         }
-        if self.with_proof_core && !conflict {
+        let run_proof_core = self.with_proof_core || self.effort == Effort::Max;
+        if run_proof_core && !conflict {
             for &i in &targets[..reached] {
-                if self.stop.load(Ordering::SeqCst) {
+                if self.stop.load(Ordering::SeqCst)
+                    || batch_deadline.is_some_and(|dl| Instant::now() >= dl)
+                {
                     break;
                 }
                 if matches!(
@@ -1880,8 +1979,111 @@ impl Session {
         stopped
     }
 
-    /// The per-property loop of [`Self::prove`]. Returns how many targets
-    /// it got through; fewer than all means a Stop ended it.
+    fn prepare_target_btor(
+        &self,
+        i: usize,
+        lowered: Result<(&str, &[informal_svlang::RtlProperty]), &str>,
+    ) -> Result<PathBuf, String> {
+        let in_rtl = self.props[i].rtl || self.props[i].copy_of.is_some();
+        let check = self.check_name(i);
+        let names = match in_rtl {
+            true => Ok(()),
+            false => self.check_names(&self.props[i].expr),
+        };
+        names.and_then(|()| {
+            let Ok((_, found)) = lowered else {
+                return Ok(());
+            };
+            match found.iter().find(|f| target_name(&f.name) == check) {
+                None if in_rtl => Err("not in the model (inside a black box)".to_string()),
+                None => Err("not in the model (disabled)".to_string()),
+                Some(f) => match (&f.unsupported, &f.error) {
+                    (Some(why), _) => Err(format!("not supported yet: {why}")),
+                    (None, Some(e)) => Err(e.clone()),
+                    (None, None) => Ok(()),
+                },
+            }
+        })?;
+        let out = self.workdir.join(format!("prop_{i}.btor2"));
+        match lowered {
+            Err(e) => Err(e.to_string()),
+            Ok((btor, _)) => {
+                let keep = check;
+                if !has_target(btor, &keep) {
+                    Err(format!("no check named {keep} in the model"))
+                } else {
+                    let task_of_prop = &self.props[i].task;
+                    let self_helpers: Vec<String> = self
+                        .props
+                        .iter()
+                        .filter(|p| {
+                            p.enabled
+                                && p.kind == Kind::Assume
+                                && &p.task == task_of_prop
+                                && p.from_assert.as_deref() == Some(keep.as_str())
+                        })
+                        .map(|p| target_name(&p.name))
+                        .collect();
+                    let (model, section) = informal_svlang::split_trace(btor);
+                    let mut per_model = only_target(model, &keep);
+                    if !self_helpers.is_empty() {
+                        per_model = drop_assumptions(&per_model, &self_helpers);
+                    }
+                    let mut r = std::fs::write(&out, per_model);
+                    if r.is_ok() && !section.is_empty() {
+                        let mut per_trace = only_target(btor, &keep);
+                        if !self_helpers.is_empty() {
+                            per_trace = drop_assumptions(&per_trace, &self_helpers);
+                        }
+                        r = std::fs::write(trace_model(&out), per_trace);
+                    }
+                    r.map(|()| out).map_err(|e| e.to_string())
+                }
+            }
+        }
+    }
+
+    fn record_target_result(
+        &mut self,
+        i: usize,
+        slot: usize,
+        tracker: Option<&Tracker>,
+        outcome: (
+            Status,
+            Option<String>,
+            Vec<EngineRun>,
+            Option<crate::stats::ProofStats>,
+        ),
+    ) -> bool {
+        let (mut status, trace, runs, mut stats) = outcome;
+        let halt = self.stop.load(Ordering::SeqCst);
+        if halt && matches!(status, Status::Undetermined { .. }) {
+            status = Status::Undetermined {
+                reason: "stopped".into(),
+            };
+        }
+        if let Some(st) = &mut stats {
+            if matches!(status, Status::Undetermined { .. } | Status::Error { .. }) {
+                st.engine = None;
+                if st.depth_kind != Some("bound") {
+                    st.depth = st.max_bound;
+                    st.depth_kind = st.max_bound.map(|_| "bound");
+                }
+            }
+        }
+        if let Some(t) = tracker {
+            t.finished(slot, &status, &runs);
+        }
+        self.props[i].status = status;
+        self.props[i].trace = trace;
+        self.props[i].engines = runs;
+        self.props[i].stats = stats;
+        halt
+    }
+
+    /// The per-property loop of [`Self::prove`], supporting single-pass and
+    /// two-pass (`Effort::Low` sweep -> `self.effort` convergence) scheduling.
+    /// Returns `(targets_processed, stopped_by_user)`.
     fn prove_targets(
         &mut self,
         targets: &[usize],
@@ -1889,130 +2091,190 @@ impl Session {
         engines: &[Arc<dyn Engine>],
         tracker: Option<&Tracker>,
         base: usize,
-    ) -> usize {
+        batch_deadline: Option<Instant>,
+    ) -> (usize, bool) {
+        let budget_for = |cap: Duration| -> Option<Duration> {
+            match batch_deadline {
+                None => Some(cap),
+                Some(dl) => {
+                    let rem = dl.saturating_duration_since(Instant::now());
+                    (!rem.is_zero()).then(|| cap.min(rem))
+                }
+            }
+        };
+        let two_pass = match self.orchestration {
+            Orchestration::Off => false,
+            Orchestration::On => self.prove_bound.is_none(),
+            Orchestration::Auto => {
+                targets.len() > 1
+                    && self.prove_bound.is_none()
+                    && self.time_limit >= Duration::from_millis(400)
+            }
+        };
+        if !two_pass {
+            for (k, &i) in targets.iter().enumerate() {
+                let slot = base + k;
+                if self.stop.load(Ordering::SeqCst) {
+                    return (k, true);
+                }
+                let Some(prop_timeout) = budget_for(self.time_limit) else {
+                    self.mark_total_timeout(&targets[k..], tracker, base + k);
+                    return (targets.len(), false);
+                };
+                if let Some(t) = tracker {
+                    t.running(slot);
+                }
+                self.props[i].trace = None;
+                let outcome = match self.prepare_target_btor(i, lowered) {
+                    Err(message) => (Status::Error { message }, None, Vec::new(), None),
+                    Ok(out) => self.check_one_with(
+                        engines,
+                        i,
+                        &out,
+                        tracker.map(|t| (t, slot)),
+                        self.effort,
+                        prop_timeout,
+                        true,
+                    ),
+                };
+                if self.record_target_result(i, slot, tracker, outcome) {
+                    return (k + 1, true);
+                }
+            }
+            return (targets.len(), false);
+        }
+
+        // Two-pass orchestration:
+        // Pass 1 sweeps all targets at Effort::Low with a short per-property cap.
+        let sweep_cap = (self.time_limit / 10)
+            .max(Duration::from_millis(250).min(self.time_limit / 2))
+            .min(Duration::from_secs(2));
+        let mut pending: Vec<(usize, usize, PathBuf, Duration)> = Vec::new();
         for (k, &i) in targets.iter().enumerate() {
             let slot = base + k;
             if self.stop.load(Ordering::SeqCst) {
-                return k;
+                for &(pk, pi, _, _) in &pending {
+                    self.mark_stopped(&[pi]);
+                    let _ = pk;
+                }
+                return (k, true);
             }
+            let cap = if self.props[i].bound.is_some() {
+                self.time_limit
+            } else {
+                sweep_cap
+            };
+            let Some(p1_timeout) = budget_for(cap) else {
+                for &(pk, pi, _, _) in &pending {
+                    self.mark_total_timeout(&[pi], tracker, base + pk);
+                }
+                self.mark_total_timeout(&targets[k..], tracker, base + k);
+                return (targets.len(), false);
+            };
             if let Some(t) = tracker {
                 t.running(slot);
             }
-            // Properties added before elaboration are checked now.
-            // (One written in the RTL had its names bound in its own scope.)
-            let in_rtl = self.props[i].rtl || self.props[i].copy_of.is_some();
-            let check = self.check_name(i);
-            let names = match in_rtl {
-                true => Ok(()),
-                false => self.check_names(&self.props[i].expr),
+            self.props[i].trace = None;
+            let out = match self.prepare_target_btor(i, lowered) {
+                Err(message) => {
+                    let _ = self.record_target_result(
+                        i,
+                        slot,
+                        tracker,
+                        (Status::Error { message }, None, Vec::new(), None),
+                    );
+                    continue;
+                }
+                Ok(out) => out,
             };
-            if let Err(e) = names.and_then(|()| {
-                // The property must be in this model, compiled.
-                let Ok((_, found)) = lowered else {
-                    return Ok(());
-                };
-                match found.iter().find(|f| target_name(&f.name) == check) {
-                    None if in_rtl => Err("not in the model (inside a black box)".to_string()),
-                    None => Err("not in the model (disabled)".to_string()),
-                    Some(f) => match (&f.unsupported, &f.error) {
-                        (Some(why), _) => Err(format!("not supported yet: {why}")),
-                        (None, Some(e)) => Err(e.clone()),
-                        (None, None) => Ok(()),
-                    },
+            if self.props[i].bound.is_some() {
+                let outcome = self.check_one_with(
+                    engines,
+                    i,
+                    &out,
+                    tracker.map(|t| (t, slot)),
+                    self.effort,
+                    p1_timeout,
+                    true,
+                );
+                if self.record_target_result(i, slot, tracker, outcome) {
+                    for &(_, pi, _, _) in &pending {
+                        self.mark_stopped(&[pi]);
+                    }
+                    return (k + 1, true);
                 }
-            }) {
-                let status = Status::Error { message: e };
-                if let Some(t) = tracker {
-                    t.finished(slot, &status, &[]);
-                }
-                self.props[i].status = status;
-                self.props[i].engines.clear();
-                self.props[i].stats = None;
                 continue;
             }
-            let out = self.workdir.join(format!("prop_{i}.btor2"));
-            let built = match lowered {
-                Err(e) => Err(anyhow!("{e}")),
-                Ok((btor, _)) => {
-                    let keep = check.clone();
-                    if !has_target(btor, &keep) {
-                        // Without its line the model would hold trivially.
-                        Err(anyhow!("no check named {keep} in the model"))
-                    } else {
-                        let task_of_prop = &self.props[i].task;
-                        let self_helpers: Vec<String> = self
-                            .props
-                            .iter()
-                            .filter(|p| {
-                                p.enabled
-                                    && p.kind == Kind::Assume
-                                    && &p.task == task_of_prop
-                                    && p.from_assert.as_deref() == Some(keep.as_str())
-                            })
-                            .map(|p| target_name(&p.name))
-                            .collect();
-                        let (model, section) = informal_svlang::split_trace(btor);
-                        let mut per_model = only_target(model, &keep);
-                        if !self_helpers.is_empty() {
-                            per_model = drop_assumptions(&per_model, &self_helpers);
-                        }
-                        let mut r = std::fs::write(&out, per_model);
-                        // The same model plus `output` lines naming the
-                        // combinational nets, for the VCD (trace_model).
-                        if r.is_ok() && !section.is_empty() {
-                            let mut per_trace = only_target(btor, &keep);
-                            if !self_helpers.is_empty() {
-                                per_trace = drop_assumptions(&per_trace, &self_helpers);
-                            }
-                            r = std::fs::write(trace_model(&out), per_trace);
-                        }
-                        r.map_err(anyhow::Error::from)
-                    }
+            let t0 = Instant::now();
+            let (status, trace, runs, stats) = self.check_one_with(
+                engines,
+                i,
+                &out,
+                tracker.map(|t| (t, slot)),
+                Effort::Low,
+                p1_timeout,
+                false,
+            );
+            let spent = t0.elapsed();
+            if self.stop.load(Ordering::SeqCst) {
+                let _ = self.record_target_result(i, slot, tracker, (status, trace, runs, stats));
+                for &(_, pi, _, _) in &pending {
+                    self.mark_stopped(&[pi]);
                 }
-            };
-            self.props[i].trace = None;
-            let (mut status, trace, runs, mut stats) = match built {
-                Err(e) => (
-                    Status::Error {
-                        message: format!("{e:#}"),
-                    },
-                    None,
-                    Vec::new(),
-                    None,
-                ),
-                Ok(()) => self.check_one(engines, i, &out, tracker.map(|t| (t, slot))),
-            };
-            // Stopped mid-run: the portfolio came back without a verdict.
-            // A verdict that landed just before the Stop is kept.
-            let halt = self.stop.load(Ordering::SeqCst);
-            if halt && matches!(status, Status::Undetermined { .. }) {
-                status = Status::Undetermined {
-                    reason: "stopped".into(),
-                };
+                return (k + 1, true);
             }
-            // The verdict may have been withdrawn or stopped since the
-            // statistics were taken: the engine named is the status's.
-            if let Some(st) = &mut stats {
-                if matches!(status, Status::Undetermined { .. } | Status::Error { .. }) {
-                    st.engine = None;
-                    if st.depth_kind != Some("bound") {
-                        st.depth = st.max_bound;
-                        st.depth_kind = st.max_bound.map(|_| "bound");
-                    }
+            if !matches!(status, Status::Undetermined { .. }) {
+                let _ = self.record_target_result(i, slot, tracker, (status, trace, runs, stats));
+            } else {
+                self.props[i].status = status;
+                self.props[i].engines = runs;
+                self.props[i].stats = stats;
+                if let Some(t) = tracker {
+                    t.defer(slot);
                 }
-            }
-            if let Some(t) = tracker {
-                t.finished(slot, &status, &runs);
-            }
-            self.props[i].status = status;
-            self.props[i].trace = trace;
-            self.props[i].engines = runs;
-            self.props[i].stats = stats;
-            if halt {
-                return k + 1;
+                pending.push((k, i, out, spent));
             }
         }
-        targets.len()
+
+        // Pass 2 converges remaining undetermined targets at full `self.effort`.
+        for (p_idx, &(k, i, ref out, spent)) in pending.iter().enumerate() {
+            let slot = base + k;
+            if self.stop.load(Ordering::SeqCst) {
+                for &(_, pi, _, _) in &pending[p_idx..] {
+                    self.mark_stopped(&[pi]);
+                }
+                return (targets.len(), true);
+            }
+            let rem_prop = self
+                .time_limit
+                .saturating_sub(spent)
+                .max(Duration::from_millis(50).min(self.time_limit));
+            let Some(p2_timeout) = budget_for(rem_prop) else {
+                for &(pk, pi, _, _) in &pending[p_idx..] {
+                    self.mark_total_timeout(&[pi], tracker, base + pk);
+                }
+                return (targets.len(), false);
+            };
+            if let Some(t) = tracker {
+                t.running(slot);
+            }
+            let outcome = self.check_one_with(
+                engines,
+                i,
+                out,
+                tracker.map(|t| (t, slot)),
+                self.effort,
+                p2_timeout,
+                true,
+            );
+            if self.record_target_result(i, slot, tracker, outcome) {
+                for &(_, pi, _, _) in &pending[p_idx + 1..] {
+                    self.mark_stopped(&[pi]);
+                }
+                return (targets.len(), true);
+            }
+        }
+        (targets.len(), false)
     }
 
     /// The enabled properties given by command, each as the name of its
@@ -2095,7 +2357,9 @@ impl Session {
                 .collect(),
             cover_targets: true,
             precondition_covers: self.preconditions && !branch_covers && !toggle_covers,
-            witness_covers: self.witnesses && !branch_covers && !toggle_covers,
+            witness_covers: (self.witnesses || self.effort == Effort::Max)
+                && !branch_covers
+                && !toggle_covers,
             bbox_mul_width: self.design.bbox_mul,
             bbox_array_words: self.design.bbox_a,
             branch_covers,
@@ -2247,12 +2511,16 @@ impl Session {
     /// progress (k-bound) is forwarded to it for `slot`. A CEX or cover
     /// also gets its trace written (the path is returned with the status),
     /// and every engine's run is returned for the proof profiler.
-    fn check_one(
+    #[allow(clippy::too_many_arguments)]
+    fn check_one_with(
         &self,
         engines: &[Arc<dyn Engine>],
         i: usize,
         model: &Path,
         tracker: Option<(&Tracker, usize)>,
+        effort: Effort,
+        timeout: Duration,
+        allow_bounded_promote: bool,
     ) -> (
         Status,
         Option<String>,
@@ -2267,8 +2535,12 @@ impl Session {
                 .count()
         };
         let bads = has("bad") + has("justice");
-        let filtered =
-            informal_bmc::select_for_btor(engines, &text, !self.engine_filter.is_empty());
+        let filtered = informal_bmc::select_for_btor_with_effort(
+            engines,
+            &text,
+            !self.engine_filter.is_empty(),
+            effort,
+        );
         let engines = &filtered[..];
         if bads == 0 {
             // The front end folded the check to a constant true.
@@ -2293,7 +2565,9 @@ impl Session {
             let req = CheckRequest {
                 model: model.to_path_buf(),
                 format: ModelFormat::Btor2,
-                timeout: self.time_limit,
+                timeout,
+                effort,
+                max_depth: Some(bound),
             };
             let before = crate::stats::Usage::now();
             let o = portfolio::run_until(&bounded_engines, &req, None, Some(self.stop.as_ref()));
@@ -2371,7 +2645,9 @@ impl Session {
         let req = CheckRequest {
             model: model.to_path_buf(),
             format: ModelFormat::Btor2,
-            timeout: self.time_limit,
+            timeout,
+            effort,
+            max_depth: self.max_trace_length,
         };
         let stop = Some(self.stop.as_ref());
         let before = crate::stats::Usage::now();
@@ -2425,6 +2701,27 @@ impl Session {
             (Verdict::Safe, _) => Status::Proven { engine, ms },
             (Verdict::Unsafe { depth }, Kind::Cover) => Status::Covered { engine, depth, ms },
             (Verdict::Unsafe { depth }, _) => Status::Cex { engine, depth, ms },
+            (Verdict::Unknown { reason }, Kind::Assert)
+                if allow_bounded_promote && !self.stop.load(Ordering::SeqCst) =>
+            {
+                if let Some((bound, bmc_eng)) = self.max_trace_length.and_then(|b| {
+                    o.runs
+                        .iter()
+                        .filter_map(|r| r.as_ref().ok())
+                        .find(|r| {
+                            matches!(&r.verdict, Verdict::Unknown { reason } if reason.starts_with("bound"))
+                        })
+                        .map(|r| (b, r.engine.clone()))
+                }) {
+                    Status::BoundedProven {
+                        engine: bmc_eng,
+                        bound,
+                        ms,
+                    }
+                } else {
+                    Status::Undetermined { reason }
+                }
+            }
             (Verdict::Unknown { reason }, _) => Status::Undetermined { reason },
         };
         let mut status = status;
@@ -2566,11 +2863,11 @@ impl Session {
             max_depth: Some(depth.unwrap_or(64) as usize),
             step: 1,
         };
-        let req = CheckRequest {
-            model: model.to_path_buf(),
-            format: ModelFormat::Btor2,
-            timeout: self.time_limit.min(Duration::from_secs(30)),
-        };
+        let req = CheckRequest::new(
+            model.to_path_buf(),
+            ModelFormat::Btor2,
+            self.time_limit.min(Duration::from_secs(30)),
+        );
         let r = bmc.check(&req, &informal_engine::RunContext::new(req.timeout))?;
         match (
             &r.verdict,

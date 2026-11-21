@@ -313,11 +313,11 @@ mod tests {
     }
 
     fn req() -> CheckRequest {
-        CheckRequest {
-            model: "m.btor2".into(),
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(10),
-        }
+        CheckRequest::new(
+            "m.btor2".into(),
+            ModelFormat::Btor2,
+            Duration::from_secs(10),
+        )
     }
 
     #[test]

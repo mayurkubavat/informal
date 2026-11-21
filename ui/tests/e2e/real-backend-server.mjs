@@ -148,12 +148,39 @@ function writeAxiTemplate(dir) {
   input  logic [31:0] rdata,
   input  logic [1:0]  rresp
 );
-  assign awaddr = 32'h0; assign wdata = 32'h0; assign wstrb = 4'hf; assign araddr = 32'h0;
-  assign bready = 1'b1; assign rready = 1'b1; assign wvalid = 1'b0; assign arvalid = 1'b0;
-  always_ff @(posedge clk or negedge rst_n)
-    if (!rst_n) awvalid <= 1'b0;
-    else if (!awvalid) awvalid <= 1'b1;
-    else if (awready) awvalid <= 1'b0;
+  assign bready = 1'b1;
+  assign rready = 1'b1;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      awvalid <= 1'b0;
+      awaddr  <= 32'h0;
+      wvalid  <= 1'b0;
+      wdata   <= 32'h0;
+      wstrb   <= 4'hf;
+      arvalid <= 1'b0;
+      araddr  <= 32'h0;
+    end else begin
+      if (!awvalid) begin
+        awvalid <= 1'b1;
+        awaddr  <= awaddr + 32'h4;
+      end else if (awready) begin
+        awvalid <= 1'b0;
+      end
+      if (!wvalid) begin
+        wvalid <= 1'b1;
+        wdata  <= wdata + 32'h1;
+        wstrb  <= 4'hf;
+      end else if (wready) begin
+        wvalid <= 1'b0;
+      end
+      if (!arvalid) begin
+        arvalid <= 1'b1;
+        araddr  <= araddr + 32'h4;
+      end else if (arready) begin
+        arvalid <= 1'b0;
+      end
+    end
+  end
 endmodule
 `,
   );

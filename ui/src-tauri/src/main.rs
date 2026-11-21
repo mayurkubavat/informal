@@ -196,12 +196,39 @@ async fn shell_source(w: State<'_, Worker>, path: String) -> Result<Reply, Strin
                      \x20 input  logic [31:0] rdata,\n\
                      \x20 input  logic [1:0]  rresp\n\
                      );\n\
-                     \x20 assign awaddr = 32'h0; assign wdata = 32'h0; assign wstrb = 4'hf; assign araddr = 32'h0;\n\
-                     \x20 assign bready = 1'b1; assign rready = 1'b1; assign wvalid = 1'b0; assign arvalid = 1'b0;\n\
-                     \x20 always_ff @(posedge clk or negedge rst_n)\n\
-                     \x20   if (!rst_n) awvalid <= 1'b0;\n\
-                     \x20   else if (!awvalid) awvalid <= 1'b1;\n\
-                     \x20   else if (awready) awvalid <= 1'b0;\n\
+                     \x20 assign bready = 1'b1;\n\
+                     \x20 assign rready = 1'b1;\n\
+                     \x20 always_ff @(posedge clk or negedge rst_n) begin\n\
+                     \x20   if (!rst_n) begin\n\
+                     \x20     awvalid <= 1'b0;\n\
+                     \x20     awaddr  <= 32'h0;\n\
+                     \x20     wvalid  <= 1'b0;\n\
+                     \x20     wdata   <= 32'h0;\n\
+                     \x20     wstrb   <= 4'hf;\n\
+                     \x20     arvalid <= 1'b0;\n\
+                     \x20     araddr  <= 32'h0;\n\
+                     \x20   end else begin\n\
+                     \x20     if (!awvalid) begin\n\
+                     \x20       awvalid <= 1'b1;\n\
+                     \x20       awaddr  <= awaddr + 32'h4;\n\
+                     \x20     end else if (awready) begin\n\
+                     \x20       awvalid <= 1'b0;\n\
+                     \x20     end\n\
+                     \x20     if (!wvalid) begin\n\
+                     \x20       wvalid <= 1'b1;\n\
+                     \x20       wdata  <= wdata + 32'h1;\n\
+                     \x20       wstrb  <= 4'hf;\n\
+                     \x20     end else if (wready) begin\n\
+                     \x20       wvalid <= 1'b0;\n\
+                     \x20     end\n\
+                     \x20     if (!arvalid) begin\n\
+                     \x20       arvalid <= 1'b1;\n\
+                     \x20       araddr  <= araddr + 32'h4;\n\
+                     \x20     end else if (arready) begin\n\
+                     \x20       arvalid <= 1'b0;\n\
+                     \x20     end\n\
+                     \x20   end\n\
+                     \x20 end\n\
                      endmodule\n",
                 );
                 format!(
@@ -874,6 +901,7 @@ fn main() {
             .unwrap_or_default()
             .into_iter()
             .chain(informal_bmc::engines())
+            .chain(informal_bitwuzla::engines())
             .collect();
         let mut session = Session::new(engines, PathBuf::from(WORKDIR));
         session.sink = Some(sink);

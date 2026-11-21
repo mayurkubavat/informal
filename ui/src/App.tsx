@@ -6,7 +6,7 @@
 // as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, type AiStatus, type DesignInfo as DesignInfoData, EngineLine, Flavor, type FormalLintFindingView, type FormalQuickFixView, type GuiRequest, type GuiState, ProveProgress, Reply, type SchematicGraphView, SessionView, type WhyCexReport } from "./backend";
+import { backend, type AiStatus, type DesignInfo as DesignInfoData, type EffortLevel, EngineLine, Flavor, type FormalLintFindingView, type FormalQuickFixView, type GuiRequest, type GuiState, type OrchestrationMode, ProveProgress, Reply, type SchematicGraphView, SessionView, type WhyCexReport } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   bound, clock, designScopes, memText, OPTIONAL_COLS, SURFER_MISSING, isProveCmd, parsePorts, STATUS_LABEL, sourceFile, sourceLine, taskOf, time, traceOf, withProgress,
@@ -1255,6 +1255,96 @@ export default function App() {
   }, [infoOpen, idle, session?.elaborated, loadInfo]);
   const proveAll = () => provePlan.cmd && idle && prove(provePlan.cmd);
   const proveSelected = () => current && current.kind !== "assume" && idle && prove(proveOne(current.name));
+
+  // ---- Proof Effort & Budget Controls (Dual-Persona: Novice UI + Tcl Echo) ----
+  const curEffort: EffortLevel = session?.effort ?? "standard";
+  const curOrch: OrchestrationMode = session?.orchestration ?? "auto";
+  const curMaxBound = session?.max_trace_length ?? null;
+  const formatDurShort = (d?: { secs: number; nanos: number } | null): string => {
+    if (!d) return "";
+    if (d.nanos !== 0) return `${Math.round(d.secs * 1000 + d.nanos / 1_000_000)}ms`;
+    if (d.secs >= 3600 && d.secs % 3600 === 0) return `${d.secs / 3600}h`;
+    if (d.secs >= 60 && d.secs % 60 === 0) return `${d.secs / 60}m`;
+    return `${d.secs}s`;
+  };
+  const curPerPropText = formatDurShort(session?.time_limit) || "1h";
+  const curTotalText = formatDurShort(session?.total_time_limit);
+  const [budgetOpen, setBudgetOpen] = useState(false);
+  const [tlDraft, setTlDraft] = useState("");
+  const [totDraft, setTotDraft] = useState("");
+  const [boundDraft, setBoundDraft] = useState("");
+  const budgetWrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!budgetOpen) return;
+    setTlDraft(curPerPropText);
+    setTotDraft(curTotalText);
+    setBoundDraft(curMaxBound != null ? String(curMaxBound) : "");
+    const onDown = (ev: MouseEvent) => {
+      if (budgetWrapRef.current && !budgetWrapRef.current.contains(ev.target as Node)) {
+        setBudgetOpen(false);
+      }
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        setBudgetOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [budgetOpen, curPerPropText, curTotalText, curMaxBound]);
+
+  const applyEffort = useCallback(
+    (eff: EffortLevel) => {
+      if (!idle) return;
+      const cmd = flavor === "vcf" ? `set_fml_var fml_effort ${eff}` : `set_prove_effort ${eff}`;
+      void run(() => backend.evalTcl(cmd), cmd);
+    },
+    [idle, flavor, run],
+  );
+  const applyPerPropLimit = useCallback(
+    (val: string) => {
+      const v = val.trim();
+      if (!idle || !v) return;
+      const cmd = flavor === "vcf" ? `set_fml_var fml_max_time ${v}` : `set_prove_time_limit ${v}`;
+      setTlDraft(v);
+      void run(() => backend.evalTcl(cmd), cmd);
+    },
+    [idle, flavor, run],
+  );
+  const applyTotalLimit = useCallback(
+    (val: string) => {
+      const v = val.trim() || "off";
+      if (!idle) return;
+      const cmd = `set_prove_total_time_limit ${v}`;
+      setTotDraft(v === "off" || v === "0" ? "" : v);
+      void run(() => backend.evalTcl(cmd), cmd);
+    },
+    [idle, run],
+  );
+  const applyMaxBound = useCallback(
+    (val: string) => {
+      const v = val.trim() || "off";
+      if (!idle) return;
+      const cmd = flavor === "vcf" ? `set_fml_var fml_max_depth ${v}` : `set_max_trace_length ${v}`;
+      setBoundDraft(v === "off" || v === "0" ? "" : v);
+      void run(() => backend.evalTcl(cmd), cmd);
+    },
+    [idle, flavor, run],
+  );
+  const applyOrchestration = useCallback(
+    (mode: OrchestrationMode) => {
+      if (!idle) return;
+      const cmd = `set_prove_orchestration ${mode}`;
+      void run(() => backend.evalTcl(cmd), cmd);
+    },
+    [idle, run],
+  );
   const openScriptPath = useCallback(
     (p: string) => {
       setScriptPath(p);
@@ -1495,6 +1585,13 @@ export default function App() {
         { label: "Prove all", hint: proveCmd, keys: "F5", onClick: proveAll, disabled: !idle || !allProps.length },
         { label: "Prove selected", keys: "F6", onClick: proveSelected, disabled: !idle || !current || current.kind === "assume" },
         { label: stopping ? "Stopping…" : "Stop", keys: "Esc", onClick: stop, disabled: !running || stopping },
+        { sep: true },
+        { label: "Effort: Quick (low)", checked: curEffort === "low", disabled: !idle, onClick: () => applyEffort("low") },
+        { label: "Effort: Standard", checked: curEffort === "standard", disabled: !idle, onClick: () => applyEffort("standard") },
+        { label: "Effort: Deep (high)", checked: curEffort === "high", disabled: !idle, onClick: () => applyEffort("high") },
+        { label: "Effort: Signoff (max)", checked: curEffort === "max", disabled: !idle, onClick: () => applyEffort("max") },
+        { sep: true },
+        { label: "Proof budget & limits…", disabled: !idle, onClick: () => setBudgetOpen(true) },
       ],
     },
     {
@@ -1559,6 +1656,10 @@ export default function App() {
       { id: "theme-dark", group: "Theme", label: "Switch Theme: Dark", run: () => setTheme("dark") },
       { id: "flavor-jg", group: "Flavor", label: "Tcl Flavor: JasperGold", disabled: !idle, run: () => changeFlavor("jg") },
       { id: "flavor-vcf", group: "Flavor", label: "Tcl Flavor: VC Formal", disabled: !idle, run: () => changeFlavor("vcf") },
+      { id: "effort-low", group: "Prove", label: "Proof Effort: Quick (low)", disabled: !idle, run: () => applyEffort("low") },
+      { id: "effort-standard", group: "Prove", label: "Proof Effort: Standard", disabled: !idle, run: () => applyEffort("standard") },
+      { id: "effort-high", group: "Prove", label: "Proof Effort: Deep (high)", disabled: !idle, run: () => applyEffort("high") },
+      { id: "effort-max", group: "Prove", label: "Proof Effort: Signoff (max)", disabled: !idle, run: () => applyEffort("max") },
       ...allProps.slice(0, 80).map((p) => ({
         id: `prop-${p.name}`,
         group: "Property",
@@ -1567,7 +1668,7 @@ export default function App() {
         run: () => (traceOf(p) ? openTrace(p.name) : select(p.name)),
       })),
     ],
-    [proveCmd, idle, allProps, current, hasTrace, topFile, launchCexWalkthrough, openSchematic, openApps, setLayoutPreset, setCenter, setTheme],
+    [proveCmd, idle, allProps, current, hasTrace, topFile, launchCexWalkthrough, openSchematic, openApps, setLayoutPreset, setCenter, setTheme, applyEffort],
   );
 
   const centerTabs = (
@@ -1724,7 +1825,7 @@ export default function App() {
       )}
 
       {/* ---- tool row ---- */}
-      <div className="toolrow">
+      <div className={`toolrow ${running ? "is-proving" : ""}`}>
         {narrow && (
           <button
             className={`tool drawer-toggle ${drawerOpen ? "on" : ""}`}
@@ -1791,6 +1892,162 @@ export default function App() {
         <button className="tool tool-text" onClick={stop} disabled={!running || stopping} title="Stop the running prove (Esc)">
           <StopIcon /> {stopping ? "Stopping…" : "Stop"}
         </button>
+        <div className="prove-config-group" ref={budgetWrapRef}>
+          <label
+            className="field effort-field"
+            title="Engine proof effort: Quick (low), Standard, Deep (high: invariant mining + deep CTG), Signoff (max: 6-worker IC3 + witness & proof core)"
+          >
+            <span className="effort-label">Effort</span>
+            <select
+              aria-label="Proof effort"
+              value={curEffort}
+              disabled={!idle}
+              onChange={(e) => applyEffort(e.target.value as EffortLevel)}
+            >
+              <option value="low">Quick</option>
+              <option value="standard">Standard</option>
+              <option value="high">Deep</option>
+              <option value="max">Signoff</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className={`tool tool-text budget-btn ${budgetOpen ? "on" : ""}`}
+            disabled={!idle}
+            aria-label="Proof budget"
+            aria-expanded={budgetOpen}
+            title="Configure per-property timeout, batch time limit, max trace bound, and 2-pass orchestration"
+            onClick={() => setBudgetOpen((o) => !o)}
+          >
+            <span className="mono budget-summary">
+              {curPerPropText}
+              {curMaxBound != null ? ` · k≤${curMaxBound}` : ""}
+            </span>
+          </button>
+          {budgetOpen && (
+            <div className="budget-popover" role="dialog" aria-label="Proof budget settings">
+              <div className="budget-row">
+                <div className="budget-head">
+                  <span className="strong">Per-prop limit</span>
+                  <code className="mono dim small">{flavor === "vcf" ? "fml_max_time" : "set_prove_time_limit"}</code>
+                </div>
+                <div className="budget-controls">
+                  {(["10s", "60s", "5m", "1h"] as const).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={`btn small ${curPerPropText === p ? "active" : ""}`}
+                      disabled={!idle}
+                      onClick={() => applyPerPropLimit(p)}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                  <input
+                    className="budget-input mono"
+                    aria-label="Per-property limit"
+                    disabled={!idle}
+                    value={tlDraft}
+                    placeholder="e.g. 30s"
+                    onChange={(e) => setTlDraft(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && applyPerPropLimit(tlDraft)}
+                  />
+                </div>
+              </div>
+              {flavor === "jg" && (
+                <div className="budget-row">
+                  <div className="budget-head">
+                    <span className="strong">Total limit</span>
+                    <code className="mono dim small">set_prove_total_time_limit</code>
+                  </div>
+                  <div className="budget-controls">
+                    {(["off", "2m", "10m", "30m"] as const).map((p) => {
+                      const active = p === "off" ? !curTotalText : curTotalText === p;
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          className={`btn small ${active ? "active" : ""}`}
+                          disabled={!idle}
+                          onClick={() => applyTotalLimit(p)}
+                        >
+                          {p === "off" ? "Off" : p}
+                        </button>
+                      );
+                    })}
+                    <input
+                      className="budget-input mono"
+                      aria-label="Total batch limit"
+                      disabled={!idle}
+                      value={totDraft}
+                      placeholder="off"
+                      onChange={(e) => setTotDraft(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && applyTotalLimit(totDraft)}
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="budget-row">
+                <div className="budget-head">
+                  <span className="strong">Max bound</span>
+                  <code className="mono dim small">{flavor === "vcf" ? "fml_max_depth" : "set_max_trace_length"}</code>
+                </div>
+                <div className="budget-controls">
+                  {(["off", "20", "50", "200"] as const).map((b) => {
+                    const active = b === "off" ? curMaxBound == null : String(curMaxBound) === b;
+                    return (
+                      <button
+                        key={b}
+                        type="button"
+                        className={`btn small ${active ? "active" : ""}`}
+                        disabled={!idle}
+                        onClick={() => applyMaxBound(b)}
+                      >
+                        {b === "off" ? "∞" : b}
+                      </button>
+                    );
+                  })}
+                  <input
+                    className="budget-input mono"
+                    aria-label="Max trace bound"
+                    disabled={!idle}
+                    value={boundDraft}
+                    placeholder="∞"
+                    onChange={(e) => setBoundDraft(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && applyMaxBound(boundDraft)}
+                  />
+                </div>
+              </div>
+              {flavor === "jg" && (
+                <div className="budget-row">
+                  <div className="budget-head">
+                    <span className="strong">2-pass orchestration</span>
+                    <code className="mono dim small">set_prove_orchestration</code>
+                  </div>
+                  <div className="budget-controls">
+                    {(
+                      [
+                        ["auto", "Auto"],
+                        ["on", "On"],
+                        ["off", "Off"],
+                      ] as const
+                    ).map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        className={`btn small ${curOrch === val ? "active" : ""}`}
+                        disabled={!idle}
+                        onClick={() => applyOrchestration(val)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         <span className="vsep" />
         <ToolBtn
           title={hasTrace ? `Visualize trace (${currentTrace})` : "Visualize trace: select a CEX or cover"}

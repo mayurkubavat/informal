@@ -21,6 +21,7 @@ serde_json = "1"
 informal-fpv = { path = "../../crates/informal-fpv" }
 informal-engines-ext = { path = "../../crates/informal-engines-ext" }
 informal-bmc = { path = "../../crates/informal-bmc" }
+informal-bitwuzla = { path = "../../crates/informal-bitwuzla" }
 informal-llm = { path = "../../crates/informal-llm" }
 informal-mcp = { path = "../../crates/informal-mcp" }
 tokio = { version = "1", features = ["time"] }

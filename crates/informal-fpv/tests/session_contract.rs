@@ -11,10 +11,12 @@
 //! React UI handles every field and enum variant exhaustively.
 
 use informal_fpv::session::{
-    Clock, Environment, Kind, Property, Session, SourceLoc, Status, Vacuity, EMBEDDED,
+    Clock, Effort, Environment, Kind, Orchestration, Property, Session, SourceLoc, Status, Vacuity,
+    EMBEDDED,
 };
 use informal_fpv::stats::ProofStats;
 use std::path::PathBuf;
+use std::time::Duration;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -37,6 +39,10 @@ fn canonical_session() -> Session {
         phase: 0,
     }];
     s.reset = Some("!rst_n".into());
+    s.effort = Effort::High;
+    s.orchestration = Orchestration::Auto;
+    s.total_time_limit = Some(Duration::from_secs(900));
+    s.max_trace_length = Some(200);
     s.create_task("Protocol").unwrap();
     s.current_task = EMBEDDED.into();
 

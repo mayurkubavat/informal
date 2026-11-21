@@ -153,6 +153,8 @@ pub fn compute_proof_core(s: &Session, prop_idx: usize) -> Result<ProofCore, Str
                     model: path.clone(),
                     format: ModelFormat::Btor2,
                     timeout: trial_timeout,
+                    effort: s.effort,
+                    max_depth: None,
                 };
                 let run = portfolio::run_until(&engines, &req, None, Some(s.stop.as_ref()));
                 let _ = std::fs::remove_file(&path);

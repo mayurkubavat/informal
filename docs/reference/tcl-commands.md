@@ -16,7 +16,7 @@ Complete reference for all commands available in `informal shell`, generated dir
 
 - **Design Setup (Analyze, Elaborate, Clocks, Reset, Blackbox)** (14 commands)
 - **Properties, Cut Points, and Tasks** (12 commands)
-- **Proving, Engines, and Reporting** (19 commands)
+- **Proving, Engines, and Reporting** (22 commands)
 - **Debugging, Complexity, and Abstraction** (12 commands)
 - **Formal Apps** (7 commands)
 - **Environment, Vacuity, Lowering, and Proof Cache** (6 commands)
@@ -605,7 +605,7 @@ set_engines informal-bmc informal-kind informal-ic3
 Run the engine portfolio on properties or tasks and print a verdict table
 
 ```tcl
-prove [-all] [-task T] [-property {P ...}] [-time_limit D] [-bound K] [-with_proof_core]
+prove [-all] [-task T] [-property {P ...}] [-effort low|standard|high|max] [-orchestration auto|on|off] [-time_limit D] [-total_time_limit D] [-bound K] [-with_proof_core]
 ```
 
 | Option | Description |
@@ -613,20 +613,23 @@ prove [-all] [-task T] [-property {P ...}] [-time_limit D] [-bound K] [-with_pro
 | `-all` | Prove all enabled properties in the current task |
 | `-task <T>` | Prove all enabled properties in task `T` |
 | `-property <list>` | Prove only the named property or properties |
+| `-effort <level>` | Override proof effort (`low`/`quick`, `standard`, `high`/`deep`, `max`/`signoff`) |
+| `-orchestration <mode>` | Override two-pass sweep/converge scheduling (`auto`, `on`, `off`) |
 | `-time_limit / -per_property_time_limit <D>` | Override per-property timeout (e.g. `30s`, `5m`, `1h`) |
+| `-total_time_limit <D>` | Cap whole-batch wall-clock time across all targets (`0`/`off` disables) |
 | `-bound <K>` | Bound BMC/safety proofs to `K` cycles (`bounded_proven`) |
 | `-with_proof_core` | Extract minimal needed assumptions and state support for proven assertions |
 | `-engine_mode <modes>` | Temporarily map Jasper engine letters (`Ht`, `Hp`, `B`, `N`) |
 
-**Accepted & ignored vendor options:** `-bg`, `-dump_trace`, `-orchestration`, `-sst`
+**Accepted & ignored vendor options:** `-bg`, `-dump_trace`, `-sst`
 
 **Cross-flavor equivalent:** VCF: `check_fv`
 
-**Notes:** Runs environment consistency check first (when vacuity is on) and precondition/witness covers after proven assertions.
+**Notes:** Runs environment consistency check first (when vacuity is on), sweeps multi-property tasks at `low` effort before converging undetermined targets, and runs precondition/witness covers after proven assertions.
 
 ```tcl
 prove -all
-prove -task Safety -time_limit 60s -with_proof_core
+prove -task Safety -effort high -time_limit 60s -with_proof_core
 ```
 
 ### `get_property_list` (`jg`)
@@ -694,6 +697,63 @@ set_prove_per_property_time_limit <duration>
 
 ```tcl
 set_prove_per_property_time_limit 30s
+```
+
+### `set_prove_total_time_limit` (`jg`)
+
+Set or query the whole-batch wall-clock time limit across a `prove` run
+
+```tcl
+set_prove_total_time_limit [<duration|0|off>]
+```
+
+**Notes:** Pass `0` or `off` to clear the batch cap; call with no arguments to query the current setting.
+
+```tcl
+set_prove_total_time_limit 15m
+```
+
+### `set_prove_effort` (`jg`)
+
+Set or query the session engine proof effort level (`low`, `standard`, `high`, `max`)
+
+```tcl
+set_prove_effort [<low|standard|high|max>]
+```
+
+| Option | Description |
+| --- | --- |
+| `low / quick` | Skip `scorr` & simulation mining; run lightweight 1-step BMC/k-ind/IC3 subset |
+| `standard / medium` | Default balanced portfolio and `scorr` budget |
+| `high / deep` | Enable simulation + Houdini 2-literal mining, deeper CTG (`8`/`3`), derived predicates, and IC3 slice restarts |
+| `max / signoff` | `high` plus 6-worker diverse `Ic3Mt` pool and automatic witness cover + minimal proof-core signoff |
+
+**Cross-flavor equivalent:** VCF: `set_fml_var fml_effort`
+
+**Notes:** Call with no arguments to return the current effort level.
+
+```tcl
+set_prove_effort high
+```
+
+### `set_prove_orchestration` (`jg`)
+
+Set or query two-pass proof orchestration (`auto`, `on`, `off`)
+
+```tcl
+set_prove_orchestration [<auto|on|off>]
+```
+
+| Option | Description |
+| --- | --- |
+| `auto` | Enable two-pass sweep/converge automatically on multi-property runs (default) |
+| `on` | Always run a fast `low`-effort sweep pass before full-effort convergence |
+| `off` | Run every property in a single pass at the configured effort |
+
+**Notes:** Pass 1 sweeps targets for `min(2s, max(250ms, time_limit / 10))` at `low` effort so easy properties settle immediately before Pass 2 focuses full effort on remaining undetermined targets.
+
+```tcl
+set_prove_orchestration auto
 ```
 
 ### `set_engine_mode` (`jg`)
@@ -824,13 +884,15 @@ set_proofgrid_mode local
 
 ### `set_max_trace_length` (`jg`)
 
-Vendor trace length hint (accepted and ignored with a note)
+Set or query the persistent BMC unrolling bound (`0`/`off` clears)
 
 ```tcl
-set_max_trace_length <N>
+set_max_trace_length [<N|0|off>]
 ```
 
-**Notes:** Use `prove -bound K` or `assert -bound K` to bound proof depth.
+**Cross-flavor equivalent:** VCF: `set_fml_var fml_max_depth`
+
+**Notes:** Caps `informal-bmc` / `informal-wbmc` depth while still allowing inductive engines (`kind`, `ic3`, `wkind`) to prove unboundedly (`proven`, `∞`). Assertions cleared cleanly to bound `N` without an unbounded proof report `bounded_proven`.
 
 ```tcl
 set_max_trace_length 200
@@ -838,7 +900,7 @@ set_max_trace_length 200
 
 ### `set_fml_var` (`vcf`)
 
-Set VC Formal session variable (supports `fml_max_time`)
+Set VC Formal session variable (`fml_max_time`, `fml_effort`, `fml_max_depth`)
 
 ```tcl
 set_fml_var <name> <value>
@@ -847,13 +909,16 @@ set_fml_var <name> <value>
 | Option | Description |
 | --- | --- |
 | `fml_max_time` | Per-property time limit (e.g. `1H`, `300s`) |
+| `fml_effort` | Engine proof effort (`low`, `standard`, `high`, `max`) |
+| `fml_max_depth` | Persistent BMC trace bound (`N`, or `0`/`off` to clear) |
 
-**Cross-flavor equivalent:** JG: `set_prove_time_limit`
+**Cross-flavor equivalent:** JG: `set_prove_time_limit` / `set_prove_effort` / `set_max_trace_length`
 
 **Notes:** Unknown vendor tuning variables are accepted and ignored with a note.
 
 ```tcl
 set_fml_var fml_max_time 10m
+set_fml_var fml_effort high
 ```
 
 ### `check_fv` (`vcf`)
@@ -861,19 +926,21 @@ set_fml_var fml_max_time 10m
 Run the engine portfolio on VC Formal properties
 
 ```tcl
-check_fv [-property {P ...}]
+check_fv [-property {P ...}] [-effort low|standard|high|max] [-time_limit D]
 ```
 
 | Option | Description |
 | --- | --- |
 | `-property <list>` | Prove only the specified property names |
+| `-effort <level>` | Override proof effort for this run (`low`, `standard`, `high`, `max`) |
+| `-time_limit <D>` | Override per-property timeout for this run |
 
 **Accepted & ignored vendor options:** `-block`, `-break`, `-run_finish`
 
 **Cross-flavor equivalent:** JG: `prove`
 
 ```tcl
-check_fv -block
+check_fv -effort high -time_limit 60s
 ```
 
 ### `report_fv` (`vcf`)

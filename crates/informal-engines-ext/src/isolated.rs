@@ -254,7 +254,12 @@ impl Engine for Isolated {
             .arg(&req.model)
             .arg("--timeout-ms")
             .arg(left.as_millis().to_string())
-            .stdin(Stdio::null())
+            .arg("--effort")
+            .arg(req.effort.as_str());
+        if let Some(md) = req.max_depth {
+            cmd.arg("--max-depth").arg(md.to_string());
+        }
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);

@@ -21,7 +21,7 @@ pub mod unroll;
 use informal_aig::preprocess::{InputMap, LatchMap};
 use informal_aig::Aig;
 use informal_engine::{
-    Capabilities, Certificate, CheckRequest, Engine, EngineResult, ModelFormat, Progress,
+    Capabilities, Certificate, CheckRequest, Effort, Engine, EngineResult, ModelFormat, Progress,
     RunContext, Verdict,
 };
 use informal_sat::{Answer, Sat};
@@ -147,15 +147,25 @@ struct Slot {
     ready: std::sync::Condvar,
 }
 
-/// Model file, its length and mtime, whether scorr is on, and whether the
-/// clock is folded.
+/// Model file, its length and mtime, scorr tier (`0` = off, `1` = standard,
+/// `2` = deep), and whether the clock is folded.
 type SlotKey = (
     std::path::PathBuf,
     u64,
     Option<std::time::SystemTime>,
-    bool,
+    u8,
     bool,
 );
+
+fn scorr_tier(effort: Effort) -> u8 {
+    if std::env::var_os("INFORMAL_NO_SCORR").is_some() || effort == Effort::Low {
+        0
+    } else if matches!(effort, Effort::High | Effort::Max) {
+        2
+    } else {
+        1
+    }
+}
 
 static SLOTS: std::sync::Mutex<Vec<(SlotKey, Arc<Slot>)>> = std::sync::Mutex::new(Vec::new());
 
@@ -203,7 +213,7 @@ fn prepare_ctx_fold(
         req.model.clone(),
         meta.as_ref().map_or(0, |m| m.len()),
         meta.and_then(|m| m.modified().ok()),
-        std::env::var_os("INFORMAL_NO_SCORR").is_none(),
+        scorr_tier(req.effort),
         fold,
     );
     let slot = {
@@ -277,10 +287,9 @@ fn prepare_ctx_fold(
     }
 }
 
-/// Experiment H1: mine two-literal invariants by simulation, prove them
-/// with Houdini (up to 10% of the time left, at most 30 s) and give them
-/// to `ic3` up front.
-fn mine_into(g: &Aig, ic3: &mut ic3::Ic3, ctx: &RunContext, name: &str) {
+/// Experiment H1: mine two-literal invariants by simulation and prove them
+/// with Houdini (up to 10% of the time left, at most 30 s).
+fn mine_invariant(g: &Aig, ctx: &RunContext, name: &str) -> Vec<ic3::Cube> {
     let t = Instant::now();
     let k = std::env::var("INFORMAL_MINE_K")
         .ok()
@@ -311,7 +320,11 @@ fn mine_into(g: &Aig, ic3: &mut ic3::Ic3, ctx: &RunContext, name: &str) {
             t.elapsed().as_secs_f64()
         );
     }
-    ic3.assume_invariant(inv);
+    inv
+}
+
+fn mine_into(g: &Aig, ic3: &mut ic3::Ic3, ctx: &RunContext, name: &str) {
+    ic3.assume_invariant(mine_invariant(g, ctx, name));
 }
 
 /// INFORMAL_IC3_SEED: seed for the first phases in IC3's own solver
@@ -733,18 +746,24 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
         latch_lits,
     } = prepare(req, fold)?;
     let mut merged = Vec::new();
-    let (g, map, imap) = if std::env::var_os("INFORMAL_NO_SCORR").is_some() || ctx.should_stop() {
+    let tier = scorr_tier(req.effort);
+    let (g, map, imap) = if tier == 0 || ctx.should_stop() {
         (g, map, imap)
     } else {
         let now = Instant::now();
         let left = ctx.deadline.saturating_duration_since(now);
         let mut c = ctx.clone();
         // INFORMAL_SCORR_TL=<seconds> overrides the budget (experiments).
+        let default_budget = if tier >= 2 {
+            (left / 10).min(std::time::Duration::from_secs(15))
+        } else {
+            (left / 20).min(std::time::Duration::from_secs(10))
+        };
         let budget = std::env::var("INFORMAL_SCORR_TL")
             .ok()
             .and_then(|x| x.parse().ok())
             .map(std::time::Duration::from_secs_f64)
-            .unwrap_or_else(|| (left / 20).min(std::time::Duration::from_secs(10)));
+            .unwrap_or(default_budget);
         c.deadline = now + budget;
         match scorr::latch_correspondence(&g, solver(&c), &c) {
             Some((h, st, hmap, himap)) => {
@@ -897,6 +916,7 @@ impl Engine for Bmc {
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
         let step = self.step.max(1);
+        let eff_max = self.max_depth.or_else(|| req.max_depth.map(|d| d as usize));
         let mut witness = None;
         let mut cert_trace = None;
         let mut u = Unroll::new(&g, solver(ctx), false);
@@ -905,11 +925,11 @@ impl Engine for Bmc {
             if ctx.should_stop() {
                 break unknown(ctx.stop_reason());
             }
-            if self.max_depth.is_some_and(|m| k > m) {
+            if eff_max.is_some_and(|m| k > m) {
                 break unknown(format!("bound {} reached", k - 1));
             }
             let mut last = k + step - 1;
-            if let Some(m) = self.max_depth {
+            if let Some(m) = eff_max {
                 last = last.min(m);
             }
             let mut bads = Vec::new();
@@ -1207,10 +1227,18 @@ impl Engine for Ic3Engine {
         // H16 (INFORMAL_IC3_RESTART=<seconds>): run in slices of that
         // length, doubling; between slices keep only the lemmas that are
         // inductive together and start again on another seed.
+        let high_effort = matches!(req.effort, Effort::High | Effort::Max);
+        let total_left = ctx.deadline.saturating_duration_since(Instant::now());
         let restart: f64 = std::env::var("INFORMAL_IC3_RESTART")
             .ok()
             .and_then(|x| x.parse().ok())
-            .unwrap_or(0.0);
+            .unwrap_or_else(|| {
+                if high_effort && total_left >= std::time::Duration::from_secs(12) {
+                    5.0
+                } else {
+                    0.0
+                }
+            });
         let mut kept = stored_invariant(&g, ctx, self.name());
         let mut attempt = 0u32;
         let (ic3, v) = loop {
@@ -1243,15 +1271,34 @@ impl Engine for Ic3Engine {
                     t0,
                 ));
             };
-            if attempt == 0 && std::env::var_os("INFORMAL_IC3_MINE").is_some() {
+            if attempt == 0
+                && (std::env::var_os("INFORMAL_IC3_MINE").is_some()
+                    || (high_effort
+                        && ctx.deadline.saturating_duration_since(Instant::now())
+                            >= std::time::Duration::from_millis(500)))
+            {
                 mine_into(&g, &mut ic3, ctx, self.name());
             }
             if std::env::var_os("INFORMAL_IC3_HOUDINI").is_none() {
                 // H2 on by default here: gap set 1 -> 3 at 300 s, sample 20 -> 21.
-                ic3.set_config(ic3::Config {
-                    houdini_every: 4,
-                    ..ic3::Config::default()
-                });
+                let d = ic3::Config::default();
+                let cfg = if high_effort {
+                    ic3::Config {
+                        houdini_every: 4,
+                        max_ctgs: d.max_ctgs.max(8),
+                        max_ctg_depth: d.max_ctg_depth.max(3),
+                        derive: true,
+                        cti_mine: true,
+                        coupled_push: true,
+                        ..d
+                    }
+                } else {
+                    ic3::Config {
+                        houdini_every: 4,
+                        ..d
+                    }
+                };
+                ic3.set_config(cfg);
             }
             ic3.assume_invariant(kept.clone());
             let v = ic3.check(&slice);
@@ -1522,7 +1569,51 @@ impl Engine for Ic3Mt {
         };
         let pool = Arc::new(ic3::LemmaPool::default());
         // H15: proved once here, assumed by every worker.
-        let stored = stored_invariant(&g, ctx, self.name());
+        let mut stored = stored_invariant(&g, ctx, self.name());
+        if matches!(req.effort, Effort::High | Effort::Max)
+            && ctx.deadline.saturating_duration_since(Instant::now())
+                >= std::time::Duration::from_millis(500)
+        {
+            stored.extend(mine_invariant(&g, ctx, self.name()));
+            stored.sort();
+            stored.dedup();
+        }
+        let mut workers = self.workers.clone();
+        if matches!(req.effort, Effort::High | Effort::Max) {
+            let d = ic3::Config::default();
+            if let Some((_, c0)) = workers.first_mut() {
+                c0.max_ctgs = c0.max_ctgs.max(8);
+                c0.max_ctg_depth = c0.max_ctg_depth.max(3);
+                c0.derive = true;
+            }
+            if req.effort == Effort::Max {
+                workers.push((
+                    false,
+                    ic3::Config {
+                        max_ctgs: 8,
+                        max_ctg_depth: 3,
+                        derive: true,
+                        houdini_every: 4,
+                        cti_mine: true,
+                        coupled_push: true,
+                        ..d
+                    },
+                ));
+                workers.push((
+                    true,
+                    ic3::Config {
+                        max_ctgs: 8,
+                        max_ctg_depth: 3,
+                        activity_order: true,
+                        lemma_domain: true,
+                        parent_lemma: true,
+                        exctg: true,
+                        stall_push: true,
+                        ..d
+                    },
+                ));
+            }
+        }
         // Workers stop on our token: cancelled by the winner or by `ctx`.
         let mut inner = ctx.clone();
         inner.cancel = informal_engine::CancelToken::new();
@@ -1538,8 +1629,7 @@ impl Engine for Ic3Mt {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
             });
-            let hs: Vec<_> = self
-                .workers
+            let hs: Vec<_> = workers
                 .iter()
                 .enumerate()
                 .map(|(id, &(mini, cfg))| {
@@ -1655,11 +1745,30 @@ pub fn select_for_btor(
     btor_text: &str,
     explicit_filter: bool,
 ) -> Vec<Arc<dyn Engine>> {
+    select_for_btor_with_effort(engines, btor_text, explicit_filter, Effort::Standard)
+}
+
+pub fn select_for_btor_with_effort(
+    engines: &[Arc<dyn Engine>],
+    btor_text: &str,
+    explicit_filter: bool,
+    effort: Effort,
+) -> Vec<Arc<dyn Engine>> {
     let Ok(m) = informal_ir::parse(btor_text) else {
         return engines.to_vec();
     };
     let f = informal_ir::Features::of(&m);
     if f.justice > 0 {
+        if effort == Effort::Low && !explicit_filter {
+            let light_live: Vec<_> = engines
+                .iter()
+                .filter(|e| matches!(e.name(), "informal-klive" | "informal-bmc" | "informal-ic3"))
+                .cloned()
+                .collect();
+            if !light_live.is_empty() {
+                return light_live;
+            }
+        }
         let out: Vec<_> = engines
             .iter()
             .filter(|e| {
@@ -1697,6 +1806,21 @@ pub fn select_for_btor(
             .collect();
         if !arr.is_empty() {
             return arr;
+        }
+    }
+    if effort == Effort::Low {
+        let light: Vec<_> = base
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.name(),
+                    "informal-bmc" | "informal-kind" | "informal-ic3" | "informal-wbmc"
+                )
+            })
+            .cloned()
+            .collect();
+        if !light.is_empty() {
+            return light;
         }
     }
     if f.states == 0 {
@@ -1745,11 +1869,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("m{}.btor2", text.len()));
         std::fs::write(&path, text).unwrap();
-        let req = CheckRequest {
-            model: path,
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(60),
-        };
+        let req = CheckRequest::new(path, ModelFormat::Btor2, Duration::from_secs(60));
         e.check(&req, &RunContext::new(req.timeout))
             .unwrap()
             .verdict
@@ -1972,11 +2092,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("twin.btor2");
         std::fs::write(&path, twin(7)).unwrap();
-        let req = CheckRequest {
-            model: path,
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(10),
-        };
+        let req = CheckRequest::new(path, ModelFormat::Btor2, Duration::from_secs(10));
         let ctx = RunContext::new(req.timeout);
         let g = prepare(&req, false).unwrap().aig;
         assert_eq!(g.latches.len(), 6);
@@ -2072,11 +2188,7 @@ mod tests {
         let path = dir.join("c.btor2");
         std::fs::write(&path, counter(7, true)).unwrap();
         let g = prepare(
-            &CheckRequest {
-                model: path,
-                format: ModelFormat::Btor2,
-                timeout: Duration::from_secs(10),
-            },
+            &CheckRequest::new(path, ModelFormat::Btor2, Duration::from_secs(10)),
             false,
         )
         .unwrap()
@@ -2153,11 +2265,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("swap.btor2");
         std::fs::write(&path, btor).unwrap();
-        let req = CheckRequest {
-            model: path,
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(10),
-        };
+        let req = CheckRequest::new(path, ModelFormat::Btor2, Duration::from_secs(10));
         let ctx = RunContext::new(req.timeout);
         let p = prepare_ctx_fold(&req, &ctx, false).unwrap();
 

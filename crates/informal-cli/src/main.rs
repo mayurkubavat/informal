@@ -57,6 +57,10 @@ enum Cmd {
         model: PathBuf,
         #[arg(long, default_value_t = 60_000)]
         timeout_ms: u64,
+        #[arg(long, default_value = "standard")]
+        effort: String,
+        #[arg(long)]
+        max_depth: Option<u32>,
     },
     /// Print a Btor2 model in canonical form.
     Fmt { model: PathBuf },
@@ -354,6 +358,8 @@ fn main() -> anyhow::Result<()> {
             name,
             model,
             timeout_ms,
+            effort,
+            max_depth,
         } => {
             let engine = in_house(false)?
                 .into_iter()
@@ -361,10 +367,13 @@ fn main() -> anyhow::Result<()> {
                 .with_context(|| format!("no in-house engine named {name}"))?;
             let format = informal_engine::ModelFormat::of_path(&model)
                 .with_context(|| format!("unknown model format: {}", model.display()))?;
+            let effort = informal_engine::Effort::parse(&effort).map_err(|e| anyhow::anyhow!(e))?;
             let req = informal_engine::CheckRequest {
                 model,
                 format,
                 timeout: Duration::from_millis(timeout_ms),
+                effort,
+                max_depth,
             };
             informal_engines_ext::isolated::serve(engine.as_ref(), &req)?;
         }
@@ -389,11 +398,7 @@ fn main() -> anyhow::Result<()> {
                 read_btor2(&model)?; // fail fast on malformed input
             }
             let engines = load_engines(&engines, &only, isolate)?;
-            let req = CheckRequest {
-                model,
-                format,
-                timeout: Duration::from_secs(timeout),
-            };
+            let req = CheckRequest::new(model, format, Duration::from_secs(timeout));
             informal_engine::memory::on_memout(|| println!("UNKNOWN (memout)"));
             let o = portfolio::run(&engines, &req, None);
             for r in &o.runs {
@@ -828,11 +833,11 @@ fn reduce(
                 .map(|n| pair.iter().find(|e| e.name() == n).cloned())
                 .collect::<Option<_>>()
                 .with_context(|| format!("engines {disagree:?} not both found"))?;
-            let req = CheckRequest {
-                model: cand.clone(),
-                format: ModelFormat::Aiger,
-                timeout: Duration::from_secs(timeout),
-            };
+            let req = CheckRequest::new(
+                cand.clone(),
+                ModelFormat::Aiger,
+                Duration::from_secs(timeout),
+            );
             let run = move |h: &informal_aig::Aig| -> Option<(Verdict, Verdict)> {
                 write(h).ok()?;
                 let mut v = Vec::new();

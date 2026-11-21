@@ -207,7 +207,8 @@ impl Engine for WordBmc {
         let t0 = Instant::now();
         let text = std::fs::read_to_string(&req.model)?;
         let m = informal_ir::parse(&text)?;
-        let verdict = run(&m, ctx, self.max_depth, self.name())?;
+        let eff_max = self.max_depth.or_else(|| req.max_depth.map(|d| d as usize));
+        let verdict = run(&m, ctx, eff_max, self.name())?;
         Ok(EngineResult {
             engine: self.name().into(),
             verdict,
@@ -756,11 +757,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(format!("m{}.btor2", text.len()));
         std::fs::write(&p, text).unwrap();
-        let req = CheckRequest {
-            model: p,
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(30),
-        };
+        let req = CheckRequest::new(p, ModelFormat::Btor2, Duration::from_secs(30));
         WordBmc {
             max_depth: Some(depth),
         }
@@ -787,11 +784,7 @@ mod tests {
             Verdict::Unknown { .. }
         ));
         let p = root.join("memory.btor2");
-        let req = CheckRequest {
-            model: p,
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(30),
-        };
+        let req = CheckRequest::new(p, ModelFormat::Btor2, Duration::from_secs(30));
         assert_eq!(
             WordKind {
                 max_depth: Some(10)

@@ -37,14 +37,25 @@ test.describe("Layer 5 — Real Rust Backend E2E", () => {
     await expect(page.locator(".tree")).toContainText("Protocol");
     await expect(page.locator(".env-pill")).toContainText("4 assumes");
 
+    // Switch Effort to Deep (`high`) before proving -> echoes `set_prove_effort high` against real Rust session
+    const effortSel = page.getByRole("combobox", { name: "Proof effort" });
+    await effortSel.selectOption("high");
+    await expect(page.locator(".console")).toContainText("set_prove_effort high");
+
     // Click Prove all -> must prove real Protocol properties (not no-op on empty <embedded>!)
     const proveBtn = page.getByRole("button", { name: "Prove all" });
     await expect(proveBtn).toContainText("Protocol (8)");
     await proveBtn.click();
 
+    // All 6 assertions prove non-vacuously and both write/read txn covers hit (`6 proven`, `2 covered`, 0 `unreachable`)!
+    await expect(page.locator(".strip-summary")).toContainText("6 proven", { timeout: 30_000 });
+    await expect(page.locator(".strip-summary")).toContainText("2 covered");
+    await expect(page.locator(".strip-summary")).not.toContainText("unreachable");
+    await expect(page.locator(".console")).not.toContainText("VACUOUS");
+
     // Real engines settle Protocol::axi4lite_aw_payload_stable as Proven with green glyph + ∞ + engine + time
     const provenRow = page.locator("table.grid tbody tr", { hasText: "Protocol::axi4lite_aw_payload_stable" });
-    await expect(provenRow).toContainText("Proven", { timeout: 30_000 });
+    await expect(provenRow).toContainText("Proven");
     await expect(provenRow.locator(".st-proven")).toBeVisible();
     await expect(provenRow).toContainText("∞");
     await expect(provenRow).toContainText(/informal-|ric3|abc/);

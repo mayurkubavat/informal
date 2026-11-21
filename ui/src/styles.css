@@ -222,6 +222,56 @@ select {
 .tool.on { background: var(--hover); border-color: var(--border-strong); }
 .tool-text { display: inline-flex; gap: 6px; padding: 0 8px; color: var(--text); white-space: nowrap; }
 .play { color: var(--st-play); }
+.prove-config-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+.prove-config-group .effort-field { margin-right: 0; gap: 4px; }
+.budget-btn { padding: 0 7px; font-size: 11.5px; color: var(--text-2); border-color: var(--border); }
+.budget-summary { font-variant-numeric: tabular-nums; }
+.budget-popover {
+  position: absolute;
+  top: 30px;
+  left: 0;
+  z-index: 35;
+  width: 320px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.budget-row { display: flex; flex-direction: column; gap: 5px; }
+.budget-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11.5px; }
+.budget-controls { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.budget-controls .btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+.budget-input {
+  width: 68px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11.5px;
+}
+@media (max-width: 1180px) {
+  .effort-label { display: none; }
+}
+@media (max-width: 1120px) {
+  .toolrow.is-proving .prove-config-group { display: none; }
+}
 /* prove progress, right of the tool row: thin neutral track, accent fill */
 /* fixed width, so the readout changing does not shift the tools */
 .progress { display: inline-flex; align-items: center; gap: 8px; margin-right: 12px; color: var(--text-2); font-size: 11.5px; white-space: nowrap; }

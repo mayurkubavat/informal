@@ -13,7 +13,8 @@
 //! silently on a different setup.
 
 use crate::session::{
-    glob, parse_duration, qualify, Clock, Kind, Session, SourceLoc, Status, EMBEDDED,
+    glob, parse_duration, qualify, Clock, Effort, Kind, Orchestration, Session, SourceLoc, Status,
+    EMBEDDED,
 };
 use informal_tcl::{Interp, TclError, Value};
 use std::cell::{Cell, RefCell};
@@ -1182,6 +1183,10 @@ const JG: &[(&str, Body)] = &[
                 ("-all", 0),
                 ("-property", 1),
                 ("-time_limit", 1),
+                ("-per_property_time_limit", 1),
+                ("-total_time_limit", 1),
+                ("-effort", 1),
+                ("-orchestration", 1),
                 ("-task", 1),
                 ("-bound", 1),
                 ("-with_proof_core", 0),
@@ -1189,15 +1194,29 @@ const JG: &[(&str, Body)] = &[
             &[
                 ("-bg", 0),
                 ("-engine_mode", 1),
-                ("-per_property_time_limit", 1),
                 ("-dump_trace", 0),
                 ("-sst", 1),
-                ("-orchestration", 1),
             ],
         )?;
         if let Some(t) = a.val("-time_limit") {
             s.time_limit = parse_duration(t)?;
         }
+        let run_per_prop = a
+            .val("-per_property_time_limit")
+            .map(parse_duration)
+            .transpose()?;
+        let run_total = a
+            .val("-total_time_limit")
+            .map(|v| parse_opt_duration("prove -total_time_limit", v))
+            .transpose()?;
+        let run_effort = a
+            .val("-effort")
+            .map(|v| Effort::parse(v).map_err(|e| format!("prove -effort: {e}")))
+            .transpose()?;
+        let run_orch = a
+            .val("-orchestration")
+            .map(|v| Orchestration::parse(v).map_err(|e| format!("prove -orchestration: {e}")))
+            .transpose()?;
         let run_bound = match a.val("-bound") {
             None => None,
             Some(v) => Some(v.parse::<u32>().ok().filter(|&n| n >= 1).ok_or_else(|| {
@@ -1254,11 +1273,33 @@ const JG: &[(&str, Body)] = &[
         };
         let saved_bound = s.prove_bound;
         let saved_pc = s.with_proof_core;
+        let saved_tl = s.time_limit;
+        let saved_total = s.total_time_limit;
+        let saved_effort = s.effort;
+        let saved_orch = s.orchestration;
         s.prove_bound = run_bound;
         s.with_proof_core = a.flag("-with_proof_core");
+        if let Some(d) = run_per_prop {
+            s.time_limit = d;
+        }
+        if let Some(tot) = run_total {
+            s.total_time_limit = tot;
+        }
+        if let Some(eff) = run_effort {
+            s.effort = eff;
+        }
+        if let Some(orch) = run_orch {
+            s.orchestration = orch;
+        }
         let res = prove_and_report(s, &which);
         s.prove_bound = saved_bound;
         s.with_proof_core = saved_pc;
+        if run_per_prop.is_some() {
+            s.time_limit = saved_tl;
+        }
+        s.total_time_limit = saved_total;
+        s.effort = saved_effort;
+        s.orchestration = saved_orch;
         res
     }),
     ("get_property_list", |s, a| {
@@ -1297,6 +1338,35 @@ const JG: &[(&str, Body)] = &[
                 .ok_or("set_prove_per_property_time_limit: time required")?,
         )?;
         Ok(().into())
+    }),
+    ("set_prove_total_time_limit", |s, a| match a.len() {
+        1 => Ok(s
+            .total_time_limit
+            .map(format_duration_short)
+            .unwrap_or_default()
+            .into()),
+        2 => {
+            s.total_time_limit = parse_opt_duration("set_prove_total_time_limit", &a[1])?;
+            Ok(().into())
+        }
+        _ => Err("set_prove_total_time_limit: expected at most 1 argument".into()),
+    }),
+    ("set_prove_effort", |s, a| match a.len() {
+        1 => Ok(s.effort.as_str().into()),
+        2 => {
+            s.effort = Effort::parse(&a[1]).map_err(|e| format!("set_prove_effort: {e}"))?;
+            Ok(().into())
+        }
+        _ => Err("set_prove_effort: expected at most 1 argument".into()),
+    }),
+    ("set_prove_orchestration", |s, a| match a.len() {
+        1 => Ok(s.orchestration.as_str().into()),
+        2 => {
+            s.orchestration =
+                Orchestration::parse(&a[1]).map_err(|e| format!("set_prove_orchestration: {e}"))?;
+            Ok(().into())
+        }
+        _ => Err("set_prove_orchestration: expected at most 1 argument".into()),
     }),
     ("set_engine_mode", |s, a| {
         // Jasper engine letters to the closest informal engines.
@@ -1427,8 +1497,53 @@ const JG: &[(&str, Body)] = &[
     ("set_proofgrid_max_local_jobs", |_, _| Ok(().into())),
     ("set_proofgrid_max_jobs", |_, _| Ok(().into())),
     ("set_proofgrid_mode", |_, _| Ok(().into())),
-    ("set_max_trace_length", |_, _| Ok(().into())),
+    ("set_max_trace_length", |s, a| match a.len() {
+        1 => Ok(s
+            .max_trace_length
+            .map(|n| n.to_string())
+            .unwrap_or_default()
+            .into()),
+        2 => {
+            s.max_trace_length = parse_opt_trace_len("set_max_trace_length", &a[1])?;
+            Ok(().into())
+        }
+        _ => Err("set_max_trace_length: expected at most 1 argument".into()),
+    }),
 ];
+
+fn format_duration_short(d: std::time::Duration) -> String {
+    if d.subsec_nanos() == 0 {
+        format!("{}s", d.as_secs())
+    } else {
+        format!("{}ms", d.as_millis())
+    }
+}
+
+fn parse_opt_duration(cmd: &str, raw: &str) -> Result<Option<std::time::Duration>, String> {
+    if matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "0" | "0s" | "0ms" | "off" | "none" | "unlimited"
+    ) {
+        return Ok(None);
+    }
+    let d = parse_duration(raw).map_err(|e| format!("{cmd}: {e}"))?;
+    Ok((!d.is_zero()).then_some(d))
+}
+
+fn parse_opt_trace_len(cmd: &str, raw: &str) -> Result<Option<u32>, String> {
+    if matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "0" | "off" | "none" | "unlimited"
+    ) {
+        return Ok(None);
+    }
+    raw.trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|&n| n >= 1)
+        .map(Some)
+        .ok_or_else(|| format!("{cmd}: positive integer or `0`/`off` expected, not `{raw}`"))
+}
 
 /// `get_design_info [-json] [-list instance|memory|clock|reset [-filter P
 /// [-regexp]]]`: the design's counts and the current task's model size
@@ -3064,6 +3179,12 @@ const VCF: &[(&str, Body)] = &[
         );
         match k.as_str() {
             "fml_max_time" => s.time_limit = parse_duration(v)?,
+            "fml_effort" => {
+                s.effort = Effort::parse(v).map_err(|e| format!("set_fml_var fml_effort: {e}"))?;
+            }
+            "fml_max_depth" => {
+                s.max_trace_length = parse_opt_trace_len("set_fml_var fml_max_depth", v)?;
+            }
             _ => note(&format!("set_fml_var: ignoring {k}")),
         }
         Ok(().into())
@@ -3142,16 +3263,34 @@ const VCF: &[(&str, Body)] = &[
     ("check_fv", |s, a| {
         let a = Args::parse(
             a,
-            &[("-property", 1)],
+            &[("-property", 1), ("-effort", 1), ("-time_limit", 1)],
             &[("-block", 0), ("-run_finish", 1), ("-break", 1)],
         )?;
+        let run_effort = a
+            .val("-effort")
+            .map(|v| Effort::parse(v).map_err(|e| format!("check_fv -effort: {e}")))
+            .transpose()?;
+        let run_tl = a.val("-time_limit").map(parse_duration).transpose()?;
         let which: Vec<String> = a.all("-property").flatten().cloned().collect();
         let which = if which.is_empty() {
             Vec::new()
         } else {
             select(s, &which)?
         };
-        prove_and_report(s, &which)
+        let saved_effort = s.effort;
+        let saved_tl = s.time_limit;
+        if let Some(eff) = run_effort {
+            s.effort = eff;
+        }
+        if let Some(tl) = run_tl {
+            s.time_limit = tl;
+        }
+        let res = prove_and_report(s, &which);
+        s.effort = saved_effort;
+        if run_tl.is_some() {
+            s.time_limit = saved_tl;
+        }
+        res
     }),
     ("report_fv", |s, a| {
         let _ = Args::parse(a, &[("-list", 0), ("-verbose", 0)], &[("-property", 1)])?;

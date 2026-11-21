@@ -201,9 +201,21 @@ impl Tracker {
     pub fn running(&self, slot: usize) {
         if let Some(s) = self.slots.lock().unwrap().get_mut(slot) {
             s.p.status = "running";
-            s.p.depth = Some(0);
+            if s.p.depth.is_none() {
+                s.p.depth = Some(0);
+            }
             s.p.ms = Some(0);
             s.since = Some(Instant::now());
+        }
+        self.emit(ProgressKind::Update);
+    }
+
+    /// Defer `slot` from Pass 1 sweep to Pass 2 convergence without logging a
+    /// premature `undetermined` console line, keeping the deepest bound seen.
+    pub fn defer(&self, slot: usize) {
+        if let Some(s) = self.slots.lock().unwrap().get_mut(slot) {
+            s.p.status = "unprocessed";
+            s.since = None;
         }
         self.emit(ProgressKind::Update);
     }

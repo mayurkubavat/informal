@@ -238,11 +238,7 @@ fn run_model(
         return Ok(Vec::new());
     };
     let (sha, features) = describe(path)?;
-    let req = CheckRequest {
-        model: path.to_path_buf(),
-        format,
-        timeout,
-    };
+    let req = CheckRequest::new(path.to_path_buf(), format, timeout);
     let base = |mode, engine: String| RunRecord {
         ts_unix_ms: now_ms(),
         model: path.display().to_string(),

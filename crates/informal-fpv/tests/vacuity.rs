@@ -272,3 +272,49 @@ fn witness_covers_run_when_requested_and_write_vcd() {
     );
     assert!(run_dir.join(wtrace).is_file(), "missing VCD at {wtrace}");
 }
+
+#[test]
+fn liveness_and_until_precondition_covers_detect_vacuity() {
+    let engines = informal_bmc::engines();
+    if engines.is_empty() {
+        informal_engine::tool_missing("needs the in-house engines (CaDiCaL)");
+        return;
+    }
+    let work = std::env::temp_dir().join(format!("informal-vac-live-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let sv = work.join("live_vac.sv");
+    std::fs::write(
+        &sv,
+        "module live_vac(input logic clk, rst, req, gnt);\n\
+           a_rtl_vac:  assert property (@(posedge clk) disable iff (rst) (req && !req) |-> s_eventually gnt);\n\
+           a_rtl_live: assert property (@(posedge clk) disable iff (rst) req |-> s_eventually gnt);\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let sh = Shell::new(Session::new(engines, work.join("run")), Flavor::Jg);
+    sh.eval(&format!(
+        "analyze -sv12 {{{}}}; elaborate -top live_vac; clock clk; reset -expression {{rst}};\n\
+         assume -name m_fair {{s_eventually gnt}};\n\
+         assert -name a_cmd_vac {{1'b0 |-> s_eventually gnt}};\n\
+         assert -name a_cmd_live {{req |=> s_eventually gnt}};\n\
+         prove -all",
+        sv.display()
+    ))
+    .unwrap();
+    assert_eq!(
+        a_le(&sh, "live_vac.a_rtl_vac"),
+        ("proven", Some(Vacuity::Vacuous))
+    );
+    assert_eq!(
+        a_le(&sh, "live_vac.a_rtl_live"),
+        ("proven", Some(Vacuity::NonVacuous))
+    );
+    assert_eq!(a_le(&sh, "a_cmd_vac"), ("proven", Some(Vacuity::Vacuous)));
+    assert_eq!(
+        a_le(&sh, "a_cmd_live"),
+        ("proven", Some(Vacuity::NonVacuous))
+    );
+    let report = sh.eval("report").unwrap();
+    assert!(report.contains("[vacuous]"), "{report}");
+    assert!(report.contains("[non-vacuous]"), "{report}");
+}

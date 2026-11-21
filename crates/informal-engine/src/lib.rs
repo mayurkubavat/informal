@@ -53,12 +53,70 @@ impl ModelFormat {
     }
 }
 
-/// One verification job: a model file and a wall-clock budget.
+/// Proof effort level controlling engine portfolio breadth, preprocessing
+/// (`scorr`), invariant mining, CTG depth, and restart/worker budgets.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    #[default]
+    Standard,
+    High,
+    Max,
+}
+
+impl Effort {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "low" | "quick" => Ok(Self::Low),
+            "standard" | "medium" | "default" => Ok(Self::Standard),
+            "high" | "deep" => Ok(Self::High),
+            "max" | "signoff" | "ultra" => Ok(Self::Max),
+            other => Err(format!(
+                "unknown effort `{other}` (expected `low`, `standard`, `high`, or `max`)"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Standard => "standard",
+            Self::High => "high",
+            Self::Max => "max",
+        }
+    }
+}
+
+impl std::fmt::Display for Effort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One verification job: a model file, wall-clock budget, effort level, and
+/// optional bounded-exploration cap.
 #[derive(Debug, Clone)]
 pub struct CheckRequest {
     pub model: PathBuf,
     pub format: ModelFormat,
     pub timeout: Duration,
+    pub effort: Effort,
+    pub max_depth: Option<u32>,
+}
+
+impl CheckRequest {
+    pub fn new(model: PathBuf, format: ModelFormat, timeout: Duration) -> Self {
+        Self {
+            model,
+            format,
+            timeout,
+            effort: Effort::Standard,
+            max_depth: None,
+        }
+    }
 }
 
 /// Outcome of a check. `Unsafe.depth` is the counterexample length when the

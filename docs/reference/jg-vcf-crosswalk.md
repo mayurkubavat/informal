@@ -53,6 +53,9 @@ Quick-reference matrix mapping JasperGold (`jg`), VC Formal (`vcf`), and flavor-
 | `get_status` | — | Return the verification status string of a single property |
 | `set_prove_time_limit` | VCF: `set_fml_var fml_max_time` | Set the session default per-property proof time limit |
 | `set_prove_per_property_time_limit` | VCF: `set_fml_var fml_max_time` | Set the per-property proof time limit (alias for `set_prove_time_limit`) |
+| `set_prove_total_time_limit` | — | Set or query the whole-batch wall-clock time limit across a `prove` run |
+| `set_prove_effort` | VCF: `set_fml_var fml_effort` | Set or query the session engine proof effort level (`low`, `standard`, `high`, `max`) |
+| `set_prove_orchestration` | — | Set or query two-pass proof orchestration (`auto`, `on`, `off`) |
 | `set_engine_mode` | Common: `set_engines` | Map JasperGold engine mode letters (`Ht`, `Hp`, `B`, `N`, ...) to InFormal engines |
 | `report` | VCF: `report_fv` | Print or export property tables, CSV summaries, design info, or per-property details |
 | `get_design_info` | JG: `report -design` | Inspect elaborated design counts (flops, latches, memories, clocks) and model sizes |
@@ -68,7 +71,7 @@ Quick-reference matrix mapping JasperGold (`jg`), VC Formal (`vcf`), and flavor-
 | `set_proofgrid_max_local_jobs` | — | Vendor proof-grid tuning command (accepted and ignored with a note) |
 | `set_proofgrid_max_jobs` | — | Vendor proof-grid tuning command (accepted and ignored with a note) |
 | `set_proofgrid_mode` | — | Vendor proof-grid mode command (accepted and ignored with a note) |
-| `set_max_trace_length` | — | Vendor trace length hint (accepted and ignored with a note) |
+| `set_max_trace_length` | VCF: `set_fml_var fml_max_depth` | Set or query the persistent BMC unrolling bound (`0`/`off` clears) |
 
 ## VC Formal (`vcf`) Commands
 
@@ -76,7 +79,7 @@ Quick-reference matrix mapping JasperGold (`jg`), VC Formal (`vcf`), and flavor-
 | --- | --- | --- |
 | `set_blackbox` | JG: `elaborate -bbox_m / -bbox_i` | Mark modules or cell instances as black boxes before elaboration |
 | `set_fml_appmode` | — | Select VC Formal application mode (`FPV`) |
-| `set_fml_var` | JG: `set_prove_time_limit` | Set VC Formal session variable (supports `fml_max_time`) |
+| `set_fml_var` | JG: `set_prove_time_limit` / `set_prove_effort` / `set_max_trace_length` | Set VC Formal session variable (`fml_max_time`, `fml_effort`, `fml_max_depth`) |
 | `read_file` | JG: `analyze` + `elaborate` | Analyze and elaborate SystemVerilog sources in one command |
 | `analyze` | JG: `analyze -sv12` | Analyze SystemVerilog source files in VC Formal style |
 | `elaborate` | JG: `elaborate -top` | Elaborate the analyzed top module in VC Formal style |

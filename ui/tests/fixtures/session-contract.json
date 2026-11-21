@@ -244,6 +244,13 @@
     "secs": 3600,
     "nanos": 0
   },
+  "total_time_limit": {
+    "secs": 900,
+    "nanos": 0
+  },
+  "effort": "high",
+  "orchestration": "auto",
+  "max_trace_length": 200,
   "engine_filter": [],
   "workdir": "/Users/mkubavat/Silicon/git/informal/crates/informal-fpv/informal_work",
   "hierarchy": [],

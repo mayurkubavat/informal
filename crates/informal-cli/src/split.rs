@@ -72,11 +72,7 @@ fn write_terms(g: &Aig, terms: &[Lit], dir: &Path) -> anyhow::Result<Vec<PathBuf
 }
 
 fn request(model: &Path, timeout: Duration) -> CheckRequest {
-    CheckRequest {
-        model: model.to_path_buf(),
-        format: ModelFormat::Aiger,
-        timeout,
-    }
+    CheckRequest::new(model.to_path_buf(), ModelFormat::Aiger, timeout)
 }
 
 fn unknown(reason: impl Into<String>) -> Verdict {

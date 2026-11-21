@@ -291,7 +291,10 @@ mod tests {
         let provider = informal_llm::build(&name, &cfg.providers[&name]).unwrap();
         let work = std::env::temp_dir().join(format!("informal-live-ask-{}", std::process::id()));
         let api = std::sync::Arc::new(informal_mcp::Api::spawn(
-            informal_bmc::engines(),
+            informal_bmc::engines()
+                .into_iter()
+                .chain(informal_bitwuzla::engines())
+                .collect(),
             work.clone(),
             informal_mcp::Options {
                 mode: informal_mcp::Mode::ReadOnly,

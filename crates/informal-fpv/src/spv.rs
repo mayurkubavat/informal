@@ -216,6 +216,8 @@ pub fn prove_spv(
                 model: path.clone(),
                 format: ModelFormat::Btor2,
                 timeout,
+                effort: s.effort,
+                max_depth: s.max_trace_length,
             };
             let run = portfolio::run_until(&engines, &req, None, Some(s.stop.as_ref()));
             let _ = std::fs::remove_file(&path);

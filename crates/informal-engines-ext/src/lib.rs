@@ -520,11 +520,11 @@ mod tests {
     }
 
     fn req(timeout_ms: u64) -> CheckRequest {
-        CheckRequest {
-            model: "x.btor2".into(),
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_millis(timeout_ms),
-        }
+        CheckRequest::new(
+            "x.btor2".into(),
+            ModelFormat::Btor2,
+            Duration::from_millis(timeout_ms),
+        )
     }
 
     #[test]
@@ -686,11 +686,11 @@ unsafe = 'was asserted in frame \d+'
 depth = 'was asserted in frame (\d+)'
 "#;
         let e = parse_config(toml).unwrap().remove(0);
-        let req = CheckRequest {
-            model: models().join("counter2_unsafe.aag"),
-            format: ModelFormat::Aiger,
-            timeout: Duration::from_secs(5),
-        };
+        let req = CheckRequest::new(
+            models().join("counter2_unsafe.aag"),
+            ModelFormat::Aiger,
+            Duration::from_secs(5),
+        );
         let r = e
             .check(&req, &RunContext::new(Duration::from_secs(5)))
             .unwrap();
@@ -722,11 +722,11 @@ unsafe = '(?m)^SAT$'
 "#
         );
         let e = parse_config(&toml).unwrap().remove(0);
-        let req = CheckRequest {
-            model: models().join("counter.btor2"),
-            format: ModelFormat::Btor2,
-            timeout: Duration::from_secs(5),
-        };
+        let req = CheckRequest::new(
+            models().join("counter.btor2"),
+            ModelFormat::Btor2,
+            Duration::from_secs(5),
+        );
         let r = e
             .check(&req, &RunContext::new(Duration::from_secs(5)))
             .unwrap();

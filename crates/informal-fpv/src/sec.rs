@@ -1046,6 +1046,8 @@ pub fn prove_sec(
             model: btor_path.clone(),
             format: ModelFormat::Btor2,
             timeout,
+            effort: s.effort,
+            max_depth: s.max_trace_length,
         };
         let run = portfolio::run_until(&chosen, &req, None, Some(s.stop.as_ref()));
         let eng = run.winner.as_ref().map(|w| w.engine.clone());

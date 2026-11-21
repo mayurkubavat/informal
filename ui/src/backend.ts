@@ -11,6 +11,9 @@ import type { FocusChip, GuiCaptureSnapshot, LayoutPreset, WalkthroughStep } fro
 export type StatusWord =
   | "unprocessed" | "proven" | "bounded_proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
 
+export type EffortLevel = "low" | "standard" | "high" | "max";
+export type OrchestrationMode = "auto" | "on" | "off";
+
 export interface PropStatus {
   status: StatusWord;
   engine?: string;
@@ -55,6 +58,14 @@ export interface Property {
   // What the vacuity checks found for a proven assertion
   // ("non-vacuous", "vacuous", ...); absent when they did not look.
   vacuity?: string | null;
+  witness_trace?: string | null;
+  bound?: number | null;
+  proof_core?: {
+    needed_assumptions: string[];
+    unused_assumptions: string[];
+    state_signals: string[];
+    total_state_signals: number;
+  } | null;
 }
 
 // Per property, what the last prove measured. Only measured values are
@@ -418,6 +429,10 @@ export interface SessionView {
   current_task?: string;
   environment?: EnvironmentView | null;
   time_limit: { secs: number; nanos: number };
+  total_time_limit?: { secs: number; nanos: number } | null;
+  effort?: EffortLevel;
+  orchestration?: OrchestrationMode;
+  max_trace_length?: number | null;
   workdir: string;
   cov?: CovStateView;
   xprop?: XpropStateView;

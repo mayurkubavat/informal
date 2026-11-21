@@ -1695,16 +1695,15 @@
     {
       "category": "proving_and_engines",
       "equivalent": "VCF: `check_fv`",
-      "example": "prove -all\nprove -task Safety -time_limit 60s -with_proof_core",
+      "example": "prove -all\nprove -task Safety -effort high -time_limit 60s -with_proof_core",
       "flavor": "jg",
       "ignored_options": [
         "-bg",
         "-dump_trace",
-        "-orchestration",
         "-sst"
       ],
       "name": "prove",
-      "notes": "Runs environment consistency check first (when vacuity is on) and precondition/witness covers after proven assertions.",
+      "notes": "Runs environment consistency check first (when vacuity is on), sweeps multi-property tasks at `low` effort before converging undetermined targets, and runs precondition/witness covers after proven assertions.",
       "options": [
         {
           "desc": "Prove all enabled properties in the current task",
@@ -1719,8 +1718,20 @@
           "flag": "-property <list>"
         },
         {
+          "desc": "Override proof effort (`low`/`quick`, `standard`, `high`/`deep`, `max`/`signoff`)",
+          "flag": "-effort <level>"
+        },
+        {
+          "desc": "Override two-pass sweep/converge scheduling (`auto`, `on`, `off`)",
+          "flag": "-orchestration <mode>"
+        },
+        {
           "desc": "Override per-property timeout (e.g. `30s`, `5m`, `1h`)",
           "flag": "-time_limit / -per_property_time_limit <D>"
+        },
+        {
+          "desc": "Cap whole-batch wall-clock time across all targets (`0`/`off` disables)",
+          "flag": "-total_time_limit <D>"
         },
         {
           "desc": "Bound BMC/safety proofs to `K` cycles (`bounded_proven`)",
@@ -1736,7 +1747,7 @@
         }
       ],
       "summary": "Run the engine portfolio on properties or tasks and print a verdict table",
-      "usage": "prove [-all] [-task T] [-property {P ...}] [-time_limit D] [-bound K] [-with_proof_core]"
+      "usage": "prove [-all] [-task T] [-property {P ...}] [-effort low|standard|high|max] [-orchestration auto|on|off] [-time_limit D] [-total_time_limit D] [-bound K] [-with_proof_core]"
     },
     {
       "category": "proving_and_engines",
@@ -1802,6 +1813,72 @@
       "options": [],
       "summary": "Set the per-property proof time limit (alias for `set_prove_time_limit`)",
       "usage": "set_prove_per_property_time_limit <duration>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_prove_total_time_limit 15m",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_prove_total_time_limit",
+      "notes": "Pass `0` or `off` to clear the batch cap; call with no arguments to query the current setting.",
+      "options": [],
+      "summary": "Set or query the whole-batch wall-clock time limit across a `prove` run",
+      "usage": "set_prove_total_time_limit [<duration|0|off>]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "VCF: `set_fml_var fml_effort`",
+      "example": "set_prove_effort high",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_prove_effort",
+      "notes": "Call with no arguments to return the current effort level.",
+      "options": [
+        {
+          "desc": "Skip `scorr` & simulation mining; run lightweight 1-step BMC/k-ind/IC3 subset",
+          "flag": "low / quick"
+        },
+        {
+          "desc": "Default balanced portfolio and `scorr` budget",
+          "flag": "standard / medium"
+        },
+        {
+          "desc": "Enable simulation + Houdini 2-literal mining, deeper CTG (`8`/`3`), derived predicates, and IC3 slice restarts",
+          "flag": "high / deep"
+        },
+        {
+          "desc": "`high` plus 6-worker diverse `Ic3Mt` pool and automatic witness cover + minimal proof-core signoff",
+          "flag": "max / signoff"
+        }
+      ],
+      "summary": "Set or query the session engine proof effort level (`low`, `standard`, `high`, `max`)",
+      "usage": "set_prove_effort [<low|standard|high|max>]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_prove_orchestration auto",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_prove_orchestration",
+      "notes": "Pass 1 sweeps targets for `min(2s, max(250ms, time_limit / 10))` at `low` effort so easy properties settle immediately before Pass 2 focuses full effort on remaining undetermined targets.",
+      "options": [
+        {
+          "desc": "Enable two-pass sweep/converge automatically on multi-property runs (default)",
+          "flag": "auto"
+        },
+        {
+          "desc": "Always run a fast `low`-effort sweep pass before full-effort convergence",
+          "flag": "on"
+        },
+        {
+          "desc": "Run every property in a single pass at the configured effort",
+          "flag": "off"
+        }
+      ],
+      "summary": "Set or query two-pass proof orchestration (`auto`, `on`, `off`)",
+      "usage": "set_prove_orchestration [<auto|on|off>]"
     },
     {
       "category": "proving_and_engines",
@@ -2136,15 +2213,15 @@
     },
     {
       "category": "proving_and_engines",
-      "equivalent": null,
+      "equivalent": "VCF: `set_fml_var fml_max_depth`",
       "example": "set_max_trace_length 200",
       "flavor": "jg",
       "ignored_options": [],
       "name": "set_max_trace_length",
-      "notes": "Use `prove -bound K` or `assert -bound K` to bound proof depth.",
+      "notes": "Caps `informal-bmc` / `informal-wbmc` depth while still allowing inductive engines (`kind`, `ic3`, `wkind`) to prove unboundedly (`proven`, `∞`). Assertions cleared cleanly to bound `N` without an unbounded proof report `bounded_proven`.",
       "options": [],
-      "summary": "Vendor trace length hint (accepted and ignored with a note)",
-      "usage": "set_max_trace_length <N>"
+      "summary": "Set or query the persistent BMC unrolling bound (`0`/`off` clears)",
+      "usage": "set_max_trace_length [<N|0|off>]"
     },
     {
       "category": "design_setup",
@@ -2185,8 +2262,8 @@
     },
     {
       "category": "proving_and_engines",
-      "equivalent": "JG: `set_prove_time_limit`",
-      "example": "set_fml_var fml_max_time 10m",
+      "equivalent": "JG: `set_prove_time_limit` / `set_prove_effort` / `set_max_trace_length`",
+      "example": "set_fml_var fml_max_time 10m\nset_fml_var fml_effort high",
       "flavor": "vcf",
       "ignored_options": [],
       "name": "set_fml_var",
@@ -2195,9 +2272,17 @@
         {
           "desc": "Per-property time limit (e.g. `1H`, `300s`)",
           "flag": "fml_max_time"
+        },
+        {
+          "desc": "Engine proof effort (`low`, `standard`, `high`, `max`)",
+          "flag": "fml_effort"
+        },
+        {
+          "desc": "Persistent BMC trace bound (`N`, or `0`/`off` to clear)",
+          "flag": "fml_max_depth"
         }
       ],
-      "summary": "Set VC Formal session variable (supports `fml_max_time`)",
+      "summary": "Set VC Formal session variable (`fml_max_time`, `fml_effort`, `fml_max_depth`)",
       "usage": "set_fml_var <name> <value>"
     },
     {
@@ -2479,7 +2564,7 @@
     {
       "category": "proving_and_engines",
       "equivalent": "JG: `prove`",
-      "example": "check_fv -block",
+      "example": "check_fv -effort high -time_limit 60s",
       "flavor": "vcf",
       "ignored_options": [
         "-block",
@@ -2492,10 +2577,18 @@
         {
           "desc": "Prove only the specified property names",
           "flag": "-property <list>"
+        },
+        {
+          "desc": "Override proof effort for this run (`low`, `standard`, `high`, `max`)",
+          "flag": "-effort <level>"
+        },
+        {
+          "desc": "Override per-property timeout for this run",
+          "flag": "-time_limit <D>"
         }
       ],
       "summary": "Run the engine portfolio on VC Formal properties",
-      "usage": "check_fv [-property {P ...}]"
+      "usage": "check_fv [-property {P ...}] [-effort low|standard|high|max] [-time_limit D]"
     },
     {
       "category": "proving_and_engines",

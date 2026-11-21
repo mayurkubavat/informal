@@ -34,7 +34,7 @@
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { AiProposal, AiStatus, ConsoleLine, DesignInfo, DesignScope, FormalLintFindingView, FormalQuickFixView, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProofStats, ProveProgress, Property, Reply, SchematicGraphView, SessionView, SignalNavView, WhyCexReport } from "./backend";
+import type { AiProposal, AiStatus, ConsoleLine, DesignInfo, DesignScope, EffortLevel, FormalLintFindingView, FormalQuickFixView, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, OrchestrationMode, PropProgress, PropStatus, ProofStats, ProveProgress, Property, Reply, SchematicGraphView, SessionView, SignalNavView, WhyCexReport } from "./backend";
 import { splitAnswer, type AskDelta, type AskDone, type LlmProviderEntry, type LlmStatus } from "./ask";
 import { encodeVcdToIftr, generateSyntheticIftr } from "./traceBin";
 import { parseVcd } from "./vcd";
@@ -117,6 +117,10 @@ const mockSession: SessionView = {
     { name: "m_en", source: at(MOCK_RTL, 7), kind: "assume", expr: "en |=> en", enabled: true, status: { status: "unprocessed" } },
   ],
   time_limit: { secs: 60, nanos: 0 },
+  total_time_limit: null,
+  effort: "standard",
+  orchestration: "auto",
+  max_trace_length: null,
   workdir: "informal_work",
 };
 
@@ -309,7 +313,7 @@ function engineLine(prop: string, engine: string, text: string, err = false) {
 // Tab completion: a static list of each flavor's commands, then the
 // session's property names (crates/informal-fpv compat::complete in the app).
 export const MOCK_COMMANDS: Record<string, string[]> = {
-  jg: ["analyze", "assert", "assume", "clear", "clock", "cover", "elaborate", "get_property_list", "get_status", "include", "prove", "report", "reset", "set_prove_time_limit"],
+  jg: ["analyze", "assert", "assume", "clear", "clock", "cover", "elaborate", "get_property_list", "get_status", "include", "prove", "report", "reset", "set_max_trace_length", "set_prove_effort", "set_prove_orchestration", "set_prove_per_property_time_limit", "set_prove_time_limit", "set_prove_total_time_limit"],
   vcf: ["check_fv", "create_clock", "create_reset", "fvassert", "fvassume", "fvcover", "fvdisable", "fvenable", "get_props", "read_file", "report_fv", "set_fml_appmode", "set_fml_var"],
 };
 export function mockComplete(prefix: string): string[] {
@@ -882,10 +886,109 @@ export function mockWhyCex(name: string): WhyCexReport {
   };
 }
 
+function parseMockDuration(raw: string): { secs: number; nanos: number } | null {
+  const m = raw.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/i);
+  if (!m) return null;
+  const val = Number(m[1]);
+  const unit = (m[2] ?? "s").toLowerCase();
+  const ms =
+    unit === "ms" ? val : unit === "m" ? val * 60_000 : unit === "h" ? val * 3_600_000 : unit === "d" ? val * 86_400_000 : val * 1_000;
+  const secs = Math.floor(ms / 1000);
+  const nanos = Math.round((ms - secs * 1000) * 1_000_000);
+  return { secs, nanos };
+}
+
+function normalizeMockEffort(raw: string): EffortLevel | null {
+  const v = raw.trim().toLowerCase();
+  if (v === "low" || v === "quick") return "low";
+  if (v === "standard" || v === "medium" || v === "default") return "standard";
+  if (v === "high" || v === "deep") return "high";
+  if (v === "max" || v === "signoff" || v === "ultra") return "max";
+  return null;
+}
+
+function normalizeMockOrch(raw: string): OrchestrationMode | null {
+  const v = raw.trim().toLowerCase();
+  if (v === "auto" || v === "default") return "auto";
+  if (v === "on" || v === "true" || v === "1") return "on";
+  if (v === "off" || v === "false" || v === "0") return "off";
+  return null;
+}
+
 export async function mock(cmd: string, args: Record<string, unknown>): Promise<Reply> {
   await new Promise((r) => setTimeout(r, 150));
   if (cmd === "shell_flavor") mockFlavor = String(args.flavor);
   const script = String(args.script ?? "");
+  if (cmd === "shell_eval") {
+    const effMatch = script.match(/^\s*set_prove_effort(?:\s+(\S+))?\s*$/);
+    if (effMatch) {
+      if (!effMatch[1]) return { ok: true, result: mockSession.effort ?? "standard", session: mockSession };
+      const eff = normalizeMockEffort(effMatch[1]);
+      if (!eff) return { ok: false, result: `set_prove_effort: unknown effort \`${effMatch[1]}\``, session: mockSession };
+      mockSession.effort = eff;
+      return { ok: true, result: "", session: mockSession };
+    }
+    const orchMatch = script.match(/^\s*set_prove_orchestration(?:\s+(\S+))?\s*$/);
+    if (orchMatch) {
+      if (!orchMatch[1]) return { ok: true, result: mockSession.orchestration ?? "auto", session: mockSession };
+      const orch = normalizeMockOrch(orchMatch[1]);
+      if (!orch) return { ok: false, result: `set_prove_orchestration: unknown mode \`${orchMatch[1]}\``, session: mockSession };
+      mockSession.orchestration = orch;
+      return { ok: true, result: "", session: mockSession };
+    }
+    const tlMatch = script.match(/^\s*set_prove_(?:per_property_)?time_limit\s+(\S+)\s*$/);
+    if (tlMatch) {
+      const d = parseMockDuration(tlMatch[1]);
+      if (!d) return { ok: false, result: `invalid duration \`${tlMatch[1]}\``, session: mockSession };
+      mockSession.time_limit = d;
+      return { ok: true, result: "", session: mockSession };
+    }
+    const totMatch = script.match(/^\s*set_prove_total_time_limit(?:\s+(\S+))?\s*$/);
+    if (totMatch) {
+      if (!totMatch[1]) {
+        const cur = mockSession.total_time_limit ? `${mockSession.total_time_limit.secs}s` : "";
+        return { ok: true, result: cur, session: mockSession };
+      }
+      if (/^(0|0s|off|none|unlimited)$/i.test(totMatch[1])) {
+        mockSession.total_time_limit = null;
+        return { ok: true, result: "", session: mockSession };
+      }
+      const d = parseMockDuration(totMatch[1]);
+      if (!d) return { ok: false, result: `invalid duration \`${totMatch[1]}\``, session: mockSession };
+      mockSession.total_time_limit = d;
+      return { ok: true, result: "", session: mockSession };
+    }
+    const boundMatch = script.match(/^\s*set_max_trace_length(?:\s+(\S+))?\s*$/);
+    if (boundMatch) {
+      if (!boundMatch[1]) {
+        return { ok: true, result: mockSession.max_trace_length ? String(mockSession.max_trace_length) : "", session: mockSession };
+      }
+      if (/^(0|off|none|unlimited)$/i.test(boundMatch[1])) {
+        mockSession.max_trace_length = null;
+        return { ok: true, result: "", session: mockSession };
+      }
+      const n = Number(boundMatch[1]);
+      if (!Number.isInteger(n) || n < 1) return { ok: false, result: `set_max_trace_length: positive integer expected`, session: mockSession };
+      mockSession.max_trace_length = n;
+      return { ok: true, result: "", session: mockSession };
+    }
+    const vcfVarMatch = script.match(/^\s*set_fml_var\s+(\S+)\s+(\S+)\s*$/);
+    if (vcfVarMatch) {
+      const [, k, v] = vcfVarMatch;
+      if (k === "fml_max_time") {
+        const d = parseMockDuration(v);
+        if (!d) return { ok: false, result: `invalid duration \`${v}\``, session: mockSession };
+        mockSession.time_limit = d;
+      } else if (k === "fml_effort") {
+        const eff = normalizeMockEffort(v);
+        if (!eff) return { ok: false, result: `set_fml_var fml_effort: unknown effort \`${v}\``, session: mockSession };
+        mockSession.effort = eff;
+      } else if (k === "fml_max_depth") {
+        mockSession.max_trace_length = /^(0|off|none|unlimited)$/i.test(v) ? null : Number(v);
+      }
+      return { ok: true, result: "", session: mockSession };
+    }
+  }
   if (cmd === "shell_eval" && /^\s*(prove|check_fv)\b/.test(script)) {
     if (active) return { ok: false, result: "a prove is already running; stop it first", session: mockSession };
     const only = /-property/.test(script) ? names(script) : null;

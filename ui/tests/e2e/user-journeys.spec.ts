@@ -108,4 +108,38 @@ test.describe("Dual-Persona UX Journeys (UX-1..UX-6)", () => {
     await page.getByRole("button", { name: "clear status filter" }).click();
     await expect(page.locator("table.grid tbody tr")).toHaveCount(12);
   });
+
+  test("Dual-Persona Effort & Budget Controls: novice toolbar controls update budget readout and echo exact Tcl commands to Console", async ({
+    page,
+  }) => {
+    await page.goto("/?fast=1");
+
+    // Select Deep effort from toolbar -> echoes `set_prove_effort high` into Console
+    const effortSel = page.getByRole("combobox", { name: "Proof effort" });
+    await expect(effortSel).toHaveValue("standard");
+    await effortSel.selectOption("high");
+    await expect(effortSel).toHaveValue("high");
+    await expect(page.locator(".console")).toContainText("set_prove_effort high");
+
+    // Open Proof budget popover and configure Per-prop limit (`5m`), Max bound (`50`), and 2-pass orchestration (`On`)
+    const budgetBtn = page.getByRole("button", { name: "Proof budget" });
+    await expect(budgetBtn).toContainText("1m");
+    await budgetBtn.click();
+
+    const pop = page.getByRole("dialog", { name: "Proof budget settings" });
+    await expect(pop).toBeVisible();
+    await pop.getByRole("button", { name: "5m", exact: true }).click();
+    await expect(page.locator(".console")).toContainText("set_prove_time_limit 5m");
+
+    await pop.getByRole("button", { name: "50", exact: true }).click();
+    await expect(page.locator(".console")).toContainText("set_max_trace_length 50");
+
+    await pop.getByRole("button", { name: "On", exact: true }).click();
+    await expect(page.locator(".console")).toContainText("set_prove_orchestration on");
+
+    // Close popover with Escape and verify compact summary badge shows `5m · k≤50`
+    await page.keyboard.press("Escape");
+    await expect(pop).toHaveCount(0);
+    await expect(budgetBtn).toContainText("5m · k≤50");
+  });
 });
