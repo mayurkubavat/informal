@@ -2332,6 +2332,148 @@
   },
   {
     "changes": true,
+    "description": "Configure, prove, list, or clear dual-design equivalence checks between a reference `spec` RTL and a refactored/pipelined `imp` RTL (`lec: false` for sequential SEC with optional `latency`, `lec: true` for combinational keypoint LEC).",
+    "input": {
+      "properties": {
+        "action": {
+          "enum": [
+            "setup",
+            "prove",
+            "list",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "assumptions": {
+          "description": "Shared SystemVerilog environment assumptions",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "clock": {
+          "description": "Clock port name",
+          "type": "string"
+        },
+        "imp_files": {
+          "description": "Implementation SystemVerilog file paths",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "imp_top": {
+          "description": "Optional implementation top module name",
+          "type": "string"
+        },
+        "latency": {
+          "description": "Additional pipeline cycles in imp relative to spec",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lec": {
+          "description": "Combinational keypoint LEC mode instead of sequential SEC",
+          "type": "boolean"
+        },
+        "reset": {
+          "description": "Active-high in-reset expression (e.g. `!rst_n`)",
+          "type": "string"
+        },
+        "spec_files": {
+          "description": "Spec SystemVerilog file paths",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "spec_top": {
+          "description": "Optional spec top module name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "check_sec",
+    "output": {
+      "properties": {
+        "checks": {
+          "items": {
+            "properties": {
+              "depth": 0,
+              "engine": "<engine>",
+              "imp_sig": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "latency": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "spec_sig": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "trace": {
+                "type": "string"
+              },
+              "width": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "spec_sig",
+              "imp_sig",
+              "width",
+              "latency",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "latency": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lec": {
+          "type": "boolean"
+        },
+        "report": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.sec/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "configured",
+        "lec",
+        "latency",
+        "checks"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
     "description": "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
     "input": {
       "properties": {

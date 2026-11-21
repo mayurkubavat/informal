@@ -275,7 +275,7 @@ impl Api {
             "session_open" | "tcl_eval" => true,
             "prove" => args.get("wait").and_then(Value::as_bool).unwrap_or(true),
             "check_cov" => args.get("action").and_then(Value::as_str) == Some("measure"),
-            "check_conn" | "check_xprop" | "check_spv" => {
+            "check_conn" | "check_xprop" | "check_spv" | "check_sec" => {
                 args.get("action").and_then(Value::as_str) == Some("prove")
             }
             _ => false,
@@ -315,6 +315,7 @@ impl Api {
             "check_conn" => self.check_conn(args, false),
             "check_xprop" => self.check_xprop(args, false),
             "check_spv" => self.check_spv(args, false),
+            "check_sec" => self.check_sec(args, false),
             "prove" => self.prove_start(args),
             "prove_status" => self.prove_status(),
             "prove_stop" => {
@@ -336,6 +337,7 @@ impl Api {
                 | "check_conn"
                 | "check_xprop"
                 | "check_spv"
+                | "check_sec"
         ) {
             self.changed(tool);
         }
@@ -352,6 +354,7 @@ impl Api {
             "check_conn" => self.check_conn(args, true),
             "check_xprop" => self.check_xprop(args, true),
             "check_spv" => self.check_spv(args, true),
+            "check_sec" => self.check_sec(args, true),
             _ => Err(err("not_found", format!("no long tool named {tool}"))),
         };
         drop(long);
@@ -774,19 +777,41 @@ impl Api {
         let max_events = opt_u64(args, "max_events")?.unwrap_or(64) as usize;
         let rep = self.on_shell(false, move |sh| {
             let s = sh.session.borrow();
-            let i = find(&s, &name)?;
-            let p = &s.props[i];
-            if p.trace.is_none() {
-                return Err(err(
-                    "no_trace",
-                    format!(
-                        "{} has no trace: its status is {} (a trace comes with cex or covered)",
-                        p.name,
-                        p.status.word()
-                    ),
-                ));
-            }
-            informal_fpv::why_cex::slice_property_cex(&s, &p.name, max_events)
+            let target_name = if let Ok(i) = find(&s, &name) {
+                let p = &s.props[i];
+                if p.trace.is_none() {
+                    return Err(err(
+                        "no_trace",
+                        format!(
+                            "{} has no trace: its status is {} (a trace comes with cex or covered)",
+                            p.name,
+                            p.status.word()
+                        ),
+                    ));
+                }
+                p.name.clone()
+            } else if let Some(chk) = s
+                .sec
+                .checks
+                .iter()
+                .find(|c| c.name == name || c.imp_sig == name)
+            {
+                if chk.trace.is_none() {
+                    return Err(err(
+                        "no_trace",
+                        format!(
+                            "{} has no trace: its status is {}",
+                            chk.name,
+                            chk.status.word()
+                        ),
+                    ));
+                }
+                chk.name.clone()
+            } else {
+                let _ = find(&s, &name)?;
+                unreachable!()
+            };
+            informal_fpv::why_cex::slice_property_cex(&s, &target_name, max_events)
                 .map_err(|e| err("internal", e))
         })??;
         let events: Vec<Value> = rep
@@ -1131,6 +1156,108 @@ impl Api {
                 "schema": "informal.spv/1",
                 "report": report,
                 "rules": rules,
+            }))
+        })?
+    }
+
+    fn check_sec(&self, args: &Value, long: bool) -> Reply {
+        self.changing()?;
+        let action = req_str(args, "action")?;
+        let spec_raw = strings(args, "spec_files")?;
+        let imp_raw = strings(args, "imp_files")?;
+        let mut spec_files = Vec::with_capacity(spec_raw.len());
+        for f in &spec_raw {
+            spec_files.push(self.below_root(f)?);
+        }
+        let mut imp_files = Vec::with_capacity(imp_raw.len());
+        for f in &imp_raw {
+            imp_files.push(self.below_root(f)?);
+        }
+        let spec_top = opt_str(args, "spec_top")?;
+        let imp_top = opt_str(args, "imp_top")?;
+        let clock = opt_str(args, "clock")?;
+        let reset = opt_str(args, "reset")?;
+        let lec = opt_bool(args, "lec")?.unwrap_or(false);
+        let latency = opt_u64(args, "latency")?.unwrap_or(0) as u32;
+        let assumptions = strings(args, "assumptions")?;
+
+        self.on_shell(long, move |sh| {
+            match action.as_str() {
+                "setup" => {
+                    if spec_files.is_empty() || imp_files.is_empty() {
+                        return Err(err(
+                            "arguments",
+                            "`spec_files` and `imp_files` are required when action is `setup`",
+                        ));
+                    }
+                    let setup = informal_fpv::sec::SecSetup {
+                        spec_files,
+                        spec_top,
+                        imp_files,
+                        imp_top,
+                        clock,
+                        reset,
+                        lec,
+                        latency,
+                        assumptions,
+                        ..Default::default()
+                    };
+                    let mut s = sh.session.borrow_mut();
+                    informal_fpv::sec::setup_sec(&mut s, setup).map_err(|e| err("rejected", e))?;
+                }
+                "prove" => {
+                    sh.eval("check_sec -prove")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "clear" => {
+                    sh.eval("check_sec -clear")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "list" => {}
+                other => {
+                    return Err(wrong(
+                        "action",
+                        &format!("setup, prove, list, or clear (got {other})"),
+                    ))
+                }
+            }
+            let s = sh.session.borrow();
+            let configured = s.sec.setup.is_some();
+            let cur_lec = s.sec.setup.as_ref().is_some_and(|st| st.lec);
+            let cur_lat = s.sec.setup.as_ref().map_or(0, |st| st.latency);
+            let checks: Vec<Value> = s
+                .sec
+                .checks
+                .iter()
+                .map(|c| {
+                    let mut o = serde_json::Map::new();
+                    o.insert("name".into(), json!(c.name));
+                    o.insert("kind".into(), json!(c.kind));
+                    o.insert("spec_sig".into(), json!(c.spec_sig));
+                    o.insert("imp_sig".into(), json!(c.imp_sig));
+                    o.insert("width".into(), json!(c.width));
+                    o.insert("latency".into(), json!(c.latency));
+                    o.insert("status".into(), json!(c.status.word()));
+                    if let informal_fpv::sec::SecStatus::Cex { depth: Some(d) } = c.status {
+                        o.insert("depth".into(), json!(d));
+                    }
+                    if let Some(ref eng) = c.engine {
+                        o.insert("engine".into(), json!(eng));
+                    }
+                    if let Some(ref tr) = c.trace {
+                        o.insert("trace".into(), json!(tr));
+                    }
+                    Value::Object(o)
+                })
+                .collect();
+            let report = informal_fpv::sec::format_report(&s.sec);
+            Ok(json!({
+                "schema": "informal.sec/1",
+                "configured": configured,
+                "lec": cur_lec,
+                "latency": cur_lat,
+                "report": report,
+                "checks": checks,
             }))
         })?
     }

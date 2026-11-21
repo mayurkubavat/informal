@@ -154,6 +154,12 @@ pub struct Property {
     /// Minimal proof core & needed assumptions (`prove -with_proof_core`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proof_core: Option<crate::proof_core::ProofCore>,
+    /// Target name of the assertion this assumption was promoted from (`assume -from_assert`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_assert: Option<String>,
+    /// True when `from_assert` references an RTL-compiled assertion target in `l.btor2`.
+    #[serde(skip)]
+    pub rtl_from_assert: bool,
     /// What the last prove measured for this property (times, depth,
     /// invariant size, certificate): `None` before a prove, and when no
     /// engine ran on it.
@@ -407,6 +413,15 @@ pub struct Session {
     /// Formal Security Path Verification rules (`check_spv`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spv: Vec<crate::spv::SpvRule>,
+    /// Formal Sequential & Combinational Equivalence Checking state (`check_sec`).
+    #[serde(default, skip_serializing_if = "crate::sec::SecState::is_empty")]
+    pub sec: crate::sec::SecState,
+    /// Provenance of helper assumptions created via `assume -from_assert`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assumed_from_assert: Vec<String>,
+    /// Over-approximate counter jump abstractions (`abstract -counter`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counter_abstractions: Vec<crate::complexity::CounterAbstraction>,
     /// Per-run bound cap set during `prove -bound K`.
     #[serde(skip)]
     pub prove_bound: Option<u32>,
@@ -475,6 +490,9 @@ impl Session {
             cov: crate::cov::CovState::default(),
             xprop: crate::xprop::XpropState::default(),
             spv: Vec::new(),
+            sec: crate::sec::SecState::default(),
+            assumed_from_assert: Vec::new(),
+            counter_abstractions: Vec::new(),
             prove_bound: None,
             with_proof_core: false,
         }
@@ -574,9 +592,85 @@ impl Session {
             copy_of: None,
             bound: None,
             proof_core: None,
+            from_assert: None,
+            rtl_from_assert: false,
             stats: None,
         });
         Ok(name)
+    }
+
+    /// Promotes selected `Assert` properties into helper `Assume` properties in `task`
+    /// (`assume -from_assert <prop_or_glob> [-name N]`), recording provenance and
+    /// preventing any promoted assertion from circularly assuming itself during `prove`.
+    pub fn assume_from_assert(
+        &mut self,
+        task: &str,
+        indices: &[usize],
+        custom_name: Option<String>,
+    ) -> Result<Vec<String>, String> {
+        let task = self.task_name(task)?;
+        let assert_idxs: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&i| self.props[i].kind == Kind::Assert)
+            .collect();
+        if assert_idxs.is_empty() {
+            return Err("assume -from_assert: no matching assertions selected".into());
+        }
+        if custom_name.is_some() && assert_idxs.len() > 1 {
+            return Err(
+                "assume -from_assert: -name can only be used when promoting a single assertion"
+                    .into(),
+            );
+        }
+        let mut created = Vec::with_capacity(assert_idxs.len());
+        for &idx in &assert_idxs {
+            let src = self.props[idx].clone();
+            let orig_target = match &src.copy_of {
+                Some(orig) => target_name(orig),
+                None => target_name(&src.name),
+            };
+            let is_rtl_src = src.rtl || src.copy_of.is_some();
+            let base_short = match &custom_name {
+                Some(n) => n
+                    .strip_prefix(&format!("{task}::"))
+                    .unwrap_or(n.as_str())
+                    .to_string(),
+                None => format!("{}_assume", src.short_name()),
+            };
+            let full_name = qualify(&task, &base_short);
+            if self.props.iter().any(|p| p.name == full_name) {
+                return Err(format!("assume -from_assert: `{full_name}` already exists"));
+            }
+            self.props.push(Property {
+                name: full_name.clone(),
+                kind: Kind::Assume,
+                expr: src.expr.clone(),
+                enabled: true,
+                status: Status::Unprocessed,
+                trace: None,
+                source: src.source.clone(),
+                rtl: false,
+                engines: Vec::new(),
+                ai: false,
+                under_ai: Vec::new(),
+                vacuity: None,
+                witness_trace: None,
+                task: task.clone(),
+                copy_of: None,
+                bound: None,
+                proof_core: None,
+                from_assert: Some(orig_target),
+                rtl_from_assert: is_rtl_src,
+                stats: None,
+            });
+            let prov = format!("{full_name} <- {}", src.name);
+            if !self.assumed_from_assert.contains(&prov) {
+                self.assumed_from_assert.push(prov);
+            }
+            created.push(full_name);
+        }
+        Ok(created)
     }
 
     // ------------------------------------------------------------ tasks
@@ -1039,6 +1133,8 @@ impl Session {
                 copy_of: None,
                 bound: None,
                 proof_core: None,
+                from_assert: None,
+                rtl_from_assert: false,
                 stats: None,
             });
         }
@@ -1843,12 +1939,32 @@ impl Session {
                         // Without its line the model would hold trivially.
                         Err(anyhow!("no check named {keep} in the model"))
                     } else {
+                        let task_of_prop = &self.props[i].task;
+                        let self_helpers: Vec<String> = self
+                            .props
+                            .iter()
+                            .filter(|p| {
+                                p.enabled
+                                    && p.kind == Kind::Assume
+                                    && &p.task == task_of_prop
+                                    && p.from_assert.as_deref() == Some(keep.as_str())
+                            })
+                            .map(|p| target_name(&p.name))
+                            .collect();
                         let (model, section) = informal_svlang::split_trace(btor);
-                        let mut r = std::fs::write(&out, only_target(model, &keep));
+                        let mut per_model = only_target(model, &keep);
+                        if !self_helpers.is_empty() {
+                            per_model = drop_assumptions(&per_model, &self_helpers);
+                        }
+                        let mut r = std::fs::write(&out, per_model);
                         // The same model plus `output` lines naming the
                         // combinational nets, for the VCD (trace_model).
                         if r.is_ok() && !section.is_empty() {
-                            r = std::fs::write(trace_model(&out), only_target(btor, &keep));
+                            let mut per_trace = only_target(btor, &keep);
+                            if !self_helpers.is_empty() {
+                                per_trace = drop_assumptions(&per_trace, &self_helpers);
+                            }
+                            r = std::fs::write(trace_model(&out), per_trace);
                         }
                         r.map_err(anyhow::Error::from)
                     }
@@ -1904,7 +2020,9 @@ impl Session {
     /// the first declared clock.
     fn bound_properties(&self, task: &str) -> Result<Vec<(String, String)>, String> {
         let mut out = Vec::new();
-        let given = |p: &&Property| !p.rtl && p.copy_of.is_none() && p.enabled && p.task == task;
+        let given = |p: &&Property| {
+            !p.rtl && !p.rtl_from_assert && p.copy_of.is_none() && p.enabled && p.task == task
+        };
         for p in self.props.iter().filter(given) {
             let expr = p.expr.trim();
             let clocked = if expr.starts_with('@') {
@@ -2034,7 +2152,7 @@ impl Session {
         }
         if l.ok {
             let disabled = self.disabled_rtl_assumptions(task);
-            let btor2 = if disabled.is_empty() {
+            let mut btor2 = if disabled.is_empty() {
                 l.btor2
             } else {
                 let of = match task {
@@ -2048,6 +2166,32 @@ impl Session {
                 ));
                 drop_assumptions(&l.btor2, &disabled)
             };
+            let rtl_helpers: Vec<(String, String)> = self
+                .props
+                .iter()
+                .filter(|p| {
+                    p.enabled && p.kind == Kind::Assume && p.task == task && p.rtl_from_assert
+                })
+                .filter_map(|p| {
+                    p.from_assert
+                        .as_ref()
+                        .map(|orig| (orig.clone(), target_name(&p.name)))
+                })
+                .collect();
+            if !rtl_helpers.is_empty() {
+                btor2 = inject_rtl_assert_assumptions(&btor2, &rtl_helpers);
+            }
+            if !self.counter_abstractions.is_empty() {
+                self.log(&format!(
+                    "counter abstractions active in this model: {}. A proof holds for the design; a counterexample may use an abstract counter jump",
+                    crate::complexity::format_abstractions(&self.counter_abstractions)
+                ));
+                btor2 = crate::complexity::apply_counter_abstractions(
+                    &btor2,
+                    &self.counter_abstractions,
+                    self.design.top.as_deref(),
+                )?;
+            }
             Ok((btor2, l.properties))
         } else {
             Err(format!("svlang: {}", l.errors.join("; ")))
@@ -2359,7 +2503,7 @@ impl Session {
     /// be replayed on the model (the caller withdraws the verdict);
     /// `Err(None)` when one was but its file could not be written (logged;
     /// the verdict stands).
-    fn write_trace(
+    pub(crate) fn write_trace(
         &self,
         name: &str,
         model: &Path,
@@ -2604,6 +2748,59 @@ pub(crate) fn drop_assumptions(btor: &str, drop_syms: &[String]) -> String {
         })
         .flat_map(|l| [l, "\n"])
         .collect()
+}
+
+/// Injects `constraint <-bad_arg> <assume_sym>` lines for RTL assertions promoted via
+/// `assume -from_assert`, bumping trailing `; informal-trace-outputs` IDs to stay monotonic.
+fn inject_rtl_assert_assumptions(btor: &str, helpers: &[(String, String)]) -> String {
+    let (core, trace_sec) = informal_svlang::split_trace(btor);
+    let mut bad_args: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    let mut max_core_id: u32 = 0;
+    for l in core.lines() {
+        let w: Vec<&str> = l.split_whitespace().collect();
+        if let Some(Ok(id)) = w.first().map(|s| s.parse::<u32>()) {
+            max_core_id = max_core_id.max(id);
+        }
+        if w.get(1) == Some(&"bad") {
+            if let (Some(Ok(arg)), Some(&sym)) = (w.get(2).map(|s| s.parse::<i64>()), w.get(3)) {
+                bad_args.insert(sym, arg);
+            }
+        }
+    }
+    let mut extra = String::new();
+    let mut added: u32 = 0;
+    for (orig_sym, assume_sym) in helpers {
+        if let Some(&bad_arg) = bad_args.get(orig_sym.as_str()) {
+            added += 1;
+            let cid = max_core_id + added;
+            let hold_arg = -bad_arg;
+            extra.push_str(&format!("{cid} constraint {hold_arg} {assume_sym}\n"));
+        }
+    }
+    if added == 0 {
+        return btor.to_string();
+    }
+    let mut out = String::with_capacity(btor.len() + extra.len() + 64);
+    out.push_str(core);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&extra);
+    if !trace_sec.is_empty() {
+        for l in trace_sec.lines() {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            if w.get(1) == Some(&"output") {
+                if let Some(Ok(oid)) = w.first().map(|s| s.parse::<u32>()) {
+                    let new_id = oid + added;
+                    out.push_str(&format!("{new_id} {}\n", w[1..].join(" ")));
+                    continue;
+                }
+            }
+            out.push_str(l);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// The model with `keep` as its only target. Fairness lines only matter to

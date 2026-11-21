@@ -13,13 +13,11 @@
 //! its finder's frames, so an importer re-checks it against its own
 //! frames and adds it at the highest level where it holds there. Not yet: CTP, EXCTG, DynAMic.
 //!
-//! TODO(D7, Gemini P2): EXCTG and DynAMic generalization, an A-IC3 bandit
-//! over generalization strategies, and stall-aware push budgets.
-//! TODO(D7, Gemini P4): parent-lemma CTP prediction (CTP is off by
-//! default today, on in one informal-ic3-mt worker).
-//! TODO(D8, Gemini P1): certify every SAFE verdict: check the final frame
-//! (init, consecution, safety) with independent CaDiCaL queries against
-//! the un-preprocessed AIG, then Certifaiger.
+//! Note on D7 & D8: EXCTG, DynAMic, stall-aware propagation, parent-lemma CTP,
+//! CTI-seeded Houdini mining, and H3 coupled lower-blocker promotion are
+//! configurable on `Config` and active across `informal-ic3-mt` workers;
+//! every SAFE verdict returned by `Ic3Engine` and `Ic3Mt` is checked against
+//! the un-preprocessed AIG via `certify::check` / `certify::check_folded` (D8).
 
 use crate::cnf::{self, TLit, Template};
 use informal_aig::{is_neg, neg, var, Aig, Init, Lit};
@@ -99,6 +97,10 @@ pub struct Config {
     pub parent_ctp: bool,
     /// CTI-seeded 1-/2-literal invariant mining fed into periodic Houdini.
     pub cti_mine: bool,
+    /// Hypothesis H3: when a push at level `i >= 2` fails on a predecessor `p`
+    /// excluded by a lemma `l_low` at `i - 1`, try promoting `l_low` to `i`
+    /// and running a bounded local-cone micro-Houdini over `{c, l_low, ...}`.
+    pub coupled_push: bool,
 }
 
 impl Default for Config {
@@ -146,6 +148,7 @@ impl Default for Config {
             stall_push: std::env::var_os("INFORMAL_IC3_STALL_PUSH").is_some(),
             parent_ctp: std::env::var_os("INFORMAL_IC3_PARENT_CTP").is_some(),
             cti_mine: std::env::var_os("INFORMAL_IC3_CTI_MINE").is_some(),
+            coupled_push: std::env::var_os("INFORMAL_IC3_COUPLED").is_some(),
         }
     }
 }
@@ -1750,6 +1753,7 @@ impl<'g> Ic3<'g> {
     /// Does lemma `c` of frame `i` hold in frame `i + 1`?
     fn push_lemma(&mut self, c: &Cube, i: usize, ctx: &RunContext) -> bool {
         let mut ctps = 0;
+        let mut coupled_tried = false;
         let eff_max_ctps = if self.cfg.parent_ctp {
             if self.parent_derived.contains(c) || c.len() <= 3 {
                 self.cfg.max_ctps.max(2)
@@ -1763,8 +1767,9 @@ impl<'g> Ic3<'g> {
             // Only at the frontier: lower down, CTP lemmas cost more than
             // the pushes they win (measured on the HWMCC'24 sample).
             let ctp = ctps < eff_max_ctps && i + 1 == self.top();
-            // Tracing (H3) also asks for the counterexample state.
-            let want = ctp || self.trace.is_some();
+            let try_h3 = self.cfg.coupled_push && !coupled_tried && i >= 2 && c.len() <= 4;
+            // Tracing (H3) and coupled lower-blocker promotion also ask for the predecessor.
+            let want = ctp || try_h3 || self.trace.is_some();
             match self.relative_inductive(c, i + 1, want) {
                 Ok(_) => return true,
                 Err(None) => return false,
@@ -1780,6 +1785,15 @@ impl<'g> Ic3<'g> {
                         self.tr(format_args!(
                             "{{\"e\":\"X\",\"from\":{i},\"low\":{low},\"n\":{n}}}"
                         ));
+                    }
+                    if try_h3 && !ctx.should_stop() {
+                        coupled_tried = true;
+                        if self.try_h3_coupled_promotion(c, &p, i, ctx) {
+                            if self.level_of.get(c).is_some_and(|&l| l > i) {
+                                return true;
+                            }
+                            continue;
+                        }
                     }
                     if !ctp {
                         return false;
@@ -2033,6 +2047,88 @@ impl<'g> Ic3<'g> {
             }
         }
         self.assume_invariant(new);
+    }
+
+    /// Hypothesis H3: when pushing `c` out of frame `i` (`i >= 2`) fails on
+    /// predecessor `p`, find a lemma `l_low` in `frames[i - 1]` that covers `p`.
+    /// First test whether `l_low` itself now promotes to `i` (unlocked by earlier
+    /// pushes in this round); if not, run a tiny local-cone micro-Houdini (`<= 12`
+    /// short clauses sharing variables with `{c, l_low}` plus `standing_inv`) to
+    /// move mutually inductive coupled pairs straight to `inf`.
+    fn try_h3_coupled_promotion(&mut self, c: &Cube, p: &Cube, i: usize, ctx: &RunContext) -> bool {
+        let Some(l_low) = self.frames[i - 1]
+            .iter()
+            .filter(|l| {
+                !l.iter().any(|&x| self.is_aux(x))
+                    && l.iter().all(|lit| p.binary_search(lit).is_ok())
+            })
+            .min_by_key(|l| l.len())
+            .cloned()
+        else {
+            return false;
+        };
+
+        // 1. Direct promotion of `l_low` from `i - 1` to `i` (and higher):
+        if let Ok(core) = self.relative_inductive(&l_low, i, false) {
+            let mut lvl = i;
+            while lvl < self.top() && self.relative_inductive(&core, lvl + 1, false).is_ok() {
+                lvl += 1;
+            }
+            self.stats_promoted += 1;
+            self.add_lemma(core, lvl);
+            return true;
+        }
+
+        // 2. Coupled local-cone micro-Houdini (`<= 12` clauses + `standing_inv`):
+        if c.iter().any(|&x| self.is_aux(x)) {
+            return false;
+        }
+        let mut cone_vars: std::collections::HashSet<u32> =
+            c.iter().chain(&l_low).map(|&x| var(x)).collect();
+        let mut local_cands: Vec<Cube> = vec![c.clone(), l_low];
+        'gather: for lvl in (1..=i).rev() {
+            for cand in &self.frames[lvl] {
+                if cand.len() <= 3
+                    && !cand.iter().any(|&x| self.is_aux(x))
+                    && cand.iter().any(|&x| cone_vars.contains(&var(x)))
+                    && !local_cands.contains(cand)
+                {
+                    for &x in cand {
+                        cone_vars.insert(var(x));
+                    }
+                    local_cands.push(cand.clone());
+                    if local_cands.len() >= 12 {
+                        break 'gather;
+                    }
+                }
+            }
+        }
+        let mut all_cands = local_cands;
+        all_cands.extend(self.inf.iter().flat_map(|q| self.expand(q)));
+        let mut sub_ctx = ctx.clone();
+        let now = std::time::Instant::now();
+        let budget = ctx
+            .deadline
+            .saturating_duration_since(now)
+            .min(std::time::Duration::from_millis(25));
+        sub_ctx.deadline = now + budget;
+        let make = &self.make_sat;
+        let Some(inv) = crate::invariant::houdini(self.g, all_cands, || make(), &sub_ctx) else {
+            return false;
+        };
+        let had: std::collections::HashSet<&Cube> = self.inf.iter().collect();
+        let new: Vec<Cube> = inv.into_iter().filter(|q| !had.contains(q)).collect();
+        if new.is_empty() {
+            return false;
+        }
+        for q in &new {
+            self.level_of.insert(q.clone(), usize::MAX);
+            if self.cfg.import != Import::Checked {
+                self.publish(q, usize::MAX);
+            }
+        }
+        self.assume_invariant(new);
+        true
     }
 
     /// Lemmas held at each level.

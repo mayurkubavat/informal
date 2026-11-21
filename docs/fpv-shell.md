@@ -151,6 +151,11 @@ passes on a different setup without saying so.
 | `check_cov -init [-model ...]`, `check_cov -waiver -add ...`, `check_cov -measure`, `check_cov -report [-html] [-report_file F]` | `check_cov ...` | Formal COI observability coverage, branch/toggle UNR dead-code detection, functional covers, and waivers |
 | `check_xprop -init [-targets ...]`, `check_xprop -waiver -add ...`, `check_xprop -prove`, `check_xprop -report` | `check_xprop ...` | Exact 2-copy self-composition X-propagation verification over reset-less flops, X literals, and undriven nets |
 | `check_spv -create -from <S> -to <O> [-cond <C>]`, `check_spv -prove`, `check_spv -report`, `check_spv -list` | `check_spv ...` | 2-safety non-interference / security path taint verification catching direct and multi-cycle covert storage channels |
+| `check_sec -setup -spec <F> -imp <F> [-lec] [-latency N]`, `check_sec -map ...`, `check_sec -prove`, `check_sec -report` | `check_sec ...` | Dual-design formal sequential (`SEC`, with optional retiming `-latency N`) and combinational keypoint (`-lec`) equivalence checking with side-by-side `spec`/`imp` VCD traces |
+| `assume -from_assert <P> [-name N]` | `fvassume -from_assert <P>` | Promote proven/helper assertion(s) into environment assumptions with provenance tracking (never circularly assuming `<P>` when proving `<P>`) |
+| `get_fv_complexity [-property P] [-json]`, `blackbox_assistant [-threshold_bits B] [-apply] [-json]` | `get_fv_complexity ...`, `blackbox_assistant ...` | Cone-of-influence flop/memory/wide-arithmetic complexity breakdown and boxing recommender |
+| `check_fv_setup [-json]`, `report_fv_setup`, `get_reset_info [-json]` | `check_fv_setup ...` | Audit formal setup completeness (clocks, resets, reset-less flops, undriven nets, abstractions, helper assumptions) |
+| `abstract -counter <sig> [-threshold K]`, `report_abstractions`, `set_abstractions -clear` | `abstract ...` | Sound over-approximate counter jump abstraction fast-forwarding wide counters to `K - 1` |
 | `why_cex [-property P] [-max_events N] [-json] [<P>]` | `why_cex ...` | Dynamic backward causal root-cause slice of a counterexample or witness trace (pruning untaken mux arms and non-controlling operands) |
 | `include file.tcl` | `source file.tcl` | Source a script |
 | `clock seconds` etc. | — | Forwarded to Tcl's own `clock` |

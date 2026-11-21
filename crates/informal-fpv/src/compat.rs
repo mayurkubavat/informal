@@ -930,7 +930,16 @@ const COMMON: &[(&str, Body)] = &[
     ("check_cov", check_cov),
     ("check_xprop", check_xprop),
     ("check_spv", check_spv),
+    ("check_sec", check_sec),
     ("why_cex", why_cex),
+    ("get_fv_complexity", get_fv_complexity),
+    ("blackbox_assistant", blackbox_assistant),
+    ("check_fv_setup", check_fv_setup),
+    ("report_fv_setup", check_fv_setup),
+    ("get_reset_info", get_reset_info),
+    ("abstract", abstract_cmd),
+    ("report_abstractions", report_abstractions),
+    ("set_abstractions", set_abstractions),
 ];
 
 const JG: &[(&str, Body)] = &[
@@ -2127,6 +2136,368 @@ fn why_cex(s: &mut Session, a: &[String]) -> Result<Value, String> {
     Ok(text.into())
 }
 
+fn check_sec(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[
+            ("-setup", 0),
+            ("-spec", 1),
+            ("-spec_files", 1),
+            ("-spec_top", 1),
+            ("-spec_define", 1),
+            ("-spec_incdir", 1),
+            ("-spec_param", 2),
+            ("-imp", 1),
+            ("-imp_files", 1),
+            ("-imp_top", 1),
+            ("-imp_define", 1),
+            ("-imp_incdir", 1),
+            ("-imp_param", 2),
+            ("-clock", 1),
+            ("-reset", 1),
+            ("-lec", 0),
+            ("-latency", 1),
+            ("-assume", 1),
+            ("-map", 0),
+            ("-input", 2),
+            ("-output", 2),
+            ("-state", 2),
+            ("-output_latency", 2),
+            ("-prove", 0),
+            ("-name", 1),
+            ("-time_limit", 1),
+            ("-list", 0),
+            ("-report", 0),
+            ("-file", 1),
+            ("-force", 0),
+            ("-json", 0),
+            ("-clear", 0),
+        ],
+        &[("-auto", 0), ("-task", 1)],
+    )?;
+    if a.flag("-clear") {
+        s.sec = crate::sec::SecState::default();
+        return Ok(().into());
+    }
+    let parse_defines = |opt: &str| -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        for d in a.all(opt) {
+            for item in d[0].split_whitespace() {
+                match item.split_once('=') {
+                    Some((k, v)) => out.push((k.to_string(), Some(v.to_string()))),
+                    None => out.push((item.to_string(), None)),
+                }
+            }
+        }
+        out
+    };
+    let parse_files = |o1: &str, o2: &str| -> Vec<PathBuf> {
+        a.all(o1)
+            .chain(a.all(o2))
+            .flat_map(|v| {
+                v[0].split_whitespace()
+                    .map(|p| std::path::absolute(p).unwrap_or_else(|_| PathBuf::from(p)))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    if a.flag("-setup") {
+        let latency: u32 = match a.val("-latency") {
+            Some(v) => v
+                .parse()
+                .map_err(|_| format!("check_sec -setup: bad -latency `{v}`"))?,
+            None => 0,
+        };
+        let setup = crate::sec::SecSetup {
+            spec_files: parse_files("-spec", "-spec_files"),
+            spec_top: a.val("-spec_top").map(String::from),
+            spec_defines: parse_defines("-spec_define"),
+            spec_incdirs: a
+                .all("-spec_incdir")
+                .flat_map(|v| {
+                    v[0].split_whitespace()
+                        .map(PathBuf::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            spec_params: a
+                .all("-spec_param")
+                .map(|p| (p[0].clone(), p[1].clone()))
+                .collect(),
+            imp_files: parse_files("-imp", "-imp_files"),
+            imp_top: a.val("-imp_top").map(String::from),
+            imp_defines: parse_defines("-imp_define"),
+            imp_incdirs: a
+                .all("-imp_incdir")
+                .flat_map(|v| {
+                    v[0].split_whitespace()
+                        .map(PathBuf::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            imp_params: a
+                .all("-imp_param")
+                .map(|p| (p[0].clone(), p[1].clone()))
+                .collect(),
+            clock: a.val("-clock").map(String::from),
+            reset: a.val("-reset").map(String::from),
+            lec: a.flag("-lec"),
+            latency,
+            input_map: a
+                .all("-input")
+                .map(|p| (p[0].clone(), p[1].clone()))
+                .collect(),
+            output_map: a
+                .all("-output")
+                .map(|p| (p[0].clone(), p[1].clone()))
+                .collect(),
+            state_map: a
+                .all("-state")
+                .map(|p| (p[0].clone(), p[1].clone()))
+                .collect(),
+            output_latency: std::collections::HashMap::new(),
+            assumptions: a.all("-assume").map(|v| v[0].clone()).collect(),
+        };
+        let (st, it) = crate::sec::setup_sec(s, setup)?;
+        if !a.flag("-prove") && !a.flag("-report") && !a.flag("-list") {
+            return Ok(format!("{st} {it}").into());
+        }
+    }
+    if a.flag("-map") {
+        let setup = s
+            .sec
+            .setup
+            .as_mut()
+            .ok_or("check_sec -map: run `check_sec -setup ...` first")?;
+        for p in a.all("-input") {
+            setup.input_map.push((p[0].clone(), p[1].clone()));
+        }
+        for p in a.all("-output") {
+            setup.output_map.push((p[0].clone(), p[1].clone()));
+        }
+        for p in a.all("-state") {
+            setup.state_map.push((p[0].clone(), p[1].clone()));
+        }
+        for p in a.all("-output_latency") {
+            let lat: u32 = p[1]
+                .parse()
+                .map_err(|_| format!("check_sec -map -output_latency: bad latency `{}`", p[1]))?;
+            setup.output_latency.insert(p[0].clone(), lat);
+        }
+        if !a.flag("-prove") && !a.flag("-report") && !a.flag("-list") {
+            return Ok(().into());
+        }
+    }
+    if a.flag("-prove") {
+        let timeout = a.val("-time_limit").map(parse_duration).transpose()?;
+        if !s.dry_run {
+            crate::sec::prove_sec(s, a.val("-name"), timeout)?;
+        }
+        if !a.flag("-report") && !a.flag("-list") {
+            return Ok(().into());
+        }
+    }
+    if a.flag("-list") {
+        let names: Vec<String> = s.sec.checks.iter().map(|c| c.name.clone()).collect();
+        return Ok(Value::List(names));
+    }
+    if a.flag("-report") {
+        if s.dry_run {
+            return Ok(().into());
+        }
+        if a.flag("-json") {
+            let js = serde_json::to_string_pretty(&s.sec).map_err(|e| e.to_string())?;
+            return Ok(js.into());
+        }
+        let text = crate::sec::format_report(&s.sec);
+        if let Some(f) = a.val("-file") {
+            let path = Path::new(f);
+            if path.exists() && !a.flag("-force") {
+                return Err(format!("check_sec: {f} exists; add -force to overwrite it"));
+            }
+            std::fs::write(path, &text).map_err(|e| format!("check_sec: {f}: {e}"))?;
+        } else {
+            print!("{text}");
+        }
+        return Ok(text.into());
+    }
+    Err("check_sec: expected -setup, -map, -prove, -list, -report or -clear".into())
+}
+
+fn get_fv_complexity(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(a, &[("-property", 1), ("-json", 0)], &[("-task", 1)])?;
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let prop = a
+        .val("-property")
+        .or_else(|| a.pos.first().map(String::as_str));
+    let rep = crate::complexity::fv_complexity(s, prop)?;
+    if a.flag("-json") {
+        let js = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+        return Ok(js.into());
+    }
+    let text = crate::complexity::format_complexity(&rep);
+    print!("{text}");
+    Ok(text.into())
+}
+
+fn blackbox_assistant(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[("-threshold_bits", 1), ("-apply", 0), ("-json", 0)],
+        &[],
+    )?;
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let threshold_bits: u64 = match a.val("-threshold_bits") {
+        Some(v) => v
+            .parse()
+            .map_err(|_| format!("blackbox_assistant: bad -threshold_bits `{v}`"))?,
+        None => 64,
+    };
+    let adv = crate::complexity::blackbox_assistant(s, threshold_bits, a.flag("-apply"))?;
+    if a.flag("-json") {
+        let js = serde_json::to_string_pretty(&adv).map_err(|e| e.to_string())?;
+        return Ok(js.into());
+    }
+    let text = crate::complexity::format_bbox_advice(&adv);
+    print!("{text}");
+    Ok(text.into())
+}
+
+fn check_fv_setup(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[("-json", 0), ("-file", 1), ("-force", 0)],
+        &[("-verbose", 0)],
+    )?;
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let rep = crate::complexity::check_fv_setup(s);
+    if a.flag("-json") {
+        let js = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
+        return Ok(js.into());
+    }
+    let text = crate::complexity::format_setup_report(&rep);
+    if let Some(f) = a.val("-file") {
+        let path = Path::new(f);
+        if path.exists() && !a.flag("-force") {
+            return Err(format!("{}: {f} exists; add -force to overwrite it", a.cmd));
+        }
+        std::fs::write(path, &text).map_err(|e| format!("{}: {f}: {e}", a.cmd))?;
+    } else {
+        print!("{text}");
+    }
+    Ok(text.into())
+}
+
+fn get_reset_info(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(a, &[("-json", 0)], &[])?;
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let rep = crate::complexity::check_fv_setup(s);
+    if a.flag("-json") {
+        let js = serde_json::to_string_pretty(&rep.reset).map_err(|e| e.to_string())?;
+        return Ok(js.into());
+    }
+    let text = format!(
+        "configured_reset: {} | rtl_resets: {} | resetless_flops: {}",
+        rep.reset.configured_reset.as_deref().unwrap_or("none"),
+        rep.reset
+            .rtl_resets
+            .iter()
+            .map(|r| format!(
+                "{}({}, {} regs)",
+                r.signal,
+                if r.active_high { "high" } else { "low" },
+                r.registers
+            ))
+            .collect::<Vec<_>>()
+            .join(", "),
+        rep.reset.resetless_flops
+    );
+    Ok(text.into())
+}
+
+fn abstract_cmd(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[
+            ("-counter", 1),
+            ("-threshold", 1),
+            ("-init_value", 0),
+            ("-clear", 0),
+            ("-list", 0),
+        ],
+        &[("-task", 1)],
+    )?;
+    if a.flag("-clear") {
+        s.counter_abstractions.clear();
+        return Ok(().into());
+    }
+    if a.flag("-list") {
+        let list: Vec<String> = s
+            .counter_abstractions
+            .iter()
+            .map(|c| c.signal.clone())
+            .collect();
+        return Ok(Value::List(list));
+    }
+    let sig = a
+        .val("-counter")
+        .or_else(|| a.pos.first().map(String::as_str))
+        .ok_or("abstract: expected -counter <signal> [-threshold K], -list, or -clear")?;
+    let threshold =
+        match a.val("-threshold") {
+            Some(v) => Some(v.parse::<u64>().ok().filter(|&k| k >= 1).ok_or_else(|| {
+                format!("abstract -threshold: positive integer expected, not `{v}`")
+            })?),
+            None => None,
+        };
+    let clean = sig.trim().to_string();
+    if let Some(existing) = s
+        .counter_abstractions
+        .iter_mut()
+        .find(|c| c.signal == clean)
+    {
+        existing.threshold = threshold;
+    } else {
+        s.counter_abstractions
+            .push(crate::complexity::CounterAbstraction {
+                signal: clean.clone(),
+                threshold,
+            });
+    }
+    Ok(clean.into())
+}
+
+fn report_abstractions(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(a, &[("-json", 0)], &[])?;
+    if a.flag("-json") {
+        let js =
+            serde_json::to_string_pretty(&s.counter_abstractions).map_err(|e| e.to_string())?;
+        return Ok(js.into());
+    }
+    let text = crate::complexity::format_abstractions(&s.counter_abstractions);
+    if !s.dry_run && !text.is_empty() {
+        println!("{text}");
+    }
+    Ok(text.into())
+}
+
+fn set_abstractions(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(a, &[("-clear", 0), ("-off", 0)], &[])?;
+    if a.flag("-clear") || a.flag("-off") || a.pos.first().map(String::as_str) == Some("off") {
+        s.counter_abstractions.clear();
+        return Ok(().into());
+    }
+    Ok(crate::complexity::format_abstractions(&s.counter_abstractions).into())
+}
+
 /// `visualize -violation|-cover -property P`: the trace of a CEX or cover,
 /// as the VCD file prove wrote. It is opened with the program named by
 /// INFORMAL_WAVE_VIEWER (`surfer`, `gtkwave`) when that is set; the path is
@@ -2215,6 +2586,7 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
             ("-enable", 0),
             ("-remove", 0),
             ("-env", 0),
+            ("-from_assert", 1),
             ("-bound", 1),
             ("-task", 1),
             ("-regexp", 0),
@@ -2222,6 +2594,26 @@ fn jg_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
         &[("-severity", 1), ("-tag", 1), ("-from_property", 1)],
     )?;
     let task = a.val("-task").map(|t| s.task_name(t)).transpose()?;
+    if let Some(pat) = a.val("-from_assert") {
+        if kind != Kind::Assume {
+            return Err(format!("{}: -from_assert is only valid on `assume`", a.cmd));
+        }
+        let target_task = task.unwrap_or_else(|| s.current_task.clone());
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let found = if a.flag("-regexp") {
+            select_regexp(s, &[pat.to_string()])?
+        } else {
+            select_in(s, None, &[pat.to_string()])?
+        };
+        let created =
+            s.assume_from_assert(&target_task, &found, a.val("-name").map(String::from))?;
+        return match created.as_slice() {
+            [single] => Ok(single.clone().into()),
+            many => Ok(Value::List(many.to_vec())),
+        };
+    }
     let pick = |s: &Session| {
         let found = if a.flag("-regexp") {
             select_regexp(s, &a.pos)
@@ -2499,9 +2891,30 @@ fn vcf_parameters(s: &mut Session, a: &Args) -> Result<(), String> {
 fn vcf_prop(s: &mut Session, a: &[String], kind: Kind) -> Result<Value, String> {
     let a = Args::parse(
         a,
-        &[("-expr", 1), ("-name", 1)],
+        &[("-expr", 1), ("-name", 1), ("-from_assert", 1)],
         &[("-type", 1), ("-usage", 1)],
     )?;
+    if let Some(pat) = a.val("-from_assert") {
+        if kind != Kind::Assume {
+            return Err(format!("{}: -from_assert is only valid on fvassume", a.cmd));
+        }
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let found = select_in(s, None, &[pat.to_string()])?;
+        let task = s.current_task.clone();
+        let created = s.assume_from_assert(
+            &task,
+            &found,
+            a.val("-name")
+                .map(String::from)
+                .or_else(|| a.pos.first().cloned()),
+        )?;
+        return match created.as_slice() {
+            [single] => Ok(single.clone().into()),
+            many => Ok(Value::List(many.to_vec())),
+        };
+    }
     let (name, expr) = match (a.val("-expr"), a.pos.as_slice()) {
         (Some(e), [n]) => (Some(n.clone()), e.to_string()),
         (Some(e), []) => (a.val("-name").map(String::from), e.to_string()),
@@ -2668,7 +3081,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("sub.tcl"),
-            "blackbox_assistant u.sig\ncover -name c1 {done}\n",
+            "set_jg_gui_layout u.sig\ncover -name c1 {done}\n",
         )
         .unwrap();
         let sh = shell(Flavor::Jg);
@@ -2688,7 +3101,7 @@ mod tests {
                 (Error, 5, "assert"),
                 (Unknown, 9, "check_cdc"),
                 (Ignored, 10, "prove"),
-                (Unknown, 1, "blackbox_assistant"),
+                (Unknown, 1, "set_jg_gui_layout"),
                 (Ignored, 12, "open"),
                 (Ignored, 13, "exec"),
                 (Ignored, 14, "file"),

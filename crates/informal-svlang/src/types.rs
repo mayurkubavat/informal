@@ -237,9 +237,13 @@ impl Design {
         ];
         let prefix = format!("{top}.");
         // Signals, plus instance names (the start of a hierarchical name),
-        // plus functions/sequences/properties/typedefs/imports in `top`.
+        // plus functions/sequences/properties/typedefs/imports in `top`,
+        // plus `top` itself for root-qualified XMRs (`top.u_sub.sig`).
         let mut known: std::collections::HashSet<&str> =
             self.top_signals(top).into_iter().map(|(n, _)| n).collect();
+        if !top.is_empty() {
+            known.insert(top);
+        }
         known.extend(
             self.instances
                 .iter()

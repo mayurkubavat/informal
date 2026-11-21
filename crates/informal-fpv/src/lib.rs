@@ -5,11 +5,13 @@
 
 pub mod cache;
 pub mod compat;
+pub mod complexity;
 pub mod conn;
 pub mod cov;
 pub mod miter;
 pub mod progress;
 pub mod proof_core;
+pub mod sec;
 pub mod session;
 pub mod spv;
 pub mod stats;

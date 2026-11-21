@@ -787,4 +787,21 @@ fn mcp_why_cex_and_formal_app_tools_conform_to_schemas() {
     assert_eq!(spv["schema"], "informal.spv/1");
     let conn = call(&api, "check_conn", json!({"action": "list"}));
     assert_eq!(conn["schema"], "informal.conn/1");
+
+    let sec_setup = call(
+        &api,
+        "check_sec",
+        json!({
+            "action": "setup",
+            "spec_files": ["tests/fpv/counter/counter.sv"],
+            "imp_files": ["tests/fpv/counter/counter.sv"],
+            "clock": "clk",
+            "reset": "!rst_n"
+        }),
+    );
+    assert_eq!(sec_setup["schema"], "informal.sec/1");
+    assert_eq!(sec_setup["configured"], true);
+    let sec_done = call(&api, "check_sec", json!({"action": "prove"}));
+    assert_eq!(sec_done["schema"], "informal.sec/1");
+    assert_eq!(sec_done["checks"][0]["status"], "proven");
 }

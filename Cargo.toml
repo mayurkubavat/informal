@@ -29,7 +29,7 @@ informal-aig = { path = "crates/informal-aig" }
 informal-bmc = { path = "crates/informal-bmc" }
 informal-svlang = { path = "crates/informal-svlang" }
 # Pinned by commit (docs/third-party.md).
-svlang = { git = "https://github.com/mayurkubavat/svlang", rev = "58b1205c6b6bf2d54f3331c31c6c7e00b1bfbbdf" }
+svlang = { git = "https://github.com/mayurkubavat/svlang", rev = "6f4fbd577ed5c42ea63e9bc4cc00306ffc14ffd3" }
 informal-bitwuzla = { path = "crates/informal-bitwuzla" }
 informal-llm = { path = "crates/informal-llm" }
 informal-mcp = { path = "crates/informal-mcp" }

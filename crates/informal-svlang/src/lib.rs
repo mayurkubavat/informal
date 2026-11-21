@@ -794,6 +794,9 @@ fn design_stats(nl: &Netlist) -> DesignStats {
         }
     };
     for r in &nl.states {
+        if r.name.contains("._sva_") {
+            continue;
+        }
         if r.latch_enable.is_some() {
             st.latches += 1;
             st.latch_bits += u64::from(r.width);

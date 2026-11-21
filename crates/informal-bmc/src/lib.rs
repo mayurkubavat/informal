@@ -1460,6 +1460,7 @@ impl Default for Ic3Mt {
                             dynamic_order: true,
                             stall_push: true,
                             cti_mine: true,
+                            coupled_push: true,
                             ..d
                         },
                     )
@@ -1488,6 +1489,7 @@ impl Default for Ic3Mt {
                         parent_ctp: true,
                         exctg: true,
                         stall_push: true,
+                        coupled_push: true,
                         ..d
                     },
                 ),
@@ -1661,7 +1663,9 @@ pub fn select_for_btor(
         let out: Vec<_> = engines
             .iter()
             .filter(|e| {
-                (e.name().starts_with("informal-") && !e.name().contains("wbmc"))
+                (e.name().starts_with("informal-")
+                    && !e.name().contains("wbmc")
+                    && !e.name().contains("wkind"))
                     || e.capabilities().liveness
             })
             .cloned()
@@ -1684,7 +1688,11 @@ pub fn select_for_btor(
     if f.array_states > 0 || f.has_arrays {
         let arr: Vec<_> = base
             .iter()
-            .filter(|e| !e.name().starts_with("informal-") || e.name().contains("wbmc"))
+            .filter(|e| {
+                !e.name().starts_with("informal-")
+                    || e.name().contains("wbmc")
+                    || e.name().contains("wkind")
+            })
             .cloned()
             .collect();
         if !arr.is_empty() {
@@ -2118,5 +2126,63 @@ mod tests {
             check(&kind, &read("liveness.btor2")),
             Verdict::Unsafe { .. }
         ));
+    }
+
+    #[test]
+    fn d8_unverified_ic3_safe_is_downgraded_and_h3_coupled_push_certifies() {
+        if informal_sat::Cadical::signature().is_none() {
+            informal_engine::tool_missing("needs CaDiCaL");
+            return;
+        }
+        // Two-latch swap `a <= b; b <= a` starting at `a=1, b=0`, checking `!(a && b)`:
+        // `!(a && b)` is inductive and coupled with `a || b`.
+        let btor = "\
+1 sort bitvec 1
+2 zero 1
+3 one 1
+4 state 1 a
+5 state 1 b
+6 init 1 4 3
+7 init 1 5 2
+8 next 1 4 5
+9 next 1 5 4
+10 and 1 4 5
+11 bad 10
+";
+        let dir = std::env::temp_dir().join(format!("informal-d8h3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("swap.btor2");
+        std::fs::write(&path, btor).unwrap();
+        let req = CheckRequest {
+            model: path,
+            format: ModelFormat::Btor2,
+            timeout: Duration::from_secs(10),
+        };
+        let ctx = RunContext::new(req.timeout);
+        let p = prepare_ctx_fold(&req, &ctx, false).unwrap();
+
+        // 1. D8 guard: an `Ic3` instance with `proof_level == None` claiming `Verdict::Safe`
+        //    must NEVER pass `certified(...)` as `Verdict::Safe`.
+        let c1 = ctx.clone();
+        let unproved = ic3::Ic3::new(&p, Box::new(move || solver(&c1))).unwrap();
+        let checked_bad = certified(&req, &p, &unproved, Verdict::Safe, &ctx);
+        assert!(
+            matches!(checked_bad.verdict, Verdict::Unknown { .. }),
+            "expected unverified Safe to be rejected, got {:?}",
+            checked_bad.verdict
+        );
+
+        // 2. H3 coupled_push run proves and passes full independent AIG certification:
+        let c2 = ctx.clone();
+        let mut runner = ic3::Ic3::new(&p, Box::new(move || solver(&c2))).unwrap();
+        runner.set_config(ic3::Config {
+            coupled_push: true,
+            ..ic3::Config::default()
+        });
+        let v = runner.check(&ctx);
+        assert_eq!(v, Verdict::Safe);
+        let checked_ok = certified(&req, &p, &runner, v, &ctx);
+        assert_eq!(checked_ok.verdict, Verdict::Safe);
+        assert!(checked_ok.certificate.is_some());
     }
 }

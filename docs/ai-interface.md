@@ -129,6 +129,7 @@ reply (`tools/list`).
 | | `check_conn` | Load and prove CSV connectivity maps (`Connectivity` task) | yes |
 | | `check_xprop` | Exact 2-copy self-composition formal X-propagation verification | yes |
 | | `check_spv` | 2-safety formal security path / non-interference verification | yes |
+| | `check_sec` | Dual-design sequential (`SEC`, optional `latency`) and combinational keypoint (`LEC`) equivalence checking | yes |
 | Proposals | `proposal_add` | Propose an assumption, helper assertion, cover or cut point | yes, by mode |
 | | `proposal_list` | Every proposal and its state | no |
 | | `proposal_undo` | Withdraw or remove proposals, one or all; results that stood on them are reset | yes |

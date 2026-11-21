@@ -427,28 +427,67 @@ pub fn slice_property_cex(
     prop_name: &str,
     max_events: usize,
 ) -> Result<WhyCexReport, String> {
-    let prop_idx = s
-        .props
-        .iter()
-        .position(|p| p.name == prop_name || p.name.ends_with(&format!("::{prop_name}")))
-        .ok_or_else(|| format!("why_cex: unknown property '{prop_name}'"))?;
-    let p = &s.props[prop_idx];
-    let Some(trace_path) = &p.trace else {
-        return Err(format!(
-            "why_cex: '{}' has no counterexample/witness trace (status is {})",
-            p.name,
-            p.status.word()
-        ));
-    };
-    let vcd_text = std::fs::read_to_string(trace_path)
+    let (resolved_name, resolved_status, trace_path, trace_btor, plain_btor) =
+        if let Some(prop_idx) = s
+            .props
+            .iter()
+            .position(|p| p.name == prop_name || p.name.ends_with(&format!("::{prop_name}")))
+        {
+            let p = &s.props[prop_idx];
+            let Some(tp) = &p.trace else {
+                return Err(format!(
+                    "why_cex: '{}' has no counterexample/witness trace (status is {})",
+                    p.name,
+                    p.status.word()
+                ));
+            };
+            (
+                p.name.clone(),
+                p.status.clone(),
+                tp.clone(),
+                s.workdir.join(format!("prop_{prop_idx}.trace.btor2")),
+                s.workdir.join(format!("prop_{prop_idx}.btor2")),
+            )
+        } else if let Some(sec_chk) = s
+            .sec
+            .checks
+            .iter()
+            .find(|c| c.name == prop_name || c.imp_sig == prop_name)
+        {
+            let Some(tp) = &sec_chk.trace else {
+                return Err(format!(
+                    "why_cex: SEC check '{}' has no counterexample trace (status is {})",
+                    sec_chk.name,
+                    sec_chk.status.word()
+                ));
+            };
+            let st = match sec_chk.status {
+                crate::sec::SecStatus::Cex { depth } => Status::Cex {
+                    engine: sec_chk.engine.clone().unwrap_or_default(),
+                    depth,
+                    ms: sec_chk.ms,
+                },
+                _ => Status::Undetermined {
+                    reason: sec_chk.status.word().to_string(),
+                },
+            };
+            (
+                sec_chk.name.clone(),
+                st,
+                tp.clone(),
+                s.workdir.join(format!("{}.trace.btor2", sec_chk.name)),
+                s.workdir.join(format!("{}.btor2", sec_chk.name)),
+            )
+        } else {
+            return Err(format!("why_cex: unknown property '{prop_name}'"));
+        };
+    let vcd_text = std::fs::read_to_string(&trace_path)
         .map_err(|e| format!("why_cex: cannot read '{trace_path}': {e}"))?;
     let vcd = parse_vcd_bits(&vcd_text)?;
 
-    let trace_btor = s.workdir.join(format!("prop_{prop_idx}.trace.btor2"));
-    let plain_btor = s.workdir.join(format!("prop_{prop_idx}.btor2"));
     let btor_text = std::fs::read_to_string(&trace_btor)
         .or_else(|_| std::fs::read_to_string(&plain_btor))
-        .map_err(|e| format!("why_cex: cannot read Btor2 model for '{}': {e}", p.name))?;
+        .map_err(|e| format!("why_cex: cannot read Btor2 model for '{resolved_name}': {e}"))?;
     let (core_btor, trace_sec) = informal_svlang::split_trace(&btor_text);
     let m = informal_ir::parse(core_btor).map_err(|e| format!("why_cex: {e}"))?;
 
@@ -480,8 +519,8 @@ pub fn slice_property_cex(
 
     let top_prefix = s.design.top.as_deref().unwrap_or_default();
     analyze_model_and_vcd(
-        &p.name,
-        &p.status,
+        &resolved_name,
+        &resolved_status,
         &m,
         &vcd,
         &wire_aliases,

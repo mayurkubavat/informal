@@ -421,12 +421,328 @@ fn unroll(
     }
 }
 
+/// Word-level k-induction (with simple-path state uniqueness) on Bitwuzla.
+/// Proves safety properties directly over bit-vectors, wide arithmetic, and
+/// unblasted Btor2 arrays (`Sort::Array`).
+pub struct WordKind {
+    pub max_depth: Option<usize>,
+}
+
+impl Engine for WordKind {
+    fn name(&self) -> &str {
+        "informal-wkind"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            formats: vec![ModelFormat::Btor2],
+            proves: true,
+            finds_bugs: true,
+            ..Default::default()
+        }
+    }
+    fn shed_rank(&self) -> u32 {
+        3
+    }
+    fn check(&self, req: &CheckRequest, ctx: &RunContext) -> anyhow::Result<EngineResult> {
+        let t0 = Instant::now();
+        let text = std::fs::read_to_string(&req.model)?;
+        let m = informal_ir::parse(&text)?;
+        let verdict = run_kind(&m, ctx, self.max_depth, self.name())?;
+        Ok(EngineResult {
+            engine: self.name().into(),
+            verdict,
+            wall_ms: t0.elapsed().as_millis(),
+            witness: None,
+            certificate: None,
+        })
+    }
+}
+
+#[cfg(not(informal_bitwuzla))]
+fn run_kind(_: &Model, _: &RunContext, _: Option<usize>, _: &str) -> anyhow::Result<Verdict> {
+    Ok(Verdict::Unknown {
+        reason: "built without Bitwuzla".into(),
+    })
+}
+
+#[cfg(informal_bitwuzla)]
+fn build_sorts(m: &Model, bz: &Bz) -> anyhow::Result<HashMap<u32, i32>> {
+    let mut sorts: HashMap<u32, i32> = HashMap::new();
+    for e in m.entries() {
+        if let informal_ir::Entry::Sort { id, sort, .. } = e {
+            let s = match *sort {
+                Sort::BitVec(w) => bz.bv_sort(w)?,
+                Sort::Array { index, element } => bz.array_sort(sorts[&index], sorts[&element])?,
+            };
+            sorts.insert(*id, s);
+        }
+    }
+    Ok(sorts)
+}
+
+#[cfg(informal_bitwuzla)]
+#[allow(clippy::too_many_arguments)]
+fn unroll_step(
+    m: &Model,
+    bz: &Bz,
+    sorts: &HashMap<u32, i32>,
+    init: &HashMap<u32, i64>,
+    next: &HashMap<u32, i64>,
+    prev: &HashMap<u32, T>,
+    k: usize,
+    assert_init: bool,
+) -> anyhow::Result<(HashMap<u32, T>, T)> {
+    let mut f: HashMap<u32, T> = HashMap::new();
+    let get = |f: &HashMap<u32, T>, a: i64| -> anyhow::Result<T> {
+        let t = *f
+            .get(&(a.unsigned_abs() as u32))
+            .ok_or_else(|| anyhow::anyhow!("node {} used before definition", a.abs()))?;
+        if a < 0 {
+            bz.op("not", &[t], 0, 0)
+        } else {
+            Ok(t)
+        }
+    };
+    for l in m.lines() {
+        let sort = l.sort.map(|s| sorts[&s]);
+        let width = l.sort.and_then(|s| m.width(s));
+        let t = match l.op {
+            Op::State => {
+                if k == 0 {
+                    bz.konst(sort.unwrap(), l.symbol.as_deref().unwrap_or(""))?
+                } else {
+                    match next.get(&l.id) {
+                        Some(&n) => {
+                            let p = *prev.get(&(n.unsigned_abs() as u32)).unwrap();
+                            if n < 0 {
+                                bz.op("not", &[p], 0, 0)?
+                            } else {
+                                p
+                            }
+                        }
+                        None => bz.konst(sort.unwrap(), "")?,
+                    }
+                }
+            }
+            Op::Input => bz.konst(sort.unwrap(), l.symbol.as_deref().unwrap_or(""))?,
+            Op::Zero | Op::One | Op::Ones | Op::Const | Op::Constd | Op::Consth => {
+                bz.value(sort.unwrap(), &const_bits(l, width.unwrap())?)?
+            }
+            Op::Sext | Op::Uext => {
+                bz.op(l.op.name(), &[get(&f, l.args[0])?], l.nums[0].parse()?, 0)?
+            }
+            Op::Slice => bz.op(
+                "slice",
+                &[get(&f, l.args[0])?],
+                l.nums[0].parse()?,
+                l.nums[1].parse()?,
+            )?,
+            Op::Init
+            | Op::Next
+            | Op::Bad
+            | Op::Constraint
+            | Op::Output
+            | Op::Fair
+            | Op::Justice => continue,
+            op => {
+                let args = l
+                    .args
+                    .iter()
+                    .map(|&a| get(&f, a))
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                bz.op(op.name(), &args, 0, 0)?
+            }
+        };
+        f.insert(l.id, t);
+    }
+    if k == 0 && assert_init {
+        for (&s, &v) in init {
+            let st = f[&s];
+            let mut val = get(&f, v)?;
+            let ss = m.line(s).and_then(|l| l.sort).unwrap();
+            if matches!(m.sort(ss), Some(Sort::Array { .. }))
+                && m.line(v.unsigned_abs() as u32)
+                    .and_then(|l| l.sort)
+                    .is_some_and(|vs| m.width(vs).is_some())
+            {
+                val = bz.const_array(sorts[&ss], val)?;
+            }
+            let eq = bz.op("eq", &[st, val], 0, 0)?;
+            bz.assert(eq)?;
+        }
+    }
+    for l in m.with_op(Op::Constraint) {
+        bz.assert(get(&f, l.args[0])?)?;
+    }
+    let bads: Vec<T> = m
+        .with_op(Op::Bad)
+        .map(|l| get(&f, l.args[0]))
+        .collect::<anyhow::Result<_>>()?;
+    let mut any = bads[0];
+    for &b in &bads[1..] {
+        any = bz.op("or", &[any, b], 0, 0)?;
+    }
+    Ok((f, any))
+}
+
+#[cfg(informal_bitwuzla)]
+fn run_kind(
+    m: &Model,
+    ctx: &RunContext,
+    max: Option<usize>,
+    name: &str,
+) -> anyhow::Result<Verdict> {
+    if m.with_op(Op::Bad).next().is_none() {
+        return Ok(Verdict::Unknown {
+            reason: "model has no bad-state property".into(),
+        });
+    }
+    if m.with_op(Op::Fair).next().is_some() || m.with_op(Op::Justice).next().is_some() {
+        return Ok(Verdict::Unknown {
+            reason: "liveness is not supported by this engine".into(),
+        });
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let watcher = {
+        let (cancel, done, token) = (cancel.clone(), done.clone(), ctx.cancel.clone());
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                if token.is_cancelled() || informal_engine::memory::exceeded() {
+                    cancel.store(true, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        })
+    };
+    let left = ctx
+        .deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis() as i64;
+    let bz_base = Bz::new(left, &cancel);
+    let bz_step = Bz::new(left, &cancel);
+    let result = unroll_kind(m, &bz_base, &bz_step, ctx, max, name);
+    done.store(true, Ordering::Relaxed);
+    let _ = watcher.join();
+    result
+}
+
+#[cfg(informal_bitwuzla)]
+fn unroll_kind(
+    m: &Model,
+    bz_base: &Bz,
+    bz_step: &Bz,
+    ctx: &RunContext,
+    max: Option<usize>,
+    name: &str,
+) -> anyhow::Result<Verdict> {
+    let sorts_base = build_sorts(m, bz_base)?;
+    let sorts_step = build_sorts(m, bz_step)?;
+    let next: HashMap<u32, i64> = m
+        .with_op(Op::Next)
+        .map(|l| (l.args[0] as u32, l.args[1]))
+        .collect();
+    let init: HashMap<u32, i64> = m
+        .with_op(Op::Init)
+        .map(|l| (l.args[0] as u32, l.args[1]))
+        .collect();
+    let state_ids: Vec<u32> = m.with_op(Op::State).map(|l| l.id).collect();
+
+    let mut prev_base: HashMap<u32, T> = HashMap::new();
+    let mut prev_step: HashMap<u32, T> = HashMap::new();
+    let mut step_states: Vec<Vec<T>> = Vec::new();
+    let mut k = 0usize;
+
+    loop {
+        if ctx.should_stop() {
+            return Ok(Verdict::Unknown {
+                reason: ctx.stop_reason().into(),
+            });
+        }
+        if max.is_some_and(|d| k > d) {
+            return Ok(Verdict::Unknown {
+                reason: format!("bound {} reached", k - 1),
+            });
+        }
+
+        // 1. Base case at depth `k` from initial state:
+        let (f_base, bad_base) =
+            unroll_step(m, bz_base, &sorts_base, &init, &next, &prev_base, k, true)?;
+        match bz_base.solve(&[bad_base])? {
+            10 => {
+                return Ok(Verdict::Unsafe {
+                    depth: Some(k as u32),
+                })
+            }
+            20 => {
+                if state_ids.is_empty() {
+                    return Ok(Verdict::Safe);
+                }
+                let nb = bz_base.op("not", &[bad_base], 0, 0)?;
+                bz_base.assert(nb)?;
+            }
+            _ => {
+                return Ok(Verdict::Unknown {
+                    reason: ctx.stop_reason().into(),
+                })
+            }
+        }
+        prev_base = f_base;
+
+        // 2. Inductive step: frames `0..k-1` assumed safe; check if frame `k` can be bad.
+        let (f_step, bad_step) =
+            unroll_step(m, bz_step, &sorts_step, &init, &next, &prev_step, k, false)?;
+        let cur_snap: Vec<T> = state_ids.iter().map(|s| f_step[s]).collect();
+        if !state_ids.is_empty() && k <= 32 {
+            for earlier in &step_states {
+                let mut diffs = Vec::with_capacity(state_ids.len());
+                for (&t_old, &t_new) in earlier.iter().zip(&cur_snap) {
+                    let eq = bz_step.op("eq", &[t_old, t_new], 0, 0)?;
+                    diffs.push(bz_step.op("not", &[eq], 0, 0)?);
+                }
+                let mut any_diff = diffs[0];
+                for &d in &diffs[1..] {
+                    any_diff = bz_step.op("or", &[any_diff, d], 0, 0)?;
+                }
+                bz_step.assert(any_diff)?;
+            }
+        }
+        step_states.push(cur_snap);
+
+        match bz_step.solve(&[bad_step])? {
+            20 => return Ok(Verdict::Safe),
+            10 => {
+                let nb = bz_step.op("not", &[bad_step], 0, 0)?;
+                bz_step.assert(nb)?;
+            }
+            _ => {
+                return Ok(Verdict::Unknown {
+                    reason: ctx.stop_reason().into(),
+                })
+            }
+        }
+
+        ctx.report(Progress {
+            engine: name.into(),
+            bound: Some(k as u32),
+            note: String::new(),
+            output: None,
+        });
+        prev_step = f_step;
+        k += 1;
+    }
+}
+
 /// The word-level engines (empty without Bitwuzla).
 pub fn engines() -> Vec<Arc<dyn Engine>> {
     if !available() {
         return Vec::new();
     }
-    vec![Arc::new(WordBmc { max_depth: None })]
+    vec![
+        Arc::new(WordBmc { max_depth: None }),
+        Arc::new(WordKind { max_depth: None }),
+    ]
 }
 
 #[cfg(test)]
@@ -465,11 +781,26 @@ mod tests {
             check(&read("counter.btor2"), 20),
             Verdict::Unsafe { depth: Some(7) }
         );
-        // Arrays: write-then-read never fails.
+        // Arrays: write-then-read never fails; wbmc reaches its bound, wkind proves Safe!
         assert!(matches!(
             check(&read("memory.btor2"), 10),
             Verdict::Unknown { .. }
         ));
+        let p = root.join("memory.btor2");
+        let req = CheckRequest {
+            model: p,
+            format: ModelFormat::Btor2,
+            timeout: Duration::from_secs(30),
+        };
+        assert_eq!(
+            WordKind {
+                max_depth: Some(10)
+            }
+            .check(&req, &RunContext::new(req.timeout))
+            .unwrap()
+            .verdict,
+            Verdict::Safe
+        );
     }
 
     #[test]
