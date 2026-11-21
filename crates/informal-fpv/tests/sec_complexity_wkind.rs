@@ -1,5 +1,7 @@
-//! End-to-end integration tests for Tiers 7, 8, & 9:
-//! 1. Tier 7 (`check_sec`):
+//! End-to-end integration tests for sequential equivalence checking (`check_sec`),
+//! SVA local variables & `case`, complexity/counter abstraction, and word-level
+//! SMT array $k$-induction (`informal-wkind`):
+//! 1. `check_sec`:
 //!    - Sequential Equivalence Checking (`SEC`) between a reference RTL and a clock-gated /
 //!      algebraically refactored RTL implementation (`proven`).
 //!    - Retimed / pipelined SEC (`-latency 1`) proving a 1-stage spec equivalent to a 2-stage
@@ -7,7 +9,7 @@
 //!    - Combinational keypoint LEC (`-lec`) proving register next-state & output cones (`proven`).
 //!    - Bug detection (`cex`) with side-by-side `shared.*`/`spec.*`/`imp.*` VCD trace and
 //!      `why_cex` backward causal root-cause slice across both designs.
-//! 2. Tier 8 (SVA Local Variables, SVA `case`, `-D` `FORMAL_KEEP`, XMR, & Vendor Tcl Flow Closure):
+//! 2. SVA Local Variables, SVA `case`, `-D` `FORMAL_KEEP`, XMR, & Complexity/Abstraction Flow:
 //!    - IEEE 1800-2023 §16.10 bounded multi-assignment local variables (`acc += din, acc++`)
 //!      and unbounded `##[1:$]` / `until_with` tag-scoreboard local variables.
 //!    - IEEE 1800-2023 §16.12.17 SVA `case (...) ... endcase`.
@@ -16,7 +18,7 @@
 //!      the promoted assertion itself!).
 //!    - `get_fv_complexity`, `blackbox_assistant -apply`, `check_fv_setup`, `get_reset_info`,
 //!      and `abstract -counter` over-approximate counter fast-forward on a 24-bit watchdog timer.
-//! 3. Tier 9 (`informal-wkind` + `H3` `coupled_push`):
+//! 3. `informal-wkind` + `H3` `coupled_push`:
 //!    - Proving a stateful read-after-write invariant on an 8,192-word (`131,072`-bit) unblasted
 //!      Btor2 `Sort::Array` memory (`> BLAST_WORDS = 4096`) end-to-end via `informal-wkind`.
 
@@ -46,9 +48,9 @@ fn all_engines() -> Option<Vec<std::sync::Arc<dyn informal_engine::Engine>>> {
 }
 
 #[test]
-fn tier7_check_sec_sequential_pipelined_lec_and_bug_vcd_slice() {
+fn check_sec_sequential_pipelined_lec_and_bug_vcd_slice() {
     let Some(eng) = all_engines() else { return };
-    let dir = temp_dir("tier7");
+    let dir = temp_dir("sec");
 
     let spec_sv = dir.join("spec.sv");
     std::fs::write(
@@ -231,11 +233,11 @@ endmodule
 }
 
 #[test]
-fn tier8_sva_local_vars_case_xmr_assume_from_assert_complexity_and_counter_abstract() {
+fn sva_local_vars_case_xmr_assume_from_assert_complexity_and_counter_abstract() {
     let Some(eng) = all_engines() else { return };
-    let dir = temp_dir("tier8");
+    let dir = temp_dir("complexity");
 
-    let sv = dir.join("tier8_dut.sv");
+    let sv = dir.join("wdog_dut.sv");
     std::fs::write(
         &sv,
         r#"
@@ -266,7 +268,7 @@ module secret_ leaf_sub (
   end
 endmodule
 
-module tier8_dut (
+module wdog_dut (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        start,
@@ -393,11 +395,11 @@ endmodule
         sv.display()
     ))
     .unwrap();
-    sh.eval("elaborate -top tier8_dut").unwrap();
+    sh.eval("elaborate -top wdog_dut").unwrap();
     sh.eval("clock clk; reset -expression {!rst_n}").unwrap();
 
-    // Root-qualified XMR CLI assertion (`tier8_dut.u_sub.shadow_q`)
-    sh.eval("assert -name a_xmr_shadow {tier8_dut.u_sub.shadow_q == u_sub.q}")
+    // Root-qualified XMR CLI assertion (`wdog_dut.u_sub.shadow_q`)
+    sh.eval("assert -name a_xmr_shadow {wdog_dut.u_sub.shadow_q == u_sub.q}")
         .unwrap();
     // Cover reaching the 1,000,000 watchdog expiration (fast-forwarded via `abstract -counter`)
     sh.eval("cover -name c_wdog_expired {wdog_expired}")
@@ -501,14 +503,14 @@ endmodule
 }
 
 #[test]
-fn tier9_wkind_proves_large_unblasted_8192_word_memory_in_session() {
+fn wkind_proves_large_unblasted_8192_word_memory_in_session() {
     let wkind_engines = informal_bitwuzla::engines();
     if !wkind_engines.iter().any(|e| e.name() == "informal-wkind") {
         informal_engine::tool_missing("needs informal-bitwuzla / informal-wkind");
         return;
     }
     let Some(eng) = all_engines() else { return };
-    let dir = temp_dir("tier9");
+    let dir = temp_dir("wkind");
 
     // 8,192 words (> BLAST_WORDS = 4096) -> lowered as unblasted Btor2 `Sort::Array`!
     let sv = dir.join("big_sram.sv");

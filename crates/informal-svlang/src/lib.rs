@@ -7,6 +7,7 @@
 //! command and the reset are bound and compiled here too, so no source file
 //! is copied or edited.
 
+pub mod ral;
 mod types;
 
 use svlang::btor2;

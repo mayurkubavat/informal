@@ -931,6 +931,8 @@ const COMMON: &[(&str, Body)] = &[
     ("check_xprop", check_xprop),
     ("check_spv", check_spv),
     ("check_sec", check_sec),
+    ("check_csr", check_csr),
+    ("check_protocol", check_protocol),
     ("why_cex", why_cex),
     ("get_fv_complexity", get_fv_complexity),
     ("blackbox_assistant", blackbox_assistant),
@@ -2496,6 +2498,286 @@ fn set_abstractions(s: &mut Session, a: &[String]) -> Result<Value, String> {
         return Ok(().into());
     }
     Ok(crate::complexity::format_abstractions(&s.counter_abstractions).into())
+}
+
+fn check_csr(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[
+            ("-load", 1),
+            ("-task", 1),
+            ("-addr", 1),
+            ("-wdata", 1),
+            ("-rdata", 1),
+            ("-we", 1),
+            ("-re", 1),
+            ("-prefix", 1),
+            ("-read_latency", 1),
+            ("-prove", 0),
+            ("-time_limit", 1),
+            ("-list", 0),
+            ("-report", 0),
+            ("-json", 0),
+            ("-file", 1),
+            ("-force", 0),
+            ("-clear", 0),
+        ],
+        &[("-bg", 0)],
+    )?;
+    let task_name = a.val("-task").unwrap_or(crate::csr::DEFAULT_CSR_TASK);
+    if a.flag("-clear") {
+        if s.tasks.iter().any(|t| t.name == task_name) {
+            s.props
+                .retain(|p| !(p.task == task_name && !p.rtl && p.copy_of.is_none()));
+        }
+        return Ok(().into());
+    }
+    let read_latency: u32 = match a.val("-read_latency") {
+        Some(v) => v
+            .parse()
+            .map_err(|_| format!("check_csr: bad -read_latency `{v}`"))?,
+        None => 0,
+    };
+    let bus = crate::csr::CsrBusConfig {
+        addr: a.val("-addr").map(String::from),
+        wdata: a.val("-wdata").map(String::from),
+        rdata: a.val("-rdata").map(String::from),
+        we: a.val("-we").map(String::from),
+        re: a.val("-re").map(String::from),
+        prefix: a.val("-prefix").unwrap_or_default().to_string(),
+        read_latency,
+    };
+    for files in a.all("-load") {
+        let p = PathBuf::from(expand_env(&files[0]));
+        let resolved = match informal_tcl::current_script()
+            .and_then(|sc| Path::new(&sc).parent().map(Path::to_path_buf))
+        {
+            Some(base) if p.is_relative() && !p.exists() && base.join(&p).exists() => base.join(&p),
+            _ => p,
+        };
+        if s.dry_run {
+            continue;
+        }
+        crate::csr::load_csr_into_session(s, &resolved, task_name, &bus)?;
+    }
+    if a.flag("-list") {
+        if s.dry_run {
+            return Ok(Value::List(Vec::new()));
+        }
+        let names: Vec<String> = s
+            .props
+            .iter()
+            .filter(|p| p.task == task_name && p.kind == Kind::Assert)
+            .map(|p| p.name.clone())
+            .collect();
+        return Ok(Value::List(names));
+    }
+    if a.flag("-prove") {
+        if let Some(tl) = a.val("-time_limit") {
+            s.time_limit = parse_duration(tl)?;
+        }
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let t = s.task_name(task_name)?;
+        let which: Vec<usize> = s
+            .props_of(&t)
+            .into_iter()
+            .filter(|&i| s.props[i].enabled && s.props[i].kind != Kind::Assume)
+            .collect();
+        if !which.is_empty() {
+            let _ = prove_and_report(s, &which)?;
+        }
+        if !a.flag("-report") && !a.flag("-json") {
+            return Ok(().into());
+        }
+    }
+    if a.flag("-report") || a.flag("-json") {
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let t = s.task_name(task_name)?;
+        let text = if a.flag("-json") {
+            let checks: Vec<serde_json::Value> = s
+                .props
+                .iter()
+                .filter(|p| p.task == t && p.kind == Kind::Assert && !p.rtl)
+                .map(|p| {
+                    serde_json::json!({
+                        "name": p.name,
+                        "expr": p.expr,
+                        "status": p.status.word(),
+                    })
+                })
+                .collect();
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": "informal.csr/1",
+                "task": t,
+                "checks": checks,
+            }))
+            .map_err(|e| format!("check_csr: {e}"))?
+        } else {
+            crate::csr::format_csr_report(s, &t)
+        };
+        if let Some(f) = a.val("-file") {
+            let path = Path::new(f);
+            if path.exists() && !a.flag("-force") {
+                return Err(format!("check_csr: {f} exists; add -force to overwrite it"));
+            }
+            std::fs::write(path, &text).map_err(|e| format!("check_csr: {f}: {e}"))?;
+        } else if !a.flag("-json") {
+            print!("{text}");
+        }
+        return Ok(text.into());
+    }
+    Ok(().into())
+}
+
+fn check_protocol(s: &mut Session, a: &[String]) -> Result<Value, String> {
+    let a = Args::parse(
+        a,
+        &[
+            ("-create", 0),
+            ("-protocol", 1),
+            ("-role", 1),
+            ("-name", 1),
+            ("-prefix", 1),
+            ("-map", 1),
+            ("-task", 1),
+            ("-prove", 0),
+            ("-time_limit", 1),
+            ("-list", 0),
+            ("-report", 0),
+            ("-json", 0),
+            ("-file", 1),
+            ("-force", 0),
+            ("-clear", 0),
+        ],
+        &[("-bg", 0)],
+    )?;
+    let task_name = a
+        .val("-task")
+        .unwrap_or(crate::protocol::DEFAULT_PROTOCOL_TASK);
+    if a.flag("-clear") {
+        if s.tasks.iter().any(|t| t.name == task_name) {
+            s.props
+                .retain(|p| !(p.task == task_name && !p.rtl && p.copy_of.is_none()));
+        }
+        return Ok(().into());
+    }
+    if a.flag("-create") {
+        let proto_raw = a
+            .val("-protocol")
+            .ok_or("check_protocol -create: -protocol <axi4lite|tlul|apb> required")?;
+        let protocol = crate::protocol::BusProtocol::parse(proto_raw)?;
+        let role = match a.val("-role") {
+            Some(r) => crate::protocol::BusRole::parse(r)?,
+            None => crate::protocol::BusRole::Slave,
+        };
+        let name = a
+            .val("-name")
+            .map(String::from)
+            .unwrap_or_else(|| protocol.as_str().to_string());
+        let mut map = std::collections::HashMap::new();
+        for m in a.all("-map") {
+            for pair in m[0].split_whitespace() {
+                let (k, v) = pair.split_once('=').ok_or_else(|| {
+                    format!("check_protocol -map: expected KEY=SIG, got `{pair}`")
+                })?;
+                map.insert(k.trim().to_string(), v.trim().to_string());
+            }
+        }
+        if !s.dry_run {
+            let spec = crate::protocol::ProtocolSpec {
+                name,
+                protocol,
+                role,
+                prefix: a.val("-prefix").unwrap_or_default().to_string(),
+                map,
+                task: task_name.to_string(),
+            };
+            let created = crate::protocol::create_protocol_vip(s, &spec)?;
+            if !a.flag("-prove") && !a.flag("-report") && !a.flag("-json") && !a.flag("-list") {
+                return Ok(Value::List(created));
+            }
+        } else if !a.flag("-prove") && !a.flag("-report") && !a.flag("-json") && !a.flag("-list") {
+            return Ok(().into());
+        }
+    }
+    if a.flag("-prove") {
+        if let Some(tl) = a.val("-time_limit") {
+            s.time_limit = parse_duration(tl)?;
+        }
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let t = s.task_name(task_name)?;
+        let which: Vec<usize> = s
+            .props_of(&t)
+            .into_iter()
+            .filter(|&i| s.props[i].enabled && s.props[i].kind != Kind::Assume)
+            .collect();
+        if !which.is_empty() {
+            let _ = prove_and_report(s, &which)?;
+        }
+        if !a.flag("-report") && !a.flag("-json") && !a.flag("-list") {
+            return Ok(().into());
+        }
+    }
+    if a.flag("-list") {
+        if s.dry_run {
+            return Ok(Value::List(Vec::new()));
+        }
+        let names: Vec<String> = s
+            .props
+            .iter()
+            .filter(|p| p.task == task_name && !p.rtl)
+            .map(|p| p.name.clone())
+            .collect();
+        return Ok(Value::List(names));
+    }
+    if a.flag("-report") || a.flag("-json") {
+        if s.dry_run {
+            return Ok(().into());
+        }
+        let t = s.task_name(task_name)?;
+        let text = if a.flag("-json") {
+            let properties: Vec<serde_json::Value> = s
+                .props
+                .iter()
+                .filter(|p| p.task == t && !p.rtl)
+                .map(|p| {
+                    serde_json::json!({
+                        "name": p.name,
+                        "kind": p.kind.label(),
+                        "expr": p.expr,
+                        "status": p.status.word(),
+                    })
+                })
+                .collect();
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": "informal.protocol/1",
+                "task": t,
+                "properties": properties,
+            }))
+            .map_err(|e| format!("check_protocol: {e}"))?
+        } else {
+            crate::protocol::format_protocol_report(s, &t)
+        };
+        if let Some(f) = a.val("-file") {
+            let path = Path::new(f);
+            if path.exists() && !a.flag("-force") {
+                return Err(format!(
+                    "check_protocol: {f} exists; add -force to overwrite it"
+                ));
+            }
+            std::fs::write(path, &text).map_err(|e| format!("check_protocol: {f}: {e}"))?;
+        } else if !a.flag("-json") {
+            print!("{text}");
+        }
+        return Ok(text.into());
+    }
+    Err("check_protocol: expected -create, -prove, -list, -report or -clear".into())
 }
 
 /// `visualize -violation|-cover -property P`: the trace of a CEX or cover,

@@ -1,4 +1,5 @@
-//! End-to-end integration tests for Tier-3 & Tier-5 capabilities:
+//! End-to-end integration tests for X-propagation, security path verification,
+//! bounded proofs, dead-end assumption checks, and proof cores:
 //! 1. `check_xprop` (exact 2-copy self-composition X-propagation, reconvergence precision, waivers)
 //! 2. `check_spv` (2-safety non-interference, conditional isolation, multi-cycle covert channels)
 //! 3. `assert -bound K` / `prove -bound K` (`bounded_proven` vs `cex`) & `check_assumptions -dead_end` (2QBF trap-state detection)

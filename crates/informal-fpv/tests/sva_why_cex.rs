@@ -1,10 +1,11 @@
-//! End-to-end integration tests for Tier-4, Deep Tier-5, and Tier-6:
-//! 1. Tier 4: `implies`, `iff`, `if..else`, `s_nexttime`, compound unbounded `always`,
+//! End-to-end integration tests for extended SVA operators, procedural unrolling,
+//! CTI invariant mining, and dynamic CEX slicing (`why_cex`):
+//! 1. SVA: `implies`, `iff`, `if..else`, `s_nexttime`, compound unbounded `always`,
 //!    procedural concurrent assertions in `for` loops & `task`s, and pure RTL user
 //!    functions in external CLI `assert` properties.
-//! 2. Deep Tier 5: CTI-seeded 2-literal Houdini mining (`mine::cti_candidates`),
+//! 2. IC3 / Portfolio: CTI-seeded 2-literal Houdini mining (`mine::cti_candidates`),
 //!    parent-lemma CTP prediction (`parent_ctp`), and structural `select_for_btor`.
-//! 3. Tier 6: Dynamic CEX root-cause backward slicing (`why_cex`) pruning untaken mux arms.
+//! 3. Causal slicing: Dynamic CEX root-cause backward slicing (`why_cex`) pruning untaken mux arms.
 
 use informal_fpv::{Flavor, Session, Shell, Status};
 use std::path::PathBuf;
@@ -30,10 +31,10 @@ fn engines() -> Option<Vec<std::sync::Arc<dyn informal_engine::Engine>>> {
 }
 
 #[test]
-fn tier4_sva_operators_loop_task_unrolling_and_cli_user_functions() {
+fn sva_operators_loop_task_unrolling_and_cli_user_functions() {
     let Some(eng) = engines() else { return };
-    let dir = temp_dir("tier4");
-    let sv = dir.join("tier4_dut.sv");
+    let dir = temp_dir("sva_ext");
+    let sv = dir.join("lane_dut.sv");
     std::fs::write(
         &sv,
         r#"
@@ -43,7 +44,7 @@ package math_pkg;
   endfunction
 endpackage
 
-module tier4_dut (
+module lane_dut (
   input  logic       clk,
   input  logic       rst_n,
   input  logic       start_cfg,
@@ -103,7 +104,7 @@ endmodule
     let sh = Shell::new(session, Flavor::Jg);
     sh.eval(&format!("analyze -sv {{{}}}", sv.display()))
         .unwrap();
-    sh.eval("elaborate -top tier4_dut").unwrap();
+    sh.eval("elaborate -top lane_dut").unwrap();
     sh.eval("clock clk").unwrap();
     sh.eval("reset {!rst_n}").unwrap();
     // External CLI properties using `implies` AND calling module + package functions!
@@ -120,14 +121,14 @@ endmodule
 
     let s = sh.session.borrow();
     for want in [
-        "tier4_dut.a_loop",
-        "tier4_dut.a_loop_2",
-        "tier4_dut.t_lane",
-        "tier4_dut.t_lane_2",
-        "tier4_dut.a_comp_alw",
-        "tier4_dut.a_iff",
-        "tier4_dut.a_ifelse",
-        "tier4_dut.a_snext",
+        "lane_dut.a_loop",
+        "lane_dut.a_loop_2",
+        "lane_dut.t_lane",
+        "lane_dut.t_lane_2",
+        "lane_dut.a_comp_alw",
+        "lane_dut.a_iff",
+        "lane_dut.a_ifelse",
+        "lane_dut.a_snext",
         "ext_imp",
         "ext_fn",
         "ext_pkg_fn",
@@ -147,9 +148,9 @@ endmodule
 }
 
 #[test]
-fn tier5_cti_mining_parent_ctp_and_structural_portfolio_selection() {
+fn cti_mining_parent_ctp_and_structural_portfolio_selection() {
     let Some(eng) = engines() else { return };
-    let dir = temp_dir("tier5");
+    let dir = temp_dir("cti_mine");
     let sv = dir.join("mutex_pipe.sv");
     std::fs::write(
         &sv,
@@ -232,7 +233,7 @@ endmodule
 }
 
 #[test]
-fn tier6_why_cex_prunes_untaken_mux_arm_and_reports_minimal_causal_chain() {
+fn why_cex_prunes_untaken_mux_arm_and_reports_minimal_causal_chain() {
     let Some(eng) = engines() else { return };
     let dir = temp_dir("why_cex");
     let sv = dir.join("mux_bug.sv");

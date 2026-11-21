@@ -2,7 +2,7 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockDesignInfo, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace, mockUiState } from "./mock";
+import { mock, mockDesignInfo, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace, mockUiState, mockWhyCex } from "./mock";
 import type { AskDelta, AskDone, LlmProviderEntry, LlmStatus } from "./ask";
 
 export type StatusWord =
@@ -196,6 +196,82 @@ export interface DesignScope {
   children: DesignScope[];
 }
 
+export interface CausalEvent {
+  frame: number;
+  signal: string;
+  kind: string;
+  width: number;
+  value: string;
+  prev_value?: string;
+  reason: string;
+}
+
+export interface WhyCexReport {
+  property: string;
+  status: string;
+  failure_frame: number;
+  total_frames: number;
+  static_cone_signals: number;
+  active_slice_signals: number;
+  active_signals: string[];
+  events: CausalEvent[];
+}
+
+export interface CovItemView {
+  id: string;
+  model: string;
+  name: string;
+  status: string;
+  file?: string;
+  line?: number;
+}
+
+export interface CovStateView {
+  initialized: boolean;
+  measured: boolean;
+  items: CovItemView[];
+}
+
+export interface XpropItemView {
+  name: string;
+  category: string;
+  status: string | { cex?: { depth?: number | null } };
+  engine?: string | null;
+  ms?: number;
+}
+
+export interface XpropStateView {
+  initialized: boolean;
+  items: XpropItemView[];
+}
+
+export interface SpvRuleView {
+  name: string;
+  task: string;
+  from: string[];
+  to: string[];
+  cond?: string | null;
+  status: string | { cex?: { depth?: number | null } };
+  engine?: string | null;
+}
+
+export interface SecCheckView {
+  name: string;
+  kind: string;
+  spec_sig: string;
+  imp_sig: string;
+  width: number;
+  latency: number;
+  status: string | { cex?: { depth?: number | null } };
+  engine?: string | null;
+  trace?: string | null;
+}
+
+export interface SecStateView {
+  setup?: { spec_top?: string | null; imp_top?: string | null; lec: boolean; latency: number } | null;
+  checks?: SecCheckView[];
+}
+
 export interface SessionView {
   // `hierarchy`: the scope tree after elaboration; empty or absent with
   // a session elaborated without a SystemVerilog front end (the Design tab then scans the top file's ports).
@@ -210,6 +286,10 @@ export interface SessionView {
   current_task?: string;
   time_limit: { secs: number; nanos: number };
   workdir: string;
+  cov?: CovStateView;
+  xprop?: XpropStateView;
+  spv?: SpvRuleView[];
+  sec?: SecStateView;
 }
 
 export interface Reply {
@@ -394,6 +474,13 @@ export const backend = {
       return invoke<void>("open_in_surfer", { path });
     }
     return mockOpenInSurfer(path);
+  },
+  // Dynamic backward causal root-cause slice of a CEX or covered witness trace.
+  whyCex: async (name: string): Promise<WhyCexReport> => {
+    if (!inTauri) return mockWhyCex(name);
+    const r = await call("shell_eval", { script: `why_cex -json {${name}}` });
+    if (!r.ok) throw new Error(r.result);
+    return JSON.parse(r.result) as WhyCexReport;
   },
   // The VCD text of a property's trace. The app only reads files inside the
   // session's workdir; the mock serves tests/fixtures/a_never9.vcd.

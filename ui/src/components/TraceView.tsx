@@ -3,11 +3,11 @@
 // lane per signal drawn as inline SVG: 1-bit signals as a step waveform,
 // buses as boxed values, and the property's own lane with its fail / cover
 // marker at the depth cycle. Strokes stay neutral; only the marker, the
-// cursor and the depth cycle number carry the status colour.
-//
-// TODO(D10): FST traces with streamed windows for large waveforms.
+// cursor, causal slice badges (`why_cex`), and the depth cycle number carry
+// status colour.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CausalEvent, WhyCexReport } from "../backend";
 import { STATUS_LABEL, type ViewProp } from "../model";
 import { cycleTimes, formatValue, parseVcd, type Radix, type Signal, type Vcd } from "../vcd";
 
@@ -19,6 +19,14 @@ const HEAD = 22;
 // Signals under the `informal` scope are FPV helpers (cycle counter, $past
 // registers): listed under Add signal…, not shown by default.
 const helper = (s: Signal) => s.path === "informal" || s.path.startsWith("informal.");
+
+function matchesCausalPath(vcdPath: string, causalSig: string): boolean {
+  if (vcdPath === causalSig) return true;
+  const vTail = vcdPath.split(".").slice(1).join(".");
+  const cTail = causalSig.split(".").slice(1).join(".");
+  if (vTail && (vTail === causalSig || vcdPath === cTail)) return true;
+  return vcdPath.endsWith(`.${causalSig}`) || causalSig.endsWith(`.${vcdPath}`);
+}
 
 export function TraceView({
   tabs,
@@ -32,6 +40,10 @@ export function TraceView({
   onView,
   actions,
   clock,
+  whyCex,
+  whyCexOpen,
+  whyCexLoading,
+  onToggleWhyCex,
 }: {
   /** The centre tab strip; the trace's own controls follow it. */
   tabs: React.ReactNode;
@@ -51,6 +63,11 @@ export function TraceView({
   actions?: React.ReactNode;
   /** The session's clock: its active edges are the cycles (a `clk` / `clock` signal otherwise). */
   clock?: { signal: string; edge?: string } | null;
+  /** Optional `why_cex` root-cause slice overlay. */
+  whyCex?: WhyCexReport | null;
+  whyCexOpen?: boolean;
+  whyCexLoading?: boolean;
+  onToggleWhyCex?: () => void;
 }) {
   const vcd = useMemo(() => (text ? parseVcd(text) : null), [text]);
   const clockSignal = clock?.signal;
@@ -69,6 +86,7 @@ export function TraceView({
   const [shown, setShown] = useState<string[]>([]);
   const [radix, setRadix] = useState<Record<string, Radix>>({});
   const [adding, setAdding] = useState(false);
+  const [sliceOnly, setSliceOnly] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
 
   // A new trace (another property, or a re-prove): default signals, cursor
@@ -83,6 +101,7 @@ export function TraceView({
     setShown(shownRef.current);
     setCursor(Math.max(0, Math.min(n - 1, depth)));
     setAdding(false);
+    setSliceOnly(false);
     reveal.current = true;
   }, [vcd, n, depth]);
 
@@ -100,8 +119,24 @@ export function TraceView({
     }
     onAddResult?.(p, result);
   }, [addRequest, vcd, byPath, onAddResult]);
-  const lanes = shown.map((p) => byPath.get(p)).filter((s): s is Signal => !!s);
+
+  const showSlice = !!whyCexOpen && !!whyCex;
+  const isCausalSig = (vcdPath: string) =>
+    showSlice && whyCex!.active_signals.some((cs) => matchesCausalPath(vcdPath, cs));
+
+  const allLanes = shown.map((p) => byPath.get(p)).filter((s): s is Signal => !!s);
+  const lanes = showSlice && sliceOnly ? allLanes.filter((s) => isCausalSig(s.path)) : allLanes;
   const hidden = vcd ? vcd.signals.filter((s) => !shown.includes(s.path)) : [];
+
+  const eventsBySig = useMemo(() => {
+    const map = new Map<string, CausalEvent[]>();
+    if (!showSlice || !whyCex || !vcd) return map;
+    for (const s of vcd.signals) {
+      const evs = whyCex.events.filter((ev) => matchesCausalPath(s.path, ev.signal));
+      if (evs.length) map.set(s.path, evs);
+    }
+    return map;
+  }, [showSlice, whyCex, vcd]);
 
   // Keep the cursor's cycle in view (the signal list covers the first 200px).
   const scrollTo = (c: number) => {
@@ -173,6 +208,17 @@ export function TraceView({
           </span>
         )}
         <span className="spacer" />
+        {onToggleWhyCex && (
+          <button
+            className={`btn ${whyCexOpen ? "active" : ""}`}
+            onClick={onToggleWhyCex}
+            disabled={!vcd || whyCexLoading}
+            aria-pressed={!!whyCexOpen}
+            title="Highlight active backward causal slice from the failing / covering cycle (why_cex)"
+          >
+            {whyCexLoading ? "Slicing…" : "Why CEX"}
+          </button>
+        )}
         <span className="zoom">
           <button className="tool" onClick={() => zoom(-1)} disabled={!vcd || px === ZOOM[0]} aria-label="Zoom out" title="Zoom out">
             −
@@ -203,6 +249,34 @@ export function TraceView({
         {actions}
       </div>
 
+      {showSlice && whyCex && (
+        <div className="causal-bar" role="region" aria-label="Causal root-cause slice">
+          <span className="causal-summary">
+            Causal slice: <strong>{whyCex.active_slice_signals}</strong> / {whyCex.static_cone_signals} COI signals · frame {whyCex.failure_frame}
+          </span>
+          <label className="causal-filter small">
+            <input
+              type="checkbox"
+              checked={sliceOnly}
+              onChange={(e) => setSliceOnly(e.target.checked)}
+            />
+            Slice only
+          </label>
+          <div className="causal-events">
+            {whyCex.events.map((ev, idx) => (
+              <button
+                key={idx}
+                className="causal-chip mono"
+                onClick={() => move(ev.frame)}
+                title={`${ev.kind} (${ev.reason}) — click to jump to cycle ${ev.frame}`}
+              >
+                @{ev.frame} {ev.signal.split(".").pop()}: {ev.prev_value ? `${ev.prev_value}→${ev.value}` : ev.value}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {!vcd ? (
         <p className="empty">{error ? `Could not read ${path}: ${error}` : `Loading ${path}…`}</p>
       ) : (
@@ -219,24 +293,32 @@ export function TraceView({
               <span className="mono ellipsis">{prop.name}</span>
               <span className="trace-val mono">{cursor === depth ? (cover ? "hit" : "fail") : cover ? "" : "ok"}</span>
             </div>
-            {lanes.map((s) => (
-              <div key={s.path} className="trace-name" title={`${s.path}${s.width > 1 ? ` [${s.width - 1}:0]` : ""}`}>
-                <span className="mono ellipsis">{s.path}</span>
-                {s.width > 1 && (
-                  <select
-                    className="radix"
-                    value={rdx(s)}
-                    onChange={(e) => setRadix((r) => ({ ...r, [s.path]: e.target.value as Radix }))}
-                    aria-label={`Radix of ${s.path}`}
-                  >
-                    <option value="hex">hex</option>
-                    <option value="dec">dec</option>
-                    <option value="bin">bin</option>
-                  </select>
-                )}
-                <span className="trace-val mono">{formatValue(at(s), rdx(s))}</span>
-              </div>
-            ))}
+            {lanes.map((s) => {
+              const causal = isCausalSig(s.path);
+              return (
+                <div
+                  key={s.path}
+                  className={`trace-name ${causal ? "causal-sig" : ""}`}
+                  data-causal={causal ? "true" : undefined}
+                  title={`${s.path}${s.width > 1 ? ` [${s.width - 1}:0]` : ""}${causal ? " (in active causal slice)" : ""}`}
+                >
+                  <span className="mono ellipsis">{s.path}</span>
+                  {s.width > 1 && (
+                    <select
+                      className="radix"
+                      value={rdx(s)}
+                      onChange={(e) => setRadix((r) => ({ ...r, [s.path]: e.target.value as Radix }))}
+                      aria-label={`Radix of ${s.path}`}
+                    >
+                      <option value="hex">hex</option>
+                      <option value="dec">dec</option>
+                      <option value="bin">bin</option>
+                    </select>
+                  )}
+                  <span className="trace-val mono">{formatValue(at(s), rdx(s))}</span>
+                </div>
+              );
+            })}
           </div>
           <svg
             className="trace-lanes"
@@ -263,7 +345,16 @@ export function TraceView({
             ))}
             <PropLane y={HEAD} n={n} px={px} depth={depth} cover={cover} />
             {lanes.map((s, i) => (
-              <Lane key={s.path} vcd={vcd} s={s} y={HEAD + LANE * (i + 1)} cycles={cycles} px={px} radix={rdx(s)} />
+              <Lane
+                key={s.path}
+                vcd={vcd}
+                s={s}
+                y={HEAD + LANE * (i + 1)}
+                cycles={cycles}
+                px={px}
+                radix={rdx(s)}
+                events={eventsBySig.get(s.path)}
+              />
             ))}
             {/* cursor: the cycle's sample point (its start), its column shaded */}
             <line className={`trace-cursorline st-${word}`} x1={cursor * px + 0.5} x2={cursor * px + 0.5} y1={0} y2={HEAD + LANE * (lanes.length + 1)} />
@@ -302,11 +393,28 @@ function runs(vcd: Vcd, s: Signal, cycles: number[], px: number) {
   return out;
 }
 
-function Lane({ vcd, s, y, cycles, px, radix }: { vcd: Vcd; s: Signal; y: number; cycles: number[]; px: number; radix: Radix }) {
+function Lane({
+  vcd,
+  s,
+  y,
+  cycles,
+  px,
+  radix,
+  events,
+}: {
+  vcd: Vcd;
+  s: Signal;
+  y: number;
+  cycles: number[];
+  px: number;
+  radix: Radix;
+  events?: CausalEvent[];
+}) {
   const rs = runs(vcd, s, cycles, px);
   const hi = y + 5;
   const lo = y + LANE - 5;
   const mid = y + LANE / 2;
+  const overlays = (events ?? []).filter((ev) => ev.frame >= 0 && ev.frame < cycles.length);
   if (s.width === 1) {
     let d = "";
     for (const r of rs) {
@@ -316,6 +424,11 @@ function Lane({ vcd, s, y, cycles, px, radix }: { vcd: Vcd; s: Signal; y: number
     }
     return (
       <g data-signal={s.path}>
+        {overlays.map((ev, idx) => (
+          <rect key={idx} className="trace-causal-cell" x={ev.frame * px + 1} y={y + 2} width={px - 2} height={LANE - 4} rx={2}>
+            <title>{`@${ev.frame} ${s.path} = ${ev.value} (${ev.reason})`}</title>
+          </rect>
+        ))}
         <line className="trace-sep" x1={0} x2={cycles.length * px} y1={y + LANE} y2={y + LANE} />
         <path className="trace-wave" d={d} />
       </g>
@@ -323,6 +436,11 @@ function Lane({ vcd, s, y, cycles, px, radix }: { vcd: Vcd; s: Signal; y: number
   }
   return (
     <g data-signal={s.path}>
+      {overlays.map((ev, idx) => (
+        <rect key={idx} className="trace-causal-cell" x={ev.frame * px + 1} y={y + 2} width={px - 2} height={LANE - 4} rx={2}>
+          <title>{`@${ev.frame} ${s.path} = ${ev.value} (${ev.reason})`}</title>
+        </rect>
+      ))}
       <line className="trace-sep" x1={0} x2={cycles.length * px} y1={y + LANE} y2={y + LANE} />
       {rs.map((r, i) => {
         const e = Math.min(3, (r.x1 - r.x0) / 4);

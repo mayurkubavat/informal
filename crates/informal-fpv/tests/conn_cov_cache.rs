@@ -1,5 +1,5 @@
-//! End-to-end integration tests for Tier-2 formal sign-off apps and vendor
-//! compatibility:
+//! End-to-end integration tests for formal connectivity, coverage/UNR,
+//! proof caching, and blackboxing:
 //! 1. Source-less `-bbox_m` (on `analyze` and `elaborate`) + `-bbox_mul` / `-bbox_a`
 //! 2. Content-addressed proof cache (`set_prove_cache`, `set_prove_cache_path`, `set_prove_cache_mode`)
 //! 3. Formal Connectivity App (`check_conn` with OpenTitan `CONNECTION`/`CONDITION`/`LATENCY` CSVs)
@@ -14,7 +14,8 @@ static TEST_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 fn temp_dir(tag: &str) -> PathBuf {
     let n = TEST_SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("informal-tier2-{tag}-{}-{n}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("informal-conncov-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

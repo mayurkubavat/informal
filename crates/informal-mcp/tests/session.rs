@@ -787,6 +787,10 @@ fn mcp_why_cex_and_formal_app_tools_conform_to_schemas() {
     assert_eq!(spv["schema"], "informal.spv/1");
     let conn = call(&api, "check_conn", json!({"action": "list"}));
     assert_eq!(conn["schema"], "informal.conn/1");
+    let csr = call(&api, "check_csr", json!({"action": "list"}));
+    assert_eq!(csr["schema"], "informal.csr/1");
+    let proto = call(&api, "check_protocol", json!({"action": "list"}));
+    assert_eq!(proto["schema"], "informal.protocol/1");
 
     let sec_setup = call(
         &api,

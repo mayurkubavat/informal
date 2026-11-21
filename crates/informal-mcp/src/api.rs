@@ -275,9 +275,8 @@ impl Api {
             "session_open" | "tcl_eval" => true,
             "prove" => args.get("wait").and_then(Value::as_bool).unwrap_or(true),
             "check_cov" => args.get("action").and_then(Value::as_str) == Some("measure"),
-            "check_conn" | "check_xprop" | "check_spv" | "check_sec" => {
-                args.get("action").and_then(Value::as_str) == Some("prove")
-            }
+            "check_conn" | "check_xprop" | "check_spv" | "check_sec" | "check_csr"
+            | "check_protocol" => args.get("action").and_then(Value::as_str) == Some("prove"),
             _ => false,
         }
     }
@@ -316,6 +315,8 @@ impl Api {
             "check_xprop" => self.check_xprop(args, false),
             "check_spv" => self.check_spv(args, false),
             "check_sec" => self.check_sec(args, false),
+            "check_csr" => self.check_csr(args, false),
+            "check_protocol" => self.check_protocol(args, false),
             "prove" => self.prove_start(args),
             "prove_status" => self.prove_status(),
             "prove_stop" => {
@@ -338,6 +339,8 @@ impl Api {
                 | "check_xprop"
                 | "check_spv"
                 | "check_sec"
+                | "check_csr"
+                | "check_protocol"
         ) {
             self.changed(tool);
         }
@@ -355,6 +358,8 @@ impl Api {
             "check_xprop" => self.check_xprop(args, true),
             "check_spv" => self.check_spv(args, true),
             "check_sec" => self.check_sec(args, true),
+            "check_csr" => self.check_csr(args, true),
+            "check_protocol" => self.check_protocol(args, true),
             _ => Err(err("not_found", format!("no long tool named {tool}"))),
         };
         drop(long);
@@ -1258,6 +1263,138 @@ impl Api {
                 "latency": cur_lat,
                 "report": report,
                 "checks": checks,
+            }))
+        })?
+    }
+
+    fn check_csr(&self, args: &Value, long: bool) -> Reply {
+        self.changing()?;
+        let action = req_str(args, "action")?;
+        let spec_path = match opt_str(args, "file")? {
+            Some(f) => Some(self.below_root(&f)?),
+            None => None,
+        };
+        let prefix = opt_str(args, "prefix")?;
+        let addr = opt_str(args, "addr")?;
+        let wdata = opt_str(args, "wdata")?;
+        let rdata = opt_str(args, "rdata")?;
+        let we = opt_str(args, "we")?;
+        let re = opt_str(args, "re")?;
+
+        self.on_shell(long, move |sh| {
+            match action.as_str() {
+                "load" => {
+                    let Some(p) = spec_path else {
+                        return Err(err("arguments", "`file` is required when action is `load`"));
+                    };
+                    let mut cmd = format!("check_csr -load {{{}}}", p.display());
+                    if let Some(ref v) = prefix {
+                        cmd.push_str(&format!(" -prefix {{{v}}}"));
+                    }
+                    if let Some(ref v) = addr {
+                        cmd.push_str(&format!(" -addr {{{v}}}"));
+                    }
+                    if let Some(ref v) = wdata {
+                        cmd.push_str(&format!(" -wdata {{{v}}}"));
+                    }
+                    if let Some(ref v) = rdata {
+                        cmd.push_str(&format!(" -rdata {{{v}}}"));
+                    }
+                    if let Some(ref v) = we {
+                        cmd.push_str(&format!(" -we {{{v}}}"));
+                    }
+                    if let Some(ref v) = re {
+                        cmd.push_str(&format!(" -re {{{v}}}"));
+                    }
+                    sh.eval(&cmd).map_err(|e| err("rejected", e.message))?;
+                }
+                "prove" => {
+                    sh.eval("check_csr -prove")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "clear" => {
+                    sh.eval("check_csr -clear")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "list" => {}
+                other => {
+                    return Err(wrong(
+                        "action",
+                        &format!("load, prove, list, or clear (got {other})"),
+                    ))
+                }
+            }
+            let s = sh.session.borrow();
+            let props: Vec<Value> = s
+                .props
+                .iter()
+                .filter(|p| p.task == informal_fpv::csr::DEFAULT_CSR_TASK)
+                .map(|p| prop_view(p, false))
+                .collect();
+            Ok(json!({
+                "schema": "informal.csr/1",
+                "count": props.len(),
+                "properties": props,
+            }))
+        })?
+    }
+
+    fn check_protocol(&self, args: &Value, long: bool) -> Reply {
+        self.changing()?;
+        let action = req_str(args, "action")?;
+        let protocol = opt_str(args, "protocol")?;
+        let role = opt_str(args, "role")?;
+        let name = opt_str(args, "name")?;
+        let prefix = opt_str(args, "prefix")?;
+
+        self.on_shell(long, move |sh| {
+            match action.as_str() {
+                "create" => {
+                    let Some(ref proto) = protocol else {
+                        return Err(err(
+                            "arguments",
+                            "`protocol` is required when action is `create`",
+                        ));
+                    };
+                    let mut cmd = format!("check_protocol -create -protocol {{{proto}}}");
+                    if let Some(ref r) = role {
+                        cmd.push_str(&format!(" -role {{{r}}}"));
+                    }
+                    if let Some(ref n) = name {
+                        cmd.push_str(&format!(" -name {{{n}}}"));
+                    }
+                    if let Some(ref p) = prefix {
+                        cmd.push_str(&format!(" -prefix {{{p}}}"));
+                    }
+                    sh.eval(&cmd).map_err(|e| err("rejected", e.message))?;
+                }
+                "prove" => {
+                    sh.eval("check_protocol -prove")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "clear" => {
+                    sh.eval("check_protocol -clear")
+                        .map_err(|e| err("rejected", e.message))?;
+                }
+                "list" => {}
+                other => {
+                    return Err(wrong(
+                        "action",
+                        &format!("create, prove, list, or clear (got {other})"),
+                    ))
+                }
+            }
+            let s = sh.session.borrow();
+            let props: Vec<Value> = s
+                .props
+                .iter()
+                .filter(|p| p.task == informal_fpv::protocol::DEFAULT_PROTOCOL_TASK)
+                .map(|p| prop_view(p, false))
+                .collect();
+            Ok(json!({
+                "schema": "informal.protocol/1",
+                "count": props.len(),
+                "properties": props,
             }))
         })?
     }

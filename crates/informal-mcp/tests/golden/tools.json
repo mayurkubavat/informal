@@ -2474,6 +2474,346 @@
   },
   {
     "changes": true,
+    "description": "Load an OpenTitan HJSON/JSON, CSV, or UVM RAL `.sv` (`uvm_reg_block`) register specification into task `CSR` and prove reset, read-back, `RW`/`RO`/`W1C`/`W1S`/`W0C`/`WO`/`RC` access, `regwen` lock, and address non-aliasing properties.",
+    "input": {
+      "properties": {
+        "action": {
+          "enum": [
+            "load",
+            "prove",
+            "list",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "addr": {
+          "description": "Optional CSR address signal override",
+          "type": "string"
+        },
+        "file": {
+          "description": "Path to HJSON, JSON, CSV, or UVM RAL `.sv` file (required for `load`)",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "Optional RTL register/field signal prefix (e.g. `u_reg.`)",
+          "type": "string"
+        },
+        "rdata": {
+          "description": "Optional CSR read-data signal override",
+          "type": "string"
+        },
+        "re": {
+          "description": "Optional CSR read-enable expression override",
+          "type": "string"
+        },
+        "wdata": {
+          "description": "Optional CSR write-data signal override",
+          "type": "string"
+        },
+        "we": {
+          "description": "Optional CSR write-enable expression override",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "check_csr",
+    "output": {
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "properties": {
+          "items": {
+            "properties": {
+              "copy_of": {
+                "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+                "type": "string"
+              },
+              "depth": 0,
+              "detail": {
+                "description": "Why it is undetermined or in error",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "engine": "<engine>",
+              "engines": "<engines>",
+              "expr": {
+                "description": "The property as written (SystemVerilog)",
+                "type": "string"
+              },
+              "has_trace": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "assert",
+                  "assume",
+                  "cover"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "origin": {
+                "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+                "enum": [
+                  "user",
+                  "rtl",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "file",
+                  "line"
+                ],
+                "type": "object"
+              },
+              "stats": "<stats>",
+              "status": {
+                "description": "proven and unreachable are proofs; cex and covered come with a trace",
+                "enum": [
+                  "unprocessed",
+                  "proven",
+                  "bounded_proven",
+                  "cex",
+                  "covered",
+                  "unreachable",
+                  "undetermined",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "task": {
+                "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+                "type": "string"
+              },
+              "time_ms": 0,
+              "under_ai": {
+                "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "vacuity": {
+                "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "status",
+              "origin",
+              "has_trace"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.csr/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "count",
+        "properties"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Generate, prove, list, or clear formal bus protocol assertion/assumption/cover VIP suites in task `Protocol` for TileLink-UL (`tlul`), AMBA AXI4-Lite (`axi4lite`), or AMBA APB (`apb`).",
+    "input": {
+      "properties": {
+        "action": {
+          "enum": [
+            "create",
+            "prove",
+            "list",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional VIP prefix name",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "Optional RTL bus signal prefix",
+          "type": "string"
+        },
+        "protocol": {
+          "description": "Required when action is `create`",
+          "enum": [
+            "tlul",
+            "axi4lite",
+            "apb"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "description": "Default: `slave`",
+          "enum": [
+            "master",
+            "slave",
+            "monitor"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "check_protocol",
+    "output": {
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "properties": {
+          "items": {
+            "properties": {
+              "copy_of": {
+                "description": "For a copy of a property written in the RTL, the original: its check in the model is this one's",
+                "type": "string"
+              },
+              "depth": 0,
+              "detail": {
+                "description": "Why it is undetermined or in error",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "engine": "<engine>",
+              "engines": "<engines>",
+              "expr": {
+                "description": "The property as written (SystemVerilog)",
+                "type": "string"
+              },
+              "has_trace": {
+                "type": "boolean"
+              },
+              "kind": {
+                "enum": [
+                  "assert",
+                  "assume",
+                  "cover"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "origin": {
+                "description": "Who wrote it: the user's script, the RTL, or an AI through this interface",
+                "enum": [
+                  "user",
+                  "rtl",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "file",
+                  "line"
+                ],
+                "type": "object"
+              },
+              "stats": "<stats>",
+              "status": {
+                "description": "proven and unreachable are proofs; cex and covered come with a trace",
+                "enum": [
+                  "unprocessed",
+                  "proven",
+                  "bounded_proven",
+                  "cex",
+                  "covered",
+                  "unreachable",
+                  "undetermined",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "task": {
+                "description": "The task it belongs to: <embedded>, or one a `task -create` made (its name is then <task>::<name>)",
+                "type": "string"
+              },
+              "time_ms": 0,
+              "under_ai": {
+                "description": "AI-added assumptions and cut points that were in the model when this status was found: the result stands on them",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "vacuity": {
+                "description": "For a proven assertion: what the vacuity checks found, or `not checked`",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "status",
+              "origin",
+              "has_trace"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.protocol/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "count",
+        "properties"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
     "description": "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
     "input": {
       "properties": {

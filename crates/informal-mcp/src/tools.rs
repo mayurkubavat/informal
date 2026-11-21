@@ -724,6 +724,57 @@ pub fn all() -> Vec<Tool> {
             changes: true,
         },
         Tool {
+            name: "check_csr",
+            title: "Automated CSR / RAL formal register verification",
+            description: "Load an OpenTitan HJSON/JSON, CSV, or UVM RAL `.sv` (`uvm_reg_block`) register specification into task `CSR` and prove reset, read-back, `RW`/`RO`/`W1C`/`W1S`/`W0C`/`WO`/`RC` access, `regwen` lock, and address non-aliasing properties.",
+            input: obj(
+                &[
+                    ("action", one_of(&["load", "prove", "list", "clear"], "")),
+                    ("file", s("Path to HJSON, JSON, CSV, or UVM RAL `.sv` file (required for `load`)")),
+                    ("prefix", s("Optional RTL register/field signal prefix (e.g. `u_reg.`)")),
+                    ("addr", s("Optional CSR address signal override")),
+                    ("wdata", s("Optional CSR write-data signal override")),
+                    ("rdata", s("Optional CSR read-data signal override")),
+                    ("we", s("Optional CSR write-enable expression override")),
+                    ("re", s("Optional CSR read-enable expression override")),
+                ],
+                &["action"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.csr/1"),
+                    ("count", n("")),
+                    ("properties", list(property(), "")),
+                ],
+                &["schema", "count", "properties"],
+            ),
+            changes: true,
+        },
+        Tool {
+            name: "check_protocol",
+            title: "Formal bus protocol VIP SVA generator (`tlul`, `axi4lite`, `apb`)",
+            description: "Generate, prove, list, or clear formal bus protocol assertion/assumption/cover VIP suites in task `Protocol` for TileLink-UL (`tlul`), AMBA AXI4-Lite (`axi4lite`), or AMBA APB (`apb`).",
+            input: obj(
+                &[
+                    ("action", one_of(&["create", "prove", "list", "clear"], "")),
+                    ("protocol", one_of(&["tlul", "axi4lite", "apb"], "Required when action is `create`")),
+                    ("role", one_of(&["master", "slave", "monitor"], "Default: `slave`")),
+                    ("name", s("Optional VIP prefix name")),
+                    ("prefix", s("Optional RTL bus signal prefix")),
+                ],
+                &["action"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.protocol/1"),
+                    ("count", n("")),
+                    ("properties", list(property(), "")),
+                ],
+                &["schema", "count", "properties"],
+            ),
+            changes: true,
+        },
+        Tool {
             name: "tcl_eval",
             title: "Evaluate a Tcl command",
             description: "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",

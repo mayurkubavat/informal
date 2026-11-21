@@ -6,7 +6,7 @@
 // as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, type AiStatus, type DesignInfo as DesignInfoData, EngineLine, Flavor, type GuiRequest, type GuiState, ProveProgress, Reply, SessionView } from "./backend";
+import { backend, type AiStatus, type DesignInfo as DesignInfoData, EngineLine, Flavor, type GuiRequest, type GuiState, ProveProgress, Reply, SessionView, type WhyCexReport } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   bound, clock, designScopes, memText, OPTIONAL_COLS, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, sourceFile, sourceLine, statusKey, taskOf, time, traceOf, withProgress,
@@ -30,6 +30,7 @@ import { TraceView } from "./components/TraceView";
 import { Profiler } from "./components/Profiler";
 import { DesignInfo } from "./components/DesignInfo";
 import { KIND_LABEL, Proposals } from "./components/Proposals";
+import { FormalApps, type AppMode } from "./components/FormalApps";
 import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
 // Lines the Log tab keeps; older ones are dropped (and counted).
@@ -95,6 +96,40 @@ export default function App() {
     setProfiler(false);
     setBottomTab((t) => (t === "profiler" ? "console" : t));
   }, [setProfiler, setBottomTab]);
+  const [appsOpen, setAppsOpen] = useState(false);
+  const [appMode, setAppMode] = useState<AppMode>("cov");
+  const openApps = useCallback((mode?: AppMode) => {
+    if (mode) setAppMode(mode);
+    setAppsOpen(true);
+    setBottomTab("apps");
+  }, [setBottomTab]);
+  const closeApps = useCallback(() => {
+    setAppsOpen(false);
+    setBottomTab((t) => (t === "apps" ? "console" : t));
+  }, [setBottomTab]);
+  const [whyCexMap, setWhyCexMap] = useState<Record<string, WhyCexReport>>({});
+  const [whyCexOpen, setWhyCexOpen] = useState(false);
+  const [whyCexLoading, setWhyCexLoading] = useState(false);
+  const toggleWhyCex = useCallback(async () => {
+    if (!traceName) return;
+    if (whyCexOpen) {
+      setWhyCexOpen(false);
+      return;
+    }
+    setWhyCexOpen(true);
+    if (!whyCexMap[traceName]) {
+      setWhyCexLoading(true);
+      try {
+        const rep = await backend.whyCex(traceName);
+        setWhyCexMap((m) => ({ ...m, [traceName]: rep }));
+      } catch (e) {
+        setLog((l) => [...l, { kind: "err", text: `why_cex: ${String(e)}` }]);
+        setWhyCexOpen(false);
+      } finally {
+        setWhyCexLoading(false);
+      }
+    }
+  }, [traceName, whyCexOpen, whyCexMap]);
   const [theme, setTheme] = useTheme();
   const [focusReq, setFocusReq] = useState<{ id: string; n: number } | null>(null);
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -809,7 +844,10 @@ export default function App() {
     },
     {
       label: "Tools",
-      items: [{ label: "Proof profiler", keys: "Ctrl+5", checked: profiler, onClick: () => (profiler ? closeProfiler() : openProfiler()) }],
+      items: [
+        { label: "Proof profiler", keys: "Ctrl+5", checked: profiler, onClick: () => (profiler ? closeProfiler() : openProfiler()) },
+        { label: "Formal apps", checked: appsOpen, onClick: () => (appsOpen ? closeApps() : openApps()) },
+      ],
     },
     {
       label: "Help",
@@ -862,10 +900,21 @@ export default function App() {
       <div className="toolrow">
         <label className="field">
           <span>App</span>
-          <select aria-label="App" defaultValue="fpv">
+          <select
+            aria-label="App"
+            defaultValue="fpv"
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v !== "fpv") openApps(v as AppMode);
+            }}
+          >
             <option value="fpv">FPV</option>
-            <option disabled>SEC (later)</option>
-            <option disabled>COV (later)</option>
+            <option value="sec">SEC / LEC</option>
+            <option value="cov">COV / UNR</option>
+            <option value="xprop">X-Prop</option>
+            <option value="spv">SPV</option>
+            <option value="csr">CSR</option>
+            <option value="protocol">Protocol VIP</option>
           </select>
         </label>
         <label className="field">
@@ -987,6 +1036,10 @@ export default function App() {
               cursorRequest={cursorReq}
               onView={setTraceView}
               clock={session?.clocks[0] ?? null}
+              whyCex={traceName ? (whyCexMap[traceName] ?? null) : null}
+              whyCexOpen={whyCexOpen}
+              whyCexLoading={whyCexLoading}
+              onToggleWhyCex={toggleWhyCex}
               actions={
                 // The title sits on a wrapper too: a disabled button shows none.
                 <span className="surfer-wrap" title={surferTip(tracePath)}>
@@ -1065,7 +1118,13 @@ export default function App() {
               onHeaderContext={(x, y) => setColMenu({ x, y })}
             />
           ) : (
-            <SourceView text={source} focus={focusLine} focusEnd={focusEnd} />
+            <SourceView
+              text={source}
+              focus={focusLine}
+              focusEnd={focusEnd}
+              causalSignals={whyCexOpen && traceName ? whyCexMap[traceName]?.active_signals : undefined}
+              covItems={session?.cov?.items?.filter((it) => !it.file || it.file === srcPath || Boolean(srcPath?.endsWith(`/${it.file}`)))}
+            />
           )}
           </>
           )}
@@ -1093,6 +1152,7 @@ export default function App() {
               ["log", "Log"],
               ["info", "Design Info"],
               ...(profiler ? ([["profiler", "Profiler", closeProfiler]] as [string, string, () => void][]) : []),
+              ...(appsOpen ? ([["apps", "Formal Apps", closeApps]] as [string, string, () => void][]) : []),
               ...(ai?.proposals.length ? ([["proposals", `Proposals${waiting ? ` (${waiting})` : ""}`]] as [string, string][]) : []),
             ]}
             value={bottomTab}
@@ -1247,6 +1307,19 @@ export default function App() {
           )}
           {bottomTab === "proposals" && ai && <Proposals ai={ai} busy={deciding || !idle} onDecide={decide} />}
           {bottomTab === "profiler" && profiler && <Profiler prop={current} props={allProps} />}
+          {bottomTab === "apps" && appsOpen && (
+            <FormalApps
+              session={session}
+              mode={appMode}
+              onMode={setAppMode}
+              idle={idle}
+              onRunTcl={(cmd) => (isProveCmd(cmd) ? prove(cmd) : run(() => backend.evalTcl(cmd), cmd))}
+              onSelectTask={(t) => {
+                setTaskFilter(t);
+                setCenter("table");
+              }}
+            />
+          )}
         </section>
       </div>
 

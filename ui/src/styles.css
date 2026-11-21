@@ -591,3 +591,47 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .proposal-head { display: flex; align-items: baseline; gap: 8px; }
 .proposal-why { margin: 0; }
 .proposal-error { margin: 0; color: var(--st-error); }
+
+/* ---- why_cex causal root-cause slice & formal apps ---- */
+.btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 500; }
+.causal-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex: none;
+}
+.causal-summary { white-space: nowrap; color: var(--text-2); }
+.causal-filter { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }
+.causal-events { display: flex; align-items: center; gap: 6px; }
+.causal-chip {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.causal-chip:hover { border-color: var(--accent); color: var(--accent); }
+.trace-name.causal-sig { background: var(--accent-soft); font-weight: 500; }
+.trace-causal-cell { fill: var(--accent); fill-opacity: 0.14; stroke: var(--accent); stroke-opacity: 0.45; stroke-width: 1; }
+.source > div.causal-line:not(.focus) { background: var(--accent-soft); }
+.cov-gutter { display: inline-block; width: 12px; margin-right: 2px; font-size: 10px; }
+.cov-covered { color: var(--st-proven); }
+.cov-unreachable { color: var(--st-cex); }
+.cov-waived { color: var(--muted); }
+
+.formal-apps { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.apps-nav { display: flex; gap: 2px; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); flex: none; overflow-x: auto; }
+.apps-tab { height: 22px; padding: 0 8px; border-radius: 3px; color: var(--text-2); white-space: nowrap; }
+.apps-tab:hover { background: var(--hover); color: var(--text); }
+.apps-tab.on { background: var(--surface); color: var(--text); font-weight: 600; border: 1px solid var(--border-strong); }
+.apps-body { flex: 1; min-height: 0; overflow: auto; }
+.apps-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.apps-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.apps-table th, .apps-table td { text-align: left; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.apps-table th { color: var(--muted); font-weight: 500; background: var(--surface-2); position: sticky; top: 0; }

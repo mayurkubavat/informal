@@ -34,7 +34,7 @@
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { AiProposal, AiStatus, ConsoleLine, DesignInfo, DesignScope, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProofStats, ProveProgress, Property, Reply, SessionView } from "./backend";
+import type { AiProposal, AiStatus, ConsoleLine, DesignInfo, DesignScope, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProofStats, ProveProgress, Property, Reply, SessionView, WhyCexReport } from "./backend";
 import { splitAnswer, type AskDelta, type AskDone, type LlmProviderEntry, type LlmStatus } from "./ask";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
@@ -592,6 +592,24 @@ function names(script: string): string[] {
   return m ? (m[1] ?? m[2]).split(/\s+/).filter(Boolean) : [];
 }
 
+export function mockWhyCex(name: string): WhyCexReport {
+  return {
+    property: name,
+    status: "cex",
+    failure_frame: 10,
+    total_frames: 11,
+    static_cone_signals: 3,
+    active_slice_signals: 2,
+    active_signals: ["counter.en", "counter.q"],
+    events: [
+      { frame: 0, signal: "counter.q", kind: "register", width: 4, value: "4'h0", reason: "initial_state" },
+      { frame: 1, signal: "counter.en", kind: "input", width: 1, value: "1'b1", reason: "active_input" },
+      { frame: 2, signal: "counter.q", kind: "register", width: 4, value: "4'h1", prev_value: "4'h0", reason: "register_transition" },
+      { frame: 10, signal: "counter.q", kind: "register", width: 4, value: "4'h9", prev_value: "4'h8", reason: "failure_operand" },
+    ],
+  };
+}
+
 export async function mock(cmd: string, args: Record<string, unknown>): Promise<Reply> {
   await new Promise((r) => setTimeout(r, 150));
   if (cmd === "shell_flavor") mockFlavor = String(args.flavor);
@@ -620,6 +638,39 @@ export async function mock(cmd: string, args: Record<string, unknown>): Promise<
     const hit = mockSession.props.filter((p) => want.includes(p.name));
     if (!hit.length) return { ok: false, result: `no property matches \`${want.join(" ")}\``, session: mockSession };
     for (const p of hit) p.enabled = toggle[1] === "fvenable";
+    return { ok: true, result: "", session: mockSession };
+  }
+  if (cmd === "shell_eval" && /^\s*check_cov\b/.test(script)) {
+    mockSession.cov = {
+      initialized: true,
+      measured: /-measure\b/.test(script) || !!mockSession.cov?.measured,
+      items: [
+        { id: "coi_0", model: "coi", name: "counter.q", status: "covered", file: MOCK_RTL, line: 5 },
+        { id: "br_0", model: "branch", name: "counter.br_reset", status: "covered", file: MOCK_RTL, line: 5 },
+        { id: "br_1", model: "branch", name: "counter.br_inc", status: "covered", file: MOCK_RTL, line: 6 },
+      ],
+    };
+    return { ok: true, result: "check_cov: 3/3 covered (0 UNR)", session: mockSession };
+  }
+  if (cmd === "shell_eval" && /^\s*check_xprop\b/.test(script)) {
+    mockSession.xprop = {
+      initialized: true,
+      items: [
+        { name: "counter.q", category: "output", status: "proven", engine: "informal-ic3-mt", ms: 4 },
+        { name: "counter.done", category: "output", status: "proven", engine: "informal-ic3-mt", ms: 3 },
+      ],
+    };
+    return { ok: true, result: "check_xprop: 2/2 proven (X-clean)", session: mockSession };
+  }
+  if (cmd === "shell_eval" && /^\s*check_spv\b/.test(script)) {
+    if (/-clear\b/.test(script)) mockSession.spv = [];
+    else if (/-prove\b/.test(script) && mockSession.spv) {
+      mockSession.spv = mockSession.spv.map((r) => ({ ...r, status: "proven", engine: "informal-ic3-mt" }));
+    } else if (/-create\b/.test(script)) {
+      const fm = script.match(/-from\s+\{?([^\s}]+)\}?/)?.[1] ?? "en";
+      const to = script.match(/-to\s+\{?([^\s}]+)\}?/)?.[1] ?? "done";
+      mockSession.spv = [...(mockSession.spv ?? []), { name: `spv_${(mockSession.spv?.length ?? 0) + 1}`, task: "<embedded>", from: [fm], to: [to], status: "unprocessed" }];
+    }
     return { ok: true, result: "", session: mockSession };
   }
   if (cmd === "shell_eval" && script.trim() !== "") {
