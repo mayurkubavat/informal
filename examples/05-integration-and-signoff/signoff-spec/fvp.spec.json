@@ -1,0 +1,41 @@
+{
+  "schema": "informal.spec/1",
+  "name": "Signoff Counter Formal Verification Plan",
+  "design": {
+    "top": "signoff_counter",
+    "clocks": ["clk"],
+    "reset": "!rst_n"
+  },
+  "boundary": {
+    "allowed_assume_inputs": ["en"],
+    "forbidden_assume_signals": ["q", "done"]
+  },
+  "requirements": [
+    {
+      "id": "REQ-SCNT-001",
+      "title": "Counter saturates cleanly at 9",
+      "assertions": ["a_max"],
+      "covers": ["c_done"]
+    },
+    {
+      "id": "REQ-SCNT-002",
+      "title": "Counter increments by 1 when enabled below saturation",
+      "assertions": ["a_step"],
+      "covers": ["c_done"]
+    },
+    {
+      "id": "REQ-SCNT-003",
+      "title": "Counter holds state when disabled",
+      "assertions": ["a_hold"],
+      "covers": ["c_done"]
+    }
+  ],
+  "signoff": {
+    "proof_target": "proven",
+    "max_overconstraints": 0,
+    "max_dead_ends": 0,
+    "forbid_vacuous": true,
+    "require_covers": true,
+    "forbid_under_ai": true
+  }
+}

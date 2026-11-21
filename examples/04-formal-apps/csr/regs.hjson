@@ -1,0 +1,37 @@
+// OpenTitan-style HJSON register specification for `check_csr`
+{
+  name: "csr_block"
+  regwidth: "32"
+  registers: [
+    {
+      name: "CFG_REGWEN"
+      swaccess: "rw0c"
+      resval: "0x1"
+      fields: [
+        { bits: "0", name: "wen", resval: "0x1" }
+      ]
+    }
+    {
+      name: "CTRL"
+      regwen: "CFG_REGWEN"
+      fields: [
+        { bits: "3:0", name: "mode", swaccess: "rw", resval: "0x5" }
+        { bits: "7:4", name: "rev_id", swaccess: "ro", resval: "0xa" }
+      ]
+    }
+    {
+      name: "IRQ_STATE"
+      swaccess: "rw1c"
+      fields: [
+        { bits: "3:0", name: "pending", resval: "0xf" }
+      ]
+    }
+    {
+      name: "KEY_WO"
+      swaccess: "wo"
+      fields: [
+        { bits: "7:0", name: "secret", resval: "0x0" }
+      ]
+    }
+  ]
+}

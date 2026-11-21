@@ -13,10 +13,11 @@
 //!   informal split <model.aig> [--timeout S] [--jobs N]   prove a wide property term by term
 //!   informal bench <dir>   [--engines F] [--timeout S] [--each] [--jobs N] [--db runs.jsonl]
 
+mod docgen;
 mod split;
 
 use anyhow::{bail, Context};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use informal_engine::{portfolio, CheckRequest, ModelFormat, Verdict};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -227,6 +228,19 @@ enum Cmd {
         /// which already uses 16 threads per model.
         #[arg(long, default_value_t = 1)]
         jobs: usize,
+    },
+    /// Generate or verify single-source-of-truth Markdown reference manuals,
+    /// `docs/reference/index.json`, and `llms.txt` from CLI, Tcl, and MCP registries.
+    Docgen {
+        /// Output directory for generated Markdown and JSON reference manuals.
+        #[arg(long, default_value = "docs/reference")]
+        out: PathBuf,
+        /// Output path for AI documentation index (`llms.txt`); pass empty string to skip.
+        #[arg(long, default_value = "llms.txt")]
+        llms_out: PathBuf,
+        /// Verify that generated files on disk match code without writing.
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -715,6 +729,18 @@ fn main() -> anyhow::Result<()> {
                 );
             }
         }
+        Cmd::Docgen {
+            out,
+            llms_out,
+            check,
+        } => {
+            let llms = if llms_out.as_os_str().is_empty() {
+                None
+            } else {
+                Some(llms_out.as_path())
+            };
+            docgen::run(Cli::command(), &out, llms, check)?;
+        }
     }
     Ok(())
 }
@@ -906,5 +932,30 @@ mod tests {
             }
             _ => panic!("expected mcp subcommand"),
         }
+    }
+
+    #[test]
+    fn docgen_writes_and_checks_cleanly() {
+        let dir = std::env::temp_dir().join(format!("informal-docgen-{}", std::process::id()));
+        let ref_dir = dir.join("reference");
+        let llms = dir.join("llms.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+        docgen::run(Cli::command(), &ref_dir, Some(&llms), false).unwrap();
+        docgen::run(Cli::command(), &ref_dir, Some(&llms), true).unwrap();
+        let cli_md = std::fs::read_to_string(ref_dir.join("cli.md")).unwrap();
+        assert!(cli_md.contains("### `informal shell`"));
+        assert!(cli_md.contains("### `informal docgen`"));
+        let tcl_md = std::fs::read_to_string(ref_dir.join("tcl-commands.md")).unwrap();
+        assert!(tcl_md.contains("### `help` (`common`)"));
+        assert!(tcl_md.contains("### `check_protocol` (`common`)"));
+        let mcp_md = std::fs::read_to_string(ref_dir.join("mcp-tools.md")).unwrap();
+        assert!(mcp_md.contains("### `spec_audit`"));
+        assert!(mcp_md.contains("### `gui_present_cex`"));
+        let idx: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(ref_dir.join("index.json")).unwrap())
+                .unwrap();
+        assert_eq!(idx["schema"], "informal.docs_index/1");
+        assert!(llms.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

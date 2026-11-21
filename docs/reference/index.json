@@ -1,0 +1,2548 @@
+{
+  "cli_subcommands": [
+    {
+      "about": "Parse and validate a Btor2 model and print its features as JSON",
+      "args": [
+        "<MODEL>"
+      ],
+      "name": "info"
+    },
+    {
+      "about": "Print a Btor2 model in canonical form",
+      "args": [
+        "<MODEL>"
+      ],
+      "name": "fmt"
+    },
+    {
+      "about": "Check one model with the engine portfolio",
+      "args": [
+        "<MODEL>",
+        "--engines <ENGINES>",
+        "--timeout <TIMEOUT>",
+        "--only <ONLY>",
+        "--certificate <DIR>"
+      ],
+      "name": "check"
+    },
+    {
+      "about": "Load a model at bit level (AIGER, or Btor2 bit-blasted), preprocess it and print its size before and after; `--aag` prints the result",
+      "args": [
+        "<MODEL>",
+        "--aag"
+      ],
+      "name": "simp"
+    },
+    {
+      "about": "Lower SystemVerilog to Btor2 with svlang; immediate assertions become bad states",
+      "args": [
+        "<FILES>",
+        "--top <TOP>",
+        "-D <DEFINE>",
+        "--skip-initial-checks",
+        "--isunknown-is-false"
+      ],
+      "name": "lower"
+    },
+    {
+      "about": "Run a JasperGold or VC Formal style Tcl script (or an interactive shell when no script is given)",
+      "args": [
+        "<SCRIPT>",
+        "--flavor <FLAVOR>",
+        "--engines <ENGINES>",
+        "--workdir <WORKDIR>",
+        "-c, --command <COMMANDS>",
+        "--check",
+        "--json",
+        "--certificate <DIR>"
+      ],
+      "name": "shell"
+    },
+    {
+      "about": "Serve one FPV session to an AI model as Model Context Protocol tools on standard input and output (docs/ai-interface.md). Replies are JSON; what the session prints goes to standard error",
+      "args": [
+        "--mode <MODE>",
+        "--root <ROOT>",
+        "--engines <ENGINES>",
+        "--workdir <WORKDIR>",
+        "--max-time <MAX_TIME>",
+        "--connect <SOCKET>"
+      ],
+      "name": "mcp"
+    },
+    {
+      "about": "Shrink an AIGER model while two engines keep disagreeing on it, or while a test command keeps exiting 0 (delta debugging)",
+      "args": [
+        "<MODEL>",
+        "--disagree <DISAGREE>",
+        "--test <TEST>",
+        "--engines <ENGINES>",
+        "--timeout <TIMEOUT>",
+        "-o, --out <OUT>",
+        "--workdir <WORKDIR>"
+      ],
+      "name": "reduce"
+    },
+    {
+      "about": "Prove a property whose bad output is an OR of several terms part by part: one model per term, proved a few at a time with the invariant store carrying each certified invariant to the others, then the original with all of them (see docs/engines.md)",
+      "args": [
+        "<MODEL>",
+        "--timeout <TIMEOUT>",
+        "--jobs <JOBS>",
+        "--max-terms <MAX_TERMS>",
+        "--slice <SLICE>",
+        "--workdir <WORKDIR>",
+        "--write-only"
+      ],
+      "name": "split"
+    },
+    {
+      "about": "Run engines over every model in a directory and log to the run database",
+      "args": [
+        "<DIR>",
+        "--engines <ENGINES>",
+        "--timeout <TIMEOUT>",
+        "--each",
+        "--db <DB>",
+        "--only <ONLY>",
+        "--jobs <JOBS>"
+      ],
+      "name": "bench"
+    },
+    {
+      "about": "Generate or verify single-source-of-truth Markdown reference manuals, `docs/reference/index.json`, and `llms.txt` from CLI, Tcl, and MCP registries",
+      "args": [
+        "--out <OUT>",
+        "--llms-out <LLMS_OUT>",
+        "--check"
+      ],
+      "name": "docgen"
+    }
+  ],
+  "mcp_prompts": [
+    {
+      "arguments": [
+        {
+          "description": "Name of the failing (`cex`) property to triage (optional: defaults to first failing property)",
+          "name": "property",
+          "required": false
+        }
+      ],
+      "description": "Expert root-cause workflow: fuse causal slice + driver snippets via `cex_diagnose`, classify RTL bug vs missing input assumption vs broken SVA, validate any fix with `proposal_validate`, and optionally launch a visual walkthrough via `gui_present_cex`.",
+      "name": "triage_cex",
+      "title": "Triage a failing counterexample (CEX)"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Name of the `undetermined` property to converge (optional: defaults to first undetermined property)",
+          "name": "property",
+          "required": false
+        }
+      ],
+      "description": "Structured convergence ladder for `undetermined` properties: inspect complexity/telemetry via `convergence_diagnose`, mine inductive helper invariants with `proposal_validate(kind=\"assert\")`, or apply sound cutpoint/blackbox/case-split abstractions.",
+      "name": "close_undetermined",
+      "title": "Close an undetermined formal proof"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Natural-language hardware specification requirement to formalize",
+          "name": "requirement",
+          "required": true
+        },
+        {
+          "description": "Optional module/scope name (defaults to top module)",
+          "name": "module",
+          "required": false
+        }
+      ],
+      "description": "Spec-driven SVA engineering hydrated with the DUT's exact input/output port boundary: write reset-guarded safety assertions paired with non-vacuity witness covers and verify them via `proposal_validate` before proposing.",
+      "name": "spec_to_sva",
+      "title": "Synthesize verifiable SVA from a specification requirement"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Optional path to `fvp.spec.json` (`informal.spec/1`); auto-discovered when omitted",
+          "name": "spec_file",
+          "required": false
+        }
+      ],
+      "description": "Run a complete signoff gate across the live session: `spec_audit` against `fvp.spec.json` (if present), `formal_lint`, assumption over-constraint/vacuity audit, `under_ai` provenance review, cover reachability, and `check_cov` COI/UNR coverage.",
+      "name": "audit_signoff",
+      "title": "Formal verification signoff & soundness audit"
+    }
+  ],
+  "mcp_tools": [
+    {
+      "changes": false,
+      "description": "Start the session over from a JasperGold or VC Formal Tcl script (`script`), or from SystemVerilog files with a top module, clock and reset (`files`). A script runs as written, including any prove in it. Returns the session summary; a script that stops with an error gives ok=false and the error, with the session as far as it got.",
+      "gui_only": false,
+      "name": "session_open",
+      "reply_schema": "informal.open/1",
+      "title": "Open a design"
+    },
+    {
+      "changes": false,
+      "description": "Report, per line, every command or option of a Tcl script that the tool would reject, ignore or does not know. Nothing is elaborated or proved and the open session is not touched.",
+      "gui_only": false,
+      "name": "script_check",
+      "reply_schema": "informal.check/1",
+      "title": "Check a script without running it"
+    },
+    {
+      "changes": false,
+      "description": "The design setup (top, files, clocks, reset, cut points), the engines, property counts by kind and status, and what an AI has added or proposed.",
+      "gui_only": false,
+      "name": "session_summary",
+      "reply_schema": "informal.summary/1",
+      "title": "Session summary"
+    },
+    {
+      "changes": false,
+      "description": "The session's last console lines: notes and warnings from elaboration and proving, and every AI-added change.",
+      "gui_only": false,
+      "name": "session_log",
+      "reply_schema": "informal.log/1",
+      "title": "Console log"
+    },
+    {
+      "changes": false,
+      "description": "The assertions, assumptions and covers of the session with their status, optionally filtered.",
+      "gui_only": false,
+      "name": "property_list",
+      "reply_schema": "informal.properties/1",
+      "title": "List properties"
+    },
+    {
+      "changes": false,
+      "description": "One property with its status, the engine and time that settled it, its source location and every engine's run.",
+      "gui_only": false,
+      "name": "property_get",
+      "reply_schema": "informal.property/1",
+      "title": "One property"
+    },
+    {
+      "changes": false,
+      "description": "The inputs and registers in a property's cone of influence, nearest first: distance is the number of register stages between the signal and the property.",
+      "gui_only": false,
+      "name": "property_cone",
+      "reply_schema": "informal.cone/1",
+      "title": "Signals a property depends on"
+    },
+    {
+      "changes": false,
+      "description": "The instance tree of the elaborated design: each scope's module, ports and signals with widths.",
+      "gui_only": false,
+      "name": "design_hierarchy",
+      "reply_schema": "informal.hierarchy/1",
+      "title": "Design hierarchy"
+    },
+    {
+      "changes": false,
+      "description": "What the design holds, counted on its netlist (instances, inputs, flops, latches, memories, clocks and resets found), what the script declared (clocks, reset, black boxes, the current task's cut points and properties), and the size of the current task's model after lowering (Btor2 nodes, states, inputs, constraints, targets, and the bit-blasted AIG). Builds the model, so it takes as long as one lowering.",
+      "gui_only": false,
+      "name": "design_info",
+      "reply_schema": "informal.design_info/1",
+      "title": "Design information"
+    },
+    {
+      "changes": false,
+      "description": "Lines of a design file or script, by line range (at most 400 lines a call).",
+      "gui_only": false,
+      "name": "design_source",
+      "reply_schema": "informal.source/1",
+      "title": "Source text"
+    },
+    {
+      "changes": false,
+      "description": "The trace of a property whose status is cex or covered: one value per signal and frame (a frame is a clock cycle; frame 0 is the reset cycle). Words are in hex, single bits 0 or 1. hit_at lists the frames in which the assertion fails or the cover is hit. Without `signals`, the signals the property names come first, then the rest of its cone.",
+      "gui_only": false,
+      "name": "trace_get",
+      "reply_schema": "informal.trace/1",
+      "title": "Counterexample or cover trace as data"
+    },
+    {
+      "changes": false,
+      "description": "Run the engines on the named assertions and covers (the enabled ones of the task, or of the current task, when none is named) and return each one's result. Each task is proved on its own model, with its own assumptions and cut points. Only this gives a verdict. With wait=false it returns at once: follow with prove_status, end with prove_stop.",
+      "gui_only": false,
+      "name": "prove",
+      "reply_schema": "informal.prove/1",
+      "title": "Prove properties"
+    },
+    {
+      "changes": false,
+      "description": "Whether a prove is running, each property's state so far, and the result of the last prove started with wait=false once it has ended.",
+      "gui_only": false,
+      "name": "prove_status",
+      "reply_schema": "informal.progress/1",
+      "title": "Progress of a prove"
+    },
+    {
+      "changes": false,
+      "description": "Ask a running prove to stop. Properties not settled yet become undetermined (stopped).",
+      "gui_only": false,
+      "name": "prove_stop",
+      "reply_schema": "informal.stop/1",
+      "title": "Stop a prove"
+    },
+    {
+      "changes": false,
+      "description": "Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SV-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.",
+      "gui_only": false,
+      "name": "proposal_validate",
+      "reply_schema": "informal.validate/1",
+      "title": "Validate a candidate assumption, helper assertion, cover, or cut point"
+    },
+    {
+      "changes": true,
+      "description": "Propose an assumption, a helper assertion, a cover (`expr`, SystemVerilog in the top module's scope) or a cut point (`signal`). Call `proposal_validate` first to verify soundness, non-vacuity, and cover non-regression. In propose mode it waits for a person (state pending); in automatic mode it is applied at once, tagged AI-added.",
+      "gui_only": false,
+      "name": "proposal_add",
+      "reply_schema": "informal.proposal/1",
+      "title": "Propose a change"
+    },
+    {
+      "changes": false,
+      "description": "Every change proposed through this interface since the design was opened, with its state.",
+      "gui_only": false,
+      "name": "proposal_list",
+      "reply_schema": "informal.proposals/1",
+      "title": "List proposals"
+    },
+    {
+      "changes": true,
+      "description": "Take back one proposal (`id`) or all of them: a pending one is withdrawn, an applied one is removed from the session, and every result that was found with it in the model goes back to unprocessed (`reset`).",
+      "gui_only": false,
+      "name": "proposal_undo",
+      "reply_schema": "informal.undo/1",
+      "title": "Take back proposals"
+    },
+    {
+      "changes": false,
+      "description": "Dynamic backward slice from a falsified assertion (`cex`) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.",
+      "gui_only": false,
+      "name": "why_cex",
+      "reply_schema": "informal.why_cex/1",
+      "title": "Root-cause slice of a counterexample trace"
+    },
+    {
+      "changes": false,
+      "description": "Preferred first tool for any `cex` or `covered` property: fuses `property_get`, backward `why_cex` causal slice, trimmed trace on active causal signals only, primary-input vs DUT-output/internal signal role classification, RTL driver source snippets (`signal_nav`), `formal_lint` findings, and a triage hint into one compact reply.",
+      "gui_only": false,
+      "name": "cex_diagnose",
+      "reply_schema": "informal.cex_diagnose/1",
+      "title": "Single-call counterexample root-cause dossier"
+    },
+    {
+      "changes": false,
+      "description": "Preferred first tool for `undetermined` or slow properties: fuses per-engine telemetry (`stats`, `max_bound`), COI input/register counts, `fv_complexity` arithmetic/memory/blackbox hotspots, active assumptions/cutpoints, and ranked proof-convergence tactics.",
+      "gui_only": false,
+      "name": "convergence_diagnose",
+      "reply_schema": "informal.convergence_diagnose/1",
+      "title": "Single-call proof convergence & complexity dossier"
+    },
+    {
+      "changes": true,
+      "description": "Enable, disable, or inspect the cone-of-influence SHA-256 proof cache (`set_prove_cache*`).",
+      "gui_only": false,
+      "name": "prove_cache",
+      "reply_schema": "informal.prove_cache/1",
+      "title": "Configure or inspect the COI proof cache"
+    },
+    {
+      "changes": true,
+      "description": "Initialize, measure, query, or clear formal coverage (`coi`, `branch`, `toggle`, `functional`).",
+      "gui_only": false,
+      "name": "check_cov",
+      "reply_schema": "informal.cov/1",
+      "title": "Formal COI observability and UNR dead-code coverage"
+    },
+    {
+      "changes": true,
+      "description": "Load a connectivity CSV map into the `Connectivity` task, prove its rules, list statuses, or clear it.",
+      "gui_only": false,
+      "name": "check_conn",
+      "reply_schema": "informal.conn/1",
+      "title": "Formal CSV connectivity verification"
+    },
+    {
+      "changes": true,
+      "description": "Initialize, prove, list, or clear 2-copy self-composition X-propagation checks across outputs, control muxes, memories, assertions, or explicit signals.",
+      "gui_only": false,
+      "name": "check_xprop",
+      "reply_schema": "informal.xprop/1",
+      "title": "Exact 2-copy formal X-propagation verification"
+    },
+    {
+      "changes": true,
+      "description": "Create, prove, list, or clear 2-safety non-interference rules proving secret `-from` signals never influence observable `-to` signals.",
+      "gui_only": false,
+      "name": "check_spv",
+      "reply_schema": "informal.spv/1",
+      "title": "2-safety formal security taint / non-interference verification"
+    },
+    {
+      "changes": true,
+      "description": "Configure, prove, list, or clear dual-design equivalence checks between a reference `spec` RTL and a refactored/pipelined `imp` RTL (`lec: false` for sequential SEC with optional `latency`, `lec: true` for combinational keypoint LEC).",
+      "gui_only": false,
+      "name": "check_sec",
+      "reply_schema": "informal.sec/1",
+      "title": "Dual-design formal sequential (SEC) and combinational (LEC) equivalence checking"
+    },
+    {
+      "changes": true,
+      "description": "Load an OpenTitan HJSON/JSON, CSV, or UVM RAL `.sv` (`uvm_reg_block`) register specification into task `CSR` and prove reset, read-back, `RW`/`RO`/`W1C`/`W1S`/`W0C`/`WO`/`RC` access, `regwen` lock, and address non-aliasing properties.",
+      "gui_only": false,
+      "name": "check_csr",
+      "reply_schema": "informal.csr/1",
+      "title": "Automated CSR / RAL formal register verification"
+    },
+    {
+      "changes": true,
+      "description": "Generate, prove, list, or clear formal bus protocol assertion/assumption/cover VIP suites in task `Protocol` for TileLink-UL (`tlul`), AMBA AXI4-Lite (`axi4lite`), or AMBA APB (`apb`).",
+      "gui_only": false,
+      "name": "check_protocol",
+      "reply_schema": "informal.protocol/1",
+      "title": "Formal bus protocol VIP SVA generator (`tlul`, `axi4lite`, `apb`)"
+    },
+    {
+      "changes": false,
+      "description": "Open or refresh the interactive InFormal verification workbench (MCP App side pane or full-page view): property status table, waveform viewer, causal schematic, RTL source, and Formal Apps.",
+      "gui_only": false,
+      "name": "open_workbench",
+      "reply_schema": "informal.workbench/1",
+      "title": "InFormal"
+    },
+    {
+      "changes": false,
+      "description": "Extract a bounded, port-aware RTL netlist schematic subgraph in the cone of influence of `name`, annotated with active `why_cex` causal paths and arithmetic state-space hotspots (`mul`, `div`, wide datapath).",
+      "gui_only": false,
+      "name": "schematic_get",
+      "reply_schema": "informal.schematic/1",
+      "title": "RTL cone & causal schematic graph"
+    },
+    {
+      "changes": false,
+      "description": "Run svlang lint with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.",
+      "gui_only": false,
+      "name": "formal_lint",
+      "reply_schema": "informal.lint/1",
+      "title": "Formal-readiness lint & quick-fixes"
+    },
+    {
+      "changes": true,
+      "description": "Apply a byte-range quick-fix from `formal_lint` to a design file under the workspace root and re-elaborate (or record as a proposal in propose mode).",
+      "gui_only": false,
+      "name": "formal_fix_apply",
+      "reply_schema": "object",
+      "title": "Apply a formal-readiness quick-fix"
+    },
+    {
+      "changes": false,
+      "description": "Resolve declarations, sequential/combinational drivers, and SVA/expression loads of an RTL signal across the design's files.",
+      "gui_only": false,
+      "name": "signal_nav",
+      "reply_schema": "informal.signal_nav/1",
+      "title": "Go-to-driver and go-to-load navigation"
+    },
+    {
+      "changes": false,
+      "description": "Analyze COI state bits, arithmetic operators, memories, and blackbox candidates (`get_fv_complexity`) for a property or the whole task.",
+      "gui_only": false,
+      "name": "fv_complexity",
+      "reply_schema": "informal.complexity/1",
+      "title": "Formal complexity & hotspot report"
+    },
+    {
+      "changes": false,
+      "description": "Cross-check the active session against a machine-verifiable formal verification spec (`fvp.spec.json` / `informal.spec/1`): verifies design/clock/reset intent, legal primary-input-only assumption boundary, per-requirement assertion + witness-cover status (`verified`, `cex`, `undetermined`, `missing_assert`, `missing_cover`, `vacuous`, `overconstrained`), signoff gates, and prioritized next actions. Auto-discovers `fvp.spec.json` next to the design files when `spec_file` and `spec` are omitted.",
+      "gui_only": false,
+      "name": "spec_audit",
+      "reply_schema": "informal.spec_audit/1",
+      "title": "Audit session against fvp.spec.json"
+    },
+    {
+      "changes": true,
+      "description": "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
+      "gui_only": false,
+      "name": "tcl_eval",
+      "reply_schema": "object",
+      "title": "Evaluate a Tcl command"
+    },
+    {
+      "changes": false,
+      "description": "The window of the person working on this session: the property they selected, the view and layout preset, the open trace with their cursor's frame, callouts and signals, the source lines in view, schematic state, and any @-focus pills.",
+      "gui_only": true,
+      "name": "gui_state",
+      "reply_schema": "informal.gui/1",
+      "title": "What the person is looking at"
+    },
+    {
+      "changes": false,
+      "description": "Select a property in the person's property table, as a click would: its details and source line show.",
+      "gui_only": true,
+      "name": "gui_select_property",
+      "reply_schema": "informal.gui/1",
+      "title": "Select a property in the window"
+    },
+    {
+      "changes": false,
+      "description": "Open the waveform of a property whose status is cex or covered in the person's window, with the cursor on `frame` (default: the frame where it fails or is hit). Use it to show the person the cycle you are talking about.",
+      "gui_only": true,
+      "name": "gui_open_trace",
+      "reply_schema": "informal.gui/1",
+      "title": "Open a trace in the window"
+    },
+    {
+      "changes": false,
+      "description": "Add signals, by full name as trace_get gives them, to the waveform that is open in the person's window. Fails when no trace is open or a signal is not in that trace.",
+      "gui_only": true,
+      "name": "gui_add_signals",
+      "reply_schema": "informal.gui/1",
+      "title": "Add signals to the open waveform"
+    },
+    {
+      "changes": false,
+      "description": "Open a design file or script in the person's source view and highlight a range of lines.",
+      "gui_only": true,
+      "name": "gui_highlight_source",
+      "reply_schema": "informal.gui/1",
+      "title": "Show source lines in the window"
+    },
+    {
+      "changes": false,
+      "description": "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`), bottom dock tab, or property filter.",
+      "gui_only": true,
+      "name": "gui_set_view",
+      "reply_schema": "informal.gui/1",
+      "title": "Switch window view, layout preset, dock tab, or filter"
+    },
+    {
+      "changes": false,
+      "description": "Open or close the `Why CEX` backward causal slice overlay on the open waveform, and optionally filter lanes to causal signals only (`slice_only`).",
+      "gui_only": true,
+      "name": "gui_toggle_why_cex",
+      "reply_schema": "informal.gui/1",
+      "title": "Toggle Why CEX causal root-cause slice overlay"
+    },
+    {
+      "changes": false,
+      "description": "Pin visual callout badges onto specific `(signal, frame)` cells in the open waveform (or clear them) so the engineer sees exact root-cause transitions.",
+      "gui_only": true,
+      "name": "gui_annotate_trace",
+      "reply_schema": "informal.gui/1",
+      "title": "Pin AI callout badges onto waveform cells"
+    },
+    {
+      "changes": false,
+      "description": "Publish, step, or dismiss an interactive multi-step root-cause tour bar in the window that synchronizes the waveform cursor, callout pins, and RTL source lines on each step.",
+      "gui_only": true,
+      "name": "gui_present_walkthrough",
+      "reply_schema": "informal.gui/1",
+      "title": "Present or step a guided multi-step CEX walkthrough"
+    },
+    {
+      "changes": false,
+      "description": "Open the schematic viewer for property `name` (default: selected property) at `max_depth` register stages.",
+      "gui_only": true,
+      "name": "gui_open_schematic",
+      "reply_schema": "informal.gui/1",
+      "title": "Open the interactive COI & causal schematic"
+    },
+    {
+      "changes": false,
+      "description": "Preferred single-call desktop visual tour for a `cex` or `covered` property: switches to `cex-debug` (or chosen layout preset), opens the trace at `frame`, activates the `Why CEX` causal slice, pins AI callout badges, and launches the interactive walkthrough bar. Auto-synthesizes steps and callouts from `why_cex` when omitted.",
+      "gui_only": true,
+      "name": "gui_present_cex",
+      "reply_schema": "informal.gui/1",
+      "title": "Atomically present a synchronized CEX debug walkthrough"
+    },
+    {
+      "changes": false,
+      "description": "Render a standalone SVG of the open waveform or schematic (including Why CEX highlights and AI callout badges) into `window.capture` for visual verification or Markdown reports.",
+      "gui_only": true,
+      "name": "gui_capture_view",
+      "reply_schema": "informal.gui/1",
+      "title": "Capture deterministic SVG or visual summary of the active view"
+    }
+  ],
+  "schema": "informal.docs_index/1",
+  "spec_schema": "informal.spec/1",
+  "tcl_commands": [
+    {
+      "category": "utilities",
+      "equivalent": "Available in both `jg` and `vcf` flavors",
+      "example": "help\nhelp prove\nhelp -apps\nhelp *cache*",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "help",
+      "notes": "Use `jg::<cmd>` or `vcf::<cmd>` to disambiguate commands that exist in both flavors (such as `analyze` or `elaborate`).",
+      "options": [
+        {
+          "desc": "List commands across common, JasperGold (jg), and VC Formal (vcf) flavors",
+          "flag": "-all"
+        },
+        {
+          "desc": "List JasperGold-flavor and common commands",
+          "flag": "-jg"
+        },
+        {
+          "desc": "List VC Formal-flavor and common commands",
+          "flag": "-vcf"
+        },
+        {
+          "desc": "List flavor-independent InFormal commands only",
+          "flag": "-common"
+        },
+        {
+          "desc": "List Formal Apps (`check_*`) only",
+          "flag": "-apps"
+        },
+        {
+          "desc": "Show full detail for a command (accepted for vendor compatibility)",
+          "flag": "-verbose"
+        },
+        {
+          "desc": "Emit the full command catalog as JSON",
+          "flag": "-json"
+        }
+      ],
+      "summary": "Show Tcl command reference, options, and examples",
+      "usage": "help [command|pattern] [-all|-jg|-vcf|-common|-apps|-verbose|-json]"
+    },
+    {
+      "category": "utilities",
+      "equivalent": null,
+      "example": "puts [get_version]",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "get_version",
+      "notes": "",
+      "options": [],
+      "summary": "Return the InFormal version string",
+      "usage": "get_version"
+    },
+    {
+      "category": "utilities",
+      "equivalent": null,
+      "example": "echo Starting FPV run",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "echo",
+      "notes": "Suppressed in `informal shell --check` dry-run mode.",
+      "options": [],
+      "summary": "Print arguments separated by spaces to standard output",
+      "usage": "echo [word ...]"
+    },
+    {
+      "category": "utilities",
+      "equivalent": null,
+      "example": "set js [informal::session]",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "session",
+      "notes": "Useful for debugging scripts or driving external tooling.",
+      "options": [],
+      "summary": "Dump the complete FPV session state as pretty-printed JSON",
+      "usage": "session"
+    },
+    {
+      "category": "environment_and_cache",
+      "equivalent": "CLI: `informal lower --skip-initial-checks --isunknown-is-false`",
+      "example": "set_lowering isunknown_is_false on",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_lowering",
+      "notes": "Both switches default to `off` (decision D13: never guess silently). Changing a switch invalidates elaboration so the next `elaborate` or `prove` re-lowers.",
+      "options": [
+        {
+          "desc": "Omit time-0 checks in `initial` blocks instead of rejecting them",
+          "flag": "skip_initial_checks"
+        },
+        {
+          "desc": "Lower `$isunknown(x)` as constant `0` (2-state) instead of rejecting it",
+          "flag": "isunknown_is_false"
+        }
+      ],
+      "summary": "Toggle opt-in SystemVerilog lowering relaxations",
+      "usage": "set_lowering [skip_initial_checks|isunknown_is_false [on|off]]"
+    },
+    {
+      "category": "environment_and_cache",
+      "equivalent": null,
+      "example": "check_assumptions -depth 20 -conflict -dead_end",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "check_assumptions",
+      "notes": "With `-dead_end`, returns `alive` or `dead_end at step ...`; with `-conflict`, returns a list of conflicting assumptions; otherwise returns the allowed trace depth. Automatically run before `prove` when vacuity checking is on.",
+      "options": [
+        {
+          "desc": "Unrolling depth for environment consistency check (default 20)",
+          "flag": "-depth N"
+        },
+        {
+          "desc": "Compute a minimal conflicting subset of assumptions when overconstrained",
+          "flag": "-conflict"
+        },
+        {
+          "desc": "Run 2QBF trap-state check detecting reachable states with no legal next input",
+          "flag": "-dead_end"
+        }
+      ],
+      "summary": "Check assumption satisfiability, UNSAT conflict cores, and 2QBF dead-end trap states",
+      "usage": "check_assumptions [-depth N] [-conflict] [-dead_end]"
+    },
+    {
+      "category": "environment_and_cache",
+      "equivalent": "JG: `elaborate -no_preconditions`",
+      "example": "set_vacuity on",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_vacuity",
+      "notes": "On by default. Call with no arguments to query current state.",
+      "options": [
+        {
+          "desc": "Enable environment consistency (depth 20) and precondition vacuity covers",
+          "flag": "on"
+        },
+        {
+          "desc": "Disable automatic vacuity checks during `prove`",
+          "flag": "off"
+        }
+      ],
+      "summary": "Enable or disable automatic environment and precondition vacuity checks",
+      "usage": "set_vacuity [on|off]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "JG: `set_engine_mode`",
+      "example": "set_engines informal-bmc informal-kind informal-ic3",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_engines",
+      "notes": "Pass an empty list to re-enable all configured engines. Unknown engine names are rejected with the available list.",
+      "options": [],
+      "summary": "Restrict the proof portfolio to named engines",
+      "usage": "set_engines [engine_name ...]"
+    },
+    {
+      "category": "environment_and_cache",
+      "equivalent": null,
+      "example": "set_prove_cache on",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_prove_cache",
+      "notes": "Keys are computed from the exact lowered Btor2 model (design + active assumptions + cut points + property).",
+      "options": [
+        {
+          "desc": "Enable caching of proven and unreachable verdicts",
+          "flag": "on"
+        },
+        {
+          "desc": "Disable proof cache lookup and writes",
+          "flag": "off"
+        }
+      ],
+      "summary": "Enable or disable the content-addressed SHA-256 proof cache",
+      "usage": "set_prove_cache [on|off]"
+    },
+    {
+      "category": "environment_and_cache",
+      "equivalent": null,
+      "example": "set_prove_cache_path .informal_cache",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_prove_cache_path",
+      "notes": "Share across CI runs to skip re-proving unchanged properties.",
+      "options": [],
+      "summary": "Get or set the proof cache directory path",
+      "usage": "set_prove_cache_path [dir]"
+    },
+    {
+      "category": "environment_and_cache",
+      "equivalent": null,
+      "example": "set_prove_cache_mode read_write",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_prove_cache_mode",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Read hits and store new proofs (default)",
+          "flag": "read_write"
+        },
+        {
+          "desc": "Reuse cached verdicts without writing new entries",
+          "flag": "read_only"
+        },
+        {
+          "desc": "Always re-prove and refresh cache entries",
+          "flag": "write_only"
+        }
+      ],
+      "summary": "Set proof cache read/write policy",
+      "usage": "set_prove_cache_mode [read_write|read_only|write_only]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "JasperGold Connectivity App (`check_conn`)",
+      "example": "check_conn -load conn.csv\ncheck_conn -prove\ncheck_conn -report",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent",
+        "-generate_candidates",
+        "-validate"
+      ],
+      "name": "check_conn",
+      "notes": "Supports `CONNECTION,name,src,dst`, `CONDITION,name,cond`, and `LATENCY,name,cycles` CSV directives.",
+      "options": [
+        {
+          "desc": "Load OpenTitan/JasperGold CONNECTION/CONDITION/LATENCY CSV into task",
+          "flag": "-load <csv>"
+        },
+        {
+          "desc": "Prove all loaded connectivity assertions",
+          "flag": "-prove"
+        },
+        {
+          "desc": "Print connectivity verification summary (use `-file F [-force]` to save)",
+          "flag": "-report"
+        },
+        {
+          "desc": "List loaded connectivity rules",
+          "flag": "-list"
+        },
+        {
+          "desc": "Target task name (default `Connectivity`)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Per-property time limit",
+          "flag": "-time_limit <dur>"
+        },
+        {
+          "desc": "Clear loaded connectivity rules",
+          "flag": "-clear"
+        },
+        {
+          "desc": "Initialize connectivity app state",
+          "flag": "-init"
+        },
+        {
+          "desc": "Write report to file (with `-force` to overwrite)",
+          "flag": "-file <F>"
+        }
+      ],
+      "summary": "Formal Connectivity App: verify pin-to-pin / muxed / pipelined CSV connectivity maps",
+      "usage": "check_conn (-load <csv> | -prove | -report | -list | -clear | -init | -validate) [options]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "JasperGold Coverage App (`check_cov`)",
+      "example": "check_cov -init -model {coi branch toggle}\ncheck_cov -measure\ncheck_cov -report",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent",
+        "-no_return",
+        "-view",
+        "-exclude_bind_hierarchies",
+        "-enable_prove_based_proof_core"
+      ],
+      "name": "check_cov",
+      "notes": "Proves unreachable branches/toggles (UNR) and reports Cone-of-Influence observability.",
+      "options": [
+        {
+          "desc": "Initialize coverage models (`-model {coi branch toggle functional}`)",
+          "flag": "-init"
+        },
+        {
+          "desc": "Coverage models to track: `coi`, `branch`, `toggle`, `functional`",
+          "flag": "-model <list>"
+        },
+        {
+          "desc": "Run formal reachability/COI measurement on active cover items",
+          "flag": "-measure"
+        },
+        {
+          "desc": "Print coverage summary (`-html -report_file F -force` for HTML report)",
+          "flag": "-report"
+        },
+        {
+          "desc": "Manage waivers (`-add|-remove|-list`, `-type`, `-instance`, `-comment`, `-cid`)",
+          "flag": "-waiver"
+        },
+        {
+          "desc": "Restrict measurement or reporting to specific task(s)",
+          "flag": "-task <T> / -tasks <L>"
+        },
+        {
+          "desc": "Time limit per UNR check",
+          "flag": "-time_limit <dur>"
+        },
+        {
+          "desc": "Reset coverage state",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "Formal Coverage & UNR App: COI observability, branch/toggle dead-code detection, and waivers",
+      "usage": "check_cov (-init | -measure | -report | -waiver | -clear) [options]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "JasperGold X-Prop App (`check_xprop`)",
+      "example": "check_xprop -init -targets {outputs} -prove\ncheck_xprop -report",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent"
+      ],
+      "name": "check_xprop",
+      "notes": "Uses exact 2-copy self-composition (avoiding false mux X-pessimism).",
+      "options": [
+        {
+          "desc": "Generate X-propagation targets (`-targets {outputs|flops|all}`, `-x_source`)",
+          "flag": "-init"
+        },
+        {
+          "desc": "Observation targets: `outputs`, `flops`, `all`, or explicit signal list",
+          "flag": "-targets <list>"
+        },
+        {
+          "desc": "X injection sources: reset-less flops, X literals, undriven nets",
+          "flag": "-x_source / -source <list>"
+        },
+        {
+          "desc": "Explicit target signals to check for X reachability",
+          "flag": "-to <signals>"
+        },
+        {
+          "desc": "Prove all generated X-propagation checks",
+          "flag": "-prove"
+        },
+        {
+          "desc": "Print X-prop summary (`-file F [-force]`)",
+          "flag": "-report"
+        },
+        {
+          "desc": "Add/remove/list X-prop waivers (`-add -instance <sig> -comment <text>`)",
+          "flag": "-waiver"
+        },
+        {
+          "desc": "Target task name (default `XProp`)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Per-property time limit",
+          "flag": "-time_limit <dur>"
+        },
+        {
+          "desc": "Clear X-prop state",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "Exact 2-copy self-composition Formal X-Propagation App",
+      "usage": "check_xprop (-init | -prove | -report | -list | -waiver | -clear) [options]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "JasperGold SPV App (`check_spv`)",
+      "example": "check_spv -create -name iso_key -from secret_key -to debug_o -cond {!dbg_en}\ncheck_spv -prove\ncheck_spv -report",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent"
+      ],
+      "name": "check_spv",
+      "notes": "Detects both direct combinational and multi-cycle covert storage leaks via 2-copy miter.",
+      "options": [
+        {
+          "desc": "Define a taint/isolation check (`-name N -from S -to O [-cond C]`)",
+          "flag": "-create"
+        },
+        {
+          "desc": "Property name for the security path check",
+          "flag": "-name <N>"
+        },
+        {
+          "desc": "Sensitive source signal (e.g., key register or port)",
+          "flag": "-from <sig>"
+        },
+        {
+          "desc": "Observable sink signal (e.g., public or debug output)",
+          "flag": "-to <sig>"
+        },
+        {
+          "desc": "Optional guard condition under which isolation must hold",
+          "flag": "-cond / -precond <expr>"
+        },
+        {
+          "desc": "Prove all defined SPV checks",
+          "flag": "-prove"
+        },
+        {
+          "desc": "Print SPV results (`-file F [-force]`)",
+          "flag": "-report"
+        },
+        {
+          "desc": "List defined SPV checks",
+          "flag": "-list"
+        },
+        {
+          "desc": "Target task name (default `SPV`)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Per-property time limit",
+          "flag": "-time_limit <dur>"
+        },
+        {
+          "desc": "Clear SPV checks",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "Formal Security Path Verification (SPV) App: 2-safety non-interference and taint flow",
+      "usage": "check_spv (-create | -prove | -report | -list | -clear) [options]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "JasperGold SEC App (`check_sec`)",
+      "example": "check_sec -setup -spec spec.sv -imp imp.sv -clock clk -reset {!rst_n} -prove\ncheck_sec -report",
+      "flavor": "common",
+      "ignored_options": [
+        "-auto"
+      ],
+      "name": "check_sec",
+      "notes": "Generates side-by-side `spec`/`imp` mismatch VCD traces on non-equivalence.",
+      "options": [
+        {
+          "desc": "Configure spec vs. implementation designs (`-spec`, `-imp`, `-clock`, `-reset`)",
+          "flag": "-setup"
+        },
+        {
+          "desc": "Reference specification RTL file(s) (`-spec_top`, `-spec_param`, `-spec_define`, `-spec_incdir`)",
+          "flag": "-spec / -spec_files <F>"
+        },
+        {
+          "desc": "Implementation RTL file(s) (`-imp_top`, `-imp_param`, `-imp_define`, `-imp_incdir`)",
+          "flag": "-imp / -imp_files <F>"
+        },
+        {
+          "desc": "Run combinational keypoint equivalence mode (match state/outputs directly)",
+          "flag": "-lec"
+        },
+        {
+          "desc": "Retiming pipeline latency offset (`imp` delayed by N cycles relative to `spec`)",
+          "flag": "-latency <N>"
+        },
+        {
+          "desc": "Clock and reset expression for sequential equivalence",
+          "flag": "-clock <clk> / -reset <expr>"
+        },
+        {
+          "desc": "Explicitly map `-input`, `-output`, `-state`, or `-output_latency` pairs, or add `-assume`",
+          "flag": "-map"
+        },
+        {
+          "desc": "Prove equivalence across all mapped outputs",
+          "flag": "-prove"
+        },
+        {
+          "desc": "Print SEC/LEC report (`-json`, `-file F [-force]`)",
+          "flag": "-report"
+        },
+        {
+          "desc": "Target task name (default `SEC`)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Per-output time limit",
+          "flag": "-time_limit <dur>"
+        },
+        {
+          "desc": "Clear SEC setup",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "Formal Sequential (SEC) and Combinational (LEC) Equivalence Checking App",
+      "usage": "check_sec (-setup | -map | -prove | -report | -list | -clear) [options]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "JasperGold CSR App (`check_csr`)",
+      "example": "check_csr -load regs.hjson -prove\ncheck_csr -report",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent"
+      ],
+      "name": "check_csr",
+      "notes": "Auto-infers standard bus port names (`addr`, `we`, `re`, `wdata`, `rdata`) unless overridden.",
+      "options": [
+        {
+          "desc": "Load register spec (`.hjson`, `.csv`, or `uvm_reg_block` `.sv`) and generate checks",
+          "flag": "-load <file>"
+        },
+        {
+          "desc": "Signal prefix for bus ports (`-addr`, `-we`, `-re`, `-wdata`, `-rdata`, `-read_latency`)",
+          "flag": "-prefix <P>"
+        },
+        {
+          "desc": "Prove all generated CSR reset, access (`RW`/`RO`/`W1C`/`W1S`/`W0C`/`WO`/`RC`), `regwen`, and non-aliasing checks",
+          "flag": "-prove"
+        },
+        {
+          "desc": "Print CSR verification summary (`-json`, `-file F [-force]`)",
+          "flag": "-report"
+        },
+        {
+          "desc": "List generated CSR checks",
+          "flag": "-list"
+        },
+        {
+          "desc": "Target task name (default `CSR`)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Per-property time limit",
+          "flag": "-time_limit <dur>"
+        },
+        {
+          "desc": "Clear CSR app state",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "Formal CSR / RAL Verification App from OpenTitan HJSON, CSV, or UVM RAL `.sv`",
+      "usage": "check_csr (-load <spec> | -prove | -report | -list | -clear) [options]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "JasperGold ABVIP / VC Formal FVIP",
+      "example": "check_protocol -create -protocol apb -role slave -prove\ncheck_protocol -report",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent"
+      ],
+      "name": "check_protocol",
+      "notes": "Generates both protocol safety assertions and legal bus master/slave environment assumptions matched to `-role`.",
+      "options": [
+        {
+          "desc": "Instantiate protocol assertions/assumptions (`-protocol`, `-role`, `-prefix`, `-map`)",
+          "flag": "-create"
+        },
+        {
+          "desc": "Protocol standard: `apb`, `axi4lite`, or `tlul`",
+          "flag": "-protocol <name>"
+        },
+        {
+          "desc": "DUT role: `slave` (assert responses, assume requests), `master`, or `monitor`",
+          "flag": "-role <role>"
+        },
+        {
+          "desc": "Optional signal name prefix on the top module",
+          "flag": "-prefix <P>"
+        },
+        {
+          "desc": "Explicit port overrides `{proto_sig dut_sig ...}`",
+          "flag": "-map <pairs>"
+        },
+        {
+          "desc": "Instance label for generated protocol properties",
+          "flag": "-name <N>"
+        },
+        {
+          "desc": "Prove all generated protocol properties",
+          "flag": "-prove"
+        },
+        {
+          "desc": "Print protocol verification report (`-json`, `-file F [-force]`)",
+          "flag": "-report"
+        },
+        {
+          "desc": "List generated protocol checks",
+          "flag": "-list"
+        },
+        {
+          "desc": "Target task name (default `Protocol`)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Per-property time limit",
+          "flag": "-time_limit <dur>"
+        },
+        {
+          "desc": "Clear protocol app state",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "1-command Formal Bus Protocol VIP Generator (`tlul`, `axi4lite`, `apb`)",
+      "usage": "check_protocol (-create | -prove | -report | -list | -clear) [options]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "JasperGold Visualize QuietTrace / VC Formal RCA",
+      "example": "why_cex -property a_never9",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "why_cex",
+      "notes": "Walks backward from failure cycle T to 0, pruning untaken mux arms and non-controlling logic operands.",
+      "options": [
+        {
+          "desc": "Failing assertion or covered witness property name",
+          "flag": "-property <P>"
+        },
+        {
+          "desc": "Limit reported causal events",
+          "flag": "-max_events <N>"
+        },
+        {
+          "desc": "Emit structured JSON causal slice",
+          "flag": "-json"
+        }
+      ],
+      "summary": "Compute a dynamic backward causal root-cause slice of a CEX or cover trace",
+      "usage": "why_cex [-property P] [-max_events N] [-json] [property_name]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "JasperGold Proof Profiling / Complexity Analyzer",
+      "example": "get_fv_complexity -property a_fifo_order",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "get_fv_complexity",
+      "notes": "Highlights wide counters, multipliers, and unpacked arrays that stall bit-level IC3/k-induction.",
+      "options": [
+        {
+          "desc": "Restrict complexity analysis to one property's COI",
+          "flag": "-property <P>"
+        },
+        {
+          "desc": "Target task (default current task)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Return structured JSON breakdown",
+          "flag": "-json"
+        }
+      ],
+      "summary": "Analyze cone-of-influence state bits, memories, and wide-arithmetic proof hotspots",
+      "usage": "get_fv_complexity [-property P] [-task T] [-json]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "JasperGold Complexity Manager",
+      "example": "blackbox_assistant -threshold_bits 128",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "blackbox_assistant",
+      "notes": "Run before `prove` or when `get_fv_complexity` flags deep arithmetic/storage blocks.",
+      "options": [
+        {
+          "desc": "Minimum flop/memory bit threshold to flag a candidate",
+          "flag": "-threshold_bits <N>"
+        },
+        {
+          "desc": "Automatically add recommended modules to the blackbox list",
+          "flag": "-apply"
+        },
+        {
+          "desc": "Return recommendations as JSON",
+          "flag": "-json"
+        }
+      ],
+      "summary": "Recommend or apply complexity-driven black-boxing of heavy submodules",
+      "usage": "blackbox_assistant [-threshold_bits N] [-apply] [-json]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "Alias: `report_fv_setup`",
+      "example": "check_fv_setup -verbose",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "check_fv_setup",
+      "notes": "Run right after `elaborate`, `clock`, and `reset` to catch missing resets or undriven internal nets early.",
+      "options": [
+        {
+          "desc": "Include detailed signal lists for each finding",
+          "flag": "-verbose"
+        },
+        {
+          "desc": "Emit audit report as JSON",
+          "flag": "-json"
+        },
+        {
+          "desc": "Write setup report to file (`-force` to overwrite)",
+          "flag": "-file <F>"
+        }
+      ],
+      "summary": "Audit formal setup completeness (clocks, resets, reset-less flops, undriven nets, abstractions)",
+      "usage": "check_fv_setup [-verbose] [-json] [-file F [-force]]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "Alias: `check_fv_setup`",
+      "example": "report_fv_setup",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "report_fv_setup",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Include detailed signal lists",
+          "flag": "-verbose"
+        },
+        {
+          "desc": "Emit audit report as JSON",
+          "flag": "-json"
+        },
+        {
+          "desc": "Write setup report to file (`-force` to overwrite)",
+          "flag": "-file <F>"
+        }
+      ],
+      "summary": "Alias for `check_fv_setup`: report formal setup audit findings",
+      "usage": "report_fv_setup [-verbose] [-json] [-file F [-force]]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "JG: `reset -analyze_only`",
+      "example": "get_reset_info",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "get_reset_info",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Emit reset analysis as JSON",
+          "flag": "-json"
+        }
+      ],
+      "summary": "Report declared reset expression, async resets found, and reset-less registers",
+      "usage": "get_reset_info [-json]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "JasperGold `abstract -counter`",
+      "example": "abstract -counter timeout_cnt_q -threshold 1000",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "abstract",
+      "notes": "Sound over-approximation: a proof under counter abstraction implies the concrete design holds; spurious CEXs can be refined.",
+      "options": [
+        {
+          "desc": "Counter register signal to abstract",
+          "flag": "-counter <sig>"
+        },
+        {
+          "desc": "Fast-forward jump threshold (`K - 1`)",
+          "flag": "-threshold <K>"
+        },
+        {
+          "desc": "Optional initial/reset value hint",
+          "flag": "-init_value <V>"
+        },
+        {
+          "desc": "Apply abstraction to a specific task",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "List active abstractions",
+          "flag": "-list"
+        },
+        {
+          "desc": "Remove active abstractions",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "Apply sound over-approximate counter jump abstractions to accelerate deep proofs",
+      "usage": "abstract -counter <sig> [-threshold K] [-init_value V] [-task T] | abstract -list | abstract -clear"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "`abstract -list`",
+      "example": "report_abstractions",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "report_abstractions",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Emit active abstractions as JSON",
+          "flag": "-json"
+        }
+      ],
+      "summary": "List active formal abstractions and their parameters",
+      "usage": "report_abstractions [-json]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "`abstract -clear`",
+      "example": "set_abstractions -clear",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_abstractions",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Remove all active abstractions",
+          "flag": "-clear"
+        },
+        {
+          "desc": "Disable abstractions",
+          "flag": "-off"
+        }
+      ],
+      "summary": "Clear or disable active formal abstractions",
+      "usage": "set_abstractions (-clear | -off)"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "VCF: start a new session",
+      "example": "clear -all",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "clear",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Clear all design state, tasks, and properties",
+          "flag": "-all"
+        }
+      ],
+      "summary": "Reset the current session, clearing design files, elaboration, and properties",
+      "usage": "clear [-all]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "VCF: `analyze -format sverilog` or `read_file`",
+      "example": "analyze -sv12 +incdir+rtl +define+FORMAL rtl/counter.sv",
+      "flavor": "jg",
+      "ignored_options": [
+        "-lib",
+        "-L"
+      ],
+      "name": "analyze",
+      "notes": "VHDL (`-vhdl*`) is rejected with a clear error.",
+      "options": [
+        {
+          "desc": "Language standard flags (accepted; parsed as IEEE 1800-2023 SystemVerilog)",
+          "flag": "-sv / -sv12 / -sv17 ..."
+        },
+        {
+          "desc": "Mark module name(s) as source-less black boxes",
+          "flag": "-bbox_m <mods>"
+        },
+        {
+          "desc": "Clear previously analyzed files and black boxes",
+          "flag": "-clear"
+        },
+        {
+          "desc": "Read compile arguments and files from a VCS/Jasper filelist (`$VAR` expanded)",
+          "flag": "-f / -F <filelist>"
+        },
+        {
+          "desc": "Define preprocessor macro(s)",
+          "flag": "+define+K[=V] / -define / -D"
+        },
+        {
+          "desc": "Add `include` search directory",
+          "flag": "+incdir+D / -incdir"
+        }
+      ],
+      "summary": "Collect SystemVerilog source files, filelists, defines, and include paths",
+      "usage": "analyze [-sv|-sv09|-sv12|-sv17|-v2k|-verilog] [-clear] [-bbox_m {M ...}] [-f list] [+define+K=V] [+incdir+D] file ..."
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "VCF: `elaborate <top>` / `read_file -top <top>`",
+      "example": "elaborate -top fifo -parameter DEPTH 8 -create_related_covers {precondition witness}",
+      "flavor": "jg",
+      "ignored_options": [
+        "-loop_limit",
+        "-multiple_tops",
+        "-extract_covergroup",
+        "-x_value",
+        "-auto_hr_info"
+      ],
+      "name": "elaborate",
+      "notes": "Extracts all RTL concurrent and immediate assertions, assumptions, and covers into `<embedded>`.",
+      "options": [
+        {
+          "desc": "Top module name (inferred if omitted and unambiguous)",
+          "flag": "-top <module>"
+        },
+        {
+          "desc": "Override top-level parameter `P` with value `V` (repeatable)",
+          "flag": "-parameter / -param <P> <V>"
+        },
+        {
+          "desc": "Black-box module definition(s) (outputs become free inputs)",
+          "flag": "-bbox_m <mods>"
+        },
+        {
+          "desc": "Black-box specific instance hierarchy path(s)",
+          "flag": "-bbox_i <insts>"
+        },
+        {
+          "desc": "Auto-blackbox multipliers at or above `<bits>` width",
+          "flag": "-bbox_mul <bits>"
+        },
+        {
+          "desc": "Auto-blackbox unpacked arrays/memories at or above `<words>` depth",
+          "flag": "-bbox_a <words>"
+        },
+        {
+          "desc": "Disable automatic complexity black-boxing",
+          "flag": "-disable_auto_bbox"
+        },
+        {
+          "desc": "Skip automatic precondition vacuity covers",
+          "flag": "-no_preconditions"
+        },
+        {
+          "desc": "Enable `precondition` and/or `witness` covers",
+          "flag": "-create_related_covers <kinds>"
+        }
+      ],
+      "summary": "Elaborate the analyzed SystemVerilog design with `svlang`",
+      "usage": "elaborate [-top M] [-parameter P V] [-bbox_m {M ...}] [-bbox_i {inst ...}] [-bbox_mul W] [-bbox_a N] [-disable_auto_bbox] [-no_preconditions] [-create_related_covers {precondition witness}]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "VCF: `create_clock`",
+      "example": "clock clk",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "clock",
+      "notes": "Tcl's standard `clock seconds` / `clock format` subcommands are automatically forwarded to `::informal::tcl_clock`.",
+      "options": [
+        {
+          "desc": "Clock period multiplier relative to the primary clock",
+          "flag": "-factor <N>"
+        },
+        {
+          "desc": "Clock phase offset",
+          "flag": "-phase <P>"
+        },
+        {
+          "desc": "Accepted for compatibility (both edges handled by netlist)",
+          "flag": "-both_edges"
+        },
+        {
+          "desc": "Clear declared clocks",
+          "flag": "-clear"
+        },
+        {
+          "desc": "Mark design as combinational (no clock)",
+          "flag": "-none"
+        },
+        {
+          "desc": "Auto-infer clocks from elaborated sequential elements",
+          "flag": "-infer"
+        }
+      ],
+      "summary": "Declare primary or derived design clocks (or forward Tcl's built-in `clock`)",
+      "usage": "clock <sig> [-factor N] [-phase P] [-both_edges] | clock -clear | clock -none | clock -infer"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "VCF: `create_reset`",
+      "example": "reset -expression {!rst_n}",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "reset",
+      "notes": "Expression identifiers are checked against the elaborated top module.",
+      "options": [
+        {
+          "desc": "Active-high reset predicate (e.g., `{!rst_n}` for active-low reset)",
+          "flag": "-expression / -expr <expr>"
+        },
+        {
+          "desc": "Run without an explicit reset constraint",
+          "flag": "-none"
+        },
+        {
+          "desc": "Report reset structure without changing the session reset",
+          "flag": "-analyze_only"
+        },
+        {
+          "desc": "List registers without reset drivers",
+          "flag": "-non_resettable_regs"
+        }
+      ],
+      "summary": "Declare the formal reset condition held in cycle 0 and released thereafter",
+      "usage": "reset -expression {<expr>} | reset <expr> | reset -none | reset -analyze_only"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "VCF: `fvassert`, `fvdisable`, `fvenable`",
+      "example": "assert -name a_max {q <= 4'd9}\nassert -disable {a_debug_*}",
+      "flavor": "jg",
+      "ignored_options": [
+        "-severity",
+        "-tag",
+        "-from_property"
+      ],
+      "name": "assert",
+      "notes": "Identifiers are validated against top-module declarations immediately; unsupported SVA operators report cleanly on `prove`.",
+      "options": [
+        {
+          "desc": "Property name (auto-generated if omitted)",
+          "flag": "-name <N>"
+        },
+        {
+          "desc": "Target task (default current task)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Cap proof depth at `K` cycles (reports `bounded_proven` if unviolated)",
+          "flag": "-bound <K>"
+        },
+        {
+          "desc": "Treat this property as an environment `assume` instead of an assertion",
+          "flag": "-env"
+        },
+        {
+          "desc": "Toggle or delete matching properties (glob or `-regexp`)",
+          "flag": "-disable / -enable / -remove"
+        },
+        {
+          "desc": "Interpret selection pattern as a regular expression",
+          "flag": "-regexp"
+        }
+      ],
+      "summary": "Add, enable, disable, or remove SVA assertions in a task",
+      "usage": "assert [-name N] [-task T] [-bound K] [-env] {<sva_expr>} | assert (-disable|-enable|-remove) [-task T] [-regexp] <pattern ...>"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "VCF: `fvassume`",
+      "example": "assume -name m_no_ovf {!(full && push)}\nassume -from_assert a_helper_inv",
+      "flavor": "jg",
+      "ignored_options": [
+        "-severity",
+        "-tag",
+        "-from_property"
+      ],
+      "name": "assume",
+      "notes": "`-from_assert` never circularly assumes assertion P while proving P itself.",
+      "options": [
+        {
+          "desc": "Assumption name",
+          "flag": "-name <N>"
+        },
+        {
+          "desc": "Target task (default current task)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Promote helper assertion(s) into assumptions with provenance tracking",
+          "flag": "-from_assert <pat>"
+        },
+        {
+          "desc": "Toggle or delete matching assumptions (including RTL assumes per task)",
+          "flag": "-disable / -enable / -remove"
+        },
+        {
+          "desc": "Interpret pattern as a regular expression",
+          "flag": "-regexp"
+        }
+      ],
+      "summary": "Add environment assumptions, promote helper assertions, or toggle/remove assumptions",
+      "usage": "assume [-name N] [-task T] {<sva_expr>} | assume -from_assert <pat> [-name N] [-task T] [-regexp] | assume (-disable|-enable|-remove) [-task T] [-regexp] <pattern ...>"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "VCF: `fvcover`",
+      "example": "cover -name c_full {full ##1 pop}",
+      "flavor": "jg",
+      "ignored_options": [
+        "-severity",
+        "-tag",
+        "-from_property"
+      ],
+      "name": "cover",
+      "notes": "A witness trace proves reachability (`covered`); an unbounded safety proof means `unreachable`.",
+      "options": [
+        {
+          "desc": "Cover property name",
+          "flag": "-name <N>"
+        },
+        {
+          "desc": "Target task (default current task)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Cap search depth at `K` cycles",
+          "flag": "-bound <K>"
+        },
+        {
+          "desc": "Toggle or delete matching covers",
+          "flag": "-disable / -enable / -remove"
+        },
+        {
+          "desc": "Interpret selection pattern as a regular expression",
+          "flag": "-regexp"
+        }
+      ],
+      "summary": "Add, enable, disable, or remove SVA reachability cover properties",
+      "usage": "cover [-name N] [-task T] [-bound K] {<sva_expr>} | cover (-disable|-enable|-remove) [-task T] [-regexp] <pattern ...>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "VCF: `check_fv`",
+      "example": "prove -all\nprove -task Safety -time_limit 60s -with_proof_core",
+      "flavor": "jg",
+      "ignored_options": [
+        "-bg",
+        "-dump_trace",
+        "-orchestration",
+        "-sst"
+      ],
+      "name": "prove",
+      "notes": "Runs environment consistency check first (when vacuity is on) and precondition/witness covers after proven assertions.",
+      "options": [
+        {
+          "desc": "Prove all enabled properties in the current task",
+          "flag": "-all"
+        },
+        {
+          "desc": "Prove all enabled properties in task `T`",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Prove only the named property or properties",
+          "flag": "-property <list>"
+        },
+        {
+          "desc": "Override per-property timeout (e.g. `30s`, `5m`, `1h`)",
+          "flag": "-time_limit / -per_property_time_limit <D>"
+        },
+        {
+          "desc": "Bound BMC/safety proofs to `K` cycles (`bounded_proven`)",
+          "flag": "-bound <K>"
+        },
+        {
+          "desc": "Extract minimal needed assumptions and state support for proven assertions",
+          "flag": "-with_proof_core"
+        },
+        {
+          "desc": "Temporarily map Jasper engine letters (`Ht`, `Hp`, `B`, `N`)",
+          "flag": "-engine_mode <modes>"
+        }
+      ],
+      "summary": "Run the engine portfolio on properties or tasks and print a verdict table",
+      "usage": "prove [-all] [-task T] [-property {P ...}] [-time_limit D] [-bound K] [-with_proof_core]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "VCF: `get_props`",
+      "example": "get_property_list -include {type assert status cex}",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "get_property_list",
+      "notes": "Returns a Tcl list of matching property names.",
+      "options": [
+        {
+          "desc": "Restrict to properties in task `T`",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Key/value filter pairs (`type`, `status`, `name`, `disabled`, `task`)",
+          "flag": "-include <pairs>"
+        },
+        {
+          "desc": "Key/value exclusion pairs",
+          "flag": "-exclude <pairs>"
+        },
+        {
+          "desc": "Treat `name` filter values as regular expressions",
+          "flag": "-regexp"
+        }
+      ],
+      "summary": "Query property names filtered by type, status, task, name, or disabled flag",
+      "usage": "get_property_list [-task T] [-include {k v ...}] [-exclude {k v ...}] [-regexp]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set st [get_status a_max]",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "get_status",
+      "notes": "Returns one of `proven`, `bounded_proven`, `cex`, `covered`, `unreachable`, `undetermined`, `error`, or `unprocessed`.",
+      "options": [],
+      "summary": "Return the verification status string of a single property",
+      "usage": "get_status <property_name>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "VCF: `set_fml_var fml_max_time`",
+      "example": "set_prove_time_limit 5m",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_prove_time_limit",
+      "notes": "Accepts durations with `ms`, `s`, `m`, `h`, or `d` suffixes.",
+      "options": [],
+      "summary": "Set the session default per-property proof time limit",
+      "usage": "set_prove_time_limit <duration>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "VCF: `set_fml_var fml_max_time`",
+      "example": "set_prove_per_property_time_limit 30s",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_prove_per_property_time_limit",
+      "notes": "",
+      "options": [],
+      "summary": "Set the per-property proof time limit (alias for `set_prove_time_limit`)",
+      "usage": "set_prove_per_property_time_limit <duration>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "Common: `set_engines`",
+      "example": "set_engine_mode {Ht B}",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_engine_mode",
+      "notes": "Maps `Ht`/`Hp` -> IC3/PDR, `B` -> BMC, `N` -> portfolio and prints the selected engines.",
+      "options": [],
+      "summary": "Map JasperGold engine mode letters (`Ht`, `Hp`, `B`, `N`, ...) to InFormal engines",
+      "usage": "set_engine_mode {<mode> ...}"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "VCF: `report_fv`",
+      "example": "report -csv -file results.csv -force",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "report",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Restrict report to task `T`",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Print property verdict table (default)",
+          "flag": "-summary / -results"
+        },
+        {
+          "desc": "Print detailed per-property engine, depth, vacuity, and memory metrics",
+          "flag": "-detail"
+        },
+        {
+          "desc": "Print design structure and lowered model sizes (`get_design_info`)",
+          "flag": "-design"
+        },
+        {
+          "desc": "Limit `-detail` output to one property",
+          "flag": "-property <P>"
+        },
+        {
+          "desc": "Format table as CSV",
+          "flag": "-csv"
+        },
+        {
+          "desc": "Write output to file (`-force` overwrites existing file)",
+          "flag": "-file <F>"
+        }
+      ],
+      "summary": "Print or export property tables, CSV summaries, design info, or per-property details",
+      "usage": "report [-task T] [-summary|-results|-detail|-design] [-property P] [-csv] [-file F [-force]]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": "JG: `report -design`",
+      "example": "get_design_info\nget_design_info -list memory",
+      "flavor": "jg",
+      "ignored_options": [
+        "-silent",
+        "-verbosity"
+      ],
+      "name": "get_design_info",
+      "notes": "Reports exact counts from `svlang` netlist plus the current task's Btor2 and AIG sizes.",
+      "options": [
+        {
+          "desc": "Return structured JSON design metrics",
+          "flag": "-json"
+        },
+        {
+          "desc": "Return Tcl list of `instance`, `memory`, `clock`, or `reset` names",
+          "flag": "-list <kind>"
+        },
+        {
+          "desc": "Filter `-list` output by glob (or `-regexp`)",
+          "flag": "-filter <pat>"
+        },
+        {
+          "desc": "Interpret `-filter` pattern as regular expression",
+          "flag": "-regexp"
+        }
+      ],
+      "summary": "Inspect elaborated design counts (flops, latches, memories, clocks) and model sizes",
+      "usage": "get_design_info [-json] [-list instance|memory|clock|reset [-filter P [-regexp]]]"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": null,
+      "example": "get_property_info a_max -cone",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "get_property_info",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Look up property in task `T`",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Return structured JSON",
+          "flag": "-json"
+        },
+        {
+          "desc": "Include inputs and registers in the property's cone of influence",
+          "flag": "-cone"
+        },
+        {
+          "desc": "Include minimal needed assumptions/state support (requires `prove -with_proof_core`)",
+          "flag": "-proof_core"
+        }
+      ],
+      "summary": "Inspect one property's status, engine stats, COI cone, or minimal proof core",
+      "usage": "get_property_info <property> [-task T] [-json] [-cone] [-proof_core]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "puts [get_stats]",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "get_stats",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Restrict statistics to task `T`",
+          "flag": "-task <T>"
+        }
+      ],
+      "summary": "Return per-property proof statistics (engine, wall/CPU time, depth, peak memory) as JSON",
+      "usage": "get_stats [-task T]"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "VCF: `snip_driver`",
+      "example": "stopat -task FreeFsm u_alu.mul_res",
+      "flavor": "jg",
+      "ignored_options": [
+        "-env"
+      ],
+      "name": "stopat",
+      "notes": "Cut points are task-scoped: cutting a signal in task `T` leaves it driven in `<embedded>` and other tasks.",
+      "options": [
+        {
+          "desc": "Apply cut points to task `T` (default current task)",
+          "flag": "-task <T>"
+        },
+        {
+          "desc": "Remove listed cut points, or all cut points in the task",
+          "flag": "-clear"
+        },
+        {
+          "desc": "Return active cut points as a Tcl list",
+          "flag": "-list"
+        }
+      ],
+      "summary": "Cut signals from their RTL drivers so they become unconstrained free inputs in a task",
+      "usage": "stopat [-task T] <sig ...> | stopat -clear [-task T] [sig ...] | stopat -list [-task T]"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `get_task_list`",
+      "example": "task -create FastPath -copy {a_fast_*} -copy_assumes -set",
+      "flavor": "jg",
+      "ignored_options": [
+        "-copy_ratings",
+        "-copy_abstractions",
+        "-copy_related_covers",
+        "-copy_proof_settings"
+      ],
+      "name": "task",
+      "notes": "Call `task` with no arguments to return the current task name. Each task is lowered and proved independently.",
+      "options": [
+        {
+          "desc": "Create task `T` (optionally with `-set` and copy flags)",
+          "flag": "-create <T>"
+        },
+        {
+          "desc": "Copy additional properties or cut points into existing task `T`",
+          "flag": "-edit <T>"
+        },
+        {
+          "desc": "Make `T` the current active task",
+          "flag": "-set <T>"
+        },
+        {
+          "desc": "Delete task `T` (cannot delete `<embedded>`)",
+          "flag": "-delete <T>"
+        },
+        {
+          "desc": "Return Tcl list of task names (`<embedded>` first)",
+          "flag": "-list"
+        },
+        {
+          "desc": "Copy source task (default current task)",
+          "flag": "-source_task <S>"
+        },
+        {
+          "desc": "Copy properties matching glob(s) or `-regexp`",
+          "flag": "-copy <pats>"
+        },
+        {
+          "desc": "Copy all properties of the specified kind",
+          "flag": "-copy_asserts / -copy_assumes / -copy_covers"
+        },
+        {
+          "desc": "Copy cut points, or copy all properties and cut points",
+          "flag": "-copy_stopats / -copy_all"
+        }
+      ],
+      "summary": "Create, edit, switch, list, or delete isolated formal verification tasks",
+      "usage": "task [-create T|-edit T|-set T|-delete T|-list] [-source_task S] [-copy {pat}] [-copy_asserts] [-copy_assumes] [-copy_covers] [-copy_stopats] [-copy_all] [-regexp]"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `task -list`",
+      "example": "get_task_list",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "get_task_list",
+      "notes": "",
+      "options": [],
+      "summary": "Return the Tcl list of all tasks in the session",
+      "usage": "get_task_list"
+    },
+    {
+      "category": "debug_and_complexity",
+      "equivalent": null,
+      "example": "visualize -violation -property a_never9",
+      "flavor": "jg",
+      "ignored_options": [
+        "-bg",
+        "-window",
+        "-new_window",
+        "-min_length",
+        "-max_length"
+      ],
+      "name": "visualize",
+      "notes": "If `$INFORMAL_WAVE_VIEWER` (e.g., `surfer` or `gtkwave`) is set, spawns the viewer on the VCD file.",
+      "options": [
+        {
+          "desc": "Open the counterexample trace for a failing assertion",
+          "flag": "-violation"
+        },
+        {
+          "desc": "Open the witness trace for a covered property",
+          "flag": "-cover"
+        },
+        {
+          "desc": "Property name",
+          "flag": "-property <P>"
+        },
+        {
+          "desc": "Task holding the property",
+          "flag": "-task <T>"
+        }
+      ],
+      "summary": "Return the VCD trace path for a CEX or cover and optionally launch `$INFORMAL_WAVE_VIEWER`",
+      "usage": "visualize (-violation|-cover) -property <P> [-task T]"
+    },
+    {
+      "category": "utilities",
+      "equivalent": "Standard Tcl: `source`",
+      "example": "include common_env.tcl",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "include",
+      "notes": "Followed recursively by `informal shell --check`.",
+      "options": [],
+      "summary": "Source another Tcl file in the global scope (JasperGold alias for `source`)",
+      "usage": "include <file.tcl>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_proofgrid_per_engine_max_jobs 4",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_proofgrid_per_engine_max_jobs",
+      "notes": "Accepted so existing JasperGold setup scripts run unmodified.",
+      "options": [],
+      "summary": "Vendor proof-grid tuning command (accepted and ignored with a note)",
+      "usage": "set_proofgrid_per_engine_max_jobs <N>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_proofgrid_per_engine_max_local_jobs 4",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_proofgrid_per_engine_max_local_jobs",
+      "notes": "Accepted so existing JasperGold setup scripts run unmodified.",
+      "options": [],
+      "summary": "Vendor proof-grid tuning command (accepted and ignored with a note)",
+      "usage": "set_proofgrid_per_engine_max_local_jobs <N>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_proofgrid_max_local_jobs 8",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_proofgrid_max_local_jobs",
+      "notes": "Accepted so existing JasperGold setup scripts run unmodified.",
+      "options": [],
+      "summary": "Vendor proof-grid tuning command (accepted and ignored with a note)",
+      "usage": "set_proofgrid_max_local_jobs <N>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_proofgrid_max_jobs 8",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_proofgrid_max_jobs",
+      "notes": "Accepted so existing JasperGold setup scripts run unmodified.",
+      "options": [],
+      "summary": "Vendor proof-grid tuning command (accepted and ignored with a note)",
+      "usage": "set_proofgrid_max_jobs <N>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_proofgrid_mode local",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_proofgrid_mode",
+      "notes": "Accepted so existing JasperGold setup scripts run unmodified.",
+      "options": [],
+      "summary": "Vendor proof-grid mode command (accepted and ignored with a note)",
+      "usage": "set_proofgrid_mode <mode>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": null,
+      "example": "set_max_trace_length 200",
+      "flavor": "jg",
+      "ignored_options": [],
+      "name": "set_max_trace_length",
+      "notes": "Use `prove -bound K` or `assert -bound K` to bound proof depth.",
+      "options": [],
+      "summary": "Vendor trace length hint (accepted and ignored with a note)",
+      "usage": "set_max_trace_length <N>"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "JG: `elaborate -bbox_m / -bbox_i`",
+      "example": "set_blackbox -designs {sram_1rw}",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "set_blackbox",
+      "notes": "Takes effect at the next `elaborate` or `read_file`.",
+      "options": [
+        {
+          "desc": "Black-box module definitions",
+          "flag": "-designs <mods>"
+        },
+        {
+          "desc": "Black-box specific instance paths",
+          "flag": "-cells <paths>"
+        },
+        {
+          "desc": "Clear existing black boxes",
+          "flag": "-clear"
+        }
+      ],
+      "summary": "Mark modules or cell instances as black boxes before elaboration",
+      "usage": "set_blackbox [-designs {M ...}] [-cells {path ...}] [-clear]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": null,
+      "example": "set_fml_appmode FPV",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "set_fml_appmode",
+      "notes": "Currently accepts `FPV`; for Formal Apps (`check_cov`, `check_csr`, etc.) call the `check_*` commands directly.",
+      "options": [],
+      "summary": "Select VC Formal application mode (`FPV`)",
+      "usage": "set_fml_appmode [FPV]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "JG: `set_prove_time_limit`",
+      "example": "set_fml_var fml_max_time 10m",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "set_fml_var",
+      "notes": "Unknown vendor tuning variables are accepted and ignored with a note.",
+      "options": [
+        {
+          "desc": "Per-property time limit (e.g. `1H`, `300s`)",
+          "flag": "fml_max_time"
+        }
+      ],
+      "summary": "Set VC Formal session variable (supports `fml_max_time`)",
+      "usage": "set_fml_var <name> <value>"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "JG: `analyze` + `elaborate`",
+      "example": "read_file -top counter -format sverilog -sva -vcs {counter.sv}",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-cov",
+        "-inject_fault",
+        "-work"
+      ],
+      "name": "read_file",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Top module to elaborate",
+          "flag": "-top <module>"
+        },
+        {
+          "desc": "Source language (`sverilog` or `verilog`)",
+          "flag": "-format <fmt>"
+        },
+        {
+          "desc": "Enable SystemVerilog Assertions",
+          "flag": "-sva"
+        },
+        {
+          "desc": "VCS-style filelist, files, `+define+`, and `+incdir+` arguments",
+          "flag": "-vcs <words>"
+        },
+        {
+          "desc": "Macro definitions",
+          "flag": "-define <defs>"
+        },
+        {
+          "desc": "Top-level parameter overrides",
+          "flag": "-parameters <params>"
+        }
+      ],
+      "summary": "Analyze and elaborate SystemVerilog sources in one command",
+      "usage": "read_file -top <M> [-format sverilog] [-sva] [-vcs {args}] [-define {K=V}] [-parameters {P=V}]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "JG: `analyze -sv12`",
+      "example": "analyze -format sverilog -vcs {+incdir+rtl rtl/counter.sv}",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-library",
+        "-work"
+      ],
+      "name": "analyze",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Source language (`sverilog` or `verilog`)",
+          "flag": "-format <fmt>"
+        },
+        {
+          "desc": "VCS-style compile flags and files",
+          "flag": "-vcs <words>"
+        },
+        {
+          "desc": "Preprocessor definitions",
+          "flag": "-define <defs>"
+        }
+      ],
+      "summary": "Analyze SystemVerilog source files in VC Formal style",
+      "usage": "analyze [-format sverilog] [-vcs {args}] [-define {K=V}] [file ...]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "JG: `elaborate -top`",
+      "example": "elaborate counter -sva",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-cov",
+        "-library",
+        "-work"
+      ],
+      "name": "elaborate",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Enable SystemVerilog Assertions",
+          "flag": "-sva"
+        },
+        {
+          "desc": "Parameter overrides",
+          "flag": "-parameters <params>"
+        },
+        {
+          "desc": "Additional VCS flags (including `-pvalue+P=V`)",
+          "flag": "-vcs <words>"
+        }
+      ],
+      "summary": "Elaborate the analyzed top module in VC Formal style",
+      "usage": "elaborate [<top>] [-sva] [-parameters {P=V}] [-vcs {args}]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "JG: `clock`",
+      "example": "create_clock clk -period 100",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-initial"
+      ],
+      "name": "create_clock",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Clock period (used for relative clock ratios)",
+          "flag": "-period <N>"
+        },
+        {
+          "desc": "Optional clock label",
+          "flag": "-name <N>"
+        }
+      ],
+      "summary": "Declare a design clock signal in VC Formal style",
+      "usage": "create_clock <sig> [-period N] [-name N] [-initial V]"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `stopat`",
+      "example": "snip_driver u_core.stall",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "snip_driver",
+      "notes": "",
+      "options": [],
+      "summary": "Cut signals from their RTL drivers (VC Formal equivalent of `stopat`)",
+      "usage": "snip_driver <sig ...>"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "JG: `reset -expression`",
+      "example": "create_reset rst_n -sense low",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "create_reset",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Reset polarity (`high` -> `sig`, `low` -> `!sig`)",
+          "flag": "-sense high|low"
+        },
+        {
+          "desc": "Shorthand polarity flags",
+          "flag": "-high / -low"
+        },
+        {
+          "desc": "Optional reset label",
+          "flag": "-name <N>"
+        }
+      ],
+      "summary": "Declare the active-high or active-low formal reset signal",
+      "usage": "create_reset <sig> (-sense high|low | -high | -low) [-name N]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "Handled automatically by `reset`",
+      "example": "sim_run -stable",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-stable"
+      ],
+      "name": "sim_run",
+      "notes": "Accepted so VC Formal scripts run unmodified.",
+      "options": [],
+      "summary": "Accept VC Formal reset simulation directive (reset is modeled natively)",
+      "usage": "sim_run [-stable]"
+    },
+    {
+      "category": "design_setup",
+      "equivalent": "Handled automatically by `reset`",
+      "example": "sim_save_reset",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "sim_save_reset",
+      "notes": "Accepted so VC Formal scripts run unmodified.",
+      "options": [],
+      "summary": "Accept VC Formal save-reset directive (reset is modeled natively)",
+      "usage": "sim_save_reset"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `assert -name`",
+      "example": "fvassert a_max -expr {q <= 4'd9}",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-type",
+        "-usage"
+      ],
+      "name": "fvassert",
+      "notes": "",
+      "options": [
+        {
+          "desc": "SystemVerilog assertion expression",
+          "flag": "-expr <sva>"
+        }
+      ],
+      "summary": "Add an SVA assertion in VC Formal style",
+      "usage": "fvassert <name> -expr {<sva_expr>}"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `assume`",
+      "example": "fvassume m_en -expr {en == 1'b1}",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-type",
+        "-usage"
+      ],
+      "name": "fvassume",
+      "notes": "",
+      "options": [
+        {
+          "desc": "SystemVerilog assumption expression",
+          "flag": "-expr <sva>"
+        },
+        {
+          "desc": "Promote helper assertion(s) into assumptions",
+          "flag": "-from_assert <pat>"
+        },
+        {
+          "desc": "Optional name override when promoting",
+          "flag": "-name <N>"
+        }
+      ],
+      "summary": "Add an SVA assumption or promote a helper assertion in VC Formal style",
+      "usage": "fvassume <name> -expr {<sva_expr>} | fvassume -from_assert <pat> [-name N]"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `cover -name`",
+      "example": "fvcover c_done -expr {done}",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-type",
+        "-usage"
+      ],
+      "name": "fvcover",
+      "notes": "",
+      "options": [
+        {
+          "desc": "SystemVerilog cover sequence/expression",
+          "flag": "-expr <sva>"
+        }
+      ],
+      "summary": "Add an SVA cover property in VC Formal style",
+      "usage": "fvcover <name> -expr {<sva_expr>}"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `assert -disable`",
+      "example": "fvdisable a_slow_*",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "fvdisable",
+      "notes": "",
+      "options": [],
+      "summary": "Disable properties matching a glob pattern",
+      "usage": "fvdisable <pattern ...>"
+    },
+    {
+      "category": "properties_and_tasks",
+      "equivalent": "JG: `assert -enable`",
+      "example": "fvenable a_slow_*",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "fvenable",
+      "notes": "",
+      "options": [],
+      "summary": "Re-enable previously disabled properties matching a glob pattern",
+      "usage": "fvenable <pattern ...>"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "JG: `prove`",
+      "example": "check_fv -block",
+      "flavor": "vcf",
+      "ignored_options": [
+        "-block",
+        "-break",
+        "-run_finish"
+      ],
+      "name": "check_fv",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Prove only the specified property names",
+          "flag": "-property <list>"
+        }
+      ],
+      "summary": "Run the engine portfolio on VC Formal properties",
+      "usage": "check_fv [-property {P ...}]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "JG: `report`",
+      "example": "report_fv -list",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "report_fv",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Print property table",
+          "flag": "-list"
+        },
+        {
+          "desc": "Print detailed engine and vacuity statistics",
+          "flag": "-verbose"
+        },
+        {
+          "desc": "Restrict verbose output to one property",
+          "flag": "-property <P>"
+        }
+      ],
+      "summary": "Print verification results table in VC Formal style",
+      "usage": "report_fv [-list] [-verbose] [-property P]"
+    },
+    {
+      "category": "proving_and_engines",
+      "equivalent": "JG: `get_property_list`",
+      "example": "get_props -type assert -status proven",
+      "flavor": "vcf",
+      "ignored_options": [],
+      "name": "get_props",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Filter by `assert`, `assume`, or `cover`",
+          "flag": "-type <kind>"
+        },
+        {
+          "desc": "Filter by proof status (e.g. `proven`, `cex`, `covered`)",
+          "flag": "-status <status>"
+        }
+      ],
+      "summary": "Return Tcl list of properties filtered by type and status",
+      "usage": "get_props [-type assert|assume|cover] [-status S]"
+    }
+  ],
+  "version": "0.1.0"
+}

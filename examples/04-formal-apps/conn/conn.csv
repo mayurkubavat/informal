@@ -1,0 +1,9 @@
+# OpenTitan / JasperGold-style connectivity specification
+CONNECTION, mux_conn, soc_top.u_src, sig_o, soc_top.u_mux_dst, sig_i
+CONDITION, , scan_en, 1'b1, 1'b0
+CONDITION, soc_top, mode, 2'b01, 2'b10
+
+CONNECTION, pipe_conn, u_src, sig_o, u_pipe_dst, sig_i
+LATENCY, 1, 1
+
+CONNECTION, bad_conn, u_src, sig_o, u_bad_dst, sig_i

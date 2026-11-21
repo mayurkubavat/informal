@@ -16,11 +16,12 @@ use crate::session::{
     glob, parse_duration, qualify, Clock, Kind, Session, SourceLoc, Status, EMBEDDED,
 };
 use informal_tcl::{Interp, TclError, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 pub mod check;
+pub mod help;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flavor {
@@ -80,12 +81,14 @@ pub struct Shell {
     pub interp: Interp,
     pub session: Shared,
     pub flavor: Flavor,
+    active_flavor: Rc<Cell<Flavor>>,
 }
 
 impl Shell {
     pub fn new(session: Session, flavor: Flavor) -> Self {
         let interp = Interp::new();
         let session = Rc::new(RefCell::new(session));
+        let active_flavor = Rc::new(Cell::new(flavor));
         // Tcl's own `clock` is kept as `::informal::tcl_clock`; jg's `clock`
         // forwards Tcl subcommands (`clock seconds`) to it.
         interp
@@ -117,6 +120,25 @@ impl Shell {
             bind("jg", name, *f);
             bind("vcf", name, *f);
         }
+        for ns in ["informal", "jg", "vcf"] {
+            let s = session.clone();
+            let af = active_flavor.clone();
+            interp.register(
+                &format!("::{ns}::help"),
+                Box::new(move |args| {
+                    let sess = s.try_borrow().map_err(|_| "session busy".to_string())?;
+                    let r = help::eval_help(args, af.get()).map(Value::Str);
+                    if !sess.dry_run {
+                        return r;
+                    }
+                    check::used("help", r.is_ok());
+                    r.or_else(|e| {
+                        check::finding(check::Kind::Error, "help", &e);
+                        Ok(Value::Str(String::new()))
+                    })
+                }),
+            );
+        }
         for (name, f) in JG {
             bind("jg", name, *f);
         }
@@ -142,6 +164,7 @@ namespace eval ::vcf { namespace export * }
             interp,
             session,
             flavor,
+            active_flavor,
         };
         shell.activate(flavor);
         shell
@@ -149,12 +172,13 @@ namespace eval ::vcf { namespace export * }
 
     /// Import a flavor's commands at global level (the other's go away).
     pub fn activate(&self, flavor: Flavor) {
+        self.active_flavor.set(flavor);
         let names: Vec<&str> = COMMON
             .iter()
             .map(|c| c.0)
             .chain(JG.iter().map(|c| c.0))
             .chain(VCF.iter().map(|c| c.0))
-            .chain(["include", "clock"])
+            .chain(["include", "clock", "help"])
             .collect();
         for n in names {
             // Only remove global commands we imported (never Tcl builtins).
@@ -1591,7 +1615,7 @@ fn check_conn(s: &mut Session, a: &[String]) -> Result<Value, String> {
         }
         return Ok(().into());
     }
-    if a.flag("-init") && !s.dry_run {
+    if a.flag("-init") {
         crate::conn::ensure_conn_task(s, task_name)?;
     }
     for files in a.all("-load") {
@@ -1603,6 +1627,7 @@ fn check_conn(s: &mut Session, a: &[String]) -> Result<Value, String> {
             _ => p,
         };
         if s.dry_run {
+            crate::conn::ensure_conn_task(s, task_name)?;
             continue;
         }
         crate::conn::load_csv_into_session(s, &resolved, task_name)?;
@@ -2128,6 +2153,9 @@ fn why_cex(s: &mut Session, a: &[String]) -> Result<Value, String> {
             .map_err(|_| format!("why_cex: bad -max_events '{v}'"))?,
         None => 64,
     };
+    if s.dry_run {
+        return Ok(().into());
+    }
     let rep = crate::why_cex::slice_property_cex(s, prop, max_events)?;
     if a.flag("-json") {
         let js = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
@@ -3566,5 +3594,72 @@ mod tests {
                 ("FAST".to_string(), None)
             ]
         );
+    }
+
+    #[test]
+    fn help_catalog_matches_all_registered_commands() {
+        use std::collections::BTreeSet;
+        let expected: BTreeSet<(help::DocFlavor, &str)> = COMMON
+            .iter()
+            .map(|(n, _)| (help::DocFlavor::Common, *n))
+            .chain(std::iter::once((help::DocFlavor::Common, "help")))
+            .chain(JG.iter().map(|(n, _)| {
+                let name = if *n == "clock_cmd" { "clock" } else { *n };
+                (help::DocFlavor::Jg, name)
+            }))
+            .chain(std::iter::once((help::DocFlavor::Jg, "include")))
+            .chain(VCF.iter().map(|(n, _)| (help::DocFlavor::Vcf, *n)))
+            .collect();
+        let documented: BTreeSet<(help::DocFlavor, &str)> = help::all_docs()
+            .iter()
+            .map(|d| (d.flavor, d.name))
+            .collect();
+        let missing: Vec<_> = expected.difference(&documented).collect();
+        let extra: Vec<_> = documented.difference(&expected).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "help catalog drift: missing={missing:?}, extra={extra:?}"
+        );
+        assert_eq!(
+            help::all_docs().len(),
+            documented.len(),
+            "duplicate (flavor, name) entry in COMMAND_DOCS"
+        );
+    }
+
+    #[test]
+    fn interactive_help_lists_and_describes_commands() {
+        let jg = shell(Flavor::Jg);
+        let summary = jg.eval("help").unwrap();
+        assert!(summary.contains("active flavor: jg"), "{summary}");
+        assert!(summary.contains("prove"), "{summary}");
+        assert!(summary.contains("check_protocol"), "{summary}");
+        let apps = jg.eval("help -apps").unwrap();
+        assert!(
+            apps.contains("check_csr") && !apps.contains("get_version"),
+            "{apps}"
+        );
+        let detail = jg.eval("help prove").unwrap();
+        assert!(
+            detail.contains("-with_proof_core") && detail.contains("check_fv"),
+            "{detail}"
+        );
+        let jg_an = jg.eval("help analyze").unwrap();
+        assert!(jg_an.contains("analyze [jg]"), "{jg_an}");
+        let vcf_an = jg.eval("help vcf::analyze").unwrap();
+        assert!(vcf_an.contains("analyze [vcf]"), "{vcf_an}");
+        let js: serde_json::Value = serde_json::from_str(&jg.eval("help -json").unwrap()).unwrap();
+        assert_eq!(js.as_array().unwrap().len(), help::all_docs().len());
+        let err = jg.eval("help no_such_cmd").unwrap_err();
+        assert!(err.message.contains("unknown command"), "{}", err.message);
+
+        let vcf = shell(Flavor::Vcf);
+        let vcf_sum = vcf.eval("help").unwrap();
+        assert!(
+            vcf_sum.contains("active flavor: vcf") && vcf_sum.contains("check_fv"),
+            "{vcf_sum}"
+        );
+        let vcf_a = vcf.eval("help analyze").unwrap();
+        assert!(vcf_a.contains("analyze [vcf]"), "{vcf_a}");
     }
 }

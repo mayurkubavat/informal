@@ -168,6 +168,8 @@ if [ "$fast" = 1 ]; then
         *) echo "selected: $affected"
            cargo nextest run --locked --workspace --profile fast -E "$affected" ;;
     esac
+    step "docs (links & mkdocs nav)"
+    python3 -I scripts/check_docs.py
     step "ui: tsc"
     (cd ui && npx --no-install tsc --noEmit)
     exit 0
@@ -194,6 +196,16 @@ if [ "$replay" = 2 ] && [ "$strict" = 0 ]; then
     echo "skipped: no BtorSim"
 elif [ "$replay" != 0 ]; then
     exit 1
+fi
+
+step "docs (links, mkdocs nav, docgen --check)"
+python3 -I scripts/check_docs.py --bin target/debug/informal
+
+step "examples (hands-on labs)"
+if [ "$strict" = 1 ]; then
+    python3 -I scripts/test_examples.py --bin target/debug/informal
+else
+    python3 -I scripts/test_examples.py --bin target/debug/informal --check-only
 fi
 
 # Every proof and counterexample of the in-house engines on tests/models,

@@ -1,0 +1,101 @@
+site_name: InFormal Documentation
+site_description: Open-source IEEE 1800 SystemVerilog formal verification tool, Formal Apps, JasperGold/VC Formal Tcl shell, workbench, and MCP server
+repo_url: https://github.com/mayurkubavat/informal
+repo_name: mayurkubavat/informal
+docs_dir: docs
+site_dir: site
+
+hooks:
+  - scripts/mkdocs_hooks.py
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+nav:
+  - Overview: README.md
+  - User Guide:
+      - Getting Started: guide/getting-started.md
+      - FPV Methodology: guide/fpv-methodology.md
+      - Debugging Counterexamples: guide/debugging-cex.md
+      - Convergence & Engines: guide/convergence-and-engines.md
+      - Formal Apps: guide/formal-apps.md
+      - Certificates & Signoff: guide/certificates-and-signoff.md
+      - Desktop Workbench UI: guide/workbench-ui.md
+  - Tool Integration:
+      - Vendor Tcl Migration: integration/vendor-migration.md
+      - CI & Batch Flows: integration/ci-and-batch.md
+      - Engine & LLM Configuration: integration/engines-config.md
+      - AI & MCP Integration: integration/ai-and-mcp.md
+  - Command Reference:
+      - CLI Reference: reference/cli.md
+      - Tcl Command Reference: reference/tcl-commands.md
+      - JG / VCF Crosswalk: reference/jg-vcf-crosswalk.md
+      - SVA & Lowering Support: reference/sva-support.md
+      - MCP Tools & Prompts: reference/mcp-tools.md
+      - Formal Spec Schema: reference/spec-schema.md
+  - Hands-On Labs:
+      - Curriculum Index: examples/README.md
+      - "01 — Quickstart Counter": examples/01-quickstart/counter/README.md
+      - "02 — FPV Fundamentals (FIFO)": examples/02-fpv-fundamentals/fifo/README.md
+      - "03 — Convergence & Abstractions": examples/03-convergence/deep_counter/README.md
+      - "04 — Formal Apps":
+          - Overview: examples/04-formal-apps/README.md
+          - Coverage & UNR: examples/04-formal-apps/cov/README.md
+          - Connectivity: examples/04-formal-apps/conn/README.md
+          - X-Propagation: examples/04-formal-apps/xprop/README.md
+          - Security Path (SPV): examples/04-formal-apps/spv/README.md
+          - Equivalence (SEC / LEC): examples/04-formal-apps/sec/README.md
+          - CSR / RAL: examples/04-formal-apps/csr/README.md
+          - Bus Protocol VIP: examples/04-formal-apps/protocol/README.md
+      - "05 — CI, Certificates & Signoff": examples/05-integration-and-signoff/signoff-spec/README.md
+  - Deep Dives & Internals:
+      - FPV Shell Deep Dive: fpv-shell.md
+      - AI Interface Architecture: ai-interface.md
+      - Engines Architecture: engines.md
+      - Vacuity Analysis: vacuity.md
+      - Independent Certificates: certificates.md
+      - Third-Party Solvers: third-party.md
+      - Design Decisions: decisions.md
+      - IC3 Research Log: ic3-research.md
+      - Engine Comparisons: compare.md
+      - Vendor Script Tally: vendor-script-tally.md
+      - Literature Notes: literature-2026-11.md
+      - Research Prompt Decisions: research-prompt-decisions.md
+      - UI Internals (Ask Mode): ui/ask-mode.md
+      - UI Internals (Progress Contract): ui/stop-progress.md
+      - UI Internals (Trace Format): ui/trace-format.md
+      - UI Internals (Testing): ui/testing.md
+      - UI Internals (EDA GUI References): ui/eda-gui-references.md

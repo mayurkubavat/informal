@@ -1,0 +1,36 @@
+# InFormal
+
+> Open-source IEEE 1800 SystemVerilog formal property verification (FPV) tool, Formal Apps suite (`check_cov`, `check_conn`, `check_xprop`, `check_spv`, `check_sec`, `check_csr`, `check_protocol`), JasperGold/VC Formal Tcl shell, desktop workbench, and verifier-gated Model Context Protocol (MCP) server.
+
+## Start Here
+
+- [README](README.md): Overview, capabilities, quick start, and build instructions
+- [Documentation Portal](docs/README.md): 4-book EDA documentation index (User Guide, Integration Guide, Command Reference, Labs)
+- [Hands-On Labs](examples/README.md): Runnable, gate-tested RTL + Tcl + spec examples from beginner to expert
+
+## User Guide
+
+- [Getting Started](docs/guide/getting-started.md): Installation, optional solvers (CaDiCaL, Bitwuzla, rIC3, ABC), and first proof
+- [FPV Methodology](docs/guide/fpv-methodology.md): Clocks, reset, SVA properties, tasks, vacuity, dead-end checks, and helper assertions
+- [Debugging Counterexamples](docs/guide/debugging-cex.md): `why_cex`, waveforms, schematics, source overlays, and `SV-FPV` formal lint
+- [Convergence & Engines](docs/guide/convergence-and-engines.md): Portfolio engines, `get_fv_complexity`, `blackbox_assistant`, `stopat`, `abstract -counter`, and proof cache
+- [Formal Apps](docs/guide/formal-apps.md): Coverage/UNR, Connectivity, X-Prop, Security Path (SPV), SEC/LEC, CSR/RAL, and Bus Protocol VIP
+- [Certificates & Signoff](docs/guide/certificates-and-signoff.md): Independent AIGER/Certifaiger proof checking and `fvp.spec.json` signoff gates
+- [Desktop Workbench UI](docs/guide/workbench-ui.md): Tauri + React workbench layouts, cross-probing, Proposals, and Ask mode
+
+## Tool Integration
+
+- [Vendor Tcl Migration](docs/integration/vendor-migration.md): Running JasperGold and VC Formal scripts with `informal shell --check`
+- [CI & Batch Flows](docs/integration/ci-and-batch.md): Exit codes, CSV/JSON reports, proof cache in CI, memory limits, and `--isolate`
+- [Engine & LLM Configuration](docs/integration/engines-config.md): `config/engines.toml`, `config/llm.toml`, and `INFORMAL_*` environment variables
+- [AI & MCP Integration](docs/integration/ai-and-mcp.md): `informal mcp`, Antigravity/Claude/Cursor setup, live `--connect`, MCP Prompts, and CEGIS loop
+
+## Auto-Generated Reference Manuals
+
+- [CLI Reference](docs/reference/cli.md): Every `informal` subcommand, flag, exit code, and environment variable
+- [Tcl Command Reference](docs/reference/tcl-commands.md): All 75 Tcl commands (`common`, `jg`, `vcf`) matching interactive `help`
+- [JG <-> VCF Crosswalk](docs/reference/jg-vcf-crosswalk.md): Side-by-side JasperGold and VC Formal command map
+- [SVA & Lowering Support](docs/reference/sva-support.md): Supported IEEE 1800 SVA operators, liveness, and explicit lowering rejections
+- [MCP Tools & Prompts Reference](docs/reference/mcp-tools.md): All 48 MCP tools, 4 prompts, and `informal.error/1` Poka-Yoke schema
+- [Formal Spec Schema](docs/reference/spec-schema.md): `fvp.spec.json` (`informal.spec/1`) contract for `spec_audit`
+- [Machine-Readable Catalog (JSON)](docs/reference/index.json): Complete CLI, Tcl, MCP tool, and prompt metadata

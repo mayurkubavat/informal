@@ -83,3 +83,6 @@ __pycache__/
 
 # Local third-party tool builds (scripts/tools.sh)
 /tools/
+
+# Built documentation site (mkdocs build)
+/site/
