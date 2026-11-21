@@ -59,7 +59,7 @@ Optionally symlink `target/release/informal` onto your `PATH` (for example `~/.l
 
 ## 3. Run Your First Formal Proof
 
-Run the quickstart counter lab (see [examples/01-quickstart/counter/README.md](../../examples/01-quickstart/counter/README.md)):
+Run the quickstart counter lab (see [Lab 01 — Quickstart Counter](../labs/01-quickstart.md)):
 
 ```sh
 target/release/informal shell examples/01-quickstart/counter/run.jg.tcl
@@ -117,5 +117,5 @@ For packaging `InFormal.app` and configuring Ask mode or live AI control (`infor
 ## Next Steps
 
 - Learn sound FPV methodology: [FPV Methodology](fpv-methodology.md)
-- Work through the hands-on labs: [examples/README.md](../../examples/README.md)
+- Work through the hands-on labs: [Hands-On Labs](../labs/README.md)
 - Look up any command: [CLI Reference](../reference/cli.md) · [Tcl Command Reference](../reference/tcl-commands.md)

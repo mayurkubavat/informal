@@ -6,7 +6,7 @@ Welcome to the InFormal documentation set. Like commercial formal verification s
 
 ## Choose Your Path
 
-- **New to InFormal or FPV?** Start with [Getting Started](guide/getting-started.md) and run the [Hands-On Labs](../examples/README.md) (`01-quickstart` → `02-fpv-fundamentals`).
+- **New to InFormal or FPV?** Start with [Getting Started](guide/getting-started.md) and run the [Hands-On Labs](labs/README.md) (`01-quickstart` → `02-fpv-fundamentals`).
 - **Migrating existing JasperGold / VC Formal flows?** Jump to [Vendor Tcl Migration](integration/vendor-migration.md) and the [JG ↔ VCF Command Crosswalk](reference/jg-vcf-crosswalk.md).
 - **Scaling proofs or running Formal Apps?** Read [Convergence & Engines](guide/convergence-and-engines.md) and [Formal Apps](guide/formal-apps.md).
 - **Wiring CI or AI coding agents?** See [CI & Batch Flows](integration/ci-and-batch.md) and [AI & MCP Integration](integration/ai-and-mcp.md).
@@ -60,13 +60,13 @@ Auto-generated directly from `informal-cli`, `informal-fpv`, and `informal-mcp` 
 
 ## Book 4 — Hands-On Labs (`examples/`)
 
-Self-contained, gate-tested RTL + Tcl + spec designs in [examples/README.md](../examples/README.md):
+Self-contained, gate-tested RTL + Tcl + spec designs documented in [Hands-On Labs](labs/README.md) (source under `examples/`):
 
-1. **[01-quickstart](../examples/01-quickstart/counter/README.md)** — Counter proof, CEX, cover, unreachable cover (both JasperGold & VC Formal scripts)
-2. **[02-fpv-fundamentals](../examples/02-fpv-fundamentals/fifo/README.md)** — Synchronous FIFO: SVA temporal checks, witness covers, vacuity, `check_assumptions -dead_end`, `why_cex`, tasks
-3. **[03-convergence](../examples/03-convergence/deep_counter/README.md)** — Wide watchdog & multiplier: `get_fv_complexity`, `blackbox_assistant`, `stopat`, `abstract -counter`, `assume -from_assert`, proof cache
-4. **[04-formal-apps](../examples/04-formal-apps/README.md)** — Seven dedicated mini-labs (`cov`, `conn`, `xprop`, `spv`, `sec`, `csr`, `protocol`)
-5. **[05-integration-and-signoff](../examples/05-integration-and-signoff/signoff-spec/README.md)** — `fvp.spec.json`, `Makefile` CI gating, `shell --check`, independent `--certificate` verification
+1. **[01 — Quickstart Counter](labs/01-quickstart.md)** — Counter proof, CEX, cover, unreachable cover (both JasperGold & VC Formal scripts)
+2. **[02 — FPV Fundamentals (FIFO)](labs/02-fpv-fundamentals.md)** — Synchronous FIFO: SVA temporal checks, witness covers, vacuity, `check_assumptions -dead_end`, `why_cex`, tasks
+3. **[03 — Convergence & Abstractions](labs/03-convergence.md)** — Wide watchdog & multiplier: `get_fv_complexity`, `blackbox_assistant`, `stopat`, `abstract -counter`, `assume -from_assert`, proof cache
+4. **[04 — Formal Apps Suite](labs/04-formal-apps.md)** — Seven dedicated mini-labs (`cov`, `conn`, `xprop`, `spv`, `sec`, `csr`, `protocol`)
+5. **[05 — CI, Certificates & Signoff](labs/05-integration-and-signoff.md)** — `fvp.spec.json`, `Makefile` CI gating, `shell --check`, independent `--certificate` verification
 
 ---
 
@@ -76,4 +76,4 @@ Existing design specifications, research notes, and developer references kept at
 
 - **Core subsystem deep dives:** [FPV Shell](fpv-shell.md) · [AI Interface](ai-interface.md) · [Engines](engines.md) · [Vacuity](vacuity.md) · [Certificates](certificates.md) · [Third-Party Tools](third-party.md)
 - **Desktop UI internals:** [Ask Mode](ui/ask-mode.md) · [Stop & Progress Contract](ui/stop-progress.md) · [Trace Format](ui/trace-format.md) · [UI Testing](ui/testing.md) · [EDA GUI References](ui/eda-gui-references.md)
-- **Architecture & research logs:** [Design Decisions](decisions.md) · [IC3 Research](ic3-research.md) · [Engine Comparisons](compare.md) · [Vendor Script Tally](vendor-script-tally.md) · [Literature Notes](literature-2026-11.md) · [Contributing](../CONTRIBUTING.md)
+- **Architecture & research logs:** [Design Decisions](decisions.md) · [IC3 Research](ic3-research.md) · [Engine Comparisons](compare.md) · [Vendor Script Tally](vendor-script-tally.md) · [Literature Notes](literature-2026-11.md) · [Research Prompt Decisions](research-prompt-decisions.md) · [Contributing](https://github.com/mayurkubavat/informal/blob/main/CONTRIBUTING.md)

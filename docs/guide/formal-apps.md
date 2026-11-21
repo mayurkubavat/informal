@@ -4,13 +4,13 @@ InFormal ships **seven built-in Formal Apps** accessible in both JasperGold (`jg
 
 | App | Tcl / MCP Command | Purpose | Runnable Lab |
 | --- | --- | --- | --- |
-| **Coverage & UNR** | `check_cov` | COI observability, branch/toggle dead-code (UNR), waivers, HTML reports | [04-formal-apps/cov](../../examples/04-formal-apps/cov/README.md) |
-| **Connectivity** | `check_conn` | Pin-to-pin, muxed (`CONDITION`), and pipelined (`LATENCY`) CSV checks | [04-formal-apps/conn](../../examples/04-formal-apps/conn/README.md) |
-| **X-Propagation** | `check_xprop` | Exact 2-copy self-composition X-reachability (no mux X-pessimism) | [04-formal-apps/xprop](../../examples/04-formal-apps/xprop/README.md) |
-| **Security Path (SPV)** | `check_spv` | 2-safety non-interference catching direct & multi-cycle covert leaks | [04-formal-apps/spv](../../examples/04-formal-apps/spv/README.md) |
-| **Equivalence (SEC / LEC)** | `check_sec` | Sequential, pipelined (`-latency N`), and combinational (`-lec`) checks | [04-formal-apps/sec](../../examples/04-formal-apps/sec/README.md) |
-| **CSR / RAL** | `check_csr` | Auto-generated register checks from OpenTitan HJSON, CSV, or UVM RAL `.sv` | [04-formal-apps/csr](../../examples/04-formal-apps/csr/README.md) |
-| **Bus Protocol VIP** | `check_protocol` | 1-command formal assertions & assumptions for APB, AXI4-Lite, and TL-UL | [04-formal-apps/protocol](../../examples/04-formal-apps/protocol/README.md) |
+| **Coverage & UNR** | `check_cov` | COI observability, branch/toggle dead-code (UNR), waivers, HTML reports | `examples/04-formal-apps/cov/` |
+| **Connectivity** | `check_conn` | Pin-to-pin, muxed (`CONDITION`), and pipelined (`LATENCY`) CSV checks | `examples/04-formal-apps/conn/` |
+| **X-Propagation** | `check_xprop` | Exact 2-copy self-composition X-reachability (no mux X-pessimism) | `examples/04-formal-apps/xprop/` |
+| **Security Path (SPV)** | `check_spv` | 2-safety non-interference catching direct & multi-cycle covert leaks | `examples/04-formal-apps/spv/` |
+| **Equivalence (SEC / LEC)** | `check_sec` | Sequential, pipelined (`-latency N`), and combinational (`-lec`) checks | `examples/04-formal-apps/sec/` |
+| **CSR / RAL** | `check_csr` | Auto-generated register checks from OpenTitan HJSON, CSV, or UVM RAL `.sv` | `examples/04-formal-apps/csr/` |
+| **Bus Protocol VIP** | `check_protocol` | 1-command formal assertions & assumptions for APB, AXI4-Lite, and TL-UL | `examples/04-formal-apps/protocol/` |
 
 ---
 
@@ -138,4 +138,4 @@ Use `-prefix <P>` or `-map {proto_sig dut_sig ...}` when port names differ from 
 
 - Exact options for every `check_*` command: [Tcl Command Reference](../reference/tcl-commands.md#formal-apps)
 - MCP JSON schemas for driving Formal Apps via AI: [MCP Tools Reference](../reference/mcp-tools.md)
-- Complete runnable mini-labs: [examples/04-formal-apps/README.md](../../examples/04-formal-apps/README.md)
+- Complete runnable mini-labs: [Lab 04 — Formal Apps Suite](../labs/04-formal-apps.md)

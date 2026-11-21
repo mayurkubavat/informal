@@ -116,7 +116,7 @@ This reveals unnecessary assumptions that can be removed — tightening the veri
 
 ## Related Guides & Labs
 
-- Hands-on FIFO lab: [examples/02-fpv-fundamentals/fifo/README.md](../../examples/02-fpv-fundamentals/fifo/README.md)
+- Hands-on FIFO lab: [Lab 02 — FPV Fundamentals](../labs/02-fpv-fundamentals.md)
 - Triaging CEXs: [Debugging Counterexamples](debugging-cex.md)
 - Closing `undetermined` proofs: [Convergence & Engines](convergence-and-engines.md)
 - Supported SVA syntax: [SVA & Lowering Reference](../reference/sva-support.md)

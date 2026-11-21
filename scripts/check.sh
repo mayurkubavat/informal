@@ -168,7 +168,7 @@ if [ "$fast" = 1 ]; then
         *) echo "selected: $affected"
            cargo nextest run --locked --workspace --profile fast -E "$affected" ;;
     esac
-    step "docs (links & mkdocs nav)"
+    step "docs (links & zensical)"
     python3 -I scripts/check_docs.py
     step "ui: tsc"
     (cd ui && npx --no-install tsc --noEmit)
@@ -198,7 +198,7 @@ elif [ "$replay" != 0 ]; then
     exit 1
 fi
 
-step "docs (links, mkdocs nav, docgen --check)"
+step "docs (links, zensical --strict, docgen --check)"
 python3 -I scripts/check_docs.py --bin target/debug/informal
 
 step "examples (hands-on labs)"

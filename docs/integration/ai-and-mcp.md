@@ -8,9 +8,9 @@ InFormal provides a **verifier-gated Model Context Protocol (MCP)** interface (`
 
 ### Option A — Antigravity Plugin (Bundled)
 
-This repository ships a ready-to-install Antigravity plugin under [`plugin/`](../../plugin/README.md) containing:
+This repository ships a ready-to-install Antigravity plugin under [`plugin/`](https://github.com/mayurkubavat/informal/blob/main/plugin/README.md) containing:
 - `mcp_config.json` and `bin/informal-mcp-launcher.sh` (auto-connects to a running `InFormal.app` socket, or falls back to a standalone stdio server with `--root "${INFORMAL_ROOT:-$HOME}"`)
-- Progressive-disclosure expert skills in [`plugin/skills/informal-fpv/SKILL.md`](../../plugin/skills/informal-fpv/SKILL.md) plus deep playbooks (`cex-triage-playbook.md`, `convergence-playbook.md`, `spec-to-sva-guide.md`)
+- Progressive-disclosure expert skills in [`plugin/skills/informal-fpv/SKILL.md`](https://github.com/mayurkubavat/informal/blob/main/plugin/skills/informal-fpv/SKILL.md) plus deep playbooks (`cex-triage-playbook.md`, `convergence-playbook.md`, `spec-to-sva-guide.md`)
 - Embedded interactive MCP App workbench (`open_workbench`)
 
 ### Option B — Generic MCP Client (Claude Code, Cursor, Codex, Custom)

@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Verify InFormal documentation integrity:
 1. Zero broken relative file links across README.md, llms.txt, docs/**/*.md, examples/**/*.md.
-2. Every file listed under `nav:` in mkdocs.yml exists under docs/.
+2. Every page listed in `zensical.toml` `nav` exists under `docs/`.
 3. Optional `--bin <informal>` runs `informal docgen --check` to verify zero drift
    in generated reference manuals (`docs/reference/*` and `llms.txt`).
+4. When `zensical` is installed, runs `zensical build --clean --strict` in an
+   isolated temporary directory to verify zero site build warnings or broken links.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -57,7 +59,6 @@ def check_links() -> list[str]:
                 raw = match.group(1).strip()
                 if not raw or raw.startswith(SKIP_PREFIXES):
                     continue
-                # Strip optional title (`path "title"`) and `#anchor`
                 target = raw.split()[0].split("#", 1)[0]
                 if not target:
                     continue
@@ -68,51 +69,57 @@ def check_links() -> list[str]:
     return errors
 
 
-def check_mkdocs_nav() -> list[str]:
-    mkdocs = REPO / "mkdocs.yml"
-    if not mkdocs.exists():
-        return ["mkdocs.yml is missing"]
+def _walk_nav(node: object, out: list[str]) -> None:
+    if isinstance(node, str):
+        out.append(node)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_nav(item, out)
+    elif isinstance(node, dict):
+        for val in node.values():
+            _walk_nav(val, out)
+
+
+def check_zensical_nav() -> list[str]:
+    cfg_path = REPO / "zensical.toml"
+    if not cfg_path.exists():
+        return ["zensical.toml is missing"]
+    cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+    project = cfg.get("project", {})
+    docs_dir = REPO / project.get("docs_dir", "docs")
+    paths: list[str] = []
+    _walk_nav(project.get("nav", []), paths)
     errors: list[str] = []
-    in_nav = False
-    for lineno, line in enumerate(mkdocs.read_text(encoding="utf-8").splitlines(), 1):
-        if line.startswith("nav:"):
-            in_nav = True
-            continue
-        if in_nav and line and not line[0].isspace():
-            in_nav = False
-        if not in_nav:
-            continue
-        m = re.search(r":\s+([A-Za-z0-9_./-]+\.md)\s*$", line)
-        if m:
-            rel = m.group(1)
-            target = (REPO / rel) if rel.startswith("examples/") else (REPO / "docs" / rel)
-            if not target.exists():
-                errors.append(f"mkdocs.yml:{lineno}: missing nav target `{rel}`")
+    for rel in paths:
+        if not (docs_dir / rel).exists():
+            errors.append(f"zensical.toml: missing nav target `{docs_dir.name}/{rel}`")
     return errors
 
 
-def find_mkdocs() -> Path | None:
-    found = shutil.which("mkdocs")
+def find_zensical() -> Path | None:
+    found = shutil.which("zensical")
     if found:
         return Path(found)
-    candidate = Path.home() / ".local" / "bin" / "mkdocs"
+    candidate = Path.home() / ".local" / "bin" / "zensical"
     return candidate if candidate.exists() else None
 
 
-def check_mkdocs_build(mkdocs_bin: Path) -> list[str]:
-    env = os.environ.copy()
-    env["NO_MKDOCS_2_WARNING"] = "1"
-    with tempfile.TemporaryDirectory(prefix="informal-mkdocs-") as tmp:
+def check_zensical_build(zensical_bin: Path) -> list[str]:
+    cfg_text = (REPO / "zensical.toml").read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="informal-zensical-") as tmp:
+        tmp_path = Path(tmp)
+        shutil.copytree(REPO / "docs", tmp_path / "docs")
+        tmp_cfg = tmp_path / "zensical.toml"
+        tmp_cfg.write_text(cfg_text, encoding="utf-8")
         proc = subprocess.run(
-            [str(mkdocs_bin), "build", "--strict", "-d", tmp],
-            cwd=REPO,
-            env=env,
+            [str(zensical_bin), "build", "--clean", "--strict", "-f", str(tmp_cfg)],
+            cwd=tmp_path,
             capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
-            msg = (proc.stderr or proc.stdout).strip()
-            return [f"mkdocs build --strict failed:\n{msg}"]
+            msg = (proc.stdout + "\n" + proc.stderr).strip()
+            return [f"zensical build --clean --strict failed:\n{msg}"]
     return []
 
 
@@ -142,12 +149,12 @@ def main() -> int:
     errors: list[str] = []
     md_files = iter_markdown_files()
     errors.extend(check_links())
-    errors.extend(check_mkdocs_nav())
+    errors.extend(check_zensical_nav())
     if args.bin is not None:
         errors.extend(check_docgen(args.bin.resolve()))
-    mkdocs_bin = find_mkdocs()
-    if mkdocs_bin is not None:
-        errors.extend(check_mkdocs_build(mkdocs_bin))
+    zensical_bin = find_zensical()
+    if zensical_bin is not None:
+        errors.extend(check_zensical_build(zensical_bin))
 
     if errors:
         print("check_docs: FAILED", file=sys.stderr)
@@ -158,10 +165,10 @@ def main() -> int:
     extras: list[str] = []
     if args.bin is not None:
         extras.append("docgen --check")
-    if mkdocs_bin is not None:
-        extras.append("mkdocs --strict")
+    if zensical_bin is not None:
+        extras.append("zensical --strict")
     suffix = (" + " + " + ".join(extras)) if extras else ""
-    print(f"check_docs: OK ({len(md_files)} markdown files + mkdocs.yml{suffix})")
+    print(f"check_docs: OK ({len(md_files)} markdown files + zensical.toml{suffix})")
     return 0
 
 

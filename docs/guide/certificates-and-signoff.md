@@ -74,6 +74,6 @@ In an MCP session (or via the `audit_signoff` MCP Prompt), call `spec_audit`:
 
 ## Related Guides & Labs
 
-- Complete runnable signoff + certificate + Makefile lab: [examples/05-integration-and-signoff/signoff-spec/README.md](../../examples/05-integration-and-signoff/signoff-spec/README.md)
+- Complete runnable signoff + certificate + Makefile lab: [Lab 05 — CI, Certificates & Signoff](../labs/05-integration-and-signoff.md)
 - Certificate internals: [docs/certificates.md](../certificates.md)
 - Full `informal.spec/1` field reference: [Formal Spec Schema](../reference/spec-schema.md)

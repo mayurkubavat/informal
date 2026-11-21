@@ -128,6 +128,6 @@ Cache keys hash the exact lowered Btor2 model (design + active assumptions + cut
 
 ## Related Guides & Labs
 
-- Hands-on convergence lab: [examples/03-convergence/deep_counter/README.md](../../examples/03-convergence/deep_counter/README.md)
+- Hands-on convergence lab: [Lab 03 — Convergence & Abstractions](../labs/03-convergence.md)
 - Engine configuration: [Engine & LLM Configuration](../integration/engines-config.md)
 - Deep engine notes: [docs/engines.md](../engines.md)

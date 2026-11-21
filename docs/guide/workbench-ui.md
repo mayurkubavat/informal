@@ -19,7 +19,7 @@ npm run tauri dev
 CARGO_BUILD_JOBS=2 npx tauri build --bundles app
 ```
 
-See [`ui/README.md`](../../ui/README.md) for frontend tests (`npm test`) and Playwright E2E/UX tests (`npm run test:e2e`).
+See [`ui/README.md`](https://github.com/mayurkubavat/informal/blob/main/ui/README.md) for frontend tests (`npm test`) and Playwright E2E/UX tests (`npm run test:e2e`).
 
 ---
 

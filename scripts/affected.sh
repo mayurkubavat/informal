@@ -28,7 +28,7 @@ while read -r f; do
     case "$f" in
         crates/*/*) add "$(cut -d/ -f2 <<<"$f")" ;;
         tests/sv/*) add informal-fpv ;;
-        docs/*|examples/*|*.md|mkdocs.yml|llms.txt|ui/src/*|ui/tests/*|ui/*.json|ui/*.ts|ui/.nvmrc|bench/*|LICENSE*|NOTICE*|.gitignore) ;;
+        docs/*|examples/*|*.md|zensical.toml|llms.txt|ui/src/*|ui/tests/*|ui/*.json|ui/*.ts|ui/.nvmrc|bench/*|LICENSE*|NOTICE*|.gitignore) ;;
         scripts/affected.sh) ;;
         scripts/*) ;;
         ui/src-tauri/*) ;;
