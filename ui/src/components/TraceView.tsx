@@ -10,6 +10,7 @@ import type { CausalEvent, WhyCexReport } from "../backend";
 import { STATUS_LABEL, type ViewProp } from "../model";
 import { useWorkbenchStore } from "../store/workbenchStore";
 import { decodeIftr, renderTraceSvg, type TraceAnnotation } from "../traceBin";
+import { resolveSvgPalette } from "../svgTheme";
 import { cycleTimes, formatValue, parseVcd, type Radix, type Signal, type Vcd } from "../vcd";
 
 export const ZOOM = [40, 60, 80, 120, 160];
@@ -37,6 +38,7 @@ export function TraceView({
   text,
   binary,
   error,
+  dark: darkProp,
   addRequest,
   onAddResult,
   cursorRequest,
@@ -54,12 +56,13 @@ export function TraceView({
   onPopOut,
   onCaptureSvgRef,
 }: {
-  tabs: React.ReactNode;
+  tabs?: React.ReactNode;
   prop: ViewProp;
   path: string;
   text: string | null;
   binary?: Uint8Array | null;
   error?: string | null;
+  dark?: boolean;
   addRequest?: { path: string; n: number } | null;
   onAddResult?: (path: string, result: "added" | "shown" | "missing") => void;
   cursorRequest?: { cycle: number; n: number } | null;
@@ -221,12 +224,13 @@ export function TraceView({
         radix,
         causalFramesBySig,
         annotations,
+        dark: darkProp,
       });
     };
     return () => {
       onCaptureSvgRef.current = null;
     };
-  }, [onCaptureSvgRef, vcd, n, prop.name, cover, depth, cycles, lanes, cursor, px, radix, causalFramesBySig, annotations]);
+  }, [onCaptureSvgRef, vcd, n, prop.name, cover, depth, cycles, lanes, cursor, px, radix, causalFramesBySig, annotations, darkProp]);
 
   const scrollTo = (c: number) => {
     const el = scroller.current;
@@ -380,14 +384,15 @@ export function TraceView({
     cvs.style.height = `${ch}px`;
     cvs.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
 
-    const dark = typeof document !== "undefined" && (document.documentElement.dataset.theme === "dark" || (document.documentElement.dataset.theme !== "light" && typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches));
-    const colSurface = dark ? "#1b1b19" : "#fdfcfa";
-    const colHead = dark ? "#232321" : "#eeece5";
-    const colGrid = dark ? "#353430" : "#e3e0d7";
-    const colWave = dark ? "#e6e3dc" : "#22211e";
-    const colMuted = dark ? "#9c988d" : "#6a665d";
+    const pal = resolveSvgPalette(darkProp);
+    const dark = pal.dark;
+    const colSurface = pal.surface;
+    const colHead = pal.chrome;
+    const colGrid = pal.border;
+    const colWave = pal.text;
+    const colMuted = pal.muted;
     const colCausal = dark ? "rgba(224, 174, 74, 0.20)" : "rgba(251, 241, 217, 0.92)";
-    const colStatus = cover ? (dark ? "#8fa8f0" : "#3b5bc4") : dark ? "#f08a5d" : "#b4471b";
+    const colStatus = cover ? pal.stCovered : pal.stCex;
 
     ctx.save();
     ctx.scale(dpr, dpr);
@@ -588,13 +593,14 @@ export function TraceView({
     ctx.stroke();
 
     ctx.restore();
-  }, [vcd, n, W, H, px, cursor, depth, cover, cycles, lanes, radix, causalFramesBySig, annotations, scrollPos]);
+  }, [vcd, n, W, H, px, cursor, depth, cover, cycles, lanes, radix, causalFramesBySig, annotations, scrollPos, darkProp]);
 
   return (
     <>
-      <div className="strip">{tabs}</div>
+      {tabs && <div className="strip">{tabs}</div>}
       <div className="trace-bar">
         <span className="strip-summary">
+          {!tabs && <><strong className="mono">{prop.name}</strong>{" · "}</>}
           {STATUS_LABEL[prop.status.status]} · depth {prop.status.depth ?? "?"} · {prop.status.engine ?? "—"}
           {vcd ? ` · ${n} cycles` : ""}
         </span>
@@ -684,43 +690,47 @@ export function TraceView({
         {actions}
       </div>
 
-      {showSlice && whyCex && (
-        <div className="causal-bar" role="region" aria-label="Causal root-cause slice">
-          <span className="causal-summary">
-            Causal slice: <strong>{whyCex.active_slice_signals}</strong> / {whyCex.static_cone_signals} COI signals · frame {whyCex.failure_frame}
-          </span>
-          <label className="causal-filter small">
-            <input type="checkbox" checked={sliceOnly} onChange={(e) => setSliceOnly(e.target.checked)} />
-            Slice only
-          </label>
-          <div className="causal-events">
-            {whyCex.events.map((ev, idx) => (
-              <button
-                key={idx}
-                className="causal-chip mono"
-                onClick={() => move(ev.frame, true)}
-                title={`${ev.kind} (${ev.reason}) — click to jump to cycle ${ev.frame}`}
-              >
-                @{ev.frame} {ev.signal.split(".").pop()}: {ev.prev_value ? `${ev.prev_value}→${ev.value}` : ev.value}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {((showSlice && whyCex) || Boolean(annotations?.length)) && (
+        <div className="trace-overlay-row">
+          {showSlice && whyCex && (
+            <div className="causal-bar" role="region" aria-label="Causal root-cause slice">
+              <span className="causal-summary">
+                Causal slice: <strong>{whyCex.active_slice_signals}</strong>/{whyCex.static_cone_signals} COI · C{whyCex.failure_frame}
+              </span>
+              <label className="causal-filter small">
+                <input type="checkbox" checked={sliceOnly} onChange={(e) => setSliceOnly(e.target.checked)} />
+                Slice only
+              </label>
+              <div className="causal-events">
+                {whyCex.events.map((ev, idx) => (
+                  <button
+                    key={idx}
+                    className="causal-chip mono"
+                    onClick={() => move(ev.frame, true)}
+                    title={`${ev.kind} (${ev.reason}) — click to jump to cycle ${ev.frame}`}
+                  >
+                    @{ev.frame} {ev.signal.split(".").pop()}: {ev.prev_value ? `${ev.prev_value}→${ev.value}` : ev.value}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
-      {!!annotations?.length && (
-        <div className="trace-ann-bar" role="region" aria-label="AI waveform callouts">
-          <span className="small strong">AI Callouts:</span>
-          {annotations.map((ann, idx) => (
-            <button
-              key={idx}
-              className={`ann-chip mono ann-${ann.tone ?? "accent"}`}
-              onClick={() => move(ann.frame, true)}
-              title={`Jump to cycle ${ann.frame} (${ann.signal})`}
-            >
-              @{ann.frame} {ann.signal.split(".").pop()}: {ann.label}
-            </button>
-          ))}
+          {!!annotations?.length && (
+            <div className="trace-ann-bar" role="region" aria-label="AI waveform callouts">
+              <span className="small strong">AI Callouts:</span>
+              {annotations.map((ann, idx) => (
+                <button
+                  key={idx}
+                  className={`ann-chip mono ann-${ann.tone ?? "accent"}`}
+                  onClick={() => move(ann.frame, true)}
+                  title={`Jump to cycle ${ann.frame} (${ann.signal})`}
+                >
+                  @{ann.frame} {ann.signal.split(".").pop()}: {ann.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

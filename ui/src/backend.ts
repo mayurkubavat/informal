@@ -186,6 +186,17 @@ export type GuiAction =
       clear?: boolean;
     }
   | { action: "open_schematic"; name?: string | null; max_depth?: number | null }
+  | {
+      action: "present_cex";
+      name: string;
+      frame?: number | null;
+      layout_preset?: LayoutPreset | null;
+      slice_only?: boolean | null;
+      title?: string | null;
+      steps?: WalkthroughStep[] | null;
+      annotations?: TraceAnnotation[] | null;
+      capture?: boolean | null;
+    }
   | { action: "capture_view"; target?: "trace" | "schematic" | "window" };
 export interface GuiRequest {
   id: number;

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import ELK, { type ElkExtendedEdge, type ElkNode } from "elkjs/lib/elk.bundled.js";
 import type { SchematicEdgeView, SchematicGraphView, SchematicNodeView } from "../backend";
 import { useWorkbenchStore } from "../store/workbenchStore";
+import { resolveSvgPalette } from "../svgTheme";
 
 interface PositionedPort {
   id: string;
@@ -86,9 +87,9 @@ function fallbackLayout(graph: SchematicGraphView): LaidOutSchematic {
         portCoords.set(p.id, { x: curX + w, y: curY + py });
       });
       posByNode.set(n.id, { ...n, x: curX, y: curY, w, h, laidPorts });
-      curY += h + 28;
+      curY += h + 46;
     }
-    maxH = Math.max(maxH, curY + 24);
+    maxH = Math.max(maxH, curY + 36);
     curX += colW + 84;
   }
 
@@ -110,7 +111,7 @@ function fallbackLayout(graph: SchematicGraphView): LaidOutSchematic {
   };
 }
 
-async function computeElkLayout(graph: SchematicGraphView): Promise<LaidOutSchematic> {
+export async function computeElkLayout(graph: SchematicGraphView): Promise<LaidOutSchematic> {
   if (!graph.nodes.length) return { width: 400, height: 240, nodes: [], edges: [] };
   const elkGraph: ElkNode = {
     id: "root",
@@ -118,9 +119,12 @@ async function computeElkLayout(graph: SchematicGraphView): Promise<LaidOutSchem
       "elk.algorithm": "layered",
       "elk.direction": "RIGHT",
       "elk.layered.spacing.nodeNodeBetweenLayers": "68",
-      "elk.spacing.nodeNode": "28",
+      "elk.spacing.nodeNode": "38",
+      "elk.spacing.edgeNode": "32",
+      "elk.layered.spacing.edgeNodeBetweenLayers": "32",
+      "elk.spacing.edgeEdge": "16",
       "elk.edgeRouting": "ORTHOGONAL",
-      "elk.padding": "[top=32,left=32,bottom=32,right=32]",
+      "elk.padding": "[top=32,left=32,bottom=48,right=32]",
     },
     children: graph.nodes.map((n) => {
       const { w, h } = nodeDimensions(n);
@@ -130,7 +134,11 @@ async function computeElkLayout(graph: SchematicGraphView): Promise<LaidOutSchem
         id: n.id,
         width: w,
         height: h,
-        layoutOptions: { "elk.portConstraints": "FIXED_ORDER" },
+        // Reserve 30px beneath each node so bottom feedback wires clear the live value label (+12px) by >= 16px.
+        layoutOptions: {
+          "elk.portConstraints": "FIXED_ORDER",
+          "elk.margins": "[top=4,left=4,bottom=30,right=4]",
+        },
         ports: [
           ...ins.map((p, idx) => ({
             id: p.id,
@@ -189,9 +197,14 @@ async function computeElkLayout(graph: SchematicGraphView): Promise<LaidOutSchem
     return { ...orig, points: [p0, p1] };
   });
 
+  const maxNodeBottom = nodes.reduce((acc, n) => Math.max(acc, n.y + n.h + 36), 0);
+  const maxEdgeBottom = edges.reduce(
+    (acc, e) => e.points.reduce((a, p) => Math.max(a, p.y + 16), acc),
+    0,
+  );
   return {
     width: Math.max(420, (res.width ?? 600) + 32),
-    height: Math.max(260, (res.height ?? 320) + 32),
+    height: Math.max(260, (res.height ?? 320) + 48, maxNodeBottom, maxEdgeBottom),
     nodes,
     edges,
   };
@@ -201,25 +214,30 @@ function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-export function renderSchematicSvg(laid: LaidOutSchematic, values: Record<string, string>): string {
+export function renderSchematicSvg(
+  laid: LaidOutSchematic,
+  values: Record<string, string>,
+  dark?: boolean,
+): string {
+  const pal = resolveSvgPalette(dark);
   const out: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${laid.width}" height="${laid.height}" viewBox="0 0 ${laid.width} ${laid.height}" font-family="IBM Plex Mono, monospace" font-size="11">`);
-  out.push(`<rect width="${laid.width}" height="${laid.height}" fill="#fdfcfa" />`);
+  out.push(`<rect width="${laid.width}" height="${laid.height}" fill="${pal.surface}" />`);
   for (const e of laid.edges) {
     if (e.points.length < 2) continue;
     const d = e.points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
-    const stroke = e.causal ? "#b4471b" : "#8b867a";
+    const stroke = e.causal ? pal.stCex : pal.wireMuted;
     const sw = e.causal ? 2 : e.width > 1 ? 1.7 : 1.2;
     out.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}" />`);
   }
   for (const n of laid.nodes) {
-    const stroke = n.hotspot ? "#d97706" : n.causal ? "#b4471b" : "#55524a";
-    const fill = n.hotspot ? "#fef3c7" : n.causal ? "#fff7ed" : "#f6f5f1";
+    const stroke = n.hotspot ? pal.stUndetermined : n.causal ? pal.stCex : pal.text2;
+    const fill = n.hotspot ? pal.hotspotFill : n.causal ? pal.causalFill : pal.nodeFill;
     out.push(`<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="${n.causal || n.hotspot ? 1.8 : 1.2}" />`);
-    out.push(`<text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + 4}" text-anchor="middle" fill="#22211e" font-weight="600">${escapeXml(n.label)}</text>`);
+    out.push(`<text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + 4}" text-anchor="middle" fill="${pal.text}" font-weight="600">${escapeXml(n.label)}</text>`);
     const v = n.signal ? values[n.signal] ?? values[n.signal.split(".").pop() ?? ""] : undefined;
     if (v) {
-      out.push(`<text x="${n.x + n.w / 2}" y="${n.y + n.h + 12}" text-anchor="middle" fill="#1d5f5b" font-size="10">${escapeXml(v)}</text>`);
+      out.push(`<text x="${n.x + n.w / 2}" y="${n.y + n.h + 12}" text-anchor="middle" fill="${pal.accent}" font-size="10">${escapeXml(v)}</text>`);
     }
   }
   out.push(`</svg>`);
@@ -232,6 +250,7 @@ export function SchematicView({
   loading,
   error,
   maxDepth,
+  dark: darkProp,
   onChangeDepth,
   onSelectSignalSource,
   onAddSignalToTrace,
@@ -244,6 +263,7 @@ export function SchematicView({
   loading?: boolean;
   error?: string | null;
   maxDepth: number;
+  dark?: boolean;
   onChangeDepth: (nextDepth: number) => void;
   onSelectSignalSource?: (signal: string) => void;
   onAddSignalToTrace?: (signal: string) => void;
@@ -282,11 +302,11 @@ export function SchematicView({
 
   useEffect(() => {
     if (!onCaptureSvgRef) return;
-    onCaptureSvgRef.current = () => (laid ? renderSchematicSvg(laid, activeTraceValues) : null);
+    onCaptureSvgRef.current = () => (laid ? renderSchematicSvg(laid, activeTraceValues, darkProp) : null);
     return () => {
       onCaptureSvgRef.current = null;
     };
-  }, [onCaptureSvgRef, laid, activeTraceValues]);
+  }, [onCaptureSvgRef, laid, activeTraceValues, darkProp]);
 
   const selectedNode = useMemo(
     () => laid?.nodes.find((n) => n.id === selectedNodeId) ?? null,
@@ -326,24 +346,20 @@ export function SchematicView({
     cvs.style.width = `${vw}px`;
     cvs.style.height = `${vh}px`;
 
-    const dark =
-      typeof document !== "undefined" &&
-      (document.documentElement.dataset.theme === "dark" ||
-        (document.documentElement.dataset.theme !== "light" &&
-          typeof window !== "undefined" &&
-          window.matchMedia?.("(prefers-color-scheme: dark)").matches));
+    const pal = resolveSvgPalette(darkProp);
+    const dark = pal.dark;
 
-    const bg = dark ? "#1b1b19" : "#fdfcfa";
+    const bg = pal.surface;
     const gridDot = dark ? "#2f2e2a" : "#e5e2d9";
-    const wireMuted = dark ? "#78746a" : "#8b867a";
-    const wireCausal = dark ? "#f08a5d" : "#b4471b";
+    const wireMuted = pal.wireMuted;
+    const wireCausal = pal.stCex;
     const hotspotStroke = dark ? "#f59e0b" : "#b45309";
     const hotspotFill = dark ? "rgba(245, 158, 11, 0.16)" : "#fef3c7";
     const causalFill = dark ? "rgba(240, 138, 93, 0.14)" : "#fff7ed";
-    const nodeFill = dark ? "#252522" : "#f6f5f1";
+    const nodeFill = pal.nodeFill;
     const nodeStroke = dark ? "#5b584f" : "#6a665d";
-    const textCol = dark ? "#e6e3dc" : "#22211e";
-    const valCol = dark ? "#5fb3ab" : "#1d5f5b";
+    const textCol = pal.text;
+    const valCol = pal.accent;
 
     ctx.save();
     ctx.scale(dpr, dpr);
@@ -458,7 +474,7 @@ export function SchematicView({
     }
 
     ctx.restore();
-  }, [laid, scale, pan, selectedNodeId, activeTraceValues]);
+  }, [laid, scale, pan, selectedNodeId, activeTraceValues, darkProp]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!laid || !canvasRef.current) return;

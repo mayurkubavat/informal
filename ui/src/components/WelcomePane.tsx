@@ -132,7 +132,8 @@ export function WelcomePane({
                     <button
                       key={r.path}
                       type="button"
-                      className="welcome-recent-item mono small"
+                      className="welcome-recent-item mono small ellipsis"
+                      title={r.path}
                       onClick={() => onOpenScript(r.path)}
                     >
                       {r.path}
@@ -142,13 +143,13 @@ export function WelcomePane({
               </section>
             )}
 
-            <section className="welcome-section welcome-ai-box" aria-label="AI Co-Pilot & MCP connection">
+            <section className="welcome-section welcome-ai-box welcome-mcp" aria-label="AI Co-Pilot & MCP connection">
               <h2 className="welcome-h2">✦ AI Co-Pilot & Antigravity MCP</h2>
               <p className="small muted">
                 Connect Antigravity, Claude Code, or Cursor to drive proofs, inspect <code>why_cex</code> slices, and render live waveforms via <code>ui://informal/workbench.html</code>.
               </p>
               <div className="welcome-mcp-row">
-                <code className="welcome-code ellipsis">{mcpCmd}</code>
+                <code className="welcome-code" tabIndex={0} aria-label="MCP connect command" title={mcpCmd}>{mcpCmd}</code>
                 <button
                   type="button"
                   className="btn small"

@@ -157,8 +157,8 @@ enum Cmd {
         /// on the session a person is looking at. Without a socket path,
         /// the most recently started app's. The app sets the mode; the
         /// other options are not used.
-        #[arg(long, value_name = "SOCKET", num_args = 0..=1, default_missing_value = "")]
-        connect: Option<PathBuf>,
+        #[arg(long, value_name = "SOCKET", num_args = 0..=1)]
+        connect: Option<Option<PathBuf>>,
     },
     /// Shrink an AIGER model while two engines keep disagreeing on it, or
     /// while a test command keeps exiting 0 (delta debugging).
@@ -614,9 +614,9 @@ fn main() -> anyhow::Result<()> {
             connect,
         } => {
             if let Some(socket) = connect {
-                let socket = match socket.as_os_str().is_empty() {
-                    false => socket,
-                    true => informal_mcp::socket::newest().with_context(|| {
+                let socket = match socket {
+                    Some(s) if !s.as_os_str().is_empty() => s,
+                    _ => informal_mcp::socket::newest().with_context(|| {
                         format!(
                             "no desktop app is serving a session (no socket in {})",
                             informal_mcp::socket::dir().display()
@@ -858,4 +858,53 @@ fn reduce(
         out.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_connect_accepts_omitted_bare_and_explicit_socket() {
+        let none = Cli::try_parse_from(["informal", "mcp"]).unwrap();
+        match none.cmd {
+            Cmd::Mcp { connect, .. } => assert_eq!(connect, None),
+            _ => panic!("expected mcp subcommand"),
+        }
+
+        let bare = Cli::try_parse_from(["informal", "mcp", "--connect"]).unwrap();
+        match bare.cmd {
+            Cmd::Mcp { connect, .. } => assert_eq!(connect, Some(None)),
+            _ => panic!("expected mcp subcommand"),
+        }
+
+        let explicit =
+            Cli::try_parse_from(["informal", "mcp", "--connect", "/tmp/informal-app.sock"])
+                .unwrap();
+        match explicit.cmd {
+            Cmd::Mcp { connect, .. } => {
+                assert_eq!(connect, Some(Some(PathBuf::from("/tmp/informal-app.sock"))));
+            }
+            _ => panic!("expected mcp subcommand"),
+        }
+
+        let eq =
+            Cli::try_parse_from(["informal", "mcp", "--connect=/tmp/informal-app.sock"]).unwrap();
+        match eq.cmd {
+            Cmd::Mcp { connect, .. } => {
+                assert_eq!(connect, Some(Some(PathBuf::from("/tmp/informal-app.sock"))));
+            }
+            _ => panic!("expected mcp subcommand"),
+        }
+
+        let bare_before_flag =
+            Cli::try_parse_from(["informal", "mcp", "--connect", "--mode", "auto"]).unwrap();
+        match bare_before_flag.cmd {
+            Cmd::Mcp { connect, mode, .. } => {
+                assert_eq!(connect, Some(None));
+                assert_eq!(mode, "auto");
+            }
+            _ => panic!("expected mcp subcommand"),
+        }
+    }
 }

@@ -54,4 +54,4 @@ if [[ -n "${DATA_DIR}" ]]; then
   WORKDIR_ARGS=(--workdir "${DATA_DIR}/informal_work")
 fi
 
-exec "${BIN}" mcp --mode "${INFORMAL_AI_MODE:-propose}" "${ENGINES_ARGS[@]}" "${WORKDIR_ARGS[@]}"
+exec "${BIN}" mcp --mode "${INFORMAL_AI_MODE:-propose}" --root "${INFORMAL_ROOT:-${HOME}}" "${ENGINES_ARGS[@]}" "${WORKDIR_ARGS[@]}"

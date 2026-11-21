@@ -168,7 +168,7 @@ export function WorkbenchDock({
     <>
       <div
         ref={hostRef}
-        className={`workbench-dockview ${dark ? "dockview-theme-abyss" : "dockview-theme-light"}`}
+        className={`workbench-dockview dockview-theme-informal ${dark ? "dockview-informal-dark" : "dockview-informal-light"}`}
         data-testid="dockview-workspace"
         data-preset={preset}
       />

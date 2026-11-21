@@ -13,6 +13,7 @@ import {
   type BottomTab, type Center, type ColKey, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useWorkbenchStore, type LayoutPreset, type WalkthroughStep } from "./store/workbenchStore";
+import { resolveSvgPalette } from "./svgTheme";
 import { useTheme } from "./useTheme";
 import { BOTTOM_DEFAULT, clampBottom, clampLeft, LEFT_MAX, LEFT_MIN, useLayout } from "./useLayout";
 import { MenuBar, type MenuDef, type MenuItem } from "./components/MenuBar";
@@ -65,6 +66,10 @@ const POPOUT_KIND: "trace" | "schematic" | null = (() => {
   const p = new URLSearchParams(window.location.search).get("popout");
   return p === "trace" || p === "schematic" ? p : null;
 })();
+
+const CEX_BOTTOM_DEFAULT = 148;
+const IS_MAC_OVERLAY =
+  backend.inTauri && typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
 
 export default function App() {
   const [session, setSession] = useState<SessionView | null>(null);
@@ -133,6 +138,34 @@ export default function App() {
     () => [set("center"), set("left"), set("leftOpen"), set("bottom"), set("bottomH"), set("leftW"), set("profiler")],
     [set],
   );
+  const [cexBottomH, setCexBottomH] = useState(CEX_BOTTOM_DEFAULT);
+  const activeBottomH = layoutPreset === "cex-debug" ? cexBottomH : bottomH;
+  const setActiveBottomH = useCallback(
+    (h: number) => {
+      if (layoutPreset === "cex-debug") setCexBottomH(h);
+      else setBottomH(h);
+    },
+    [layoutPreset, setBottomH],
+  );
+  const [narrow, setNarrow] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 720 : false));
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia?.("(max-width: 719.98px)");
+    const sync = () => {
+      const isNarrow = mq ? mq.matches : window.innerWidth < 720;
+      setNarrow(isNarrow);
+      if (!isNarrow) setDrawerOpen(false);
+    };
+    sync();
+    mq?.addEventListener?.("change", sync);
+    window.addEventListener("resize", sync);
+    return () => {
+      mq?.removeEventListener?.("change", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, []);
+  const showLeft = narrow ? drawerOpen : leftOpen;
   // Tools > Proof profiler (or Ctrl+5) adds the Profiler dock tab and shows
   // it; its × removes it again.
   const openProfiler = useCallback(() => {
@@ -482,14 +515,48 @@ export default function App() {
   const proveOne = (n: string) => (flavor === "jg" ? `prove -property ${tclWord(n)}` : `check_fv -property {${n}}`);
   // The source view follows the selected property's own file (its script
   // line, or RTL for SVA in the design); the top file otherwise.
+  // In CEX Debug, Tcl-defined properties auto-pivot to the primary RTL `.sv`
+  // file so live `@C<k>` values and `SV-FPV` lint appear immediately, with
+  // file-switcher pills (`top.sv` · `script.tcl`) to flip back anytime.
   // Unless an agent pointed at other lines (gui_highlight_source): those
   // stay until the person selects a property.
   const [srcShow, setSrcShow] = useState<{ file: string; first: number; last: number } | null>(null);
-  useEffect(() => setSrcShow(null), [selected]);
-  const srcPath = srcShow?.file ?? sourceFile(current, topFile);
+  const [srcFileOverride, setSrcFileOverride] = useState<string | null>(null);
   useEffect(() => {
-    if (srcPath !== topFile) loadText(srcPath);
-  }, [srcPath, topFile, loadText]);
+    setSrcShow(null);
+    setSrcFileOverride(null);
+  }, [selected]);
+  useEffect(() => {
+    setSrcFileOverride(null);
+  }, [layoutPreset]);
+  const propSrcFile = current?.source?.file ?? null;
+  const rtlFiles = useMemo(
+    () => (session?.design.files ?? []).filter((f) => /\.(sv|svh|v)$/i.test(f)),
+    [session?.design.files],
+  );
+  const primaryRtlFile = rtlFiles[0] ?? topFile;
+  const autoPivotToRtl =
+    layoutPreset === "cex-debug" &&
+    !srcShow &&
+    !srcFileOverride &&
+    Boolean(propSrcFile?.endsWith(".tcl")) &&
+    Boolean(primaryRtlFile);
+  const srcPath =
+    srcShow?.file ??
+    srcFileOverride ??
+    (autoPivotToRtl ? primaryRtlFile : sourceFile(current, topFile));
+  const sourceSwitchFiles = useMemo(() => {
+    const list: string[] = [];
+    for (const f of rtlFiles) {
+      if (f && !list.includes(f)) list.push(f);
+    }
+    if (propSrcFile && !list.includes(propSrcFile)) list.push(propSrcFile);
+    if (srcPath && !list.includes(srcPath)) list.push(srcPath);
+    return list.length > 1 ? list : [];
+  }, [rtlFiles, propSrcFile, srcPath]);
+  useEffect(() => {
+    if (srcPath) loadText(srcPath);
+  }, [srcPath, loadText]);
   const source = (srcPath && texts[srcPath]) || "";
   const focusLine = srcShow ? srcShow.first : sourceLine(current, srcPath, source);
   const focusEnd = srcShow?.last;
@@ -551,7 +618,7 @@ export default function App() {
     [session?.elaborated],
   );
   useEffect(() => {
-    if ((center === "source" || layoutPreset !== "triage") && srcPath?.endsWith(".sv")) {
+    if ((center === "source" || layoutPreset !== "triage") && srcPath && /\.(sv|svh|v)$/i.test(srcPath)) {
       refreshLint(srcPath);
     }
   }, [center, layoutPreset, srcPath, refreshLint]);
@@ -632,6 +699,27 @@ export default function App() {
       } else if (schema === "informal.why_cex/1" && typeof sc.property === "string") {
         setWhyCexMap((m) => ({ ...m, [sc.property as string]: sc as unknown as WhyCexReport }));
         setWhyCexOpen(true);
+      } else if (schema === "informal.cex_diagnose/1" && sc.property && typeof (sc.property as { name?: string }).name === "string") {
+        const propName = (sc.property as { name: string }).name;
+        const slice = sc.causal_slice as Record<string, unknown> | undefined;
+        setSelected(propName);
+        setTraceName(propName);
+        if (slice) {
+          setWhyCexMap((m) => ({
+            ...m,
+            [propName]: {
+              property: propName,
+              status: String((sc.property as { status?: string }).status ?? "cex"),
+              failure_frame: Number(slice.failure_frame ?? 0),
+              total_frames: Number(slice.total_frames ?? 0),
+              static_cone_signals: Number(slice.static_cone_signals ?? 0),
+              active_slice_signals: Number(slice.active_slice_signals ?? 0),
+              active_signals: Array.isArray(slice.active_signals) ? (slice.active_signals as string[]) : [],
+              events: Array.isArray(slice.events) ? (slice.events as WhyCexReport["events"]) : [],
+            },
+          }));
+          setWhyCexOpen(true);
+        }
       } else if (schema === "informal.schematic/1") {
         setSchematicGraph(sc as unknown as SchematicGraphView);
         setCenter("schematic");
@@ -846,15 +934,23 @@ export default function App() {
     if (error) backend.aiGuiDone(id, null, error).catch(() => {});
     else setTimeout(() => backend.aiGuiDone(id, guiNow.current).catch(() => {}), 60);
   }, []);
-  // Waiting for a trace to load (open_trace), and signals still to add.
-  const guiTrace = useRef<{ id: number; path: string; what: string } | null>(null);
+  // Waiting for a trace to load (open_trace / present_cex), and signals still to add.
+  const guiTrace = useRef<{ id: number; path: string; what: string; capture?: boolean } | null>(null);
   const guiAdd = useRef<{ id: number; left: string[]; missing: string[]; what: string } | null>(null);
   useEffect(() => {
     const w = guiTrace.current;
     if (!w || trace?.path !== w.path || (trace.text === null && !trace.error)) return;
     guiTrace.current = null;
+    if (w.capture && !trace.error) {
+      setTimeout(() => {
+        const svg = traceSvgCaptureRef.current?.() ?? null;
+        if (svg) setLastCapture({ target: "trace", format: "svg", svg, captured_at: new Date().toISOString() });
+        guiDone(w.id, w.what);
+      }, 60);
+      return;
+    }
     guiDone(w.id, w.what, trace.error ?? undefined);
-  }, [trace, guiDone]);
+  }, [trace, guiDone, setLastCapture]);
   const guiAct = useRef<(r: GuiRequest) => void>(() => {});
   guiAct.current = ({ id, action: a }) => {
     markAgentDriven();
@@ -997,6 +1093,63 @@ export default function App() {
       openSchematic(target, a.max_depth != null ? Number(a.max_depth) : undefined);
       return guiDone(id, `open schematic of ${target}`);
     }
+    if (a.action === "present_cex") {
+      const what = `present CEX walkthrough for ${a.name}`;
+      const p = allProps.find((q) => q.name === a.name);
+      const path = traceOf(p ?? null);
+      if (!p) return guiDone(id, what, `no property named ${a.name}`);
+      if (!path) return guiDone(id, what, `${a.name} has no trace: its status is ${p.status.status}`);
+      setLayoutPreset(a.layout_preset ?? "cex-debug");
+      openTrace(a.name);
+      setSchematicTarget(a.name);
+      if (a.slice_only != null) setSliceOnlyControlled(a.slice_only);
+      setWhyCexOpen(true);
+      if (!whyCexMap[a.name]) {
+        setWhyCexLoading(true);
+        backend
+          .whyCex(a.name)
+          .then((rep) => setWhyCexMap((m) => ({ ...m, [a.name]: rep })))
+          .catch(() => {})
+          .finally(() => setWhyCexLoading(false));
+      }
+      if (a.annotations?.length) {
+        setTraceAnnotations(a.annotations);
+      }
+      if (a.steps && a.steps.length > 0) {
+        const title = a.title || `Why ${a.name} fails`;
+        setFollowAgent(true);
+        setWalkthrough({ title, steps: a.steps, step: 0 });
+        const st0 = a.steps[0];
+        if (st0.file) {
+          backend.readText(st0.file).then(
+            (t) => {
+              setTexts((m) => ({ ...m, [st0.file!]: t }));
+              if (st0.first_line != null) {
+                setSrcShow({ file: st0.file!, first: st0.first_line, last: st0.last_line ?? st0.first_line });
+              }
+            },
+            () => {},
+          );
+        }
+      }
+      const targetFrame = a.frame ?? a.steps?.[0]?.frame ?? null;
+      if (targetFrame != null) {
+        setCursorReq((r) => ({ cycle: targetFrame, n: (r?.n ?? 0) + 1 }));
+      }
+      if (trace?.path === path && trace.text !== null) {
+        if (a.capture) {
+          setTimeout(() => {
+            const svg = traceSvgCaptureRef.current?.() ?? null;
+            if (svg) setLastCapture({ target: "trace", format: "svg", svg, captured_at: new Date().toISOString() });
+            guiDone(id, what);
+          }, 80);
+          return;
+        }
+        return guiDone(id, what);
+      }
+      guiTrace.current = { id, path, what, capture: Boolean(a.capture) };
+      return;
+    }
     if (a.action === "capture_view") {
       const target = a.target ?? "trace";
       if (target === "trace") {
@@ -1011,10 +1164,11 @@ export default function App() {
         setLastCapture({ target: "schematic", format: "svg", svg, captured_at: new Date().toISOString() });
         return guiDone(id, "capture schematic SVG");
       }
+      const pal = resolveSvgPalette();
       const fallbackSvg =
         traceSvgCaptureRef.current?.() ??
         schemSvgCaptureRef.current?.() ??
-        `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="80"><rect width="480" height="80" fill="#fdfcfa"/><text x="16" y="44" font-family="monospace" font-size="13">InFormal window: ${allProps.length} properties (${selected ?? "none selected"})</text></svg>`;
+        `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="80"><rect width="480" height="80" fill="${pal.surface}"/><text x="16" y="44" fill="${pal.text}" font-family="monospace" font-size="13">InFormal window: ${allProps.length} properties (${selected ?? "none selected"})</text></svg>`;
       setLastCapture({ target: "window", format: "svg", svg: fallbackSvg, captured_at: new Date().toISOString() });
       return guiDone(id, "capture window SVG");
     }
@@ -1207,8 +1361,8 @@ export default function App() {
   };
   const startResize = (e: React.PointerEvent) => {
     const y0 = e.clientY;
-    const h0 = bottomH;
-    drag(e, (ev) => setBottomH(clampBottom(h0 + y0 - ev.clientY, window.innerHeight)));
+    const h0 = activeBottomH;
+    drag(e, (ev) => setActiveBottomH(clampBottom(h0 + y0 - ev.clientY, window.innerHeight)));
   };
   const leftRef = useRef<HTMLElement>(null);
   const curLeftW = () => leftW ?? leftRef.current?.getBoundingClientRect().width ?? 236;
@@ -1227,7 +1381,7 @@ export default function App() {
     const d = e.key === "ArrowUp" ? 16 : e.key === "ArrowDown" ? -16 : 0;
     if (!d) return;
     e.preventDefault();
-    setBottomH(clampBottom(bottomH + d, window.innerHeight));
+    setActiveBottomH(clampBottom(activeBottomH + d, window.innerHeight));
   };
 
   const menus: MenuDef[] = [
@@ -1245,7 +1399,11 @@ export default function App() {
     {
       label: "View",
       items: [
-        { label: "Task / Design dock", checked: leftOpen, onClick: () => setLeftOpen((o) => !o) },
+        {
+          label: "Task / Design dock",
+          checked: showLeft,
+          onClick: () => (narrow ? setDrawerOpen((o) => !o) : setLeftOpen((o) => !o)),
+        },
         { label: "Property table", checked: center === "table" && layoutPreset === "triage", onClick: () => { setLayoutPreset("triage"); setCenter("table"); } },
         { label: `Source (${fileName ?? "none"})`, checked: center === "source" && layoutPreset === "triage", keys: "F3", onClick: () => { setLayoutPreset("triage"); setCenter("source"); }, disabled: !topFile },
         { label: "COI & causal schematic", checked: center === "schematic" && layoutPreset === "triage", onClick: () => { setLayoutPreset("triage"); openSchematic(); }, disabled: !allProps.length },
@@ -1281,7 +1439,21 @@ export default function App() {
         { label: "Theme: Dark", checked: theme === "dark", onClick: () => setTheme("dark") },
       ],
     },
-    { label: "Design", items: [{ label: "Show hierarchy", onClick: () => { setLeftOpen(true); setLeft("design"); } }, { label: "Design info", onClick: () => setBottomTab("info") }, { label: "Elaborate", disabled: true }] },
+    {
+      label: "Design",
+      items: [
+        {
+          label: "Show hierarchy",
+          onClick: () => {
+            if (narrow) setDrawerOpen(true);
+            else setLeftOpen(true);
+            setLeft("design");
+          },
+        },
+        { label: "Design info", onClick: () => setBottomTab("info") },
+        { label: "Elaborate", disabled: true },
+      ],
+    },
     {
       label: "Prove",
       items: [
@@ -1378,16 +1550,22 @@ export default function App() {
 
   const isDark =
     theme === "dark" ||
-    (theme === "system" && typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-color-scheme: dark)").matches));
+    (theme === "system" &&
+      typeof document !== "undefined" &&
+      (document.documentElement.dataset.theme === "dark" ||
+        (document.documentElement.dataset.theme !== "light" &&
+          typeof window !== "undefined" &&
+          Boolean(window.matchMedia?.("(prefers-color-scheme: dark)").matches))));
 
   const traceElement = traceProp ? (
     <TraceView
-      tabs={layoutPreset === "triage" && !POPOUT_KIND ? centerTabs : <span className="strip-summary mono">Trace: {traceProp.name}</span>}
+      tabs={layoutPreset === "triage" && !POPOUT_KIND ? centerTabs : undefined}
       prop={traceProp}
       path={trace?.path ?? tracePath ?? ""}
       text={trace?.text ?? null}
       binary={trace?.binary ?? null}
       error={trace?.error}
+      dark={isDark}
       addRequest={addReq}
       onAddResult={onAddResult}
       cursorRequest={cursorReq}
@@ -1419,6 +1597,12 @@ export default function App() {
     <SourceView
       text={source}
       file={srcPath}
+      switchFiles={sourceSwitchFiles}
+      onSelectFile={(f) => {
+        setSrcShow(null);
+        setSrcFileOverride(f);
+        loadText(f);
+      }}
       focus={focusLine}
       focusEnd={focusEnd}
       causalSignals={whyCexOpen && traceName ? whyCexMap[traceName]?.active_signals : undefined}
@@ -1446,6 +1630,7 @@ export default function App() {
       loading={schematicLoading}
       error={schematicError}
       maxDepth={schematicDepth}
+      dark={isDark}
       onChangeDepth={(d) => setSchematicTarget(activeSchemProp, d)}
       onSelectSignalSource={(sig) => {
         if (!topFile) return;
@@ -1476,12 +1661,12 @@ export default function App() {
 
   return (
     <div
-      className={`app ${backend.inMcpApp ? "mcp-app-mode" : ""}`}
-      style={{ "--bottom-h": `${bottomH}px`, ...(leftW ? { "--left-w": `${leftW}px` } : {}) } as React.CSSProperties}
+      className={`app ${backend.inMcpApp ? "mcp-app-mode" : ""} ${IS_MAC_OVERLAY ? "mac-overlay-titlebar" : ""}`}
+      style={{ "--bottom-h": `${activeBottomH}px`, ...(leftW ? { "--left-w": `${leftW}px` } : {}) } as React.CSSProperties}
     >
       {/* ---- menu bar ---- */}
       {!backend.inMcpApp && (
-        <MenuBar menus={menus}>
+        <MenuBar menus={menus} macOverlay={IS_MAC_OVERLAY}>
           <input
             ref={pathRef}
             className="menu-path mono"
@@ -1505,6 +1690,17 @@ export default function App() {
 
       {/* ---- tool row ---- */}
       <div className="toolrow">
+        {narrow && (
+          <button
+            className={`tool drawer-toggle ${drawerOpen ? "on" : ""}`}
+            onClick={() => setDrawerOpen((o) => !o)}
+            aria-expanded={drawerOpen}
+            aria-label="Toggle tasks sidebar"
+            title="Toggle Tasks / Design sidebar"
+          >
+            ☰
+          </button>
+        )}
         <label className="field">
           <span>App</span>
           <select
@@ -1607,24 +1803,29 @@ export default function App() {
         />
       )}
 
-      <div className={`workbench ${leftOpen ? "" : "left-closed"}`}>
+      <div className={`workbench ${narrow ? "narrow" : leftOpen ? "" : "left-closed"}`}>
+        {narrow && drawerOpen && (
+          <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
+        )}
         {/* ---- left dock ---- */}
-        {leftOpen && (
-          <aside className="left" ref={leftRef}>
-            <div
-              className="vsplitter"
-              onPointerDown={startLeftResize}
-              onDoubleClick={() => setLeftW(null)}
-              onKeyDown={leftKeys}
-              tabIndex={0}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize left dock"
-              aria-valuemin={LEFT_MIN}
-              aria-valuemax={LEFT_MAX}
-              aria-valuenow={Math.round(leftW ?? (window.innerWidth <= 1000 ? 200 : 236))}
-              title="Drag to resize; double-click to reset"
-            />
+        {showLeft && (
+          <aside className={`left ${narrow ? "drawer" : ""}`} ref={leftRef}>
+            {!narrow && (
+              <div
+                className="vsplitter"
+                onPointerDown={startLeftResize}
+                onDoubleClick={() => setLeftW(null)}
+                onKeyDown={leftKeys}
+                tabIndex={0}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize left dock"
+                aria-valuemin={LEFT_MIN}
+                aria-valuemax={LEFT_MAX}
+                aria-valuenow={Math.round(leftW ?? (window.innerWidth <= 1000 ? 200 : 236))}
+                title="Drag to resize; double-click to reset"
+              />
+            )}
             <Tabs
               tabs={[
                 ["tasks", "Tasks"],
@@ -1789,13 +1990,13 @@ export default function App() {
           <div
             className="splitter"
             onPointerDown={startResize}
-            onDoubleClick={() => setBottomH(BOTTOM_DEFAULT)}
+            onDoubleClick={() => setActiveBottomH(layoutPreset === "cex-debug" ? CEX_BOTTOM_DEFAULT : BOTTOM_DEFAULT)}
             onKeyDown={bottomKeys}
             tabIndex={0}
             role="separator"
             aria-orientation="horizontal"
             aria-label="Resize bottom dock"
-            aria-valuenow={bottomH}
+            aria-valuenow={activeBottomH}
             title="Drag to resize; double-click to reset"
           />
           <Tabs

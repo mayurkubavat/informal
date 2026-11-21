@@ -49,5 +49,26 @@ describe("traceBin IFTR codec & SVG exporter", () => {
     expect(svg).toContain("<svg");
     expect(svg).toContain("a_never9");
     expect(svg).toContain("reaches 9");
+    expect(svg).toContain('fill="#fdfcfa"');
+  });
+
+  it("respects dark theme palette in standalone trace SVG capture", () => {
+    const vcd = parseVcd(vcdText);
+    const cycles = cycleTimes(vcd, { signal: "clk", edge: "posedge" });
+    const darkSvg = renderTraceSvg({
+      propName: "a_never9",
+      cover: false,
+      depth: 11,
+      vcd,
+      cycles,
+      lanes: vcd.signals.slice(0, 4),
+      cursor: 10,
+      px: 60,
+      radix: {},
+      dark: true,
+    });
+    expect(darkSvg).toContain('fill="#1b1b19"');
+    expect(darkSvg).toContain('fill="#e6e3dc"');
+    expect(darkSvg).not.toContain('fill="#fdfcfa"');
   });
 });

@@ -536,7 +536,15 @@ export const MOCK_PROPOSALS: Omit<AiProposal, "id" | "state">[] = [
   { kind: "assume", name: "m_en_hold", text: "en |=> en", rationale: "The counter is only specified while en stays high once raised; without it a_step has a counterexample." },
   { kind: "assert", name: "a_q_bound", text: "q <= 4'd9", rationale: "Helper invariant: q never leaves 0..9, which makes a_never9's failure the only reachable one." },
 ];
-const mockAi: AiStatus = { mode: "propose", socket: "/run/user/1000/informal/app-1.sock", error: null, proposals: [] };
+const mockAi: AiStatus = {
+  mode: "propose",
+  socket:
+    typeof location !== "undefined" && new URLSearchParams(location.search).get("longSocket") === "1"
+      ? "/var/folders/8x/9q2m4r7n6v0h3k1w5z8p0000gn/T/informal-socket-cache/informal-app-98765.sock"
+      : "/run/user/1000/informal/app-1.sock",
+  error: null,
+  proposals: [],
+};
 // An agent proposes a change: it is pending, and the window is told.
 export function mockAiPropose(p: Omit<AiProposal, "id" | "state">): AiProposal {
   const made: AiProposal = { ...p, id: mockAi.proposals.length + 1, state: "pending" };

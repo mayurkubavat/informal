@@ -2,6 +2,7 @@
 // zoom bucket decimator for 5,000+ cycle canvas viewports, and deterministic
 // standalone SVG exporter for `gui_capture_view`.
 
+import { resolveSvgPalette } from "./svgTheme";
 import { formatValue, type Radix, type Signal, type Vcd } from "./vcd";
 
 export interface TraceAnnotation {
@@ -231,36 +232,39 @@ export function renderTraceSvg(opts: {
   radix: Record<string, Radix>;
   causalFramesBySig?: Map<string, Set<number>>;
   annotations?: TraceAnnotation[];
+  dark?: boolean;
 }): string {
-  const { propName, cover, depth, vcd, cycles, lanes, cursor, px, radix, causalFramesBySig, annotations } = opts;
+  const { propName, cover, depth, vcd, cycles, lanes, cursor, px, radix, causalFramesBySig, annotations, dark } = opts;
+  const pal = resolveSvgPalette(dark);
   const n = Math.max(1, cycles.length);
   const nameCol = 180;
   const laneH = 26;
   const headH = 24;
   const w = nameCol + n * px;
   const h = headH + (lanes.length + 1) * laneH;
-  const statusColor = cover ? "#3b5bc4" : "#b4471b";
+  const statusColor = cover ? pal.stCovered : pal.stCex;
 
   const out: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="IBM Plex Mono, monospace" font-size="11">`);
-  out.push(`<rect width="${w}" height="${h}" fill="#fdfcfa" />`);
-  out.push(`<rect width="${nameCol}" height="${h}" fill="#f1efe9" />`);
-  out.push(`<rect x="${nameCol + cursor * px}" y="0" width="${px}" height="${h}" fill="${statusColor}" fill-opacity="0.09" />`);
+  out.push(`<rect width="${w}" height="${h}" fill="${pal.surface}" />`);
+  out.push(`<rect width="${nameCol}" height="${h}" fill="${pal.surface2}" />`);
+  out.push(`<rect x="${nameCol}" y="0" width="${w - nameCol}" height="${headH}" fill="${pal.chrome}" />`);
+  out.push(`<rect x="${nameCol + cursor * px}" y="0" width="${px}" height="${h}" fill="${statusColor}" fill-opacity="0.12" />`);
 
   // Ruler
   for (let c = 0; c < n; c++) {
     const x = nameCol + c * px;
-    out.push(`<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="#e3e0d7" stroke-width="1" />`);
-    out.push(`<text x="${x + 4}" y="15" fill="${c === depth ? statusColor : "#6a665d"}">${c}</text>`);
+    out.push(`<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="${pal.border}" stroke-width="1" />`);
+    out.push(`<text x="${x + 4}" y="15" fill="${c === depth ? statusColor : pal.muted}">${c}</text>`);
   }
-  out.push(`<line x1="0" y1="${headH}" x2="${w}" y2="${headH}" stroke="#d9d5ca" />`);
+  out.push(`<line x1="0" y1="${headH}" x2="${w}" y2="${headH}" stroke="${pal.borderStrong}" />`);
 
   // Property lane
   const py = headH;
   const failX = nameCol + Math.max(0, Math.min(n - 1, depth)) * px;
-  out.push(`<text x="8" y="${py + 17}" fill="#22211e" font-weight="600">${escapeXml(propName)}</text>`);
-  out.push(`<line x1="${nameCol}" y1="${py + laneH - 5}" x2="${failX}" y2="${py + laneH - 5}" stroke="#55524a" stroke-width="1.5" />`);
-  out.push(`<rect x="${failX + 2}" y="${py + 4}" width="${Math.max(4, px - 4)}" height="${laneH - 8}" rx="2" fill="${statusColor}" fill-opacity="0.18" stroke="${statusColor}" />`);
+  out.push(`<text x="8" y="${py + 17}" fill="${pal.text}" font-weight="600">${escapeXml(propName)}</text>`);
+  out.push(`<line x1="${nameCol}" y1="${py + laneH - 5}" x2="${failX}" y2="${py + laneH - 5}" stroke="${pal.text2}" stroke-width="1.5" />`);
+  out.push(`<rect x="${failX + 2}" y="${py + 4}" width="${Math.max(4, px - 4)}" height="${laneH - 8}" rx="2" fill="${statusColor}" fill-opacity="0.2" stroke="${statusColor}" />`);
   out.push(`<text x="${failX + px / 2}" y="${py + 17}" text-anchor="middle" fill="${statusColor}" font-weight="600">${cover ? "cover" : "fail"}</text>`);
 
   // Signal lanes
@@ -270,14 +274,14 @@ export function renderTraceSvg(opts: {
     const lo = y + laneH - 5;
     const mid = y + laneH / 2;
     const rdx = radix[s.path] ?? "hex";
-    out.push(`<text x="8" y="${y + 17}" fill="#22211e">${escapeXml(s.path)}</text>`);
-    out.push(`<line x1="0" y1="${y + laneH}" x2="${w}" y2="${y + laneH}" stroke="#e3e0d7" />`);
+    out.push(`<text x="8" y="${y + 17}" fill="${pal.text}">${escapeXml(s.path)}</text>`);
+    out.push(`<line x1="0" y1="${y + laneH}" x2="${w}" y2="${y + laneH}" stroke="${pal.border}" />`);
 
     const causalFrames = causalFramesBySig?.get(s.path);
     if (causalFrames) {
       for (const cf of causalFrames) {
         if (cf >= 0 && cf < n) {
-          out.push(`<rect x="${nameCol + cf * px + 1}" y="${y + 2}" width="${Math.max(2, px - 2)}" height="${laneH - 4}" rx="2" fill="#fbf1d9" stroke="#e0ae4a" stroke-opacity="0.6" />`);
+          out.push(`<rect x="${nameCol + cf * px + 1}" y="${y + 2}" width="${Math.max(2, px - 2)}" height="${laneH - 4}" rx="2" fill="${pal.hlLine}" stroke="${pal.stUndetermined}" stroke-opacity="0.65" />`);
         }
       }
     }
@@ -291,7 +295,7 @@ export function renderTraceSvg(opts: {
         const x1 = x0 + px;
         d += d ? ` L${x0},${yv} L${x1},${yv}` : `M${x0},${yv} L${x1},${yv}`;
       }
-      out.push(`<path d="${d}" fill="none" stroke="#22211e" stroke-width="1.4" />`);
+      out.push(`<path d="${d}" fill="none" stroke="${pal.text}" stroke-width="1.4" />`);
     } else {
       let runStart = 0;
       let runVal = vcd.valuesAt(s, cycles[0]) ?? "x".repeat(s.width);
@@ -299,9 +303,9 @@ export function renderTraceSvg(opts: {
         const x0 = nameCol + runStart * px;
         const x1 = nameCol + cEnd * px;
         const txt = formatValue(val, rdx);
-        out.push(`<rect x="${x0 + 1}" y="${hi}" width="${Math.max(2, x1 - x0 - 2)}" height="${lo - hi}" rx="2" fill="#fdfcfa" stroke="#55524a" stroke-width="1.2" />`);
+        out.push(`<rect x="${x0 + 1}" y="${hi}" width="${Math.max(2, x1 - x0 - 2)}" height="${lo - hi}" rx="2" fill="${pal.surface}" stroke="${pal.text2}" stroke-width="1.2" />`);
         if (txt.length * 7 + 6 <= x1 - x0) {
-          out.push(`<text x="${(x0 + x1) / 2}" y="${mid + 4}" text-anchor="middle" fill="#22211e">${escapeXml(txt)}</text>`);
+          out.push(`<text x="${(x0 + x1) / 2}" y="${mid + 4}" text-anchor="middle" fill="${pal.text}">${escapeXml(txt)}</text>`);
         }
       };
       for (let c = 1; c < n; c++) {
@@ -319,9 +323,10 @@ export function renderTraceSvg(opts: {
     for (const ann of annotations ?? []) {
       if ((ann.signal === s.path || s.path.endsWith(`.${ann.signal}`) || ann.signal.endsWith(`.${s.path}`)) && ann.frame >= 0 && ann.frame < n) {
         const ax = nameCol + ann.frame * px + 2;
-        const badgeColor = ann.tone === "danger" ? "#b42318" : ann.tone === "ok" ? "#2f7a4c" : "#1d5f5b";
+        const badgeColor = ann.tone === "danger" ? pal.stError : ann.tone === "ok" ? pal.stProven : pal.accent;
+        const badgeText = pal.dark ? "#161614" : "#ffffff";
         out.push(`<rect x="${ax}" y="${y + 2}" width="${Math.max(36, ann.label.length * 6.5 + 8)}" height="14" rx="3" fill="${badgeColor}" />`);
-        out.push(`<text x="${ax + 4}" y="${y + 12}" fill="#ffffff" font-size="9.5" font-weight="600">${escapeXml(ann.label)}</text>`);
+        out.push(`<text x="${ax + 4}" y="${y + 12}" fill="${badgeText}" font-size="9.5" font-weight="600">${escapeXml(ann.label)}</text>`);
       }
     }
   });

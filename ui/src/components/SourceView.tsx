@@ -113,6 +113,8 @@ function buildSvSyntaxPlugin() {
 export function SourceView({
   text,
   file,
+  switchFiles,
+  onSelectFile,
   focus,
   focusEnd,
   causalSignals,
@@ -124,6 +126,8 @@ export function SourceView({
 }: {
   text: string;
   file?: string | null;
+  switchFiles?: string[];
+  onSelectFile?: (file: string) => void;
   focus: number;
   focusEnd?: number;
   causalSignals?: string[];
@@ -224,8 +228,8 @@ export function SourceView({
           builder.add(line.from, line.from, Decoration.widget({ widget: new FocusLinePrefixWidget(lno), side: -1 }));
         }
 
-        // Inline Active Trace Value decoration at end of RTL (.sv) lines when trace is open
-        const isRtl = Boolean(file?.endsWith(".sv"));
+        // Inline Active Trace Value decoration at end of RTL (.sv/.svh/.v) lines when trace is open
+        const isRtl = Boolean(file && /\.(sv|svh|v)$/i.test(file));
         if (isRtl && activeTraceCycle !== null && traceRe && codePart.trim().length > 0 && !codePart.trimStart().startsWith("module ")) {
           const seen = new Set<string>();
           let m: RegExpExecArray | null;
@@ -348,14 +352,37 @@ export function SourceView({
   if (!text) return <p className="empty">No source loaded.</p>;
 
   const hasLint = (lintFindings?.length ?? 0) > 0;
-  const showToolbar = Boolean(file || hasLint || selectedWord);
+  const hasSwitcher = Boolean(switchFiles && switchFiles.length > 1 && onSelectFile);
+  const isRtlFile = Boolean(file && /\.(sv|svh|v)$/i.test(file));
+  const showToolbar = Boolean(file || hasLint || selectedWord || hasSwitcher);
 
   return (
     <div className="source-wrap">
       {showToolbar && (
         <div className="source-bar">
-          {file && <span className="mono small muted ellipsis">{file}</span>}
-          {activeTraceCycle !== null && (
+          {hasSwitcher ? (
+            <div className="source-file-switcher" role="group" aria-label="Source files">
+              {switchFiles!.map((f) => {
+                const base = f.split("/").pop() ?? f;
+                const active = f === file;
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    className={`source-file-pill mono ${active ? "on" : ""}`}
+                    aria-pressed={active}
+                    title={f}
+                    onClick={() => onSelectFile!(f)}
+                  >
+                    {base}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            file && <span className="source-file-label mono small muted ellipsis" title={file}>{file}</span>
+          )}
+          {isRtlFile && activeTraceCycle !== null && (
             <span className="source-live-badge mono" title="Inline RTL signal values are live-synced to the open waveform cursor">
               ● Live values @C{activeTraceCycle}
             </span>
@@ -399,9 +426,9 @@ export function SourceView({
         <div className="lint-strip" role="region" aria-label="Formal-readiness lint diagnostics">
           {lintFindings!.slice(0, 4).map((d, i) => (
             <div key={`${d.rule}-${d.line}-${i}`} className={`lint-item lint-${d.severity}`}>
-              <span className="mono strong">{d.rule}</span>
-              <span className="muted mono">L{d.line}</span>
-              <span className="ellipsis" title={d.message}>{d.message}</span>
+              <span className="lint-rule mono strong">{d.rule}</span>
+              <span className="lint-line muted mono">L{d.line}</span>
+              <span className="lint-msg ellipsis" title={d.message}>{d.message}</span>
               {d.fixes.map((fx, fi) => (
                 <button
                   key={fi}

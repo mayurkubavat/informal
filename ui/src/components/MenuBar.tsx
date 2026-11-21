@@ -6,7 +6,15 @@ export type MenuItem =
   | { sep: true };
 export type MenuDef = { label: string; items: MenuItem[] };
 
-export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: React.ReactNode }) {
+export function MenuBar({
+  menus,
+  macOverlay,
+  children,
+}: {
+  menus: MenuDef[];
+  macOverlay?: boolean;
+  children?: React.ReactNode;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   const bar = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -25,9 +33,10 @@ export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: Reac
       document.removeEventListener("keydown", esc);
     };
   }, [open]);
+  const dragProps = macOverlay ? { "data-tauri-drag-region": "" } : {};
   return (
-    <div className="menubar" ref={bar}>
-      <span className="menubar-brand" title="InFormal Formal Verification">
+    <div className={`menubar ${macOverlay ? "mac-overlay" : ""}`} ref={bar} {...dragProps}>
+      <span className="menubar-brand" title="InFormal Formal Verification" {...dragProps}>
         <Logo size={16} />
       </span>
       {/* role lives on a layout-neutral wrapper: a menubar may only own menu items, not the script path field */}
@@ -73,7 +82,7 @@ export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: Reac
         </div>
       ))}
       </div>
-      <span className="spacer" />
+      <span className="spacer" {...dragProps} />
       {children}
     </div>
   );
