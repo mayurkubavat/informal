@@ -603,7 +603,7 @@ export default function App() {
   }, [tracePath]);
   const showTrace = center === "trace" && !!traceProp;
 
-  // Live formal-ready lint (`dv-lint` SV-FPV-001..005) when source view opens on an RTL file
+  // Live formal-ready lint (`svlang lint` SV-FPV-001..005) when source view opens on an RTL file
   const refreshLint = useCallback(
     (targetFile?: string) => {
       if (!session?.elaborated) {

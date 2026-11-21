@@ -1,4 +1,4 @@
-//! Live Formal-Ready linting (`dv-lint` `SV-FPV-001..005` + SVA/CDC/FSM checks)
+//! Live Formal-Ready linting (`svlang-lint` `SV-FPV-001..005` + SVA/CDC/FSM checks)
 //! with 1-click quick-fixes and RTL Go-to-Driver / Go-to-Load navigation.
 
 use crate::types::Request;
@@ -183,7 +183,7 @@ fn synthesize_fpv_fix(
     }
 }
 
-/// Run `dv-lint` with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM)
+/// Run `svlang-lint` with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM)
 /// in-process on `req`'s SystemVerilog files and return structured findings + quick-fixes.
 pub fn lint_formal_ready(
     req: &Request,
@@ -206,10 +206,10 @@ pub fn lint_formal_ready(
         args.push(f.display().to_string());
     }
     let (trees, parse_ms) = svlang::semantic::parse_args(&args).map_err(|e| e.to_string())?;
-    let (_design, (files, found)) = dv_lint::lint_built(
-        || dv_model::design_of(&trees, parse_ms),
+    let (_design, (files, found)) = svlang_lint::lint_built(
+        || svlang_model::design_of(&trees, parse_ms),
         &trees,
-        dv_lint::is_formal_ready_rule,
+        svlang_lint::is_formal_ready_rule,
     );
 
     let mut source_cache: std::collections::HashMap<String, String> =

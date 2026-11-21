@@ -694,24 +694,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
-name = "dv-lint"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
-dependencies = [
- "dv-model",
- "regex",
- "svlang",
-]
-
-[[package]]
-name = "dv-model"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
-dependencies = [
- "svlang",
-]
-
-[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1659,10 +1641,10 @@ version = "0.1.0"
 name = "informal-svlang"
 version = "0.1.0"
 dependencies = [
- "dv-lint",
- "dv-model",
  "serde",
  "svlang",
+ "svlang-lint",
+ "svlang-model",
 ]
 
 [[package]]
@@ -3270,8 +3252,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sv-aiger"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-btor2",
  "sv-netlist",
@@ -3279,8 +3261,8 @@ dependencies = [
 
 [[package]]
 name = "sv-btor2"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-netlist",
  "sv-semantic",
@@ -3288,13 +3270,13 @@ dependencies = [
 
 [[package]]
 name = "sv-lexer"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 
 [[package]]
 name = "sv-netlist"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-semantic",
  "sv-syntax",
@@ -3302,16 +3284,16 @@ dependencies = [
 
 [[package]]
 name = "sv-preprocessor"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-lexer",
 ]
 
 [[package]]
 name = "sv-semantic"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-source",
  "sv-syntax",
@@ -3319,13 +3301,13 @@ dependencies = [
 
 [[package]]
 name = "sv-source"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 
 [[package]]
 name = "sv-syntax"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-lexer",
  "sv-preprocessor",
@@ -3333,8 +3315,8 @@ dependencies = [
 
 [[package]]
 name = "sv-yosys"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-netlist",
  "sv-semantic",
@@ -3342,8 +3324,8 @@ dependencies = [
 
 [[package]]
 name = "svlang"
-version = "0.2.0"
-source = "git+https://github.com/mayurkubavat/svlang?rev=923f0f1bc06393645a989714d12b2694d090359e#923f0f1bc06393645a989714d12b2694d090359e"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
 dependencies = [
  "sv-aiger",
  "sv-btor2",
@@ -3354,6 +3336,24 @@ dependencies = [
  "sv-source",
  "sv-syntax",
  "sv-yosys",
+]
+
+[[package]]
+name = "svlang-lint"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
+dependencies = [
+ "regex",
+ "svlang",
+ "svlang-model",
+]
+
+[[package]]
+name = "svlang-model"
+version = "0.3.0"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=6b1dab712656194d14956226ff0c52c86656c792#6b1dab712656194d14956226ff0c52c86656c792"
+dependencies = [
+ "svlang",
 ]
 
 [[package]]

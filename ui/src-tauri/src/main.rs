@@ -768,7 +768,7 @@ fn ai_gui_done(
     ai.window.done(id, result);
 }
 
-/// Structured tool queries used by the rich UI views (CodeMirror `dv-lint` + quick-fixes,
+/// Structured tool queries used by the rich UI views (CodeMirror `svlang lint` + quick-fixes,
 /// Go-to-Driver/Load `signal_nav`, `schematic_get`, `fv_complexity`).
 #[tauri::command]
 async fn workbench_tool(

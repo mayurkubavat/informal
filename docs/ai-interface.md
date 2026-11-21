@@ -119,7 +119,7 @@ reply (`tools/list`).
 | Design | `design_hierarchy` | Instance tree with ports and signals | no |
 | | `design_info` | Counts of the design (inputs, flops, latches, memories, clocks and resets found) and the size of the current task's model (Btor2 nodes, states, AIG ands) | no |
 | | `design_source` | Source text by file and line range | no |
-| | `formal_lint` | Run `dv-lint` (`formal-ready` pack: `SV-FPV-001..005`, SVA, CDC, FSM) on the design's RTL files with structured 1-click quick-fix byte edits | no |
+| | `formal_lint` | Run `svlang lint` (`formal-ready` pack: `SV-FPV-001..005`, SVA, CDC, FSM) on the design's RTL files with structured 1-click quick-fix byte edits | no |
 | | `formal_fix_apply` | Apply a byte-range quick-fix from `formal_lint` to a design file under the workspace root (or propose it in `propose` mode) | yes, by mode |
 | | `signal_nav` | Resolve declarations, sequential/combinational drivers, and SVA/expression loads of an RTL signal across files | no |
 | | `fv_complexity` | COI state bits, wide arithmetic hotspots, memories, and blackbox candidates (`get_fv_complexity`) | no |

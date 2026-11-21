@@ -741,7 +741,7 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
   border: 0;
 }
 
-/* ---- CodeMirror 6 SourceView + Live Trace Values + dv-lint + Nav Popover ---- */
+/* ---- CodeMirror 6 SourceView + Live Trace Values + svlang lint + Nav Popover ---- */
 .source-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; background: var(--surface); }
 .source-bar {
   display: flex;
