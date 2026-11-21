@@ -42,3 +42,36 @@ For every synthesized property:
 2. For an `assert` that comes back `cex`, inspect with `cex_diagnose` to determine whether the RTL has a real bug or the SVA mis-modeled the spec.
 3. For a `cover`, confirm `candidate_result.status == "covered"`.
 4. Only call `proposal_add` once validated, including the spec requirement ID and validation result in `rationale`.
+
+## Step 5: Machine-Verifiable Plan & Signoff (`fvp.spec.json` + `spec_audit`)
+
+Author or audit a compact `fvp.spec.json` (`"schema": "informal.spec/1"`) alongside the RTL so requirement completeness and boundary soundness are verified mechanically:
+
+```json
+{
+  "schema": "informal.spec/1",
+  "design": { "top": "fifo", "clocks": ["clk"], "reset": "!rst_n" },
+  "boundary": {
+    "allowed_assume_inputs": ["push", "pop", "din"],
+    "forbidden_assume_signals": ["full", "empty", "dout", "status", "count", "wp", "rp"]
+  },
+  "requirements": [
+    {
+      "id": "REQ-FIFO-001",
+      "title": "Occupancy stays within depth and full/empty are mutually exclusive",
+      "assertions": ["a_count_max", "a_full_empty"],
+      "covers": ["c_full"]
+    }
+  ],
+  "signoff": {
+    "proof_target": "proven",
+    "max_overconstraints": 0,
+    "max_dead_ends": 0,
+    "forbid_vacuous": true,
+    "coi_coverage_floor": 90.0
+  }
+}
+```
+
+- Run `spec_audit(check_dead_end=true)` (auto-discovers `fvp.spec.json` next to the open design files, or accepts `spec_file` / inline `spec`).
+- Require `signoff_ready == true` before claiming verification signoff: zero `missing_assert`, zero `missing_cover`, zero `vacuous`, zero `overconstrained`, and all `gates` green.

@@ -22,6 +22,7 @@ pub mod diagnose;
 pub mod prompts;
 pub mod server;
 pub mod socket;
+pub mod spec;
 pub mod tools;
 pub mod vcd;
 

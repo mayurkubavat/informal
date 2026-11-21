@@ -123,6 +123,7 @@ reply (`tools/list`).
 | | `formal_fix_apply` | Apply a byte-range quick-fix from `formal_lint` to a design file under the workspace root (or propose it in `propose` mode) | yes, by mode |
 | | `signal_nav` | Resolve declarations, sequential/combinational drivers, and SVA/expression loads of an RTL signal across files | no |
 | | `fv_complexity` | COI state bits, wide arithmetic hotspots, memories, and blackbox candidates (`get_fv_complexity`) | no |
+| | `spec_audit` | Cross-check the active session against `fvp.spec.json` (`informal.spec/1`): design/clock/reset intent, legal primary-input assumption boundary, per-`REQ-*` status (`verified`, `cex`, `undetermined`, `missing_assert`, `missing_cover`, `vacuous`, `overconstrained`), signoff gates, and next-action hints | no |
 | Traces & Cone | `trace_get` | A counterexample or cover trace: values per signal and frame, chosen signals, a frame window | no |
 | | `why_cex` | Dynamic backward causal slice of a `cex` or `covered` trace from failure cycle `T` to `0` (active mux arms, controlling boolean inputs, register transitions) | no |
 | | `cex_diagnose` | Single-call CEX root-cause dossier: fuses `property_get`, `why_cex`, trimmed trace on active causal signals, primary-input vs DUT-state signal roles, RTL driver snippets, `formal_lint`, and a triage hint | no |

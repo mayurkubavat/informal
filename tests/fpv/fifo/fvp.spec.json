@@ -1,0 +1,63 @@
+{
+  "schema": "informal.spec/1",
+  "name": "Parameterized 4-Entry Sync FIFO Formal Verification Plan",
+  "design": {
+    "top": "fifo",
+    "clocks": ["clk"],
+    "reset": "!rst_n"
+  },
+  "boundary": {
+    "allowed_assume_inputs": ["push", "pop", "din"],
+    "forbidden_assume_signals": [
+      "dout",
+      "full",
+      "empty",
+      "status",
+      "count",
+      "wp",
+      "rp",
+      "mem",
+      "u_wp.*",
+      "u_rp.*"
+    ]
+  },
+  "requirements": [
+    {
+      "id": "REQ-FIFO-001",
+      "title": "Occupancy never exceeds depth and full/empty are mutually exclusive",
+      "assertions": ["a_count_max", "a_full_empty"],
+      "covers": ["c_full"]
+    },
+    {
+      "id": "REQ-FIFO-002",
+      "title": "Pointer difference and write-pointer sub-instance track occupancy",
+      "assertions": ["a_ptr_diff", "a_sub_ptr"],
+      "covers": ["c_full"]
+    },
+    {
+      "id": "REQ-FIFO-003",
+      "title": "Full FIFO preserves full flag on push without pop (no overflow)",
+      "assertions": ["a_no_overflow"],
+      "covers": ["c_full"]
+    },
+    {
+      "id": "REQ-FIFO-004",
+      "title": "Status encoding matches full and count==3 states",
+      "assertions": ["a_status"],
+      "covers": ["c_status3"]
+    },
+    {
+      "id": "REQ-FIFO-005",
+      "title": "First word pushed into empty FIFO appears on dout until popped",
+      "assertions": ["a_data"],
+      "covers": ["c_full"]
+    }
+  ],
+  "signoff": {
+    "proof_target": "proven",
+    "max_overconstraints": 0,
+    "max_dead_ends": 0,
+    "forbid_vacuous": true,
+    "forbid_under_ai": false
+  }
+}

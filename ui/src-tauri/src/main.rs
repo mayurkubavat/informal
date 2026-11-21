@@ -782,6 +782,7 @@ async fn workbench_tool(
         "formal_fix_apply",
         "signal_nav",
         "fv_complexity",
+        "spec_audit",
         "why_cex",
         "cex_diagnose",
         "convergence_diagnose",

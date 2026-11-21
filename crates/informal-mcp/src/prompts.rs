@@ -52,8 +52,12 @@ const PROMPTS: &[PromptSpec] = &[
     PromptSpec {
         name: "audit_signoff",
         title: "Formal verification signoff & soundness audit",
-        description: "Run a complete signoff gate across the live session: `formal_lint`, assumption over-constraint/vacuity audit, `under_ai` provenance review, cover reachability, and `check_cov` COI/UNR coverage.",
-        arguments: &[],
+        description: "Run a complete signoff gate across the live session: `spec_audit` against `fvp.spec.json` (if present), `formal_lint`, assumption over-constraint/vacuity audit, `under_ai` provenance review, cover reachability, and `check_cov` COI/UNR coverage.",
+        arguments: &[(
+            "spec_file",
+            "Optional path to `fvp.spec.json` (`informal.spec/1`); auto-discovered when omitted",
+            false,
+        )],
     },
 ];
 
@@ -164,8 +168,15 @@ pub fn get(name: &str, args: &Value, ctx: &Value) -> Result<Value, String> {
             )
         }
         "spec_to_sva" => {
-            let req = arg("requirement").ok_or_else(|| "`requirement` argument is required".to_string())?;
+            let req = arg("requirement")
+                .ok_or_else(|| "`requirement` argument is required".to_string())?;
             let scope = arg("module").unwrap_or(top);
+            let spec_note = match ctx["spec_file"].as_str() {
+                Some(sf) => format!(
+                    "\n5. Cross-check requirement coverage with `spec_audit(spec_file=\"{sf}\")` so every `REQ-*` maps to proven assertions and reachable witness covers."
+                ),
+                None => "\n5. If a `fvp.spec.json` (`informal.spec/1`) specification exists or is requested, run `spec_audit` to verify requirement-to-assertion/cover completeness.".into(),
+            };
             (
                 PROMPTS[2].description,
                 format!(
@@ -181,24 +192,33 @@ pub fn get(name: &str, args: &Value, ctx: &Value) -> Result<Value, String> {
                         - Explicit reset guard (`disable iff ({reset})`) when checking post-reset behavior.\n\
                         - Exact sampling semantics (`|->` same-cycle vs `|=>` next-cycle; guard `$past(...)` against cycle 0).\n\
                         - A **companion non-vacuity witness `cover`** proving the antecedent/scenario is reachable.\n\
-                     4. Validate every candidate with `proposal_validate` (confirming non-vacuity and cover reachability) BEFORE calling `proposal_add`."
+                     4. Validate every candidate with `proposal_validate` (confirming non-vacuity and cover reachability) BEFORE calling `proposal_add`.{spec_note}"
                 ),
             )
         }
-        "audit_signoff" => (
-            PROMPTS[3].description,
-            format!(
-                "Perform a rigorous formal verification signoff audit on `{top}` (clocks: {clocks}; reset: {reset}; mode: {mode}).\n\
-                 Failing (`cex`) properties: {cex_list}\n\
-                 Undetermined properties: {undet_list}\n\n\
-                 Audit checklist (report findings with exact evidence, no hand-waving):\n\
-                 1. **Session & Status**: Call `session_summary` and `property_list` — list counts of `proven`, `cex`, `undetermined`, `covered`, `unreachable`, and `unprocessed`.\n\
-                 2. **Lint & Anti-Cheat**: Call `formal_lint` (`SV-FPV-001..005`) — flag any output/state-constraining assumptions or missing `disable iff` reset guards.\n\
-                 3. **Vacuity & AI Provenance**: Inspect every `proven` assertion via `property_get` for `vacuity` (`non-vacuous` vs `vacuous` / `not checked`) and `under_ai` dependencies.\n\
-                 4. **Assumption Sanity & Covers**: Verify environment assumptions are conflict-free and no witness `cover` is unexpectedly `unreachable`.\n\
-                 5. **Formal Coverage**: Check COI/UNR coverage via `check_cov` if initialized, and summarize concrete signoff blockers."
-            ),
-        ),
+        "audit_signoff" => {
+            let sf = arg("spec_file").or_else(|| ctx["spec_file"].as_str());
+            let spec_step = match sf {
+                Some(p) => format!(
+                    "1. **Machine-Verifiable Spec Audit**: Call `spec_audit(spec_file=\"{p}\", check_dead_end=true)` first — report `signoff_ready`, per-`REQ-*` status (`verified`, `cex`, `undetermined`, `missing_assert`, `missing_cover`, `vacuous`, `overconstrained`), boundary over-constraints, and failed gates."
+                ),
+                None => "1. **Machine-Verifiable Spec Audit**: Call `spec_audit(check_dead_end=true)` if an `fvp.spec.json` (`informal.spec/1`) file is present (or pass inline `spec`), and call `session_summary` + `property_list` to tally `proven`, `cex`, `undetermined`, `covered`, and `unreachable`.".into(),
+            };
+            (
+                PROMPTS[3].description,
+                format!(
+                    "Perform a rigorous formal verification signoff audit on `{top}` (clocks: {clocks}; reset: {reset}; mode: {mode}).\n\
+                     Failing (`cex`) properties: {cex_list}\n\
+                     Undetermined properties: {undet_list}\n\n\
+                     Audit checklist (report findings with exact evidence, no hand-waving):\n\
+                     {spec_step}\n\
+                     2. **Lint & Anti-Cheat**: Call `formal_lint` (`SV-FPV-001..005`) — flag any output/state-constraining assumptions or missing `disable iff` reset guards.\n\
+                     3. **Vacuity & AI Provenance**: Inspect every `proven` assertion via `property_get` for `vacuity` (`non-vacuous` vs `vacuous` / `not checked`) and `under_ai` dependencies.\n\
+                     4. **Assumption Sanity & Covers**: Verify environment assumptions are conflict-free and dead-end-free, and no witness `cover` is unexpectedly `unreachable`.\n\
+                     5. **Formal Coverage**: Check COI/UNR coverage via `check_cov` if initialized, and summarize concrete signoff blockers."
+                ),
+            )
+        }
         _ => {
             let names: Vec<&str> = PROMPTS.iter().map(|p| p.name).collect();
             return Err(format!(

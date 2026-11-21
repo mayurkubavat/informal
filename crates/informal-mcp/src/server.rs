@@ -30,9 +30,10 @@ active trace + signal roles + RTL drivers), and call `convergence_diagnose` firs
 property. Decision D17: only a `prove` verdict establishes truth; NEVER mask an RTL bug or constrain \
 DUT outputs/internal state inside an `assume`. Always call `proposal_validate` (zero-side-effect scratch \
 task checking environment consistency, 2QBF dead-end freedom, cover non-regression, vacuity, and target \
-impact) BEFORE `proposal_add`. On a desktop window, prefer `gui_present_cex` for an atomic visual \
-walkthrough. Use MCP `prompts/list` for hydrated playbooks (`triage_cex`, `close_undetermined`, \
-`spec_to_sva`, `audit_signoff`).";
+impact) BEFORE `proposal_add`. When an `fvp.spec.json` (`informal.spec/1`) verification plan exists, \
+call `spec_audit` to check requirement-to-SVA completeness, input-only assumption boundaries, and signoff \
+gates. On a desktop window, prefer `gui_present_cex` for an atomic visual walkthrough. Use MCP \
+`prompts/list` for hydrated playbooks (`triage_cex`, `close_undetermined`, `spec_to_sva`, `audit_signoff`).";
 
 type Out = Arc<dyn Fn(&Value) + Send + Sync>;
 

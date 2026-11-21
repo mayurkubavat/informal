@@ -1079,3 +1079,152 @@ fn slice1_aci_diagnose_proposal_validate_poka_yoke_and_prompts() {
     assert!(!acts[0]["steps"].as_array().unwrap().is_empty());
     assert!(!acts[0]["annotations"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn spec_audit_verifies_requirements_boundaries_and_signoff_gates() {
+    let Some(api) = api(Mode::Auto, "spec-audit") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/fifo/fifo.jg.tcl"}),
+    );
+
+    // 1. Zero-arg auto-discovery of `tests/fpv/fifo/fvp.spec.json` + 2QBF dead-end check.
+    let summary_before = call(&api, "session_summary", json!({}));
+    let audit = call(&api, "spec_audit", json!({"check_dead_end": true}));
+    assert_eq!(audit["schema"], "informal.spec_audit/1");
+    assert_eq!(audit["signoff_ready"], true, "{audit:#}");
+    assert_eq!(audit["boundary_audit"]["ok"], true);
+    assert_eq!(audit["boundary_audit"]["dead_end_checked"], true);
+    assert_eq!(audit["boundary_audit"]["dead_end_found"], false);
+    assert_eq!(audit["summary"]["total_requirements"], 5);
+    assert_eq!(audit["summary"]["verified"], 5);
+    assert_eq!(audit["summary"]["unmapped_assertions"], json!(["a_wrong"]));
+    assert!(audit["uncovered_requirements"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    // Zero side effects on session!
+    assert_eq!(call(&api, "session_summary", json!({})), summary_before);
+
+    // 2. Hydrated `audit_signoff` prompt picks up `fvp.spec.json` and `spec_audit`.
+    let (tx, rx) = mpsc::channel::<Value>();
+    let server = Server::new(api.clone(), move |msg| {
+        let _ = tx.send(msg.clone());
+    });
+    server.handle(
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "prompts/get",
+            "params": {"name": "audit_signoff", "arguments": {}}
+        })
+        .to_string(),
+    );
+    let pget = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let ptxt = pget["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(ptxt.contains("spec_audit"));
+    assert!(ptxt.contains("fvp.spec.json"));
+
+    // 3. Add a vacuous assertion + an unprocessed assertion, and audit an inline spec
+    //    exercising verified, cex, missing_assert, missing_cover, vacuous, undetermined,
+    //    and mutation_score_floor / coi_coverage_floor gates.
+    call(
+        &api,
+        "proposal_add",
+        json!({"kind": "assert", "name": "a_vac_false", "expr": "1'b0 |-> full", "rationale": "vacuity test"}),
+    );
+    call(&api, "prove", json!({"names": ["a_vac_false"]}));
+    call(
+        &api,
+        "proposal_add",
+        json!({"kind": "assert", "name": "a_unproved", "expr": "count <= 3'd4", "rationale": "unproved test"}),
+    );
+
+    let rich_spec = json!({
+        "schema": "informal.spec/1",
+        "design": {"top": "fifo", "clocks": ["clk"], "reset": "!rst_n"},
+        "boundary": {
+            "allowed_assume_inputs": ["push", "pop", "din"],
+            "forbidden_assume_signals": ["full", "empty", "dout", "count"]
+        },
+        "requirements": [
+            {"id": "REQ-OK", "title": "Valid", "assertions": ["a_count_max"], "covers": ["c_full"]},
+            {"id": "REQ-CEX", "title": "Fails", "assertions": ["a_wrong"], "covers": ["c_full"]},
+            {"id": "REQ-MISS-A", "title": "Missing assert", "assertions": ["a_missing_xyz"], "covers": []},
+            {"id": "REQ-MISS-C", "title": "Unreachable cover", "assertions": ["a_status"], "covers": ["c_count5"]},
+            {"id": "REQ-VAC", "title": "Vacuous assert", "assertions": ["a_vac_false"], "covers": []},
+            {"id": "REQ-UNDET", "title": "Unprocessed assert", "assertions": ["a_unproved"], "covers": []}
+        ],
+        "signoff": {
+            "proof_target": "proven",
+            "max_overconstraints": 0,
+            "forbid_vacuous": true,
+            "coi_coverage_floor": 80.0,
+            "mutation_score_floor": 90.0
+        }
+    });
+    let diag = call(
+        &api,
+        "spec_audit",
+        json!({"spec": rich_spec, "mutation_score": 75.0}),
+    );
+    assert_eq!(diag["signoff_ready"], false);
+    assert_eq!(diag["summary"]["verified"], 1);
+    assert_eq!(diag["summary"]["cex"], 1);
+    assert_eq!(diag["summary"]["missing_assert"], 1);
+    assert_eq!(diag["summary"]["missing_cover"], 1);
+    assert_eq!(diag["summary"]["vacuous"], 1);
+    assert_eq!(diag["summary"]["undetermined"], 1);
+
+    let status_of = |id: &str| -> String {
+        diag["requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()["status"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(status_of("REQ-OK"), "verified");
+    assert_eq!(status_of("REQ-CEX"), "cex");
+    assert_eq!(status_of("REQ-MISS-A"), "missing_assert");
+    assert_eq!(status_of("REQ-MISS-C"), "missing_cover");
+    assert_eq!(status_of("REQ-VAC"), "vacuous");
+    assert_eq!(status_of("REQ-UNDET"), "undetermined");
+
+    let gate_ok = |g: &str| -> bool {
+        diag["gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["gate"] == g)
+            .unwrap()["ok"]
+            .as_bool()
+            .unwrap()
+    };
+    assert!(!gate_ok("coi_coverage"));
+    assert!(!gate_ok("mutation_coverage"));
+
+    // 4. Inject an illegal DUT-output assumption (`!full`) -> boundary_audit catches it
+    //    and marks requirements `overconstrained`.
+    call(
+        &api,
+        "proposal_add",
+        json!({"kind": "assume", "name": "m_bad_out", "expr": "!full", "rationale": "bad output constraint"}),
+    );
+    let cheated = call(&api, "spec_audit", json!({}));
+    assert_eq!(cheated["signoff_ready"], false);
+    assert_eq!(cheated["boundary_audit"]["ok"], false);
+    assert_eq!(
+        cheated["boundary_audit"]["overconstrained_assumptions"][0]["name"],
+        "m_bad_out"
+    );
+    assert_eq!(cheated["summary"]["overconstrained"], 5);
+}

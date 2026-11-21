@@ -3681,6 +3681,380 @@
     }
   },
   {
+    "changes": false,
+    "description": "Cross-check the active session against a machine-verifiable formal verification spec (`fvp.spec.json` / `informal.spec/1`): verifies design/clock/reset intent, legal primary-input-only assumption boundary, per-requirement assertion + witness-cover status (`verified`, `cex`, `undetermined`, `missing_assert`, `missing_cover`, `vacuous`, `overconstrained`), signoff gates, and prioritized next actions. Auto-discovers `fvp.spec.json` next to the design files when `spec_file` and `spec` are omitted.",
+    "input": {
+      "properties": {
+        "check_dead_end": {
+          "description": "Run live environment consistency + 2QBF dead-end freedom check (default false)",
+          "type": "boolean"
+        },
+        "depth": 0,
+        "mutation_score": {
+          "description": "Optional mutant-kill percentage (0..100) to evaluate against signoff.mutation_score_floor",
+          "type": "number"
+        },
+        "spec": {
+          "description": "Optional inline `informal.spec/1` JSON object instead of reading a file",
+          "type": "object"
+        },
+        "spec_file": {
+          "description": "Optional path to fvp.spec.json (auto-discovered next to open design files when omitted)",
+          "type": "string"
+        },
+        "task": {
+          "description": "Optional task name to audit (defaults to current_task)",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "spec_audit",
+    "output": {
+      "properties": {
+        "boundary_audit": {
+          "properties": {
+            "conflict": {
+              "type": "boolean"
+            },
+            "conflict_set": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "dead_end_checked": {
+              "type": "boolean"
+            },
+            "dead_end_found": {
+              "type": "boolean"
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "overconstrained_assumptions": {
+              "items": {
+                "properties": {
+                  "expr": {
+                    "type": "string"
+                  },
+                  "forbidden_signals": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "roles": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "name",
+                  "expr",
+                  "forbidden_signals",
+                  "roles",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "ok",
+            "overconstrained_assumptions",
+            "conflict",
+            "conflict_set",
+            "dead_end_checked",
+            "dead_end_found"
+          ],
+          "type": "object"
+        },
+        "design_check": {
+          "properties": {
+            "actual_reset": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "actual_top": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clocks_ok": {
+              "type": "boolean"
+            },
+            "expected_reset": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expected_top": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mismatches": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "clocks_ok",
+            "mismatches"
+          ],
+          "type": "object"
+        },
+        "gates": {
+          "items": {
+            "properties": {
+              "actual": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "expected": {
+                "type": "string"
+              },
+              "gate": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "gate",
+              "ok",
+              "expected",
+              "actual",
+              "detail"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "next_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requirements": {
+          "items": {
+            "properties": {
+              "assertions": {
+                "items": {
+                  "properties": {
+                    "found": {
+                      "type": "boolean"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "under_ai": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "vacuity": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "found",
+                    "status",
+                    "vacuity",
+                    "under_ai"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "covers": {
+                "items": {
+                  "properties": {
+                    "found": {
+                      "type": "boolean"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "found",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "issues": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "next_action": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "verified",
+                  "cex",
+                  "undetermined",
+                  "missing_assert",
+                  "missing_cover",
+                  "vacuous",
+                  "overconstrained"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "status",
+              "assertions",
+              "covers",
+              "issues",
+              "next_action"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.spec_audit/1",
+          "type": "string"
+        },
+        "signoff_ready": {
+          "description": "True iff all requirements are verified and all signoff gates pass",
+          "type": "boolean"
+        },
+        "spec_source": {
+          "description": "Canonical fvp.spec.json path or <inline>",
+          "type": "string"
+        },
+        "summary": {
+          "properties": {
+            "cex": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "missing_assert": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "missing_cover": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "overconstrained": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total_requirements": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "undetermined": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unmapped_assertions": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "vacuous": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "verified": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_requirements",
+            "verified",
+            "cex",
+            "undetermined",
+            "missing_assert",
+            "missing_cover",
+            "vacuous",
+            "overconstrained",
+            "unmapped_assertions"
+          ],
+          "type": "object"
+        },
+        "task": {
+          "description": "Audited task name",
+          "type": "string"
+        },
+        "uncovered_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "spec_source",
+        "task",
+        "signoff_ready",
+        "design_check",
+        "boundary_audit",
+        "summary",
+        "gates",
+        "requirements",
+        "uncovered_requirements",
+        "next_actions"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "changes": true,
     "description": "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
     "input": {

@@ -24,7 +24,8 @@ Use the `informal` MCP server tools whenever the user wants to elaborate SystemV
 | Property is `cex` or `covered` | `cex_diagnose` | Read `references/cex-triage-playbook.md` (do NOT dump raw `trace_get` first) |
 | Property is `undetermined` or slow | `convergence_diagnose` | Read `references/convergence-playbook.md` (helper-lemma CEGIS / abstraction) |
 | Testing a candidate `assume` / lemma / `cut_point` | `proposal_validate` | Only call `proposal_add` when `ready_to_propose: true` and warnings are justified |
-| Formalizing a spec requirement into SVA | `design_hierarchy` + `design_source` | Read `references/spec-to-sva-guide.md` |
+| Formalizing a spec requirement into SVA | `design_hierarchy` + `design_source` + `spec_audit` | Read `references/spec-to-sva-guide.md` |
+| Signoff & requirement completeness audit | `spec_audit` + `formal_lint` | Cross-checks `fvp.spec.json` (`informal.spec/1`), input-only `assume` boundary, witness covers, vacuity, and signoff gates |
 | Desktop `InFormal.app` connected (`gui_*` present) | `gui_present_cex` | Single-call atomic visual tour (`cex-debug` + Why CEX + callouts + walkthrough) |
 | IDE embedded side pane (no `gui_*`) | `open_workbench` | Automatically refreshed by `prove`, `cex_diagnose`, `why_cex`, `schematic_get`, Formal Apps |
 | Formal Apps (COV, X-Prop, SPV, SEC, CSR, VIP) | `check_cov` / `check_xprop` / `check_spv` / `check_sec` / `check_csr` / `check_protocol` | Inspect `session_summary` and `property_list` after running |

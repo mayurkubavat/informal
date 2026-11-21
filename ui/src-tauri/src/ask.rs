@@ -27,12 +27,13 @@ pub const TOOLS: &[&str] = &[
     "formal_lint",
     "signal_nav",
     "fv_complexity",
+    "spec_audit",
     "session_log",
     "gui_state",
 ];
 
 /// Added to the system prompt when the model has the tools.
-pub const TOOLS_NOTE: &str = "Prefer `cex_diagnose` first for any failing (`cex`) or `covered` property (1-call causal slice + trimmed active trace + input/output signal roles + RTL drivers + lint), and `convergence_diagnose` first for any `undetermined` property (engine bounds + complexity hotspots + convergence tactics). You also have `trace_get`, `why_cex`, `schematic_get`, `formal_lint`, `signal_nav`, `fv_complexity`, `design_source`, and `gui_state`. Look before you explain a failure; cite exact cycles and values; never suggest masking an RTL bug with an `assume` on DUT outputs.";
+pub const TOOLS_NOTE: &str = "Prefer `cex_diagnose` first for any failing (`cex`) or `covered` property (1-call causal slice + trimmed active trace + input/output signal roles + RTL drivers + lint), `convergence_diagnose` first for any `undetermined` property (engine bounds + complexity hotspots + convergence tactics), and `spec_audit` when checking requirement completeness/signoff against `fvp.spec.json`. You also have `trace_get`, `why_cex`, `schematic_get`, `formal_lint`, `signal_nav`, `fv_complexity`, `design_source`, and `gui_state`. Look before you explain a failure; cite exact cycles and values; never suggest masking an RTL bug with an `assume` on DUT outputs.";
 
 /// [`TOOLS`] as the model is given them, from the AI interface's own
 /// definitions.

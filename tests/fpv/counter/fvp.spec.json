@@ -1,0 +1,41 @@
+{
+  "schema": "informal.spec/1",
+  "name": "Saturating Modulo-9 Counter Formal Verification Plan",
+  "design": {
+    "top": "counter",
+    "clocks": ["clk"],
+    "reset": "!rst_n"
+  },
+  "boundary": {
+    "allowed_assume_inputs": ["en"],
+    "forbidden_assume_signals": ["q", "done", "nxt", "wrap"]
+  },
+  "requirements": [
+    {
+      "id": "REQ-CNT-001",
+      "title": "Counter saturates at 9 and never wraps",
+      "assertions": ["a_max", "a_no_wrap"],
+      "covers": ["c_done"],
+      "assumptions": ["m_en_burst"]
+    },
+    {
+      "id": "REQ-CNT-002",
+      "title": "Enabled below saturation increments q by 1 on next cycle",
+      "assertions": ["a_step"],
+      "covers": ["c_done"]
+    },
+    {
+      "id": "REQ-CNT-003",
+      "title": "Deasserted enable holds q stable",
+      "assertions": ["a_hold"],
+      "covers": ["c_done"]
+    }
+  ],
+  "signoff": {
+    "proof_target": "proven",
+    "max_overconstraints": 0,
+    "max_dead_ends": 0,
+    "forbid_vacuous": true,
+    "forbid_under_ai": false
+  }
+}

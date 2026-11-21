@@ -1025,6 +1025,183 @@ pub fn all() -> Vec<Tool> {
             changes: false,
         },
         Tool {
+            name: "spec_audit",
+            title: "Audit session against fvp.spec.json",
+            description: "Cross-check the active session against a machine-verifiable formal verification spec (`fvp.spec.json` / `informal.spec/1`): verifies design/clock/reset intent, legal primary-input-only assumption boundary, per-requirement assertion + witness-cover status (`verified`, `cex`, `undetermined`, `missing_assert`, `missing_cover`, `vacuous`, `overconstrained`), signoff gates, and prioritized next actions. Auto-discovers `fvp.spec.json` next to the design files when `spec_file` and `spec` are omitted.",
+            input: obj(
+                &[
+                    ("spec_file", s("Optional path to fvp.spec.json (auto-discovered next to open design files when omitted)")),
+                    ("spec", json!({"type": "object", "description": "Optional inline `informal.spec/1` JSON object instead of reading a file"})),
+                    ("task", s("Optional task name to audit (defaults to current_task)")),
+                    ("check_dead_end", b("Run live environment consistency + 2QBF dead-end freedom check (default false)")),
+                    ("depth", n("Bounded depth for check_dead_end (default 10)")),
+                    ("mutation_score", json!({"type": "number", "description": "Optional mutant-kill percentage (0..100) to evaluate against signoff.mutation_score_floor"})),
+                ],
+                &[],
+            ),
+            output: obj(
+                &[
+                    schema("informal.spec_audit/1"),
+                    ("spec_source", s("Canonical fvp.spec.json path or <inline>")),
+                    ("task", s("Audited task name")),
+                    ("signoff_ready", b("True iff all requirements are verified and all signoff gates pass")),
+                    (
+                        "design_check",
+                        obj(
+                            &[
+                                ("ok", b("")),
+                                ("expected_top", json!({"type": ["string", "null"]})),
+                                ("actual_top", json!({"type": ["string", "null"]})),
+                                ("expected_reset", json!({"type": ["string", "null"]})),
+                                ("actual_reset", json!({"type": ["string", "null"]})),
+                                ("clocks_ok", b("")),
+                                ("mismatches", list(s(""), "")),
+                            ],
+                            &["ok", "clocks_ok", "mismatches"],
+                        ),
+                    ),
+                    (
+                        "boundary_audit",
+                        obj(
+                            &[
+                                ("ok", b("")),
+                                (
+                                    "overconstrained_assumptions",
+                                    list(
+                                        obj(
+                                            &[
+                                                ("name", s("")),
+                                                ("expr", s("")),
+                                                ("forbidden_signals", list(s(""), "")),
+                                                ("roles", list(s(""), "")),
+                                                ("reason", s("")),
+                                            ],
+                                            &["name", "expr", "forbidden_signals", "roles", "reason"],
+                                        ),
+                                        "",
+                                    ),
+                                ),
+                                ("conflict", b("")),
+                                ("conflict_set", list(s(""), "")),
+                                ("dead_end_checked", b("")),
+                                ("dead_end_found", b("")),
+                            ],
+                            &["ok", "overconstrained_assumptions", "conflict", "conflict_set", "dead_end_checked", "dead_end_found"],
+                        ),
+                    ),
+                    (
+                        "summary",
+                        obj(
+                            &[
+                                ("total_requirements", n("")),
+                                ("verified", n("")),
+                                ("cex", n("")),
+                                ("undetermined", n("")),
+                                ("missing_assert", n("")),
+                                ("missing_cover", n("")),
+                                ("vacuous", n("")),
+                                ("overconstrained", n("")),
+                                ("unmapped_assertions", list(s(""), "")),
+                            ],
+                            &["total_requirements", "verified", "cex", "undetermined", "missing_assert", "missing_cover", "vacuous", "overconstrained", "unmapped_assertions"],
+                        ),
+                    ),
+                    (
+                        "gates",
+                        list(
+                            obj(
+                                &[
+                                    ("gate", s("")),
+                                    ("ok", b("")),
+                                    ("expected", s("")),
+                                    ("actual", s("")),
+                                    ("detail", s("")),
+                                ],
+                                &["gate", "ok", "expected", "actual", "detail"],
+                            ),
+                            "",
+                        ),
+                    ),
+                    (
+                        "requirements",
+                        list(
+                            obj(
+                                &[
+                                    ("id", s("")),
+                                    ("title", s("")),
+                                    (
+                                        "status",
+                                        one_of(
+                                            &[
+                                                "verified",
+                                                "cex",
+                                                "undetermined",
+                                                "missing_assert",
+                                                "missing_cover",
+                                                "vacuous",
+                                                "overconstrained",
+                                            ],
+                                            "",
+                                        ),
+                                    ),
+                                    (
+                                        "assertions",
+                                        list(
+                                            obj(
+                                                &[
+                                                    ("name", s("")),
+                                                    ("found", b("")),
+                                                    ("status", s("")),
+                                                    ("vacuity", s("")),
+                                                    ("under_ai", list(s(""), "")),
+                                                ],
+                                                &["name", "found", "status", "vacuity", "under_ai"],
+                                            ),
+                                            "",
+                                        ),
+                                    ),
+                                    (
+                                        "covers",
+                                        list(
+                                            obj(
+                                                &[
+                                                    ("name", s("")),
+                                                    ("found", b("")),
+                                                    ("status", s("")),
+                                                ],
+                                                &["name", "found", "status"],
+                                            ),
+                                            "",
+                                        ),
+                                    ),
+                                    ("issues", list(s(""), "")),
+                                    ("next_action", s("")),
+                                ],
+                                &["id", "title", "status", "assertions", "covers", "issues", "next_action"],
+                            ),
+                            "",
+                        ),
+                    ),
+                    ("uncovered_requirements", list(s(""), "")),
+                    ("next_actions", list(s(""), "")),
+                ],
+                &[
+                    "schema",
+                    "spec_source",
+                    "task",
+                    "signoff_ready",
+                    "design_check",
+                    "boundary_audit",
+                    "summary",
+                    "gates",
+                    "requirements",
+                    "uncovered_requirements",
+                    "next_actions",
+                ],
+            ),
+            changes: false,
+        },
+        Tool {
             name: "tcl_eval",
             title: "Evaluate a Tcl command",
             description: "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",

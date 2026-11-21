@@ -2,7 +2,7 @@
 //! one versioned JSON reply about the FPV session, or changes it in the
 //! way its mode allows (decision D17).
 
-use crate::{cone, diagnose, vcd};
+use crate::{cone, diagnose, spec, vcd};
 use informal_engine::Engine;
 use informal_fpv::session::glob;
 use informal_fpv::{
@@ -315,6 +315,10 @@ impl Api {
     pub fn is_long(tool: &str, args: &Value) -> bool {
         match tool {
             "session_open" | "tcl_eval" | "proposal_validate" => true,
+            "spec_audit" => args
+                .get("check_dead_end")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             "prove" => args.get("wait").and_then(Value::as_bool).unwrap_or(true),
             "check_cov" => args.get("action").and_then(Value::as_str) == Some("measure"),
             "check_conn" | "check_xprop" | "check_spv" | "check_sec" | "check_csr"
@@ -336,11 +340,13 @@ impl Api {
             "outputs": "(unknown)",
             "cex_properties": "none",
             "undetermined_properties": "none",
+            "spec_file": Value::Null,
         });
         if self.state.is_busy() {
             return ctx;
         }
-        if let Ok(live) = self.on_shell(false, |sh| {
+        let root = self.opts.root.clone();
+        if let Ok(live) = self.on_shell(false, move |sh| {
             let s = sh.session.borrow();
             let top = s.design.top.as_deref().unwrap_or("(not elaborated)").to_string();
             let clocks = if s.clocks.is_empty() {
@@ -368,6 +374,8 @@ impl Api {
                 .map(|p| p.name.clone())
                 .take(12)
                 .collect();
+            let spec_file = spec::discover_spec_file(&s, &root)
+                .map(|p| p.display().to_string());
             json!({
                 "top": top,
                 "clocks": clocks,
@@ -376,6 +384,7 @@ impl Api {
                 "outputs": if outs.is_empty() { "(none)".into() } else { outs.join(", ") },
                 "cex_properties": if cex.is_empty() { "none".into() } else { cex.join(", ") },
                 "undetermined_properties": if undet.is_empty() { "none".into() } else { undet.join(", ") },
+                "spec_file": spec_file,
             })
         }) {
             if let (Some(dst), Some(src)) = (ctx.as_object_mut(), live.as_object()) {
@@ -423,6 +432,7 @@ impl Api {
             "formal_fix_apply" => self.formal_fix_apply(args),
             "signal_nav" => self.signal_nav(args),
             "fv_complexity" => self.fv_complexity(args),
+            "spec_audit" => self.spec_audit(args, false),
             "prove_cache" => self.prove_cache(args),
             "check_cov" => self.check_cov(args, false),
             "check_conn" => self.check_conn(args, false),
@@ -469,6 +479,7 @@ impl Api {
             "tcl_eval" => self.tcl_eval(args),
             "prove" => self.prove(args),
             "proposal_validate" => self.proposal_validate(args),
+            "spec_audit" => self.spec_audit(args, true),
             "check_cov" => self.check_cov(args, true),
             "check_conn" => self.check_conn(args, true),
             "check_xprop" => self.check_xprop(args, true),
@@ -479,7 +490,7 @@ impl Api {
             _ => Err(err("not_found", format!("no long tool named {tool}"))),
         };
         drop(long);
-        if tool != "proposal_validate" {
+        if !matches!(tool, "proposal_validate" | "spec_audit") {
             self.changed(tool);
         }
         reply
@@ -1435,6 +1446,151 @@ impl Api {
             "schema": "informal.complexity/1",
             "report": parsed,
         }))
+    }
+
+    fn spec_audit(&self, args: &Value, long: bool) -> Reply {
+        let spec_file_arg = opt_str(args, "spec_file")?;
+        let inline_spec = match args.get("spec") {
+            None | Some(Value::Null) => None,
+            Some(v) if v.is_object() => Some(v.clone()),
+            Some(_) => return Err(wrong("spec", "a JSON object matching informal.spec/1")),
+        };
+        if spec_file_arg.is_some() && inline_spec.is_some() {
+            return Err(err(
+                "arguments",
+                "pass either `spec_file` or inline `spec`, not both",
+            ));
+        }
+        let task_arg = opt_str(args, "task")?;
+        let check_dead_end = opt_bool(args, "check_dead_end")?.unwrap_or(false);
+        let depth = opt_u64(args, "depth")?.unwrap_or(10).clamp(1, 50) as u32;
+        let mutation_score = opt_f64(args, "mutation_score")?;
+        if let Some(ms) = mutation_score {
+            if !(0.0..=100.0).contains(&ms) || ms.is_nan() {
+                return Err(wrong("mutation_score", "a percentage between 0 and 100"));
+            }
+        }
+
+        // Resolve spec document before holding the shell for solver work.
+        let (parsed_spec, spec_source) = if let Some(v) = inline_spec {
+            let sp = spec::FvpSpec::parse_value(&v).map_err(|m| {
+                err("arguments", m).with_hint(
+                    "Ensure `schema` is `\"informal.spec/1\"` and requirement IDs are unique.",
+                )
+            })?;
+            (sp, "<inline>".to_string())
+        } else {
+            let root = self.opts.root.clone();
+            let known_dirs: Vec<PathBuf> = self.on_shell(long, |sh| {
+                let s = sh.session.borrow();
+                let mut dirs = Vec::new();
+                for f in &s.design.files {
+                    if let Some(p) = f.parent().and_then(|d| d.canonicalize().ok()) {
+                        if !dirs.contains(&p) {
+                            dirs.push(p);
+                        }
+                    }
+                }
+                for prop in &s.props {
+                    if let Some(src) = &prop.source {
+                        if let Some(p) = Path::new(&src.file)
+                            .parent()
+                            .and_then(|d| d.canonicalize().ok())
+                        {
+                            if !dirs.contains(&p) {
+                                dirs.push(p);
+                            }
+                        }
+                    }
+                }
+                dirs
+            })?;
+            let path = if let Some(raw) = spec_file_arg {
+                let named = root.join(&raw);
+                match named.canonicalize() {
+                    Ok(p)
+                        if p.parent()
+                            .is_some_and(|d| known_dirs.iter().any(|kd| kd == d)) =>
+                    {
+                        p
+                    }
+                    _ => self.below_root(&raw)?,
+                }
+            } else {
+                let root2 = root.clone();
+                let found = self.on_shell(long, move |sh| {
+                    let s = sh.session.borrow();
+                    spec::discover_spec_file(&s, &root2)
+                })?;
+                found.ok_or_else(|| {
+                    err(
+                        "not_found",
+                        "no `fvp.spec.json` found next to open design files or workspace root",
+                    )
+                    .with_hint(
+                        "Pass `spec_file` (path to an `informal.spec/1` JSON file) or inline `spec`.",
+                    )
+                })?
+            };
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| err("path", format!("{}: {e}", path.display())))?;
+            let sp = spec::FvpSpec::parse_str(&text).map_err(|m| {
+                err("arguments", format!("{}: {m}", path.display()))
+                    .with_hint("Ensure `fvp.spec.json` uses `\"schema\": \"informal.spec/1\"`.")
+            })?;
+            (sp, path.display().to_string())
+        };
+
+        self.on_shell(long, move |sh| {
+            let mut s = sh.session.borrow_mut();
+            let target_task = match task_arg {
+                Some(ref t) => s.task_name(t).map_err(|m| {
+                    let cands =
+                        diagnose::closest_matches(t, s.tasks.iter().map(|tk| tk.name.as_str()), 4);
+                    err("not_found", m)
+                        .with_tool("session_summary")
+                        .with_candidates(cands)
+                })?,
+                None => s.current_task.clone(),
+            };
+
+            let mut rt = spec::AuditRuntime {
+                spec_source,
+                task: target_task.clone(),
+                mutation_score,
+                ..Default::default()
+            };
+
+            if check_dead_end && s.elaborated {
+                let prev_task = s.current_task.clone();
+                let prev_env = s.environment.clone();
+                let prev_sink = s.sink.take();
+                s.stop.store(false, Ordering::SeqCst);
+
+                let _ = s.set_task(&target_task);
+                if let Ok(env) = s.environment_now(depth) {
+                    rt.env_conflict = env.conflict();
+                    rt.conflict_set = env.conflict_set;
+                }
+                if !rt.env_conflict {
+                    if let Ok(de) = s.dead_end_now(depth.min(10)) {
+                        rt.dead_end_checked = true;
+                        if let Some(hit) = de {
+                            rt.dead_end_found = true;
+                            rt.dead_end_depth = Some(hit.depth);
+                        }
+                    }
+                } else {
+                    rt.dead_end_checked = true;
+                }
+
+                let _ = s.set_task(&prev_task);
+                s.environment = prev_env;
+                s.sink = prev_sink;
+            }
+
+            Ok(spec::audit_session(&s, &parsed_spec, &rt))
+        })?
     }
 
     // -------------------------------------------------------- formal apps
