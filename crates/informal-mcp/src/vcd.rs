@@ -151,6 +151,212 @@ pub fn value(bits: &str) -> String {
         .collect()
 }
 
+/// Compact binary run-length waveform wire format (`IFTR` v1) for zero-JSON
+/// Tauri IPC (`tauri::ipc::Response` -> `Uint8Array`).
+///
+/// Layout (all integers little-endian):
+/// - `[0..4]`: `"IFTR"`
+/// - `[4]`: `version = 1`
+/// - `[5]`: `flags` (`bit 0 = steps`)
+/// - `[6..10]`: `u32` `frames`
+/// - `[10..14]`: `u32` `signal_count`
+/// - Per signal:
+///   - `u16` `name_len`, `[u8; name_len]` UTF-8 path
+///   - `u16` `width`
+///   - `u8` `sig_flags` (`bit 0 = clock`)
+///   - `u32` `run_count`
+///   - Per run: `u32` `start_frame`, `u16` `bits_len`, `[u8; bits_len]` MSB-first bit string
+pub fn encode_iftr(text: &str) -> Result<Vec<u8>, String> {
+    let mut scope: Vec<&str> = Vec::new();
+    struct RawSig {
+        name: String,
+        width: usize,
+        clock: bool,
+        runs: Vec<(u32, String)>,
+    }
+    let mut signals: Vec<RawSig> = Vec::new();
+    let mut by_id: HashMap<&str, usize> = HashMap::new();
+    let mut frames_comment: Option<u32> = None;
+    let mut steps = false;
+    let mut lines = text.lines();
+    for l in lines.by_ref() {
+        let w: Vec<&str> = l.split_whitespace().collect();
+        match w.first().copied() {
+            Some("$comment") => {
+                let body = w[1..w.len().saturating_sub(1)].join(" ");
+                if let Some(rest) = body.strip_prefix("informal trace of ") {
+                    let count = rest.rsplit(": ").next().unwrap_or("");
+                    frames_comment = count.split(' ').next().and_then(|n| n.parse().ok());
+                    steps = count.ends_with("model steps");
+                }
+            }
+            Some("$scope") => scope.push(w.get(2).copied().unwrap_or("")),
+            Some("$upscope") => {
+                scope.pop();
+            }
+            Some("$var") if w.len() >= 6 => {
+                let width: usize = w[2].parse().map_err(|_| format!("bad $var: {l}"))?;
+                by_id.insert(w[3], signals.len());
+                signals.push(RawSig {
+                    name: scope
+                        .iter()
+                        .chain([&w[4]])
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join("."),
+                    width,
+                    clock: signals.is_empty(),
+                    runs: Vec::new(),
+                });
+            }
+            Some("$enddefinitions") => break,
+            _ => {}
+        }
+    }
+    if signals.is_empty() {
+        return Err("no signals in the trace".into());
+    }
+    let mut frame: Option<u32> = None;
+    let mut last_frame = 0u32;
+    for l in lines {
+        if let Some(t) = l.strip_prefix('#') {
+            let t: usize = t.trim().parse().map_err(|_| format!("bad time: {l}"))?;
+            frame = t.is_multiple_of(10).then_some((t / 10) as u32);
+            continue;
+        }
+        let Some(f) = frame else { continue };
+        let (bits, id) = match l.strip_prefix('b') {
+            Some(rest) => match rest.split_once(' ') {
+                Some((bits, id)) => (bits, id.trim()),
+                None => continue,
+            },
+            None if l.starts_with(['0', '1', 'x', 'z']) => l.split_at(1),
+            None => continue,
+        };
+        if let Some(&i) = by_id.get(id) {
+            let s = &mut signals[i];
+            let padded = format!("{bits:0>width$}", width = s.width);
+            match s.runs.last_mut() {
+                Some((prev_f, prev_v)) if *prev_f == f => *prev_v = padded,
+                Some((_, prev_v)) if *prev_v == padded => {}
+                _ => s.runs.push((f, padded)),
+            }
+            last_frame = last_frame.max(f);
+        }
+    }
+    let total_frames = frames_comment.unwrap_or(last_frame + 1).max(1);
+    for s in &mut signals {
+        if s.runs.first().is_none_or(|(f, _)| *f > 0) {
+            s.runs.insert(0, (0, "x".repeat(s.width)));
+        }
+    }
+
+    let mut buf = Vec::with_capacity(64 + signals.len() * 32);
+    buf.extend_from_slice(b"IFTR");
+    buf.push(1u8);
+    buf.push(u8::from(steps));
+    buf.extend_from_slice(&total_frames.to_le_bytes());
+    buf.extend_from_slice(&(signals.len() as u32).to_le_bytes());
+    for s in &signals {
+        let nb = s.name.as_bytes();
+        buf.extend_from_slice(&(nb.len() as u16).to_le_bytes());
+        buf.extend_from_slice(nb);
+        buf.extend_from_slice(&(s.width as u16).to_le_bytes());
+        buf.push(u8::from(s.clock));
+        buf.extend_from_slice(&(s.runs.len() as u32).to_le_bytes());
+        for (start, val) in &s.runs {
+            buf.extend_from_slice(&start.to_le_bytes());
+            let vb = val.as_bytes();
+            buf.extend_from_slice(&(vb.len() as u16).to_le_bytes());
+            buf.extend_from_slice(vb);
+        }
+    }
+    Ok(buf)
+}
+
+/// Decode an `IFTR` v1 binary buffer back into a [`Trace`].
+pub fn decode_iftr(bytes: &[u8], drop_clock: bool) -> Result<Trace, String> {
+    if bytes.len() < 14 || &bytes[0..4] != b"IFTR" {
+        return Err("invalid IFTR header".into());
+    }
+    if bytes[4] != 1 {
+        return Err(format!("unsupported IFTR version {}", bytes[4]));
+    }
+    let steps = (bytes[5] & 1) != 0;
+    let frames = u32::from_le_bytes(bytes[6..10].try_into().unwrap()) as usize;
+    let sig_count = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) as usize;
+    let mut off = 14usize;
+    let read_u16 = |b: &[u8], o: &mut usize| -> Result<u16, String> {
+        if *o + 2 > b.len() {
+            return Err("truncated IFTR u16".into());
+        }
+        let v = u16::from_le_bytes(b[*o..*o + 2].try_into().unwrap());
+        *o += 2;
+        Ok(v)
+    };
+    let read_u32 = |b: &[u8], o: &mut usize| -> Result<u32, String> {
+        if *o + 4 > b.len() {
+            return Err("truncated IFTR u32".into());
+        }
+        let v = u32::from_le_bytes(b[*o..*o + 4].try_into().unwrap());
+        *o += 4;
+        Ok(v)
+    };
+
+    let mut signals = Vec::with_capacity(sig_count);
+    for _ in 0..sig_count {
+        let nlen = read_u16(bytes, &mut off)? as usize;
+        if off + nlen + 3 > bytes.len() {
+            return Err("truncated IFTR signal".into());
+        }
+        let name = std::str::from_utf8(&bytes[off..off + nlen])
+            .map_err(|e| e.to_string())?
+            .to_string();
+        off += nlen;
+        let width = read_u16(bytes, &mut off)? as usize;
+        let clock = (bytes[off] & 1) != 0;
+        off += 1;
+        let run_count = read_u32(bytes, &mut off)? as usize;
+        let mut runs: Vec<(usize, String)> = Vec::with_capacity(run_count);
+        for _ in 0..run_count {
+            let start = read_u32(bytes, &mut off)? as usize;
+            let vlen = read_u16(bytes, &mut off)? as usize;
+            if off + vlen > bytes.len() {
+                return Err("truncated IFTR run".into());
+            }
+            let val = std::str::from_utf8(&bytes[off..off + vlen])
+                .map_err(|e| e.to_string())?
+                .to_string();
+            off += vlen;
+            runs.push((start, val));
+        }
+        if drop_clock && !steps && clock {
+            continue;
+        }
+        let mut values = vec!["x".repeat(width); frames];
+        for (idx, (start, val)) in runs.iter().enumerate() {
+            let end = runs
+                .get(idx + 1)
+                .map_or(frames, |(nf, _)| (*nf).min(frames));
+            for slot in values.iter_mut().take(end).skip((*start).min(frames)) {
+                slot.clone_from(val);
+            }
+        }
+        signals.push(Signal {
+            name,
+            width,
+            clock,
+            values,
+        });
+    }
+    Ok(Trace {
+        frames,
+        steps,
+        signals,
+        notes: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +414,16 @@ b1010 #
         assert_eq!(value("1010"), "a");
         assert_eq!(value("101111"), "2f");
         assert_eq!(value("1x0000"), "x0");
+    }
+
+    #[test]
+    fn iftr_binary_roundtrip_matches_parsed_vcd() {
+        let expected = parse(VCD).unwrap();
+        let bin = encode_iftr(VCD).unwrap();
+        assert_eq!(&bin[0..4], b"IFTR");
+        let got = decode_iftr(&bin, true).unwrap();
+        assert_eq!(got.frames, expected.frames);
+        assert_eq!(got.steps, expected.steps);
+        assert_eq!(got.signals, expected.signals);
     }
 }

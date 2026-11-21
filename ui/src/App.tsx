@@ -6,12 +6,13 @@
 // as a closable "Trace: <prop>" document tab (components/TraceView.tsx).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backend, type AiStatus, type DesignInfo as DesignInfoData, EngineLine, Flavor, type GuiRequest, type GuiState, ProveProgress, Reply, SessionView, type WhyCexReport } from "./backend";
+import { backend, type AiStatus, type DesignInfo as DesignInfoData, EngineLine, Flavor, type FormalLintFindingView, type FormalQuickFixView, type GuiRequest, type GuiState, ProveProgress, Reply, type SchematicGraphView, SessionView, type WhyCexReport } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   bound, clock, designScopes, memText, OPTIONAL_COLS, SURFER_MISSING, isProveCmd, matches, parsePorts, STATUS_LABEL, SUMMARY, sourceFile, sourceLine, statusKey, taskOf, time, traceOf, withProgress,
   type BottomTab, type Center, type ColKey, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
+import { useWorkbenchStore, type LayoutPreset, type WalkthroughStep } from "./store/workbenchStore";
 import { useTheme } from "./useTheme";
 import { BOTTOM_DEFAULT, clampBottom, clampLeft, LEFT_MAX, LEFT_MIN, useLayout } from "./useLayout";
 import { MenuBar, type MenuDef, type MenuItem } from "./components/MenuBar";
@@ -27,11 +28,16 @@ import { Messages } from "./components/Messages";
 import { EngineLog } from "./components/EngineLog";
 import { SourceView } from "./components/SourceView";
 import { TraceView } from "./components/TraceView";
+import { SchematicView } from "./components/SchematicView";
 import { Profiler } from "./components/Profiler";
 import { DesignInfo } from "./components/DesignInfo";
 import { KIND_LABEL, Proposals } from "./components/Proposals";
 import { FormalApps, type AppMode } from "./components/FormalApps";
-import { CodeIcon, PlayIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
+import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
+import { WalkthroughBar } from "./components/WalkthroughBar";
+import { WelcomePane } from "./components/WelcomePane";
+import { WorkbenchDock } from "./components/WorkbenchDock";
+import { CodeIcon, PlayIcon, SchematicIcon, ScriptIcon, StopIcon, WaveIcon } from "./components/icons";
 
 // Lines the Log tab keeps; older ones are dropped (and counted).
 const LOG_CAP = 5000;
@@ -49,9 +55,16 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl+L", "Console prompt"],
   ["Ctrl+1..5", "Console / Details / Messages / Log / Profiler"],
   ["Tab", "Complete a command or property name (console; again to cycle)"],
+  ["Ctrl+K / Cmd+K", "Universal command palette"],
   ["Ctrl+Shift+A", "Console input mode: Tcl / Ask"],
   ["Enter / Esc", "Run / discard a command Ask suggested (console)"],
 ];
+
+const POPOUT_KIND: "trace" | "schematic" | null = (() => {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search).get("popout");
+  return p === "trace" || p === "schematic" ? p : null;
+})();
 
 export default function App() {
   const [session, setSession] = useState<SessionView | null>(null);
@@ -77,9 +90,43 @@ export default function App() {
   const [taskFilter, setTaskFilter] = useState<string | null>(null);
   // Text of files read for the source view and the design tree, by path.
   const [texts, setTexts] = useState<Record<string, string>>({});
-  // The property shown in the trace tab (null: no trace tab), and its VCD.
+  // The property shown in the trace tab (null: no trace tab), its binary IFTR stream, and raw VCD text.
   const [traceName, setTraceName] = useState<string | null>(null);
-  const [trace, setTrace] = useState<{ path: string; text: string | null; error: string | null } | null>(null);
+  const [trace, setTrace] = useState<{ path: string; text: string | null; binary: Uint8Array | null; error: string | null } | null>(null);
+  const traceSvgCaptureRef = useRef<(() => string | null) | null>(null);
+  const schemSvgCaptureRef = useRef<(() => string | null) | null>(null);
+
+  // Fine-grained Zustand slices
+  const setStoreProgress = useWorkbenchStore((st) => st.setProveProgress);
+  const layoutPreset = useWorkbenchStore((st) => st.layoutPreset);
+  const setLayoutPreset = useWorkbenchStore((st) => st.setLayoutPreset);
+  const commandPaletteOpen = useWorkbenchStore((st) => st.commandPaletteOpen);
+  const setCommandPaletteOpen = useWorkbenchStore((st) => st.setCommandPaletteOpen);
+  const schematicProp = useWorkbenchStore((st) => st.schematicProp);
+  const schematicDepth = useWorkbenchStore((st) => st.schematicDepth);
+  const setSchematicTarget = useWorkbenchStore((st) => st.setSchematicTarget);
+  const traceAnnotations = useWorkbenchStore((st) => st.traceAnnotations);
+  const setTraceAnnotations = useWorkbenchStore((st) => st.setTraceAnnotations);
+  const sliceOnlyControlled = useWorkbenchStore((st) => st.sliceOnlyControlled);
+  const setSliceOnlyControlled = useWorkbenchStore((st) => st.setSliceOnlyControlled);
+  const walkthrough = useWorkbenchStore((st) => st.walkthrough);
+  const setWalkthrough = useWorkbenchStore((st) => st.setWalkthrough);
+  const followAgent = useWorkbenchStore((st) => st.followAgent);
+  const setFollowAgent = useWorkbenchStore((st) => st.setFollowAgent);
+  const markAgentDriven = useWorkbenchStore((st) => st.markAgentDriven);
+  const focusChips = useWorkbenchStore((st) => st.focusChips);
+  const addFocusChip = useWorkbenchStore((st) => st.addFocusChip);
+  const removeFocusChip = useWorkbenchStore((st) => st.removeFocusChip);
+  const clearFocusChips = useWorkbenchStore((st) => st.clearFocusChips);
+  const lastCapture = useWorkbenchStore((st) => st.lastCapture);
+  const setLastCapture = useWorkbenchStore((st) => st.setLastCapture);
+  const recentSessions = useWorkbenchStore((st) => st.recentSessions);
+  const recordRecentSession = useWorkbenchStore((st) => st.recordRecentSession);
+
+  const [schematicGraph, setSchematicGraph] = useState<SchematicGraphView | null>(null);
+  const [schematicLoading, setSchematicLoading] = useState(false);
+  const [schematicError, setSchematicError] = useState<string | null>(null);
+  const [lintFindings, setLintFindings] = useState<FormalLintFindingView[]>([]);
   const { layout, set } = useLayout();
   const { center, left, leftOpen, bottom: bottomTab, bottomH, leftW, profiler, hidden } = layout;
   const [setCenter, setLeft, setLeftOpen, setBottomTab, setBottomH, setLeftW, setProfiler] = useMemo(
@@ -191,6 +238,7 @@ export default function App() {
   useEffect(() => {
     const offProgress = backend.onProgress((p) => {
       setProgress(p);
+      setStoreProgress(p);
       if (p.kind === "done" || p.kind === "stopped") setStopping(false);
     });
     const offConsole = backend.onConsole((l) => setLog((log) => [...log, { kind: l.kind, text: l.text }]));
@@ -267,7 +315,9 @@ export default function App() {
     setAsking(true);
     setSuggestion(null);
     setLog((l) => [...l, { kind: "ask-in", text: prompt }, { kind: "ask", text: "" }]);
-    const context = selected ? `selected property: ${selected}` : undefined;
+    const chipSummary = focusChips.map((c) => c.detail).join(" | ");
+    const baseCtx = selected ? `selected property: ${selected}` : "";
+    const context = [baseCtx, chipSummary].filter(Boolean).join("; ") || undefined;
     backend.ask(id, prompt, context).catch((e) => {
       if (askRef.current?.id !== id) return;
       askRef.current = null;
@@ -468,21 +518,236 @@ export default function App() {
   useEffect(() => {
     if (traceName && selected && selected !== traceName && currentTrace) setTraceName(selected);
   }, [selected, traceName, currentTrace]);
-  // Load the VCD when the trace tab's path changes. A re-prove clears the
-  // path while it runs; the last trace stays on screen until a new one.
+  // Load both binary IFTR stream (zero-JSON Uint8Array IPC) and VCD text when the trace tab's path changes.
   useEffect(() => {
     if (!tracePath) return;
     let live = true;
-    setTrace((t) => (t?.path === tracePath ? t : { path: tracePath, text: null, error: null }));
-    backend.readTrace(tracePath).then(
-      (text) => live && setTrace({ path: tracePath, text, error: null }),
-      (e) => live && setTrace({ path: tracePath, text: null, error: String(e) }),
+    setTrace((t) => (t?.path === tracePath ? t : { path: tracePath, text: null, binary: null, error: null }));
+    Promise.all([
+      backend.readTraceBin(tracePath).catch(() => null),
+      backend.readTrace(tracePath),
+    ]).then(
+      ([binary, text]) => live && setTrace({ path: tracePath, text, binary, error: null }),
+      (e) => live && setTrace({ path: tracePath, text: null, binary: null, error: String(e) }),
     );
     return () => {
       live = false;
     };
   }, [tracePath]);
   const showTrace = center === "trace" && !!traceProp;
+
+  // Live formal-ready lint (`dv-lint` SV-FPV-001..005) when source view opens on an RTL file
+  const refreshLint = useCallback(
+    (targetFile?: string) => {
+      if (!session?.elaborated) {
+        setLintFindings([]);
+        return;
+      }
+      backend
+        .formalLint(targetFile)
+        .then((list) => setLintFindings(list))
+        .catch(() => setLintFindings([]));
+    },
+    [session?.elaborated],
+  );
+  useEffect(() => {
+    if ((center === "source" || layoutPreset !== "triage") && srcPath?.endsWith(".sv")) {
+      refreshLint(srcPath);
+    }
+  }, [center, layoutPreset, srcPath, refreshLint]);
+
+  const applyQuickFix = useCallback(
+    (fix: FormalQuickFixView) => {
+      backend
+        .applyFormalFix(fix)
+        .then((res) => {
+          if (res.updatedText !== undefined) {
+            setTexts((m) => ({ ...m, [fix.file]: res.updatedText! }));
+          } else {
+            loadText(fix.file);
+          }
+          refreshLint(fix.file);
+          setEvents((ev) => [
+            ...ev,
+            { at: new Date(), cmd: `quick-fix ${fix.file.split("/").pop()}:${fix.line}`, ok: true, ms: 0, summary: fix.description },
+          ]);
+        })
+        .catch((e) => setLog((l) => [...l, { kind: "err", text: `quick-fix: ${String(e)}` }]));
+    },
+    [loadText, refreshLint],
+  );
+
+  // Interactive COI & Causal Schematic loader
+  const activeSchemProp = useMemo(() => {
+    if (schematicProp && allProps.some((p) => p.name === schematicProp)) return schematicProp;
+    if (current && current.kind !== "assume") return current.name;
+    return allProps.find((p) => p.kind !== "assume")?.name ?? null;
+  }, [schematicProp, allProps, current]);
+
+  useEffect(() => {
+    const needSchem = center === "schematic" || layoutPreset === "cex-debug" || layoutPreset === "split" || POPOUT_KIND === "schematic";
+    if (!needSchem || !activeSchemProp || !session?.elaborated) return;
+    let alive = true;
+    setSchematicLoading(true);
+    setSchematicError(null);
+    backend
+      .schematic(activeSchemProp, schematicDepth)
+      .then((g) => {
+        if (alive) setSchematicGraph(g);
+      })
+      .catch((e) => {
+        if (alive) setSchematicError(String(e instanceof Error ? e.message : e));
+      })
+      .finally(() => {
+        if (alive) setSchematicLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [center, layoutPreset, activeSchemProp, schematicDepth, session?.elaborated]);
+
+  const openSchematic = useCallback(
+    (propName?: string, depth?: number) => {
+      const target = propName ?? activeSchemProp;
+      if (target) {
+        setSelected(target);
+        setSchematicTarget(target, depth);
+      }
+      setCenter("schematic");
+    },
+    [activeSchemProp, setSchematicTarget, setCenter],
+  );
+
+  // MCP App (`ui://informal/workbench.html`) live tool result updates
+  useEffect(() => {
+    if (!backend.inMcpApp) return;
+    return backend.onMcpToolResult((sc) => {
+      const schema = String(sc.schema ?? "");
+      if (schema === "informal.workbench/1" && sc.session) {
+        setSession(sc.session as SessionView);
+        if (typeof sc.focus_property === "string") setSelected(sc.focus_property);
+        if (typeof sc.view === "string" && ["table", "source", "trace", "schematic"].includes(sc.view)) {
+          setCenter(sc.view as Center);
+        }
+      } else if (schema === "informal.why_cex/1" && typeof sc.property === "string") {
+        setWhyCexMap((m) => ({ ...m, [sc.property as string]: sc as unknown as WhyCexReport }));
+        setWhyCexOpen(true);
+      } else if (schema === "informal.schematic/1") {
+        setSchematicGraph(sc as unknown as SchematicGraphView);
+        setCenter("schematic");
+      } else {
+        void backend.snapshot().then((r) => r.session && setSession(r.session));
+      }
+    });
+  }, [setCenter]);
+
+  // Dynamic standalone window title
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const top = session?.design.top;
+    if (!top) {
+      document.title = "InFormal";
+      return;
+    }
+    const badges = [
+      counts.proven ? `${counts.proven} proven` : "",
+      counts.cex ? `${counts.cex} CEX` : "",
+      counts.covered ? `${counts.covered} covered` : "",
+    ].filter(Boolean);
+    document.title = badges.length ? `InFormal — ${top} [${badges.join(" · ")}]` : `InFormal — ${top}`;
+  }, [session?.design.top, counts.proven, counts.cex, counts.covered]);
+
+  // Reverse UI -> AI `@context` pin helper
+  const pinContext = useCallback(
+    (label: string, detail: string) => {
+      addFocusChip({ label, detail });
+      if (backend.inMcpApp) {
+        const allText = [...focusChips.map((c) => c.detail), detail].join(" | ");
+        void backend.attachHostContext(allText);
+      } else if (askOk) {
+        setInputMode("ask");
+        setBottomTab("console");
+        setFocusReq((r) => ({ id: "console-input", n: (r?.n ?? 0) + 1 }));
+      }
+    },
+    [addFocusChip, focusChips, askOk, setBottomTab],
+  );
+
+  // Synchronize a walkthrough step across Trace + Callouts + Source
+  const applyWalkthroughStep = useCallback(
+    (st: WalkthroughStep) => {
+      markAgentDriven();
+      if (st.property) {
+        const p = allProps.find((q) => q.name === st.property);
+        if (p && traceOf(p)) {
+          setSelected(st.property);
+          setTraceName(st.property);
+          if (layoutPreset === "triage" && !st.file) setCenter("trace");
+        }
+      }
+      if (st.frame != null) {
+        setCursorReq((r) => ({ cycle: st.frame!, n: (r?.n ?? 0) + 1 }));
+      }
+      if (st.signals?.length && st.frame != null) {
+        setTraceAnnotations(
+          st.signals.map((sig) => ({
+            frame: st.frame!,
+            signal: sig,
+            label: st.label,
+            tone: "danger" as const,
+          })),
+        );
+      }
+      if (st.file) {
+        backend.readText(st.file).then(
+          (t) => {
+            setTexts((m) => ({ ...m, [st.file!]: t }));
+            const first = st.first_line ?? 1;
+            setSrcShow({ file: st.file!, first, last: st.last_line ?? first });
+            if (layoutPreset === "triage" && st.frame == null) setCenter("source");
+          },
+          () => {},
+        );
+      }
+    },
+    [allProps, layoutPreset, markAgentDriven, setCenter, setTraceAnnotations],
+  );
+
+  // 1-Click AI Co-Pilot CEX Root-Cause Walkthrough builder
+  const launchCexWalkthrough = useCallback(
+    async (propName: string) => {
+      openTrace(propName);
+      setLayoutPreset("cex-debug");
+      let rep = whyCexMap[propName];
+      if (!rep) {
+        setWhyCexLoading(true);
+        try {
+          rep = await backend.whyCex(propName);
+          setWhyCexMap((m) => ({ ...m, [propName]: rep! }));
+        } catch (e) {
+          setLog((l) => [...l, { kind: "err", text: `why_cex: ${String(e)}` }]);
+          return;
+        } finally {
+          setWhyCexLoading(false);
+        }
+      }
+      setWhyCexOpen(true);
+      const steps: WalkthroughStep[] = rep.events.map((ev, idx) => ({
+        label: idx === rep.events.length - 1 ? `Failure @C${ev.frame}` : `Step ${idx + 1} @C${ev.frame}`,
+        note: `${ev.signal} = ${ev.prev_value ? `${ev.prev_value} → ${ev.value}` : ev.value} (${ev.reason.replace(/_/g, " ")})`,
+        property: propName,
+        frame: ev.frame,
+        signals: [ev.signal],
+        file: topFile,
+      }));
+      if (steps.length > 0) {
+        setFollowAgent(true);
+        setWalkthrough({ title: `Why ${propName} fails`, steps, step: 0 });
+        applyWalkthroughStep(steps[0]);
+      }
+    },
+    [whyCexMap, topFile, setLayoutPreset, setFollowAgent, setWalkthrough, applyWalkthroughStep],
+  );
   // The Design tab's double-click: add that signal to the open trace.
   const [addReq, setAddReq] = useState<{ path: string; n: number } | null>(null);
   const note = useCallback((ok: boolean, summary: string) => setEvents((e) => [...e, { at: new Date(), cmd: "add signal", ok, ms: 0, summary }]), []);
@@ -512,12 +777,61 @@ export default function App() {
   const guiState: GuiState = useMemo(
     () => ({
       selected_property: selected,
-      view: showTrace ? "trace" : center === "source" ? "source" : "table",
+      view: showTrace ? "trace" : center === "source" ? "source" : center === "schematic" ? "schematic" : "table",
       filter,
-      trace: traceName ? { property: traceName, cursor: traceView?.cursor ?? 0, signals: traceView?.signals ?? [] } : null,
+      status_filter: statusFilter,
+      layout_preset: layoutPreset,
+      active_app: appsOpen ? appMode : null,
+      bottom_tab: bottomTab,
+      follow_agent: followAgent,
+      trace: traceName
+        ? {
+            property: traceName,
+            cursor: traceView?.cursor ?? 0,
+            signals: traceView?.signals ?? [],
+            why_cex_open: whyCexOpen,
+            slice_only: Boolean(sliceOnlyControlled),
+            annotations: traceAnnotations,
+          }
+        : null,
       source: srcPath ? { file: srcPath, first_line: focusLine, last_line: focusEnd ?? focusLine } : null,
+      schematic: center === "schematic" || layoutPreset !== "triage" ? { property: activeSchemProp, max_depth: schematicDepth } : null,
+      walkthrough: walkthrough
+        ? {
+            title: walkthrough.title,
+            step: walkthrough.step,
+            total_steps: walkthrough.steps.length,
+            label: walkthrough.steps[walkthrough.step]?.label ?? "",
+          }
+        : null,
+      focus_context: focusChips.length ? focusChips : null,
+      capture: lastCapture,
     }),
-    [selected, showTrace, center, filter, traceName, traceView, srcPath, focusLine, focusEnd],
+    [
+      selected,
+      showTrace,
+      center,
+      filter,
+      statusFilter,
+      layoutPreset,
+      appsOpen,
+      appMode,
+      bottomTab,
+      followAgent,
+      traceName,
+      traceView,
+      whyCexOpen,
+      sliceOnlyControlled,
+      traceAnnotations,
+      srcPath,
+      focusLine,
+      focusEnd,
+      activeSchemProp,
+      schematicDepth,
+      walkthrough,
+      focusChips,
+      lastCapture,
+    ],
   );
   const guiNow = useRef(guiState);
   guiNow.current = guiState;
@@ -543,6 +857,7 @@ export default function App() {
   }, [trace, guiDone]);
   const guiAct = useRef<(r: GuiRequest) => void>(() => {});
   guiAct.current = ({ id, action: a }) => {
+    markAgentDriven();
     if (a.action === "select_property") {
       const what = `select ${a.name}`;
       if (!allProps.some((p) => p.name === a.name)) return guiDone(id, what, `no property named ${a.name}`);
@@ -557,8 +872,6 @@ export default function App() {
       if (!path) return guiDone(id, what, `${a.name} has no trace: its status is ${p.status.status}`);
       openTrace(a.name);
       if (a.frame != null) setCursorReq((r) => ({ cycle: a.frame as number, n: (r?.n ?? 0) + 1 }));
-      // Answered when the trace is loaded (the effect above); at once
-      // when it already is.
       if (trace?.path === path && trace.text !== null) return guiDone(id, what);
       guiTrace.current = { id, path, what };
       return;
@@ -573,16 +886,138 @@ export default function App() {
       setAddReq((r) => ({ path: first, n: (r?.n ?? 0) + 1 }));
       return;
     }
-    const what = `show ${a.file}:${a.first_line}${a.last_line > a.first_line ? `-${a.last_line}` : ""}`;
-    backend.readText(a.file).then(
-      (text) => {
-        setTexts((t) => ({ ...t, [a.file]: text }));
-        setSrcShow({ file: a.file, first: a.first_line, last: a.last_line });
-        setCenter("source");
-        guiDone(id, what);
-      },
-      (e) => guiDone(id, what, String(e)),
-    );
+    if (a.action === "highlight_source") {
+      const what = `show ${a.file}:${a.first_line}${a.last_line > a.first_line ? `-${a.last_line}` : ""}`;
+      backend.readText(a.file).then(
+        (text) => {
+          setTexts((t) => ({ ...t, [a.file]: text }));
+          setSrcShow({ file: a.file, first: a.first_line, last: a.last_line });
+          setCenter("source");
+          guiDone(id, what);
+        },
+        (e) => guiDone(id, what, String(e)),
+      );
+      return;
+    }
+    if (a.action === "set_view") {
+      const parts: string[] = [];
+      if (a.layout_preset) {
+        setLayoutPreset(a.layout_preset);
+        parts.push(`preset=${a.layout_preset}`);
+      }
+      if (a.app_tab) {
+        openApps(a.app_tab as AppMode);
+        parts.push(`app=${a.app_tab}`);
+      }
+      if (a.bottom_tab) {
+        if (a.bottom_tab === "profiler") openProfiler();
+        else if (a.bottom_tab === "apps") openApps();
+        else setBottomTab(a.bottom_tab as BottomTab);
+        parts.push(`dock=${a.bottom_tab}`);
+      }
+      if (a.filter != null) {
+        setFilter(a.filter);
+        parts.push(`filter=${a.filter}`);
+      }
+      if (a.status_filter !== undefined) {
+        setStatusFilter((a.status_filter as StatusFilter) ?? null);
+        parts.push(`status=${a.status_filter ?? "all"}`);
+      }
+      if (a.view) {
+        if (a.view === "apps") openApps((a.app_tab as AppMode | undefined) ?? appMode);
+        else if (a.view === "schematic") openSchematic();
+        else setCenter(a.view as Center);
+        parts.push(`view=${a.view}`);
+      }
+      return guiDone(id, `set view (${parts.join(", ") || "no-op"})`);
+    }
+    if (a.action === "toggle_why_cex") {
+      const what = `${a.open ? "open" : "close"} Why CEX slice`;
+      if (!traceName) return guiDone(id, what, "no trace is open: open one first (gui_open_trace)");
+      if (a.slice_only != null) setSliceOnlyControlled(a.slice_only);
+      if (!a.open) {
+        setWhyCexOpen(false);
+        return guiDone(id, what);
+      }
+      setWhyCexOpen(true);
+      if (whyCexMap[traceName]) return guiDone(id, what);
+      setWhyCexLoading(true);
+      backend
+        .whyCex(traceName)
+        .then(
+          (rep) => {
+            setWhyCexMap((m) => ({ ...m, [traceName]: rep }));
+            guiDone(id, what);
+          },
+          (e) => {
+            setWhyCexOpen(false);
+            guiDone(id, what, String(e));
+          },
+        )
+        .finally(() => setWhyCexLoading(false));
+      return;
+    }
+    if (a.action === "annotate_trace") {
+      if (a.clear) {
+        setTraceAnnotations([]);
+        return guiDone(id, "clear trace callouts");
+      }
+      if (!traceName) return guiDone(id, "annotate trace", "no trace is open: open one first (gui_open_trace)");
+      const list = a.annotations ?? [];
+      setTraceAnnotations(list);
+      return guiDone(id, `pin ${list.length} callout${list.length === 1 ? "" : "s"} on ${traceName}`);
+    }
+    if (a.action === "present_walkthrough") {
+      if (a.clear) {
+        setWalkthrough(null);
+        return guiDone(id, "dismiss walkthrough");
+      }
+      if (a.steps && a.steps.length > 0) {
+        const idx = Math.max(0, Math.min(a.steps.length - 1, Number(a.step ?? 0)));
+        const title = a.title || "Root-cause walkthrough";
+        setFollowAgent(true);
+        setWalkthrough({ title, steps: a.steps, step: idx });
+        applyWalkthroughStep(a.steps[idx]);
+        return guiDone(id, `present walkthrough "${title}" (${a.steps.length} steps)`);
+      }
+      if (a.step != null && walkthrough) {
+        const idx = Math.max(0, Math.min(walkthrough.steps.length - 1, Number(a.step)));
+        setWalkthrough({ ...walkthrough, step: idx });
+        if (followAgent) applyWalkthroughStep(walkthrough.steps[idx]);
+        return guiDone(id, `step walkthrough to ${idx + 1}/${walkthrough.steps.length}`);
+      }
+      return guiDone(id, "present walkthrough", "`steps` or `step` is required");
+    }
+    if (a.action === "open_schematic") {
+      const target = a.name ?? selected ?? activeSchemProp;
+      if (!target) return guiDone(id, "open schematic", "no property available for schematic");
+      const p = allProps.find((q) => q.name === target);
+      if (!p) return guiDone(id, `open schematic of ${target}`, `no property named ${target}`);
+      if (p.kind === "assume") return guiDone(id, `open schematic of ${target}`, "an assumption has no target cone");
+      openSchematic(target, a.max_depth != null ? Number(a.max_depth) : undefined);
+      return guiDone(id, `open schematic of ${target}`);
+    }
+    if (a.action === "capture_view") {
+      const target = a.target ?? "trace";
+      if (target === "trace") {
+        const svg = traceSvgCaptureRef.current?.() ?? null;
+        if (!svg) return guiDone(id, "capture trace SVG", "no trace is open to capture");
+        setLastCapture({ target: "trace", format: "svg", svg, captured_at: new Date().toISOString() });
+        return guiDone(id, "capture trace SVG");
+      }
+      if (target === "schematic") {
+        const svg = schemSvgCaptureRef.current?.() ?? null;
+        if (!svg) return guiDone(id, "capture schematic SVG", "no schematic is open to capture");
+        setLastCapture({ target: "schematic", format: "svg", svg, captured_at: new Date().toISOString() });
+        return guiDone(id, "capture schematic SVG");
+      }
+      const fallbackSvg =
+        traceSvgCaptureRef.current?.() ??
+        schemSvgCaptureRef.current?.() ??
+        `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="80"><rect width="480" height="80" fill="#fdfcfa"/><text x="16" y="44" font-family="monospace" font-size="13">InFormal window: ${allProps.length} properties (${selected ?? "none selected"})</text></svg>`;
+      setLastCapture({ target: "window", format: "svg", svg: fallbackSvg, captured_at: new Date().toISOString() });
+      return guiDone(id, "capture window SVG");
+    }
   };
   useEffect(() => backend.onAiGui((r) => guiAct.current(r)), []);
   const onAddResult = useCallback(
@@ -623,11 +1058,21 @@ export default function App() {
   }, [infoOpen, idle, session?.elaborated, loadInfo]);
   const proveAll = () => allProps.length && idle && prove(proveCmd);
   const proveSelected = () => current && current.kind !== "assume" && idle && prove(proveOne(current.name));
+  const openScriptPath = useCallback(
+    (p: string) => {
+      setScriptPath(p);
+      recordRecentSession(p);
+      if (idle) void run(() => backend.source(p), `source ${p}`);
+    },
+    [idle, recordRecentSession, run],
+  );
+
   const runScript = () => {
     if (!scriptPath) {
       pathRef.current?.focus();
       return;
     }
+    recordRecentSession(scriptPath);
     if (idle) run(() => backend.source(scriptPath), `source ${scriptPath}`);
   };
   const changeFlavor = (f: Flavor) => {
@@ -673,6 +1118,9 @@ export default function App() {
     if (e.key === "F5" && !mod) proveAll();
     else if (e.key === "F6" && !mod) proveSelected();
     else if (e.key === "F3" && !mod) toggleSource();
+    else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+      setCommandPaletteOpen(!commandPaletteOpen);
+    }
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") focusFilter();
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") focusConsole();
     else if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "a") {
@@ -788,6 +1236,7 @@ export default function App() {
       items: [
         { label: "Source script…", onClick: runScript },
         { label: "Edit script path", onClick: () => pathRef.current?.focus() },
+        { label: "Command palette…", keys: "Ctrl+K", onClick: () => setCommandPaletteOpen(true) },
         { sep: true },
         { label: "Close design", disabled: true },
       ],
@@ -797,8 +1246,14 @@ export default function App() {
       label: "View",
       items: [
         { label: "Task / Design dock", checked: leftOpen, onClick: () => setLeftOpen((o) => !o) },
-        { label: "Property table", checked: center === "table", onClick: () => setCenter("table") },
-        { label: `Source (${fileName ?? "none"})`, checked: center === "source", keys: "F3", onClick: () => setCenter("source"), disabled: !topFile },
+        { label: "Property table", checked: center === "table" && layoutPreset === "triage", onClick: () => { setLayoutPreset("triage"); setCenter("table"); } },
+        { label: `Source (${fileName ?? "none"})`, checked: center === "source" && layoutPreset === "triage", keys: "F3", onClick: () => { setLayoutPreset("triage"); setCenter("source"); }, disabled: !topFile },
+        { label: "COI & causal schematic", checked: center === "schematic" && layoutPreset === "triage", onClick: () => { setLayoutPreset("triage"); openSchematic(); }, disabled: !allProps.length },
+        { sep: true },
+        { label: "Layout: Triage (Default)", checked: layoutPreset === "triage", onClick: () => setLayoutPreset("triage") },
+        { label: "Layout: CEX Debug (Source + Trace + Schematic)", checked: layoutPreset === "cex-debug", onClick: () => setLayoutPreset("cex-debug") },
+        { label: "Layout: Split Workspace", checked: layoutPreset === "split", onClick: () => setLayoutPreset("split") },
+        { label: "Layout: Signoff & Apps", checked: layoutPreset === "signoff", onClick: () => setLayoutPreset("signoff") },
         { sep: true },
         { label: "Console", keys: "Ctrl+1", checked: bottomTab === "console", onClick: () => setBottomTab("console") },
         { label: "Details", keys: "Ctrl+2", checked: bottomTab === "details", onClick: () => setBottomTab("details") },
@@ -840,11 +1295,14 @@ export default function App() {
       items: [
         { label: "Visualize trace", disabled: !hasTrace, onClick: () => current && hasTrace && openTrace(current.name) },
         { label: "Show source of selected", keys: "F3", onClick: () => current && setCenter("source"), disabled: !current || !topFile },
+        { label: "Open COI & causal schematic", onClick: () => openSchematic(current?.name), disabled: !allProps.length },
+        { label: "✦ Explain & walk through CEX", onClick: () => current && hasTrace && void launchCexWalkthrough(current.name), disabled: !hasTrace },
       ],
     },
     {
       label: "Tools",
       items: [
+        { label: "Command palette…", keys: "Ctrl+K", onClick: () => setCommandPaletteOpen(true) },
         { label: "Proof profiler", keys: "Ctrl+5", checked: profiler, onClick: () => (profiler ? closeProfiler() : openProfiler()) },
         { label: "Formal apps", checked: appsOpen, onClick: () => (appsOpen ? closeApps() : openApps()) },
       ],
@@ -860,16 +1318,57 @@ export default function App() {
           },
         },
         { sep: true },
-        { label: "InFormal v0.1", disabled: true },
+        { label: "InFormal v0.2", disabled: true },
       ],
     },
   ];
+
+  const paletteCommands: PaletteCommand[] = useMemo(
+    () => [
+      { id: "prove-all", group: "Prove", label: "Prove all properties", shortcut: "F5", detail: proveCmd, disabled: !idle || !allProps.length, run: proveAll },
+      ...(current && current.kind !== "assume"
+        ? [{ id: "prove-sel", group: "Prove", label: `Prove selected: ${current.name}`, shortcut: "F6", disabled: !idle, run: proveSelected }]
+        : []),
+      ...(current && hasTrace
+        ? [
+            { id: "walk-cex", group: "AI Co-Pilot", label: `✦ Explain & walk through CEX: ${current.name}`, detail: "why_cex + 3-way tour", run: () => void launchCexWalkthrough(current.name) },
+            { id: "vis-trace", group: "Debug", label: `Open waveform trace: ${current.name}`, run: () => openTrace(current.name) },
+          ]
+        : []),
+      { id: "view-table", group: "View", label: "Show Property Table", run: () => { setLayoutPreset("triage"); setCenter("table"); } },
+      { id: "view-source", group: "View", label: "Show RTL Source (CodeMirror 6)", shortcut: "F3", disabled: !topFile, run: () => { setLayoutPreset("triage"); setCenter("source"); } },
+      { id: "view-schem", group: "View", label: "Show COI & Causal Schematic", disabled: !allProps.length, run: () => { setLayoutPreset("triage"); openSchematic(); } },
+      { id: "preset-triage", group: "Layout", label: "Workspace Preset: Triage (Single-pane)", run: () => setLayoutPreset("triage") },
+      { id: "preset-cex", group: "Layout", label: "Workspace Preset: CEX Debug (Source + Trace + Schematic)", run: () => setLayoutPreset("cex-debug") },
+      { id: "preset-split", group: "Layout", label: "Workspace Preset: Side-by-Side Split", run: () => setLayoutPreset("split") },
+      { id: "preset-signoff", group: "Layout", label: "Workspace Preset: Signoff & Formal Apps", run: () => setLayoutPreset("signoff") },
+      { id: "app-cov", group: "Formal Apps", label: "Open COV / UNR Coverage", run: () => openApps("cov") },
+      { id: "app-xprop", group: "Formal Apps", label: "Open X-Prop Verification", run: () => openApps("xprop") },
+      { id: "app-spv", group: "Formal Apps", label: "Open SPV Security Paths", run: () => openApps("spv") },
+      { id: "app-sec", group: "Formal Apps", label: "Open SEC / LEC Equivalence", run: () => openApps("sec") },
+      { id: "app-csr", group: "Formal Apps", label: "Open CSR / RAL Verification", run: () => openApps("csr") },
+      { id: "app-proto", group: "Formal Apps", label: "Open Bus Protocol VIP", run: () => openApps("protocol") },
+      { id: "theme-light", group: "Theme", label: "Switch Theme: Light", run: () => setTheme("light") },
+      { id: "theme-dark", group: "Theme", label: "Switch Theme: Dark", run: () => setTheme("dark") },
+      { id: "flavor-jg", group: "Flavor", label: "Tcl Flavor: JasperGold", disabled: !idle, run: () => changeFlavor("jg") },
+      { id: "flavor-vcf", group: "Flavor", label: "Tcl Flavor: VC Formal", disabled: !idle, run: () => changeFlavor("vcf") },
+      ...allProps.slice(0, 80).map((p) => ({
+        id: `prop-${p.name}`,
+        group: "Property",
+        label: p.name,
+        detail: `${STATUS_LABEL[p.status.status]} · ${p.expr}`,
+        run: () => (traceOf(p) ? openTrace(p.name) : select(p.name)),
+      })),
+    ],
+    [proveCmd, idle, allProps, current, hasTrace, topFile, launchCexWalkthrough, openSchematic, openApps, setLayoutPreset, setCenter, setTheme],
+  );
 
   const centerTabs = (
     <Tabs
       tabs={[
         ["table", "Property Table"],
         ...(topFile ? ([["source", fileName ?? "Source"]] as [string, string][]) : []),
+        ...(allProps.length ? ([["schematic", "Schematic"]] as [string, string][]) : []),
         ...(traceName ? ([["trace", `Trace: ${traceName}`, closeTrace]] as [string, string, () => void][]) : []),
       ]}
       value={center === "trace" && !traceName ? "table" : center}
@@ -877,24 +1376,132 @@ export default function App() {
     />
   );
 
+  const isDark =
+    theme === "dark" ||
+    (theme === "system" && typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-color-scheme: dark)").matches));
+
+  const traceElement = traceProp ? (
+    <TraceView
+      tabs={layoutPreset === "triage" && !POPOUT_KIND ? centerTabs : <span className="strip-summary mono">Trace: {traceProp.name}</span>}
+      prop={traceProp}
+      path={trace?.path ?? tracePath ?? ""}
+      text={trace?.text ?? null}
+      binary={trace?.binary ?? null}
+      error={trace?.error}
+      addRequest={addReq}
+      onAddResult={onAddResult}
+      cursorRequest={cursorReq}
+      onView={setTraceView}
+      clock={session?.clocks[0] ?? null}
+      whyCex={traceName ? (whyCexMap[traceName] ?? null) : null}
+      whyCexOpen={whyCexOpen}
+      whyCexLoading={whyCexLoading}
+      onToggleWhyCex={toggleWhyCex}
+      annotations={traceAnnotations}
+      controlledSliceOnly={sliceOnlyControlled}
+      onSliceOnlyChange={setSliceOnlyControlled}
+      onPinContext={pinContext}
+      onPopOut={!POPOUT_KIND ? () => void backend.popOutWindow("trace", `InFormal Trace — ${traceProp.name}`) : undefined}
+      onCaptureSvgRef={traceSvgCaptureRef}
+      actions={
+        <span className="surfer-wrap" title={surferTip(tracePath)}>
+          <button className="btn" disabled={!surfer || !tracePath} onClick={() => tracePath && openInSurfer(tracePath)} title={surferTip(tracePath)}>
+            Open in Surfer
+          </button>
+        </span>
+      }
+    />
+  ) : (
+    <p className="empty">Double-click a CEX or covered property to visualize its trace.</p>
+  );
+
+  const sourceElement = (
+    <SourceView
+      text={source}
+      file={srcPath}
+      focus={focusLine}
+      focusEnd={focusEnd}
+      causalSignals={whyCexOpen && traceName ? whyCexMap[traceName]?.active_signals : undefined}
+      covItems={session?.cov?.items?.filter((it) => !it.file || it.file === srcPath || Boolean(srcPath?.endsWith(`/${it.file}`)))}
+      lintFindings={lintFindings.filter((f) => !srcPath || f.file === srcPath || Boolean(srcPath.endsWith(`/${f.file}`)))}
+      onApplyFix={applyQuickFix}
+      onJumpLocation={(f, line) => {
+        backend.readText(f).then(
+          (t) => {
+            setTexts((m) => ({ ...m, [f]: t }));
+            setSrcShow({ file: f, first: line, last: line });
+            if (layoutPreset === "triage") setCenter("source");
+          },
+          () => {},
+        );
+      }}
+      onPinContext={pinContext}
+    />
+  );
+
+  const schematicElement = (
+    <SchematicView
+      tabs={layoutPreset === "triage" && !POPOUT_KIND ? centerTabs : undefined}
+      graph={schematicGraph}
+      loading={schematicLoading}
+      error={schematicError}
+      maxDepth={schematicDepth}
+      onChangeDepth={(d) => setSchematicTarget(activeSchemProp, d)}
+      onSelectSignalSource={(sig) => {
+        if (!topFile) return;
+        const leaf = sig.split(".").pop() ?? sig;
+        const idx = topText.split("\n").findIndex((ln) => new RegExp(`\\b${leaf}\\b`).test(ln));
+        setSrcShow({ file: topFile, first: idx >= 0 ? idx + 1 : 1, last: idx >= 0 ? idx + 1 : 1 });
+        if (layoutPreset === "triage") setCenter("source");
+      }}
+      onAddSignalToTrace={(sig) => addSignal(sig)}
+      onPinContext={pinContext}
+      onPopOut={!POPOUT_KIND ? () => void backend.popOutWindow("schematic", `InFormal Schematic — ${activeSchemProp ?? ""}`) : undefined}
+      onCaptureSvgRef={schemSvgCaptureRef}
+    />
+  );
+
+  // Popped-out secondary monitor window mode (`?popout=trace` or `?popout=schematic`)
+  if (POPOUT_KIND) {
+    return (
+      <div className="app popout-window">
+        <main className="center" style={{ height: "100%" }}>
+          {POPOUT_KIND === "trace" ? traceElement : schematicElement}
+        </main>
+      </div>
+    );
+  }
+
+  const showWelcome = !session?.elaborated && allProps.length === 0 && !busy && !running;
+
   return (
     <div
-      className="app"
+      className={`app ${backend.inMcpApp ? "mcp-app-mode" : ""}`}
       style={{ "--bottom-h": `${bottomH}px`, ...(leftW ? { "--left-w": `${leftW}px` } : {}) } as React.CSSProperties}
     >
       {/* ---- menu bar ---- */}
-      <MenuBar menus={menus}>
-        <input
-          ref={pathRef}
-          className="menu-path mono"
-          placeholder="script path, e.g. tests/fpv/counter/counter.jg.tcl"
-          value={scriptPath}
-          onChange={(e) => setScriptPath(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && runScript()}
-          aria-label="Script path"
-          title="Script path (Enter to source)"
-        />
-      </MenuBar>
+      {!backend.inMcpApp && (
+        <MenuBar menus={menus}>
+          <input
+            ref={pathRef}
+            className="menu-path mono"
+            placeholder="script path, e.g. tests/fpv/counter/counter.jg.tcl"
+            value={scriptPath}
+            onChange={(e) => setScriptPath(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runScript()}
+            aria-label="Script path"
+            title="Script path (Enter to source)"
+          />
+          <button
+            className="btn small palette-trigger"
+            onClick={() => setCommandPaletteOpen(true)}
+            title="Open Command Palette (Ctrl+K / Cmd+K)"
+            aria-label="Command palette"
+          >
+            ⌘K
+          </button>
+        </MenuBar>
+      )}
 
       {/* ---- tool row ---- */}
       <div className="toolrow">
@@ -924,6 +1531,19 @@ export default function App() {
             <option value="vcf">VC Formal</option>
           </select>
         </label>
+        <label className="field layout-field">
+          <span>Layout</span>
+          <select
+            aria-label="Layout"
+            value={layoutPreset}
+            onChange={(e) => setLayoutPreset(e.target.value as LayoutPreset)}
+          >
+            <option value="triage">Triage</option>
+            <option value="cex-debug">CEX Debug</option>
+            <option value="split">Split</option>
+            <option value="signoff">Signoff</option>
+          </select>
+        </label>
         <span className="vsep" />
         <ToolBtn title={scriptPath ? `source ${scriptPath}` : "Run script (set a script path first)"} onClick={runScript} disabled={!idle}>
           <ScriptIcon />
@@ -943,8 +1563,11 @@ export default function App() {
         >
           <WaveIcon />
         </ToolBtn>
-        <ToolBtn title="Source view (F3)" onClick={toggleSource} disabled={!topFile} on={center === "source"}>
+        <ToolBtn title="Source view (F3)" onClick={toggleSource} disabled={!topFile} on={center === "source" && layoutPreset === "triage"}>
           <CodeIcon />
+        </ToolBtn>
+        <ToolBtn title="COI & causal schematic" onClick={() => openSchematic()} disabled={!allProps.length} on={center === "schematic" && layoutPreset === "triage"}>
+          <SchematicIcon />
         </ToolBtn>
         <span className="spacer" />
         {running && progress && (
@@ -962,15 +1585,27 @@ export default function App() {
             <span className="progress-text mono">
               {progress.done} of {progress.total} · {clock(progress.elapsed_ms)}
               {(() => {
-                // The property an engine is on now: which engine, how deep, how long.
                 const r = progress.props.find((q) => q.status === "running");
                 return r ? ` · ${r.name}${r.engine ? ` ${r.engine}` : ""}${r.depth != null ? ` k=${r.depth}` : ""} ${clock(r.ms ?? 0)}` : "";
               })()}
             </span>
           </span>
         )}
-        {!backend.inTauri && <span className="muted small">Browser preview</span>}
+        {!backend.inTauri && <span className="muted small">{backend.inMcpApp ? "Antigravity MCP App" : "Browser preview"}</span>}
       </div>
+
+      {walkthrough && (
+        <WalkthroughBar
+          walkthrough={walkthrough}
+          followAgent={followAgent}
+          onStep={(nextIdx, st) => {
+            setWalkthrough({ ...walkthrough, step: nextIdx });
+            if (followAgent) applyWalkthroughStep(st);
+          }}
+          onToggleFollow={() => setFollowAgent(!followAgent)}
+          onClose={() => setWalkthrough(null)}
+        />
+      )}
 
       <div className={`workbench ${leftOpen ? "" : "left-closed"}`}>
         {/* ---- left dock ---- */}
@@ -1024,109 +1659,128 @@ export default function App() {
 
         {/* ---- centre ---- */}
         <main className="center">
-          {showTrace ? (
-            <TraceView
-              tabs={centerTabs}
-              prop={traceProp}
-              path={trace?.path ?? tracePath ?? ""}
-              text={trace?.text ?? null}
-              error={trace?.error}
-              addRequest={addReq}
-              onAddResult={onAddResult}
-              cursorRequest={cursorReq}
-              onView={setTraceView}
-              clock={session?.clocks[0] ?? null}
-              whyCex={traceName ? (whyCexMap[traceName] ?? null) : null}
-              whyCexOpen={whyCexOpen}
-              whyCexLoading={whyCexLoading}
-              onToggleWhyCex={toggleWhyCex}
-              actions={
-                // The title sits on a wrapper too: a disabled button shows none.
-                <span className="surfer-wrap" title={surferTip(tracePath)}>
-                  <button className="btn" disabled={!surfer || !tracePath} onClick={() => tracePath && openInSurfer(tracePath)} title={surferTip(tracePath)}>
-                    Open in Surfer
-                  </button>
-                </span>
-              }
+          {showWelcome ? (
+            <WelcomePane
+              ai={ai}
+              recent={recentSessions}
+              onOpenScript={openScriptPath}
+              onOpenPalette={() => setCommandPaletteOpen(true)}
             />
-          ) : (
-          <>
-          <div className="strip">
-            {centerTabs}
-            {center !== "source" ? (
-              <>
-                <span className="strip-summary">{summary}</span>
-                <span className="spacer" />
-                {statusFilter && (
-                  <button className="link small" onClick={() => setStatusFilter(null)}>
-                    clear status filter
-                  </button>
-                )}
-                {shownTask && (
-                  <button className="link small" onClick={() => setTaskFilter(null)} title={`Showing task ${shownTask} only`}>
-                    all tasks
-                  </button>
-                )}
-                {(filter.trim() || statusFilter || shownTask) && (
-                  <span className="filter-count" role="status" aria-live="polite">
-                    {props.length} of {allProps.length}
-                  </span>
-                )}
-                <input
-                  id="prop-filter"
-                  className="filter"
-                  placeholder="Filter"
-                  title="Case-insensitive; matches name, expression or engine (Esc clears)"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape" && filter) {
-                      e.preventDefault();
-                      setFilter("");
-                    }
-                  }}
-                  aria-label="Filter properties"
-                />
-                <button
-                  className="btn small"
-                  aria-haspopup="menu"
-                  title="Show or hide table columns (also: right-click the header)"
-                  onClick={(e) => {
-                    const r = e.currentTarget.getBoundingClientRect();
-                    setColMenu({ x: r.left, y: r.bottom + 2 });
-                  }}
-                >
-                  Columns
-                </button>
-              </>
-            ) : (
-              <span className="strip-summary mono">{srcPath}{focusLine ? `:${focusLine}` : ""}</span>
-            )}
-          </div>
-          {center !== "source" ? (
-            <PropTable
-              props={props}
-              total={allProps.length}
-              selected={selected}
-              onSelect={select}
-              onOpen={(p) => (traceOf(p) ? openTrace(p.name) : select(p.name))}
-              onContext={(p, x, y) => {
-                setSelected(p.name);
-                setCtx({ name: p.name, x, y });
+          ) : layoutPreset !== "triage" ? (
+            <WorkbenchDock
+              preset={layoutPreset}
+              dark={isDark}
+              slots={{
+                table: (
+                  <PropTable
+                    props={props}
+                    total={allProps.length}
+                    selected={selected}
+                    onSelect={select}
+                    onOpen={(p) => (traceOf(p) ? openTrace(p.name) : select(p.name))}
+                    onContext={(p, x, y) => {
+                      setSelected(p.name);
+                      setCtx({ name: p.name, x, y });
+                    }}
+                    hidden={hidden}
+                    onHeaderContext={(x, y) => setColMenu({ x, y })}
+                  />
+                ),
+                source: sourceElement,
+                trace: traceElement,
+                schematic: schematicElement,
+                apps: (
+                  <FormalApps
+                    session={session}
+                    mode={appMode}
+                    onMode={setAppMode}
+                    idle={idle}
+                    onRunTcl={(cmd) => (isProveCmd(cmd) ? prove(cmd) : run(() => backend.evalTcl(cmd), cmd))}
+                    onSelectTask={(t) => {
+                      setTaskFilter(t);
+                      setLayoutPreset("triage");
+                      setCenter("table");
+                    }}
+                  />
+                ),
               }}
-              hidden={hidden}
-              onHeaderContext={(x, y) => setColMenu({ x, y })}
             />
+          ) : showTrace ? (
+            traceElement
+          ) : center === "schematic" ? (
+            schematicElement
           ) : (
-            <SourceView
-              text={source}
-              focus={focusLine}
-              focusEnd={focusEnd}
-              causalSignals={whyCexOpen && traceName ? whyCexMap[traceName]?.active_signals : undefined}
-              covItems={session?.cov?.items?.filter((it) => !it.file || it.file === srcPath || Boolean(srcPath?.endsWith(`/${it.file}`)))}
-            />
-          )}
-          </>
+            <>
+              <div className="strip">
+                {centerTabs}
+                {center !== "source" ? (
+                  <>
+                    <span className="strip-summary">{summary}</span>
+                    <span className="spacer" />
+                    {statusFilter && (
+                      <button className="link small" onClick={() => setStatusFilter(null)}>
+                        clear status filter
+                      </button>
+                    )}
+                    {shownTask && (
+                      <button className="link small" onClick={() => setTaskFilter(null)} title={`Showing task ${shownTask} only`}>
+                        all tasks
+                      </button>
+                    )}
+                    {(filter.trim() || statusFilter || shownTask) && (
+                      <span className="filter-count" role="status" aria-live="polite">
+                        {props.length} of {allProps.length}
+                      </span>
+                    )}
+                    <input
+                      id="prop-filter"
+                      className="filter"
+                      placeholder="Filter"
+                      title="Case-insensitive; matches name, expression or engine (Esc clears)"
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape" && filter) {
+                          e.preventDefault();
+                          setFilter("");
+                        }
+                      }}
+                      aria-label="Filter properties"
+                    />
+                    <button
+                      className="btn small"
+                      aria-haspopup="menu"
+                      title="Show or hide table columns (also: right-click the header)"
+                      onClick={(e) => {
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setColMenu({ x: r.left, y: r.bottom + 2 });
+                      }}
+                    >
+                      Columns
+                    </button>
+                  </>
+                ) : (
+                  <span className="strip-summary mono">{srcPath}{focusLine ? `:${focusLine}` : ""}</span>
+                )}
+              </div>
+              {center !== "source" ? (
+                <PropTable
+                  props={props}
+                  total={allProps.length}
+                  selected={selected}
+                  onSelect={select}
+                  onOpen={(p) => (traceOf(p) ? openTrace(p.name) : select(p.name))}
+                  onContext={(p, x, y) => {
+                    setSelected(p.name);
+                    setCtx({ name: p.name, x, y });
+                  }}
+                  hidden={hidden}
+                  onHeaderContext={(x, y) => setColMenu({ x, y })}
+                />
+              ) : (
+                sourceElement
+              )}
+            </>
           )}
         </main>
 
@@ -1173,6 +1827,22 @@ export default function App() {
               </div>
             }
           />
+          {bottomTab === "console" && focusChips.length > 0 && (
+            <div className="focus-chip-bar" role="region" aria-label="Pinned AI context">
+              <span className="small muted">AI Context:</span>
+              {focusChips.map((chip) => (
+                <span key={chip.id} className="focus-chip mono small" title={chip.detail}>
+                  {chip.label}
+                  <button type="button" onClick={() => removeFocusChip(chip.id)} aria-label={`Remove ${chip.label}`}>
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button type="button" className="link small" onClick={clearFocusChips}>
+                clear
+              </button>
+            </div>
+          )}
           {/* kept mounted so history and scroll survive tab switches */}
           <Console
             hidden={bottomTab !== "console"}
@@ -1292,6 +1962,20 @@ export default function App() {
                     >
                       Visualize trace
                     </button>
+                    {current.kind !== "assume" && (
+                      <button className="btn" onClick={() => openSchematic(current.name)} title="Open COI & causal schematic">
+                        Schematic
+                      </button>
+                    )}
+                    {hasTrace && (
+                      <button
+                        className="btn"
+                        onClick={() => void launchCexWalkthrough(current.name)}
+                        title="Run why_cex and launch a synchronized 3-way guided CEX walkthrough"
+                      >
+                        ✦ Explain CEX
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="details-right">
@@ -1347,6 +2031,12 @@ export default function App() {
           <span>{busy ? "Working…" : "Idle"}</span>
         )}
       </footer>
+
+      <CommandPalette
+        open={commandPaletteOpen}
+        commands={paletteCommands}
+        onClose={() => setCommandPaletteOpen(false)}
+      />
 
       {llmMenu && (
         <ContextMenu

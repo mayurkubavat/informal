@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 svlang.workspace = true
+dv-lint.workspace = true
+dv-model.workspace = true
 
 [dev-dependencies]
 informal-ir.workspace = true

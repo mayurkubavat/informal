@@ -1,0 +1,13 @@
+{
+  "name": "informal",
+  "displayName": "InFormal",
+  "version": "0.2.0",
+  "description": "IEEE 1800 SystemVerilog formal property verification, dynamic why_cex causal root-cause slicing, RTL cone schematics, and interactive waveform MCP App workbench.",
+  "logo": "assets/logo.svg",
+  "repository": "https://github.com/mayurkubavat/informal",
+  "suggestedPrompts": [
+    "Open the InFormal workbench and prove all assertions in my SystemVerilog design",
+    "Slice the failing CEX with why_cex, open the RTL cone schematic, and walk me through the root cause",
+    "Run formal-readiness lint (SV-FPV-001..005) and verify CSR or AXI4-Lite protocol properties"
+  ]
+}

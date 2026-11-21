@@ -2813,6 +2813,367 @@
     }
   },
   {
+    "changes": false,
+    "description": "Open or refresh the interactive InFormal verification workbench (MCP App side pane or full-page view): property status table, waveform viewer, causal schematic, RTL source, and Formal Apps.",
+    "input": {
+      "properties": {
+        "focus_property": {
+          "description": "Optional property name to focus on open",
+          "type": "string"
+        },
+        "view": {
+          "description": "Optional initial view",
+          "enum": [
+            "table",
+            "source",
+            "trace",
+            "schematic",
+            "apps"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "open_workbench",
+    "output": {
+      "properties": {
+        "focus_property": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "const": "informal.workbench/1",
+          "type": "string"
+        },
+        "session": {
+          "description": "Full SessionView snapshot for the UI",
+          "type": "object"
+        },
+        "view": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "session"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Extract a bounded, port-aware RTL netlist schematic subgraph in the cone of influence of `name`, annotated with active `why_cex` causal paths and arithmetic state-space hotspots (`mul`, `div`, wide datapath).",
+    "input": {
+      "properties": {
+        "max_depth": {
+          "description": "Register stages to expand backward from the property (default: 2)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_nodes": {
+          "description": "Maximum schematic operator/register nodes (default: 80)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Target assert or cover property name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "schematic_get",
+    "output": {
+      "properties": {
+        "edges": {
+          "description": "Schematic edges with id, source, source_port, target, target_port, width, inverted, causal, signal",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "max_depth": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nodes": {
+          "description": "Schematic nodes with id, label, signal, kind, op, width, distance, causal, hotspot, expandable, ports",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "property": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.schematic/1",
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "property",
+        "max_depth",
+        "truncated",
+        "nodes",
+        "edges"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Run svlang dv-lint with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.",
+    "input": {
+      "properties": {
+        "file": {
+          "description": "Optional design file filter",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "formal_lint",
+    "output": {
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "findings": {
+          "description": "Findings with rule, name, severity, message, file, line, column, fixes",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.lint/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "count",
+        "findings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Apply a byte-range quick-fix from `formal_lint` to a design file under the workspace root and re-elaborate (or record as a proposal in propose mode).",
+    "input": {
+      "properties": {
+        "end": {
+          "description": "0-based UTF-8 end byte offset",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file": {
+          "description": "Design file path",
+          "type": "string"
+        },
+        "rationale": {
+          "description": "Why (required in propose mode)",
+          "type": "string"
+        },
+        "replacement": {
+          "description": "Replacement SystemVerilog text",
+          "type": "string"
+        },
+        "start": {
+          "description": "0-based UTF-8 start byte offset",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file",
+        "start",
+        "end",
+        "replacement"
+      ],
+      "type": "object"
+    },
+    "name": "formal_fix_apply",
+    "output": {
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "file": {
+          "type": "string"
+        },
+        "proposal": {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "id": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "assume",
+                "assert",
+                "cover",
+                "cut_point",
+                "command"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "state": {
+              "description": "pending waits for a person; applied is in the session, tagged AI-added",
+              "enum": [
+                "pending",
+                "applied",
+                "rejected",
+                "withdrawn",
+                "undone",
+                "failed",
+                "gone"
+              ],
+              "type": "string"
+            },
+            "text": {
+              "description": "The expression, the signal, or the Tcl command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "text",
+            "rationale",
+            "state"
+          ],
+          "type": "object"
+        },
+        "schema": {
+          "description": "informal.fix/1, or informal.proposal/1 in propose mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Resolve declarations, sequential/combinational drivers, and SVA/expression loads of an RTL signal across the design's files.",
+    "input": {
+      "properties": {
+        "signal": {
+          "description": "Signal name or hierarchical path, e.g. fifo.count",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal"
+      ],
+      "type": "object"
+    },
+    "name": "signal_nav",
+    "output": {
+      "properties": {
+        "declarations": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "drivers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "leaf": {
+          "type": "string"
+        },
+        "loads": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "informal.signal_nav/1",
+          "type": "string"
+        },
+        "signal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "signal",
+        "leaf",
+        "declarations",
+        "drivers",
+        "loads"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Analyze COI state bits, arithmetic operators, memories, and blackbox candidates (`get_fv_complexity`) for a property or the whole task.",
+    "input": {
+      "properties": {
+        "property": {
+          "description": "Optional property name filter",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "fv_complexity",
+    "output": {
+      "properties": {
+        "report": {
+          "description": "Complexity metrics and hotspot list",
+          "type": "object"
+        },
+        "schema": {
+          "const": "informal.complexity/1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "report"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "changes": true,
     "description": "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
     "input": {

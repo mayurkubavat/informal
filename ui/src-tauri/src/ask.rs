@@ -8,9 +8,9 @@ use informal_mcp::Api;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// The tools Ask may use: those that read the session or the window.
-/// Nothing that proves, proposes or evaluates Tcl; a command is still only
-/// suggested, and the user presses Enter.
+/// The tools Ask may use: those that read the session, analyze causal slices /
+/// schematics / formal lint / drivers, or read what the window shows (`gui_state`),
+/// without proving, mutating the model, or moving the user's window unasked.
 pub const TOOLS: &[&str] = &[
     "session_summary",
     "property_list",
@@ -20,12 +20,17 @@ pub const TOOLS: &[&str] = &[
     "design_info",
     "design_source",
     "trace_get",
+    "why_cex",
+    "schematic_get",
+    "formal_lint",
+    "signal_nav",
+    "fv_complexity",
     "session_log",
     "gui_state",
 ];
 
 /// Added to the system prompt when the model has the tools.
-pub const TOOLS_NOTE: &str = "You can look up what the session summary below does not show: a failing property's trace (trace_get), the design's source (design_source), a property's details and the signals it depends on, and what the user has selected (gui_state). Look before you explain a failure; say what the values show.";
+pub const TOOLS_NOTE: &str = "You can inspect failing traces (trace_get), dynamic backward causal root-cause slices (why_cex), RTL cone schematics (schematic_get), formal-readiness lint (formal_lint), signal drivers/loads (signal_nav), complexity hotspots (fv_complexity), design source (design_source), and what the user sees (gui_state). Look before you explain a failure; say what the values show.";
 
 /// [`TOOLS`] as the model is given them, from the AI interface's own
 /// definitions.

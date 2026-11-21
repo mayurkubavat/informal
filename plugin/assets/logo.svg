@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="48" y1="32" x2="464" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#226e69" />
+      <stop offset="100%" stop-color="#133f3c" />
+    </linearGradient>
+  </defs>
+  <!-- Rounded geometric squircle -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bg)" />
+  <rect x="30" y="30" width="452" height="452" rx="102" stroke="#ffffff" stroke-opacity="0.14" stroke-width="12" />
+  <!-- Formal entailment turnstile (|- ) morphing into a clean 2-step digital waveform -->
+  <path
+    d="M138 144V368"
+    stroke="#fdfcfa"
+    stroke-width="38"
+    stroke-linecap="round"
+  />
+  <path
+    d="M138 256H222V180H308V332H374"
+    stroke="#fdfcfa"
+    stroke-width="36"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Verified terminal proof node -->
+  <circle cx="386" cy="332" r="26" fill="#6ee7b7" />
+</svg>

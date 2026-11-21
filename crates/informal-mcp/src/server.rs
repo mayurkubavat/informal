@@ -11,6 +11,17 @@ use std::sync::{Arc, Mutex};
 
 /// Protocol revisions this server speaks, newest first.
 const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+const APP_MIME: &str = "text/html;profile=mcp-app";
+const WORKBENCH_HTML: &str = include_str!("../assets/workbench.html");
+
+fn read_workbench_html() -> String {
+    if let Ok(p) = std::env::var("INFORMAL_MCP_UI_HTML") {
+        if let Ok(s) = std::fs::read_to_string(p) {
+            return s;
+        }
+    }
+    WORKBENCH_HTML.to_string()
+}
 
 const INSTRUCTIONS: &str = "InFormal is a formal property verification tool for digital designs. \
 These tools read and drive one verification session: open a design with session_open, list its \
@@ -79,7 +90,10 @@ impl Server {
                     id,
                     json!({
                         "protocolVersion": version,
-                        "capabilities": {"tools": {"listChanged": false}},
+                        "capabilities": {
+                            "tools": {"listChanged": false},
+                            "resources": {"listChanged": false},
+                        },
                         "serverInfo": {
                             "name": "informal",
                             "title": "InFormal formal verification",
@@ -97,17 +111,60 @@ impl Server {
                 let list: Vec<Value> = tools::for_mode(self.api.mode(), self.api.has_gui())
                     .iter()
                     .map(|t| {
-                        json!({
+                        let mut item = json!({
                             "name": t.name,
                             "title": t.title,
                             "description": t.description,
                             "inputSchema": t.input,
                             "outputSchema": t.output,
                             "annotations": {"readOnlyHint": !t.changes},
-                        })
+                        });
+                        if let Some(meta) = tools::ui_meta(t.name) {
+                            item["_meta"] = meta;
+                        }
+                        item
                     })
                     .collect();
                 (self.out)(&result(id, json!({"tools": list})));
+            }
+            "resources/list" => {
+                (self.out)(&result(
+                    id,
+                    json!({
+                        "resources": [
+                            {
+                                "uri": tools::APP_URI,
+                                "name": "InFormal Workbench",
+                                "description": "Interactive formal verification waveform, causal schematic, RTL source, and Formal Apps workbench",
+                                "mimeType": APP_MIME,
+                                "_meta": {
+                                    "ui": {"prefersBorder": false}
+                                }
+                            }
+                        ]
+                    }),
+                ));
+            }
+            "resources/read" => {
+                let uri = params.get("uri").and_then(Value::as_str).unwrap_or("");
+                if uri != tools::APP_URI {
+                    return (self.out)(&error(id, -32602, &format!("unknown resource: {uri}")));
+                }
+                (self.out)(&result(
+                    id,
+                    json!({
+                        "contents": [
+                            {
+                                "uri": tools::APP_URI,
+                                "mimeType": APP_MIME,
+                                "text": read_workbench_html(),
+                                "_meta": {
+                                    "ui": {"prefersBorder": false}
+                                }
+                            }
+                        ]
+                    }),
+                ));
             }
             "tools/call" => self.call(id, &params),
             _ => (self.out)(&error(id, -32601, &format!("no method {method}"))),

@@ -309,6 +309,12 @@ impl Api {
             "design_source" => self.design_source(args),
             "trace_get" => self.trace_get(args),
             "why_cex" => self.why_cex(args),
+            "open_workbench" => self.open_workbench(args),
+            "schematic_get" => self.schematic_get(args),
+            "formal_lint" => self.formal_lint(args),
+            "formal_fix_apply" => self.formal_fix_apply(args),
+            "signal_nav" => self.signal_nav(args),
+            "fv_complexity" => self.fv_complexity(args),
             "prove_cache" => self.prove_cache(args),
             "check_cov" => self.check_cov(args, false),
             "check_conn" => self.check_conn(args, false),
@@ -333,6 +339,7 @@ impl Api {
             tool,
             "proposal_add"
                 | "proposal_undo"
+                | "formal_fix_apply"
                 | "prove_cache"
                 | "check_cov"
                 | "check_conn"
@@ -846,6 +853,195 @@ impl Api {
             "active_slice_signals": rep.active_slice_signals,
             "active_signals": rep.active_signals,
             "events": events,
+        }))
+    }
+
+    fn open_workbench(&self, args: &Value) -> Reply {
+        let focus = opt_str(args, "focus_property")?;
+        let view = opt_str(args, "view")?;
+        let snap = self.on_shell(false, move |sh| {
+            let s = sh.session.borrow();
+            serde_json::to_value(&*s).map_err(|e| err("internal", e.to_string()))
+        })??;
+        Ok(json!({
+            "schema": "informal.workbench/1",
+            "focus_property": focus,
+            "view": view,
+            "session": snap,
+        }))
+    }
+
+    fn schematic_get(&self, args: &Value) -> Reply {
+        let name = req_str(args, "name")?;
+        let max_depth = opt_u64(args, "max_depth")?.unwrap_or(2) as u32;
+        let max_nodes = opt_u64(args, "max_nodes")?.unwrap_or(80) as usize;
+        let (prop_name, model, active_signals) = self.on_shell(false, move |sh| {
+            let s = sh.session.borrow();
+            let p = find(&s, &name)?;
+            if s.props[p].kind == Kind::Assume {
+                return Err(err(
+                    "rejected",
+                    "an assumption is not a target and has no schematic cone",
+                ));
+            }
+            let model = s.model_for(p).map_err(|e| err("rejected", e))?;
+            let active = informal_fpv::why_cex::slice_property_cex(&s, &s.props[p].name, 64)
+                .map(|r| r.active_signals)
+                .unwrap_or_default();
+            Ok((s.props[p].name.clone(), model, active))
+        })??;
+        let g = cone::schematic(&model, max_depth, max_nodes, &active_signals)
+            .map_err(|e| err("internal", e))?;
+        Ok(json!({
+            "schema": "informal.schematic/1",
+            "property": prop_name,
+            "max_depth": g.max_depth,
+            "truncated": g.truncated,
+            "nodes": g.nodes,
+            "edges": g.edges,
+        }))
+    }
+
+    fn formal_lint(&self, args: &Value) -> Reply {
+        let file_filter = opt_str(args, "file")?;
+        let (req, rst) = self.on_shell(false, move |sh| {
+            let s = sh.session.borrow();
+            let req = informal_svlang::Request {
+                files: s.design.files.clone(),
+                defines: s.design.defines.clone(),
+                incdirs: s.design.incdirs.clone(),
+                top: s.design.top.clone(),
+                params: s.design.params.clone(),
+                black_box_modules: s.design.bbox.clone(),
+                ..Default::default()
+            };
+            Ok((req, s.reset.clone()))
+        })??;
+        let mut findings = informal_svlang::assist::lint_formal_ready(&req, rst.as_deref())
+            .map_err(|e| err("internal", e))?;
+        if let Some(ref f) = file_filter {
+            findings.retain(|d| d.file == *f || d.file.ends_with(&format!("/{f}")));
+        }
+        let val = serde_json::to_value(&findings).map_err(|e| err("internal", e.to_string()))?;
+        Ok(json!({
+            "schema": "informal.lint/1",
+            "count": findings.len(),
+            "findings": val,
+        }))
+    }
+
+    fn formal_fix_apply(&self, args: &Value) -> Reply {
+        self.changing()?;
+        let file_arg = req_str(args, "file")?;
+        let path = self.below_root(&file_arg)?;
+        let start = opt_u64(args, "start")?
+            .ok_or_else(|| err("arguments", "`start` byte offset is required"))?
+            as usize;
+        let end = opt_u64(args, "end")?
+            .ok_or_else(|| err("arguments", "`end` byte offset is required"))?
+            as usize;
+        let replacement = req_str(args, "replacement")?;
+        if end < start {
+            return Err(err("arguments", "`end` must be >= `start`"));
+        }
+        if self.opts.mode == Mode::Propose {
+            let rationale = opt_str(args, "rationale")?.unwrap_or_else(|| {
+                format!(
+                    "Apply formal-ready quick-fix in {} ({start}..{end})",
+                    path.display()
+                )
+            });
+            return self.propose(Proposal {
+                id: 0,
+                kind: "command".into(),
+                name: None,
+                text: format!(
+                    "# quick-fix {}:{}..{} -> {}",
+                    path.display(),
+                    start,
+                    end,
+                    replacement
+                ),
+                rationale,
+                state: "pending".into(),
+                error: None,
+            });
+        }
+        // Verify file is part of the session's design files
+        let in_design = self.on_shell(false, {
+            let check_path = path.clone();
+            move |sh| {
+                let s = sh.session.borrow();
+                s.design
+                    .files
+                    .iter()
+                    .any(|f| f.canonicalize().ok() == check_path.canonicalize().ok())
+            }
+        })?;
+        if !in_design {
+            return Err(err(
+                "rejected",
+                format!(
+                    "{} is not in the elaborated design's file list",
+                    path.display()
+                ),
+            ));
+        }
+        let mut src = std::fs::read_to_string(&path)
+            .map_err(|e| err("path", format!("{}: {e}", path.display())))?;
+        if end > src.len() || !src.is_char_boundary(start) || !src.is_char_boundary(end) {
+            return Err(err(
+                "arguments",
+                "byte span is out of bounds or not UTF-8 aligned",
+            ));
+        }
+        src.replace_range(start..end, &replacement);
+        std::fs::write(&path, &src).map_err(|e| err("path", format!("{}: {e}", path.display())))?;
+        self.on_shell(false, move |sh| {
+            let _ = sh.eval("elaborate");
+            Ok(())
+        })??;
+        Ok(json!({
+            "schema": "informal.fix/1",
+            "applied": true,
+            "file": path.display().to_string(),
+        }))
+    }
+
+    fn signal_nav(&self, args: &Value) -> Reply {
+        let signal = req_str(args, "signal")?;
+        let req = self.on_shell(false, move |sh| {
+            let s = sh.session.borrow();
+            Ok(informal_svlang::Request {
+                files: s.design.files.clone(),
+                defines: s.design.defines.clone(),
+                incdirs: s.design.incdirs.clone(),
+                top: s.design.top.clone(),
+                params: s.design.params.clone(),
+                black_box_modules: s.design.bbox.clone(),
+                ..Default::default()
+            })
+        })??;
+        let nav = informal_svlang::assist::navigate_signal(&req, &signal)
+            .map_err(|e| err("internal", e))?;
+        let mut v = serde_json::to_value(&nav).map_err(|e| err("internal", e.to_string()))?;
+        v["schema"] = json!("informal.signal_nav/1");
+        Ok(v)
+    }
+
+    fn fv_complexity(&self, args: &Value) -> Reply {
+        let prop = opt_str(args, "property")?;
+        let raw = self.on_shell(false, move |sh| {
+            let cmd = match prop {
+                Some(ref p) => format!("get_fv_complexity -json {{{p}}}"),
+                None => "get_fv_complexity -json".to_string(),
+            };
+            sh.eval(&cmd).map_err(|e| err("rejected", e.message))
+        })??;
+        let parsed: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({"text": raw}));
+        Ok(json!({
+            "schema": "informal.complexity/1",
+            "report": parsed,
         }))
     }
 
@@ -1775,6 +1971,45 @@ impl Api {
                     "last_line": last,
                 }))
             }
+            "gui_set_view" => Some(json!({
+                "action": "set_view",
+                "view": opt_str(args, "view")?,
+                "layout_preset": opt_str(args, "layout_preset")?,
+                "app_tab": opt_str(args, "app_tab")?,
+                "bottom_tab": opt_str(args, "bottom_tab")?,
+                "filter": opt_str(args, "filter")?,
+                "status_filter": args.get("status_filter").cloned(),
+            })),
+            "gui_toggle_why_cex" => {
+                let open = opt_bool(args, "open")?
+                    .ok_or_else(|| err("arguments", "`open` boolean is required"))?;
+                Some(json!({
+                    "action": "toggle_why_cex",
+                    "open": open,
+                    "slice_only": opt_bool(args, "slice_only")?,
+                }))
+            }
+            "gui_annotate_trace" => Some(json!({
+                "action": "annotate_trace",
+                "annotations": args.get("annotations").cloned().unwrap_or(json!([])),
+                "clear": opt_bool(args, "clear")?.unwrap_or(false),
+            })),
+            "gui_present_walkthrough" => Some(json!({
+                "action": "present_walkthrough",
+                "title": opt_str(args, "title")?,
+                "steps": args.get("steps").cloned(),
+                "step": opt_u64(args, "step")?,
+                "clear": opt_bool(args, "clear")?.unwrap_or(false),
+            })),
+            "gui_open_schematic" => Some(json!({
+                "action": "open_schematic",
+                "name": opt_str(args, "name")?,
+                "max_depth": opt_u64(args, "max_depth")?,
+            })),
+            "gui_capture_view" => Some(json!({
+                "action": "capture_view",
+                "target": opt_str(args, "target")?.unwrap_or_else(|| "trace".to_string()),
+            })),
             _ => return Err(err("not_found", format!("no tool named {tool}"))),
         };
         let state = match &action {

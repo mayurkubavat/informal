@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "informal": {
+      "command": "bash",
+      "args": ["${PLUGIN_ROOT}/bin/informal-mcp-launcher.sh", "${PLUGIN_DATA}"]
+    }
+  }
+}

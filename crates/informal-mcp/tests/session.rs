@@ -552,7 +552,7 @@ fn window_tools_need_a_window_and_drive_it() {
     api.set_gui(window.clone());
     assert_eq!(
         names(&api).iter().filter(|n| n.starts_with("gui_")).count(),
-        5
+        11
     );
     golden(
         "tools_gui",
@@ -578,9 +578,36 @@ fn window_tools_need_a_window_and_drive_it() {
     );
     call(&api, "gui_add_signals", json!({"signals": ["fifo.count"]}));
     call(&api, "gui_select_property", json!({"name": "a_data"}));
+    call(
+        &api,
+        "gui_set_view",
+        json!({"view": "schematic", "layout_preset": "cex-debug"}),
+    );
+    call(
+        &api,
+        "gui_toggle_why_cex",
+        json!({"open": true, "slice_only": true}),
+    );
+    call(
+        &api,
+        "gui_annotate_trace",
+        json!({"annotations": [{"frame": 4, "signal": "fifo.count", "label": "hits 3", "tone": "danger"}]}),
+    );
+    call(
+        &api,
+        "gui_present_walkthrough",
+        json!({"title": "FIFO CEX", "steps": [{"label": "Cycle 4", "note": "count reaches 3", "frame": 4}]}),
+    );
+    call(
+        &api,
+        "gui_open_schematic",
+        json!({"name": "a_wrong", "max_depth": 2}),
+    );
+    call(&api, "gui_capture_view", json!({"target": "trace"}));
     let actions = window.0.lock().unwrap().clone();
+    assert_eq!(actions.len(), 10);
     assert_eq!(
-        actions,
+        &actions[..4],
         [
             json!({"action": "open_trace", "name": "a_wrong", "frame": 4}),
             json!({"action": "highlight_source", "file": "tests/fpv/fifo/fifo.sv", "first_line": 40, "last_line": 40}),
@@ -713,13 +740,36 @@ fn an_agent_finds_the_failing_assertion_and_proposes_a_fix() {
     assert_eq!(proved["results"][0]["status"], "proven");
     assert_eq!(proved["results"][0]["origin"], "ai");
 
+    // MCP App SEP-1865 resource discovery and read (`ui://informal/workbench.html`).
+    let resources = c.request("resources/list", json!({}));
+    assert_eq!(
+        resources["resources"][0]["uri"],
+        "ui://informal/workbench.html"
+    );
+    assert_eq!(
+        resources["resources"][0]["mimeType"],
+        "text/html;profile=mcp-app"
+    );
+    let read_res = c.request(
+        "resources/read",
+        json!({"uri": "ui://informal/workbench.html"}),
+    );
+    assert_eq!(
+        read_res["contents"][0]["mimeType"],
+        "text/html;profile=mcp-app"
+    );
+    assert!(read_res["contents"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("<html"));
+
     // Protocol errors: an unknown tool and an unknown method.
     c.server
         .handle(r#"{"jsonrpc":"2.0","id":"x","method":"tools/call","params":{"name":"nope"}}"#);
     let e = c.rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(e["error"]["code"], -32602);
     c.server
-        .handle(r#"{"jsonrpc":"2.0","id":"y","method":"resources/list"}"#);
+        .handle(r#"{"jsonrpc":"2.0","id":"y","method":"prompts/list"}"#);
     assert_eq!(
         c.rx.recv_timeout(Duration::from_secs(5)).unwrap()["error"]["code"],
         -32601
@@ -757,6 +807,32 @@ fn mcp_why_cex_and_formal_app_tools_conform_to_schemas() {
     assert_eq!(slice["schema"], "informal.why_cex/1");
     assert_eq!(slice["status"], "cex");
     assert!(!slice["events"].as_array().unwrap().is_empty());
+
+    let wb = call(
+        &api,
+        "open_workbench",
+        json!({"focus_property": "a_never9"}),
+    );
+    assert_eq!(wb["schema"], "informal.workbench/1");
+    assert_eq!(wb["focus_property"], "a_never9");
+
+    let schem = call(
+        &api,
+        "schematic_get",
+        json!({"name": "a_never9", "max_depth": 2}),
+    );
+    assert_eq!(schem["schema"], "informal.schematic/1");
+    assert!(!schem["nodes"].as_array().unwrap().is_empty());
+
+    let lint = call(&api, "formal_lint", json!({}));
+    assert_eq!(lint["schema"], "informal.lint/1");
+
+    let nav = call(&api, "signal_nav", json!({"signal": "counter.q"}));
+    assert_eq!(nav["schema"], "informal.signal_nav/1");
+    assert!(!nav["declarations"].as_array().unwrap().is_empty());
+
+    let comp = call(&api, "fv_complexity", json!({}));
+    assert_eq!(comp["schema"], "informal.complexity/1");
 
     let pc = call(&api, "prove_cache", json!({"enabled": true, "mode": "rw"}));
     assert_eq!(pc["enabled"], true);

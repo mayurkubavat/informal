@@ -119,8 +119,14 @@ reply (`tools/list`).
 | Design | `design_hierarchy` | Instance tree with ports and signals | no |
 | | `design_info` | Counts of the design (inputs, flops, latches, memories, clocks and resets found) and the size of the current task's model (Btor2 nodes, states, AIG ands) | no |
 | | `design_source` | Source text by file and line range | no |
-| Traces | `trace_get` | A counterexample or cover trace: values per signal and frame, chosen signals, a frame window | no |
+| | `formal_lint` | Run `dv-lint` (`formal-ready` pack: `SV-FPV-001..005`, SVA, CDC, FSM) on the design's RTL files with structured 1-click quick-fix byte edits | no |
+| | `formal_fix_apply` | Apply a byte-range quick-fix from `formal_lint` to a design file under the workspace root (or propose it in `propose` mode) | yes, by mode |
+| | `signal_nav` | Resolve declarations, sequential/combinational drivers, and SVA/expression loads of an RTL signal across files | no |
+| | `fv_complexity` | COI state bits, wide arithmetic hotspots, memories, and blackbox candidates (`get_fv_complexity`) | no |
+| Traces & Cone | `trace_get` | A counterexample or cover trace: values per signal and frame, chosen signals, a frame window | no |
 | | `why_cex` | Dynamic backward causal slice of a `cex` or `covered` trace from failure cycle `T` to `0` (active mux arms, controlling boolean inputs, register transitions) | no |
+| | `schematic_get` | Bounded, port-aware RTL netlist schematic subgraph in the COI of a property, annotated with active `why_cex` paths and complexity hotspots | no |
+| Workbench UI | `open_workbench` | Open or refresh the embedded MCP App (`ui://informal/workbench.html`, `text/html;profile=mcp-app`) in an IDE side pane or global view | no |
 | Prove | `prove` | Run the engines on named properties, or on one task's, with a time limit; each one's result | statuses only |
 | | `prove_status` | Progress of a running prove; the result of one started with `wait: false` | no |
 | | `prove_stop` | Stop a running prove | no |
@@ -149,6 +155,12 @@ window, never the session.
 | `gui_open_trace` | Open a cex or covered property's waveform, with the cursor on a frame |
 | `gui_add_signals` | Add signals, by full name, to the open waveform |
 | `gui_highlight_source` | Open a file in the source view and highlight a range of lines |
+| `gui_set_view` | Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab, dock tab, or filter |
+| `gui_toggle_why_cex` | Show or hide the `Why CEX` causal slice bar and optional `slice_only` lane filter |
+| `gui_annotate_trace` | Pin or clear AI callout badges onto `(signal, frame)` waveform cells |
+| `gui_present_walkthrough` | Present, step, or dismiss an interactive multi-step CEX root-cause walkthrough bar |
+| `gui_open_schematic` | Open the interactive COI & causal schematic viewer for a property |
+| `gui_capture_view` | Render deterministic standalone SVG / snapshot of the active waveform, schematic, or window into `window.capture` |
 
 Each returns the window's state after it (`informal.gui/1`), or the
 window's reason when it cannot be done ("a_max has no trace: its status is

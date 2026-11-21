@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Logo } from "./Logo";
 
 export type MenuItem =
   | { label: string; hint?: string; keys?: string; title?: string; onClick?: () => void; disabled?: boolean; checked?: boolean }
@@ -26,6 +27,9 @@ export function MenuBar({ menus, children }: { menus: MenuDef[]; children?: Reac
   }, [open]);
   return (
     <div className="menubar" ref={bar}>
+      <span className="menubar-brand" title="InFormal Formal Verification">
+        <Logo size={16} />
+      </span>
       {/* role lives on a layout-neutral wrapper: a menubar may only own menu items, not the script path field */}
       <div role="menubar" aria-label="Main menu" style={{ display: "contents" }}>
       {menus.map((m) => (

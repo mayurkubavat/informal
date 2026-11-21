@@ -80,16 +80,24 @@ fn engines_config() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("INFORMAL_ENGINES") {
         return Some(p.into());
     }
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let c = dir.join("config/engines.toml");
-        if c.is_file() {
-            return Some(c);
-        }
-        if !dir.pop() {
-            return None;
+    if let Ok(mut dir) = std::env::current_dir() {
+        loop {
+            let c = dir.join("config/engines.toml");
+            if c.is_file() {
+                return Some(c);
+            }
+            if !dir.pop() {
+                break;
+            }
         }
     }
+    // When launched from macOS Finder / Dock / Spotlight, current_dir is `/`:
+    // fall back to the checkout this binary was built from when present.
+    let built_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/engines.toml");
+    if built_root.is_file() {
+        return Some(built_root);
+    }
+    None
 }
 
 /// The design file list and property names from the last reply, and the
@@ -159,6 +167,88 @@ async fn shell_eval(w: State<'_, Worker>, script: String) -> Result<Reply, Strin
 
 #[tauri::command]
 async fn shell_source(w: State<'_, Worker>, path: String) -> Result<Reply, String> {
+    if let Some(tpl) = path.strip_prefix("template:") {
+        let dir = Path::new(WORKDIR).join("templates");
+        let _ = std::fs::create_dir_all(&dir);
+        let script = match tpl {
+            "axi4lite" => {
+                let sv = dir.join("axi_lite_demo.sv");
+                let _ = std::fs::write(
+                    &sv,
+                    "module axi_lite_demo (\n\
+                     \x20 input  logic        clk,\n\
+                     \x20 input  logic        rst_n,\n\
+                     \x20 output logic        awvalid,\n\
+                     \x20 input  logic        awready,\n\
+                     \x20 output logic [31:0] awaddr,\n\
+                     \x20 output logic        wvalid,\n\
+                     \x20 input  logic        wready,\n\
+                     \x20 output logic [31:0] wdata,\n\
+                     \x20 output logic [3:0]  wstrb,\n\
+                     \x20 input  logic        bvalid,\n\
+                     \x20 output logic        bready,\n\
+                     \x20 input  logic [1:0]  bresp,\n\
+                     \x20 output logic        arvalid,\n\
+                     \x20 input  logic        arready,\n\
+                     \x20 output logic [31:0] araddr,\n\
+                     \x20 input  logic        rvalid,\n\
+                     \x20 output logic        rready,\n\
+                     \x20 input  logic [31:0] rdata,\n\
+                     \x20 input  logic [1:0]  rresp\n\
+                     );\n\
+                     \x20 assign awaddr = 32'h0; assign wdata = 32'h0; assign wstrb = 4'hf; assign araddr = 32'h0;\n\
+                     \x20 assign bready = 1'b1; assign rready = 1'b1; assign wvalid = 1'b0; assign arvalid = 1'b0;\n\
+                     \x20 always_ff @(posedge clk or negedge rst_n)\n\
+                     \x20   if (!rst_n) awvalid <= 1'b0;\n\
+                     \x20   else if (!awvalid) awvalid <= 1'b1;\n\
+                     \x20   else if (awready) awvalid <= 1'b0;\n\
+                     endmodule\n",
+                );
+                format!(
+                    "clear -all; analyze -sv12 {{{}}}; elaborate -top axi_lite_demo; clock clk; reset -expression {{!rst_n}}; check_protocol -create -protocol axi4lite -role master",
+                    sv.display()
+                )
+            }
+            "csr" => {
+                let sv = dir.join("csr_demo.sv");
+                let csv = dir.join("csr_demo.csv");
+                let _ = std::fs::write(
+                    &sv,
+                    "module csr_demo (\n\
+                     \x20 input  logic        clk,\n\
+                     \x20 input  logic        rst_n,\n\
+                     \x20 input  logic        wr_en,\n\
+                     \x20 input  logic [7:0]  addr,\n\
+                     \x20 input  logic [31:0] wr_data,\n\
+                     \x20 output logic [31:0] ctrl_q,\n\
+                     \x20 output logic [31:0] status_q\n\
+                     );\n\
+                     \x20 assign status_q = 32'h0000_00a5;\n\
+                     \x20 always_ff @(posedge clk or negedge rst_n)\n\
+                     \x20   if (!rst_n) ctrl_q <= 32'h0;\n\
+                     \x20   else if (wr_en && addr == 8'h00) ctrl_q <= wr_data;\n\
+                     endmodule\n",
+                );
+                let _ = std::fs::write(
+                    &csv,
+                    "name,offset,access,reset,field_signal,bus_write,bus_addr,bus_wdata\n\
+                     ctrl,0x00,RW,0x0,ctrl_q,wr_en,addr,wr_data\n\
+                     status,0x04,RO,0xa5,status_q,wr_en,addr,wr_data\n",
+                );
+                format!(
+                    "clear -all; analyze -sv12 {{{}}}; elaborate -top csr_demo; clock clk; reset -expression {{!rst_n}}; check_csr -load {{{}}}",
+                    sv.display(),
+                    csv.display()
+                )
+            }
+            _ => format!("source {{{tpl}}}"),
+        };
+        return Ok(call(&w, Request::Eval(script)).await);
+    }
+    if path.ends_with(".sv") || path.ends_with(".svh") {
+        let script = format!("clear -all; analyze -sv12 {{{path}}}; elaborate");
+        return Ok(call(&w, Request::Eval(script)).await);
+    }
     Ok(call(&w, Request::Source(path.into())).await)
 }
 
@@ -213,6 +303,15 @@ const WORKDIR: &str = "informal_work";
 #[tauri::command]
 fn read_trace(path: String) -> Result<String, String> {
     trace_in(Path::new(WORKDIR), Path::new(&path))
+}
+
+/// Binary `IFTR` v1 waveform stream over raw Tauri v2 IPC (`Uint8Array` on JS side),
+/// avoiding VCD text allocation and JSON serialization for large traces.
+#[tauri::command]
+fn read_trace_bin(path: String) -> Result<tauri::ipc::Response, String> {
+    let text = trace_in(Path::new(WORKDIR), Path::new(&path))?;
+    let bytes = informal_mcp::vcd::encode_iftr(&text)?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 fn trace_in(workdir: &Path, path: &Path) -> Result<String, String> {
@@ -669,7 +768,78 @@ fn ai_gui_done(
     ai.window.done(id, result);
 }
 
+/// Structured tool queries used by the rich UI views (CodeMirror `dv-lint` + quick-fixes,
+/// Go-to-Driver/Load `signal_nav`, `schematic_get`, `fv_complexity`).
+#[tauri::command]
+async fn workbench_tool(
+    ai: State<'_, ai::Ai>,
+    tool: String,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    const ALLOWED: &[&str] = &[
+        "schematic_get",
+        "formal_lint",
+        "formal_fix_apply",
+        "signal_nav",
+        "fv_complexity",
+        "why_cex",
+        "open_workbench",
+    ];
+    if !ALLOWED.contains(&tool.as_str()) {
+        return Err(format!("disallowed workbench tool: {tool}"));
+    }
+    let api = ai.api.clone();
+    tauri::async_runtime::spawn_blocking(move || api.call(&tool, &args))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.message)
+}
+
+/// Open or focus a secondary monitor pop-out window (`trace` or `schematic`).
+#[tauri::command]
+fn pop_out_window(app: AppHandle, kind: String, title: String) -> Result<(), String> {
+    if !matches!(kind.as_str(), "trace" | "schematic") {
+        return Err(format!("unsupported pop-out kind: {kind}"));
+    }
+    let label = format!("informal-popout-{kind}");
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.set_title(&title);
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        label,
+        tauri::WebviewUrl::App(format!("index.html?popout={kind}").into()),
+    )
+    .title(title)
+    .inner_size(1120.0, 680.0)
+    .min_inner_size(640.0, 400.0)
+    .build()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 fn main() {
+    // Augment minimal macOS LaunchServices PATH so external engines (`ric3`,
+    // `abc`) and `surfer` in ~/.local/bin or Homebrew are found from Dock/Spotlight.
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let cur = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths: Vec<PathBuf> = std::env::split_paths(&cur).collect();
+        for extra in [
+            home.join(".local/bin"),
+            home.join(".cargo/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ] {
+            if extra.is_dir() && !paths.contains(&extra) {
+                paths.push(extra);
+            }
+        }
+        if let Ok(joined) = std::env::join_paths(paths) {
+            std::env::set_var("PATH", joined);
+        }
+    }
     // Run from the repo root (the directory holding config/engines.toml), so
     // script paths read as they do for `informal shell` and generated models land
     // in its informal_work/ rather than under src-tauri, which the dev watcher
@@ -755,6 +925,7 @@ fn main() {
             shell_complete,
             read_text,
             read_trace,
+            read_trace_bin,
             tool_available,
             open_in_surfer,
             llm_status,
@@ -765,7 +936,9 @@ fn main() {
             ai_status,
             ai_decide,
             ui_state,
-            ai_gui_done
+            ai_gui_done,
+            workbench_tool,
+            pop_out_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running the InFormal app");

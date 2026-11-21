@@ -34,8 +34,10 @@
 // before the session has them, which joins them on the reply.
 
 import counterTrace from "../tests/fixtures/a_never9.vcd?raw";
-import type { AiProposal, AiStatus, ConsoleLine, DesignInfo, DesignScope, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProofStats, ProveProgress, Property, Reply, SessionView, WhyCexReport } from "./backend";
+import type { AiProposal, AiStatus, ConsoleLine, DesignInfo, DesignScope, FormalLintFindingView, FormalQuickFixView, GuiAction, GuiRequest, GuiState, EngineLine, EngineRun, PropProgress, PropStatus, ProofStats, ProveProgress, Property, Reply, SchematicGraphView, SessionView, SignalNavView, WhyCexReport } from "./backend";
 import { splitAnswer, type AskDelta, type AskDone, type LlmProviderEntry, type LlmStatus } from "./ask";
+import { encodeVcdToIftr, generateSyntheticIftr } from "./traceBin";
+import { parseVcd } from "./vcd";
 
 export const mockSource = `module counter (input logic clk, input logic rst_n, input logic en,
                 output logic [3:0] q, output logic done);
@@ -66,8 +68,9 @@ cover  -name c_10     {q == 4'd10}
 
 prove -all
 `;
+let mockRtlOverride: string | null = null;
 export function mockText(path: string): string | null {
-  if (path === MOCK_RTL) return mockSource;
+  if (path === MOCK_RTL) return mockRtlOverride ?? mockSource;
   if (path === MOCK_SCRIPT) return mockScript;
   return null;
 }
@@ -219,7 +222,7 @@ export const MOCK_TICKS: Record<string, number> = { a_max: 2, a_step: 3, a_never
 export const TICK_MS = 300;
 const PARALLEL = 2;
 
-export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false, surfer: false, llmOffline: false };
+export const mockOptions = { tick: 300, freeze: null as number | null, holdStop: false, surfer: false, llmOffline: false, traceSigs: 0, traceCycles: 0 };
 if (typeof location !== "undefined") {
   const q = new URLSearchParams(location.search);
   if (q.get("fast") === "1") mockOptions.tick = 0;
@@ -230,6 +233,17 @@ if (typeof location !== "undefined") {
   if (q.get("llm") === "offline") mockOptions.llmOffline = true;
   if (q.get("design") === "fifo") mockSession.design.hierarchy = MOCK_FIFO;
   if (q.get("design") === "scan") mockSession.design.hierarchy = [];
+  if (q.get("welcome") === "1") {
+    mockSession.elaborated = false;
+    mockSession.design = { files: [], top: null, defines: [], hierarchy: [] };
+    mockSession.clocks = [];
+    mockSession.reset = null;
+    mockSession.props = [];
+  }
+  if (q.has("traceSigs") || q.has("traceCycles") || q.get("bigtrace") === "1") {
+    mockOptions.traceSigs = Number(q.get("traceSigs") ?? (q.get("bigtrace") === "1" ? 500 : 0));
+    mockOptions.traceCycles = Number(q.get("traceCycles") ?? (q.get("bigtrace") === "1" ? 5000 : 0));
+  }
   // `?tasks=1`: a second task, FreeQ, with a copy of a_max and a cut point
   // on q (as `task -create FreeQ -copy a_max; stopat -task FreeQ q`).
   if (q.get("tasks") === "1") {
@@ -430,6 +444,7 @@ export function resetMock() {
   mockAsks.clear();
   mockAi.proposals.length = 0;
   mockUi = null;
+  mockRtlOverride = null;
   guiWaiting.clear();
 }
 
@@ -592,6 +607,223 @@ function names(script: string): string[] {
   return m ? (m[1] ?? m[2]).split(/\s+/).filter(Boolean) : [];
 }
 
+let cachedCounterBin: Uint8Array | null = null;
+export function mockTraceBin(path: string): Uint8Array | null {
+  if (!Object.values(MOCK_TRACES).includes(path)) return null;
+  if (mockOptions.traceSigs > 0 && mockOptions.traceCycles > 0) {
+    return generateSyntheticIftr(mockOptions.traceSigs, mockOptions.traceCycles);
+  }
+  if (!cachedCounterBin) {
+    const parsed = parseVcd(counterTrace);
+    cachedCounterBin = encodeVcdToIftr(parsed, 12, "counter.clk");
+  }
+  return cachedCounterBin;
+}
+
+export function mockSchematic(name: string, maxDepth = 2): SchematicGraphView {
+  const nodes: SchematicGraphView["nodes"] = [
+    {
+      id: "n_target",
+      label: name,
+      signal: name,
+      kind: "target",
+      op: "bad",
+      width: 1,
+      distance: 0,
+      causal: true,
+      hotspot: false,
+      expandable: false,
+      ports: [{ id: "n_target.chk", label: "chk", dir: "in" }],
+    },
+    {
+      id: "n_cmp",
+      label: "done (==)",
+      signal: "counter.done",
+      kind: "cmp",
+      op: "eq",
+      width: 1,
+      distance: 0,
+      causal: true,
+      hotspot: false,
+      expandable: false,
+      ports: [
+        { id: "n_cmp.a", label: "a", dir: "in" },
+        { id: "n_cmp.b", label: "b", dir: "in" },
+        { id: "n_cmp.y", label: "y", dir: "out" },
+      ],
+    },
+    {
+      id: "n_q",
+      label: "q",
+      signal: "counter.q",
+      kind: "register",
+      op: "state",
+      width: 4,
+      distance: 0,
+      causal: true,
+      hotspot: false,
+      expandable: maxDepth === 0,
+      ports: [
+        ...(maxDepth > 0 ? [{ id: "n_q.d", label: "D", dir: "in" as const }] : []),
+        { id: "n_q.y", label: "Q", dir: "out" },
+      ],
+    },
+    {
+      id: "n_c9",
+      label: "4'd9",
+      kind: "const",
+      op: "const",
+      width: 4,
+      distance: 0,
+      causal: true,
+      hotspot: false,
+      expandable: false,
+      ports: [{ id: "n_c9.y", label: "y", dir: "out" }],
+    },
+  ];
+  const edges: SchematicGraphView["edges"] = [
+    { id: "e0", source: "n_cmp", source_port: "n_cmp.y", target: "n_target", target_port: "n_target.chk", width: 1, inverted: false, causal: true, signal: "counter.done" },
+    { id: "e1", source: "n_q", source_port: "n_q.y", target: "n_cmp", target_port: "n_cmp.a", width: 4, inverted: false, causal: true, signal: "counter.q" },
+    { id: "e2", source: "n_c9", source_port: "n_c9.y", target: "n_cmp", target_port: "n_cmp.b", width: 4, inverted: false, causal: true },
+  ];
+  if (maxDepth > 0) {
+    nodes.push(
+      {
+        id: "n_mux",
+        label: "MUX",
+        kind: "mux",
+        op: "ite",
+        width: 4,
+        distance: 1,
+        causal: true,
+        hotspot: false,
+        expandable: false,
+        ports: [
+          { id: "n_mux.sel", label: "S", dir: "in" },
+          { id: "n_mux.t", label: "1", dir: "in" },
+          { id: "n_mux.f", label: "0", dir: "in" },
+          { id: "n_mux.y", label: "Y", dir: "out" },
+        ],
+      },
+      {
+        id: "n_add",
+        label: "+ 4'd1",
+        kind: "arith",
+        op: "add",
+        width: 4,
+        distance: 1,
+        causal: true,
+        hotspot: maxDepth >= 2,
+        expandable: false,
+        ports: [
+          { id: "n_add.a", label: "a", dir: "in" },
+          { id: "n_add.y", label: "y", dir: "out" },
+        ],
+      },
+      {
+        id: "n_en",
+        label: "en",
+        signal: "counter.en",
+        kind: "input",
+        op: "input",
+        width: 1,
+        distance: 1,
+        causal: true,
+        hotspot: false,
+        expandable: false,
+        ports: [{ id: "n_en.y", label: "y", dir: "out" }],
+      },
+    );
+    edges.push(
+      { id: "e3", source: "n_mux", source_port: "n_mux.y", target: "n_q", target_port: "n_q.d", width: 4, inverted: false, causal: true },
+      { id: "e4", source: "n_en", source_port: "n_en.y", target: "n_mux", target_port: "n_mux.sel", width: 1, inverted: false, causal: true, signal: "counter.en" },
+      { id: "e5", source: "n_add", source_port: "n_add.y", target: "n_mux", target_port: "n_mux.t", width: 4, inverted: false, causal: true },
+      { id: "e6", source: "n_q", source_port: "n_q.y", target: "n_mux", target_port: "n_mux.f", width: 4, inverted: false, causal: false, signal: "counter.q" },
+      { id: "e7", source: "n_q", source_port: "n_q.y", target: "n_add", target_port: "n_add.a", width: 4, inverted: false, causal: true, signal: "counter.q" },
+    );
+  }
+  return { property: name, max_depth: maxDepth, truncated: false, nodes, edges };
+}
+
+export function mockFormalLint(file?: string): FormalLintFindingView[] {
+  if (file && file !== MOCK_RTL) return [];
+  const src = mockText(MOCK_RTL) ?? mockSource;
+  if (src.includes("disable iff (!rst_n)")) return [];
+  const idx = src.indexOf("@(posedge clk)");
+  const insertAt = idx >= 0 ? idx + "@(posedge clk)".length : 0;
+  return [
+    {
+      rule: "SV-FPV-003",
+      name: "FormalAssertMissingDisableIff",
+      severity: "info",
+      message: "Concurrent property 'm_en' has no 'disable iff' in module 'counter' with reset 'rst_n'",
+      file: MOCK_RTL,
+      line: 7,
+      column: 5,
+      fixes: insertAt > 0
+        ? [
+            {
+              file: MOCK_RTL,
+              start: insertAt,
+              end: insertAt,
+              line: 7,
+              replacement: " disable iff (!rst_n)",
+              description: "Insert `disable iff (!rst_n)`",
+              safety: "safe",
+            },
+          ]
+        : [],
+    },
+  ];
+}
+
+export function mockApplyFormalFix(fix: FormalQuickFixView): { applied: boolean; updatedText?: string } {
+  const cur = mockText(fix.file);
+  if (cur === null) throw new Error(`${fix.file}: not in design`);
+  const next = cur.slice(0, fix.start) + fix.replacement + cur.slice(fix.end);
+  if (fix.file === MOCK_RTL) mockRtlOverride = next;
+  return { applied: true, updatedText: next };
+}
+
+export function mockSignalNav(signal: string): SignalNavView {
+  const leaf = signal.split(".").pop() ?? signal;
+  if (leaf === "q") {
+    return {
+      signal,
+      leaf: "q",
+      declarations: [{ file: MOCK_RTL, line: 2, column: 34, role: "declaration", kind: "output", scope: "counter", snippet: "output logic [3:0] q, output logic done);" }],
+      drivers: [
+        { file: MOCK_RTL, line: 5, column: 21, role: "driver", kind: "always_ff", scope: "counter", snippet: "if (!rst_n) q <= 4'd0;" },
+        { file: MOCK_RTL, line: 6, column: 30, role: "driver", kind: "always_ff", scope: "counter", snippet: "else if (en && !done) q <= q + 4'd1;" },
+      ],
+      loads: [{ file: MOCK_RTL, line: 3, column: 20, role: "load", kind: "expr", scope: "counter", snippet: "assign done = (q == 4'd9);" }],
+    };
+  }
+  return {
+    signal,
+    leaf,
+    declarations: [{ file: MOCK_RTL, line: 1, column: 16, role: "declaration", kind: "input", scope: "counter", snippet: `input logic ${leaf}` }],
+    drivers: [],
+    loads: [{ file: MOCK_RTL, line: 6, column: 18, role: "load", kind: "expr", scope: "counter", snippet: "else if (en && !done) q <= q + 4'd1;" }],
+  };
+}
+
+export function mockLoadTemplate(templateId: string): Reply {
+  mockSession.elaborated = true;
+  mockSession.design = { files: [MOCK_RTL], top: "counter", defines: [], hierarchy: MOCK_HIERARCHY };
+  mockSession.clocks = [{ signal: "clk", edge: "posedge" }];
+  mockSession.reset = "!rst_n";
+  mockSession.props = [
+    { name: "a_max", source: at(MOCK_SCRIPT, 8), kind: "assert", expr: "q <= 4'd9", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_step", source: at(MOCK_SCRIPT, 9), kind: "assert", expr: "en && !done |=> q == $past(q) + 4'd1", enabled: true, status: { status: "unprocessed" } },
+    { name: "a_never9", source: at(MOCK_SCRIPT, 10), kind: "assert", expr: "q != 4'd9", enabled: true, status: { status: "unprocessed" } },
+    { name: "c_done", source: at(MOCK_SCRIPT, 11), kind: "cover", expr: "$rose(done)", enabled: true, status: { status: "unprocessed" } },
+    { name: "c_10", source: at(MOCK_SCRIPT, 12), kind: "cover", expr: "q == 4'd10", enabled: true, status: { status: "unprocessed" } },
+    { name: "m_en", source: at(MOCK_RTL, 7), kind: "assume", expr: "en |=> en", enabled: true, status: { status: "unprocessed" } },
+  ];
+  return { ok: true, result: `Loaded starter workspace: ${templateId}`, session: mockSession };
+}
+
 export function mockWhyCex(name: string): WhyCexReport {
   return {
     property: name,
@@ -672,6 +904,15 @@ export async function mock(cmd: string, args: Record<string, unknown>): Promise<
       mockSession.spv = [...(mockSession.spv ?? []), { name: `spv_${(mockSession.spv?.length ?? 0) + 1}`, task: "<embedded>", from: [fm], to: [to], status: "unprocessed" }];
     }
     return { ok: true, result: "", session: mockSession };
+  }
+  if (cmd === "shell_source" && String(args.path ?? "").startsWith("template:")) {
+    return mockLoadTemplate(String(args.path).slice("template:".length));
+  }
+  if (cmd === "shell_source" && !mockSession.elaborated) {
+    return mockLoadTemplate(String(args.path ?? "counter.jg.tcl"));
+  }
+  if (cmd === "shell_eval" && /^\s*why_cex\b/.test(script)) {
+    return { ok: true, result: JSON.stringify(mockWhyCex("a_never9")), session: mockSession };
   }
   if (cmd === "shell_eval" && script.trim() !== "") {
     return { ok: false, result: "browser preview: Tcl runs only in the desktop app", session: mockSession };

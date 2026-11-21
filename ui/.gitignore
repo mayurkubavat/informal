@@ -1,6 +1,7 @@
 # No trailing slash: a symlinked node_modules is ignored too.
 node_modules
 dist/
+dist-mcp-app/
 src-tauri/target/
 src-tauri/gen/
 test-results/

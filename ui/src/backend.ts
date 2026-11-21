@@ -2,8 +2,11 @@
 // commands (src-tauri/src/main.rs); in a plain browser (`npm run dev`) a
 // small mock stands in so the views can be worked on without the app.
 
-import { mock, mockDesignInfo, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockText, mockTrace, mockUiState, mockWhyCex } from "./mock";
+import { mock, mockApplyFormalFix, mockDesignInfo, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockFormalLint, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockSchematic, mockSignalNav, mockText, mockTrace, mockTraceBin, mockUiState, mockWhyCex } from "./mock";
 import type { AskDelta, AskDone, LlmProviderEntry, LlmStatus } from "./ask";
+import { isMcpAppSurface, mcpBridge } from "./mcpApp";
+import type { TraceAnnotation } from "./traceBin";
+import type { FocusChip, GuiCaptureSnapshot, LayoutPreset, WalkthroughStep } from "./store/workbenchStore";
 
 export type StatusWord =
   | "unprocessed" | "proven" | "cex" | "covered" | "unreachable" | "undetermined" | "error";
@@ -134,20 +137,56 @@ export interface AiProposal {
 // What the window shows, as an agent's window tools read it (`gui_state`).
 export interface GuiState {
   selected_property: string | null;
-  view: "table" | "source" | "trace";
+  view: "table" | "source" | "trace" | "schematic" | "apps";
   filter: string;
+  status_filter?: string | null;
+  layout_preset?: LayoutPreset | null;
+  active_app?: string | null;
+  bottom_tab?: string | null;
+  follow_agent?: boolean | null;
   // The open trace: its property, the cycle the cursor is on, the signals
-  // in the waveform (hierarchical paths).
-  trace: { property: string; cursor: number; signals: string[] } | null;
+  // in the waveform (hierarchical paths), causal slice state, and AI callouts.
+  trace: {
+    property: string;
+    cursor: number;
+    signals: string[];
+    why_cex_open?: boolean;
+    slice_only?: boolean;
+    annotations?: TraceAnnotation[];
+  } | null;
   // The source in view and its highlighted lines.
   source: { file: string; first_line: number; last_line: number } | null;
+  schematic?: { property: string | null; max_depth: number } | null;
+  walkthrough?: { title: string; step: number; total_steps: number; label: string } | null;
+  focus_context?: FocusChip[] | null;
+  capture?: GuiCaptureSnapshot | null;
 }
 // One thing an agent asks the window to do (docs/ai-interface.md).
 export type GuiAction =
   | { action: "select_property"; name: string }
   | { action: "open_trace"; name: string; frame?: number | null }
   | { action: "add_signals"; signals: string[] }
-  | { action: "highlight_source"; file: string; first_line: number; last_line: number };
+  | { action: "highlight_source"; file: string; first_line: number; last_line: number }
+  | {
+      action: "set_view";
+      view?: "table" | "source" | "trace" | "schematic" | "apps" | null;
+      layout_preset?: LayoutPreset | null;
+      app_tab?: string | null;
+      bottom_tab?: string | null;
+      filter?: string | null;
+      status_filter?: string | null;
+    }
+  | { action: "toggle_why_cex"; open: boolean; slice_only?: boolean | null }
+  | { action: "annotate_trace"; annotations?: TraceAnnotation[]; clear?: boolean }
+  | {
+      action: "present_walkthrough";
+      title?: string | null;
+      steps?: WalkthroughStep[] | null;
+      step?: number | null;
+      clear?: boolean;
+    }
+  | { action: "open_schematic"; name?: string | null; max_depth?: number | null }
+  | { action: "capture_view"; target?: "trace" | "schematic" | "window" };
 export interface GuiRequest {
   id: number;
   action: GuiAction;
@@ -272,6 +311,79 @@ export interface SecStateView {
   checks?: SecCheckView[];
 }
 
+export interface SchematicPortView {
+  id: string;
+  label: string;
+  dir: "in" | "out";
+}
+export interface SchematicNodeView {
+  id: string;
+  label: string;
+  signal?: string;
+  kind: "input" | "register" | "mux" | "arith" | "cmp" | "logic" | "const" | "target";
+  op: string;
+  width: number;
+  distance: number;
+  causal: boolean;
+  hotspot: boolean;
+  expandable: boolean;
+  ports: SchematicPortView[];
+}
+export interface SchematicEdgeView {
+  id: string;
+  source: string;
+  source_port: string;
+  target: string;
+  target_port: string;
+  width: number;
+  inverted: boolean;
+  causal: boolean;
+  signal?: string;
+}
+export interface SchematicGraphView {
+  property: string;
+  max_depth: number;
+  truncated: boolean;
+  nodes: SchematicNodeView[];
+  edges: SchematicEdgeView[];
+}
+
+export interface FormalQuickFixView {
+  file: string;
+  start: number;
+  end: number;
+  line: number;
+  replacement: string;
+  description: string;
+  safety: "safe" | "unsafe" | string;
+}
+export interface FormalLintFindingView {
+  rule: string;
+  name: string;
+  severity: "error" | "warning" | "info" | "style" | string;
+  message: string;
+  file: string;
+  line: number;
+  column: number;
+  fixes: FormalQuickFixView[];
+}
+export interface SignalRefView {
+  file: string;
+  line: number;
+  column: number;
+  role: "declaration" | "driver" | "load" | string;
+  kind: string;
+  scope: string;
+  snippet: string;
+}
+export interface SignalNavView {
+  signal: string;
+  leaf: string;
+  declarations: SignalRefView[];
+  drivers: SignalRefView[];
+  loads: SignalRefView[];
+}
+
 export interface SessionView {
   // `hierarchy`: the scope tree after elaboration; empty or absent with
   // a session elaborated without a SystemVerilog front end (the Design tab then scans the top file's ports).
@@ -383,7 +495,18 @@ async function invokeOr<T>(cmd: string, args: Record<string, unknown>, mocked: (
 
 export const backend = {
   inTauri,
-  snapshot: () => call("snapshot"),
+  inMcpApp: isMcpAppSurface,
+  snapshot: async (): Promise<Reply> => {
+    if (isMcpAppSurface) {
+      try {
+        const res = await mcpBridge.callTool<{ session: SessionView }>("open_workbench", {});
+        return { ok: true, result: "", session: res.session };
+      } catch {
+        return call("snapshot");
+      }
+    }
+    return call("snapshot");
+  },
   // The flavor the shell started in (a startup script picks it).
   flavor: () => invokeOr<Flavor>("current_flavor", {}, () => "jg"),
   evalTcl: (script: string) => call("shell_eval", { script }),
@@ -477,6 +600,13 @@ export const backend = {
   },
   // Dynamic backward causal root-cause slice of a CEX or covered witness trace.
   whyCex: async (name: string): Promise<WhyCexReport> => {
+    if (isMcpAppSurface) {
+      try {
+        return await mcpBridge.callTool<WhyCexReport>("why_cex", { name });
+      } catch {
+        // fallback in mock
+      }
+    }
     if (!inTauri) return mockWhyCex(name);
     const r = await call("shell_eval", { script: `why_cex -json {${name}}` });
     if (!r.ok) throw new Error(r.result);
@@ -493,4 +623,123 @@ export const backend = {
     if (t === null) throw new Error(`${path}: no such trace`);
     return t;
   },
+  // Binary `IFTR` v1 waveform stream over raw Tauri v2 IPC (`Uint8Array`).
+  readTraceBin: async (path: string): Promise<Uint8Array> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const ab = await invoke<ArrayBuffer | Uint8Array>("read_trace_bin", { path });
+      return ab instanceof Uint8Array ? ab : new Uint8Array(ab);
+    }
+    const bin = mockTraceBin(path);
+    if (bin === null) throw new Error(`${path}: no such trace`);
+    return bin;
+  },
+  // Port-aware RTL COI & causal schematic subgraph (`elkjs` + Canvas).
+  schematic: async (name: string, maxDepth = 2, maxNodes = 80): Promise<SchematicGraphView> => {
+    if (isMcpAppSurface) {
+      try {
+        return await mcpBridge.callTool<SchematicGraphView>("schematic_get", {
+          name,
+          max_depth: maxDepth,
+          max_nodes: maxNodes,
+        });
+      } catch {
+        // fallback in mock
+      }
+    }
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<SchematicGraphView>("workbench_tool", {
+        tool: "schematic_get",
+        args: { name, max_depth: maxDepth, max_nodes: maxNodes },
+      });
+    }
+    return mockSchematic(name, maxDepth);
+  },
+  // Live `dv-lint` (`formal-ready` `SV-FPV-001..005` + quick-fixes).
+  formalLint: async (file?: string): Promise<FormalLintFindingView[]> => {
+    if (isMcpAppSurface) {
+      try {
+        const res = await mcpBridge.callTool<{ findings: FormalLintFindingView[] }>(
+          "formal_lint",
+          file ? { file } : {},
+        );
+        return res.findings ?? [];
+      } catch {
+        // fallback in mock
+      }
+    }
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res = await invoke<{ findings: FormalLintFindingView[] }>("workbench_tool", {
+        tool: "formal_lint",
+        args: file ? { file } : {},
+      });
+      return res.findings ?? [];
+    }
+    return mockFormalLint(file);
+  },
+  applyFormalFix: async (
+    fix: FormalQuickFixView,
+    rationale?: string,
+  ): Promise<{ applied: boolean; updatedText?: string }> => {
+    if (isMcpAppSurface) {
+      const res = await mcpBridge.callTool<{ applied?: boolean }>("formal_fix_apply", {
+        file: fix.file,
+        start: fix.start,
+        end: fix.end,
+        replacement: fix.replacement,
+        rationale: rationale ?? fix.description,
+      });
+      return { applied: Boolean(res.applied) };
+    }
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res = await invoke<{ applied?: boolean }>("workbench_tool", {
+        tool: "formal_fix_apply",
+        args: {
+          file: fix.file,
+          start: fix.start,
+          end: fix.end,
+          replacement: fix.replacement,
+          rationale: rationale ?? fix.description,
+        },
+      });
+      return { applied: Boolean(res.applied) };
+    }
+    return mockApplyFormalFix(fix);
+  },
+  // RTL Go-to-Driver and Go-to-Load navigation.
+  signalNav: async (signal: string): Promise<SignalNavView> => {
+    if (isMcpAppSurface) {
+      try {
+        return await mcpBridge.callTool<SignalNavView>("signal_nav", { signal });
+      } catch {
+        // fallback in mock
+      }
+    }
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<SignalNavView>("workbench_tool", {
+        tool: "signal_nav",
+        args: { signal },
+      });
+    }
+    return mockSignalNav(signal);
+  },
+  // Pop out Trace or Schematic onto a secondary monitor window.
+  popOutWindow: async (kind: "trace" | "schematic", title: string): Promise<void> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke<void>("pop_out_window", { kind, title });
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.open(`/?popout=${encodeURIComponent(kind)}&fast=1`, `informal-popout-${kind}`, "width=1120,height=680");
+    }
+  },
+  // MCP App host hooks (SEP-1865 + Antigravity extensions).
+  onMcpToolResult: (cb: (sc: Record<string, unknown>) => void) => mcpBridge.onToolResult(cb),
+  attachHostContext: (summaryText: string) => mcpBridge.attachContext(summaryText),
+  openHostEditorFile: (absPath: string) => mcpBridge.openFileInHostEditor(absPath),
 };

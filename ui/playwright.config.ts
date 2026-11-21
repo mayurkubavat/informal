@@ -1,10 +1,19 @@
-import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
+import { chromium, defineConfig, devices } from "@playwright/test";
 
 // Runs against the browser mock (`npm run dev`, src/backend.ts), not the
 // Tauri app, so no Rust build is needed. Screenshots live under
 // tests/__screenshots__/ and carry the platform in their names, so Linux and
 // macOS baselines can sit side by side.
 const size = { width: 1440, height: 900 };
+const bundledPath = (() => {
+  try {
+    return chromium.executablePath();
+  } catch {
+    return "";
+  }
+})();
+const chromeChannel = bundledPath && existsSync(bundledPath) ? undefined : "chrome";
 
 // The suites start their own dev server on their own port and never reuse
 // one that is already up: a server on the app's port 1420 may belong to
@@ -32,13 +41,13 @@ export default defineConfig({
     {
       name: "e2e",
       testMatch: /e2e\/.*\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"], viewport: size, deviceScaleFactor: 1 },
+      use: { ...devices["Desktop Chrome"], channel: chromeChannel, viewport: size, deviceScaleFactor: 1 },
     },
     {
       // Sizes and colour schemes are set per describe block in the spec.
       name: "visual",
       testMatch: /visual\/.*\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"], viewport: size, deviceScaleFactor: 1 },
+      use: { ...devices["Desktop Chrome"], channel: chromeChannel, viewport: size, deviceScaleFactor: 1 },
     },
   ],
   webServer: {

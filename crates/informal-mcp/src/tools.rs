@@ -775,6 +775,134 @@ pub fn all() -> Vec<Tool> {
             changes: true,
         },
         Tool {
+            name: "open_workbench",
+            title: "InFormal",
+            description: "Open or refresh the interactive InFormal verification workbench (MCP App side pane or full-page view): property status table, waveform viewer, causal schematic, RTL source, and Formal Apps.",
+            input: obj(
+                &[
+                    ("focus_property", s("Optional property name to focus on open")),
+                    ("view", one_of(&["table", "source", "trace", "schematic", "apps"], "Optional initial view")),
+                ],
+                &[],
+            ),
+            output: obj(
+                &[
+                    schema("informal.workbench/1"),
+                    ("focus_property", json!({"type": ["string", "null"]})),
+                    ("view", json!({"type": ["string", "null"]})),
+                    ("session", json!({"type": "object", "description": "Full SessionView snapshot for the UI"})),
+                ],
+                &["schema", "session"],
+            ),
+            changes: false,
+        },
+        Tool {
+            name: "schematic_get",
+            title: "RTL cone & causal schematic graph",
+            description: "Extract a bounded, port-aware RTL netlist schematic subgraph in the cone of influence of `name`, annotated with active `why_cex` causal paths and arithmetic state-space hotspots (`mul`, `div`, wide datapath).",
+            input: obj(
+                &[
+                    ("name", s("Target assert or cover property name")),
+                    ("max_depth", n("Register stages to expand backward from the property (default: 2)")),
+                    ("max_nodes", n("Maximum schematic operator/register nodes (default: 80)")),
+                ],
+                &["name"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.schematic/1"),
+                    ("property", s("")),
+                    ("max_depth", n("")),
+                    ("truncated", b("")),
+                    ("nodes", list(json!({"type": "object"}), "Schematic nodes with id, label, signal, kind, op, width, distance, causal, hotspot, expandable, ports")),
+                    ("edges", list(json!({"type": "object"}), "Schematic edges with id, source, source_port, target, target_port, width, inverted, causal, signal")),
+                ],
+                &["schema", "property", "max_depth", "truncated", "nodes", "edges"],
+            ),
+            changes: false,
+        },
+        Tool {
+            name: "formal_lint",
+            title: "Formal-readiness lint & quick-fixes",
+            description: "Run svlang dv-lint with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.",
+            input: obj(
+                &[("file", s("Optional design file filter"))],
+                &[],
+            ),
+            output: obj(
+                &[
+                    schema("informal.lint/1"),
+                    ("count", n("")),
+                    ("findings", list(json!({"type": "object"}), "Findings with rule, name, severity, message, file, line, column, fixes")),
+                ],
+                &["schema", "count", "findings"],
+            ),
+            changes: false,
+        },
+        Tool {
+            name: "formal_fix_apply",
+            title: "Apply a formal-readiness quick-fix",
+            description: "Apply a byte-range quick-fix from `formal_lint` to a design file under the workspace root and re-elaborate (or record as a proposal in propose mode).",
+            input: obj(
+                &[
+                    ("file", s("Design file path")),
+                    ("start", n("0-based UTF-8 start byte offset")),
+                    ("end", n("0-based UTF-8 end byte offset")),
+                    ("replacement", s("Replacement SystemVerilog text")),
+                    ("rationale", s("Why (required in propose mode)")),
+                ],
+                &["file", "start", "end", "replacement"],
+            ),
+            output: obj(
+                &[
+                    ("schema", s("informal.fix/1, or informal.proposal/1 in propose mode")),
+                    ("applied", b("")),
+                    ("file", s("")),
+                    ("proposal", proposal()),
+                ],
+                &["schema"],
+            ),
+            changes: true,
+        },
+        Tool {
+            name: "signal_nav",
+            title: "Go-to-driver and go-to-load navigation",
+            description: "Resolve declarations, sequential/combinational drivers, and SVA/expression loads of an RTL signal across the design's files.",
+            input: obj(
+                &[("signal", s("Signal name or hierarchical path, e.g. fifo.count"))],
+                &["signal"],
+            ),
+            output: obj(
+                &[
+                    schema("informal.signal_nav/1"),
+                    ("signal", s("")),
+                    ("leaf", s("")),
+                    ("declarations", list(json!({"type": "object"}), "")),
+                    ("drivers", list(json!({"type": "object"}), "")),
+                    ("loads", list(json!({"type": "object"}), "")),
+                ],
+                &["schema", "signal", "leaf", "declarations", "drivers", "loads"],
+            ),
+            changes: false,
+        },
+        Tool {
+            name: "fv_complexity",
+            title: "Formal complexity & hotspot report",
+            description: "Analyze COI state bits, arithmetic operators, memories, and blackbox candidates (`get_fv_complexity`) for a property or the whole task.",
+            input: obj(
+                &[("property", s("Optional property name filter"))],
+                &[],
+            ),
+            output: obj(
+                &[
+                    schema("informal.complexity/1"),
+                    ("report", json!({"type": "object", "description": "Complexity metrics and hotspot list"})),
+                ],
+                &["schema", "report"],
+            ),
+            changes: false,
+        },
+        Tool {
             name: "tcl_eval",
             title: "Evaluate a Tcl command",
             description: "The escape hatch: evaluate a JasperGold or VC Formal style command in the session's shell. In automatic mode it runs; in propose mode it is recorded as a proposal that waits for a person (give `rationale`). Prefer the other tools: their replies are data.",
@@ -783,6 +911,29 @@ pub fn all() -> Vec<Tool> {
             changes: true,
         },
     ]
+}
+
+/// MCP App resource URI served by `resources/list` and `resources/read` (SEP-1865).
+pub const APP_URI: &str = "ui://informal/workbench.html";
+
+/// `_meta` attached to `tools/list` entries that open or update the MCP App UI.
+pub fn ui_meta(name: &str) -> Option<Value> {
+    match name {
+        "open_workbench" => Some(json!({
+            "ui": {"resourceUri": APP_URI},
+            "com.google.antigravity/ui": {
+                "entrypoints": [
+                    {"type": "aux_pane", "title": "InFormal"},
+                    {"type": "global", "title": "InFormal"},
+                ]
+            }
+        })),
+        "prove" | "why_cex" | "trace_get" | "schematic_get" | "check_csr" | "check_sec"
+        | "check_cov" => Some(json!({
+            "ui": {"resourceUri": APP_URI}
+        })),
+        _ => None,
+    }
 }
 
 /// What the window shows, as every `gui_` tool returns it.
@@ -799,18 +950,54 @@ fn window() -> Value {
                         (
                             "view",
                             one_of(
-                                &["table", "source", "trace"],
+                                &["table", "source", "trace", "schematic", "apps"],
                                 "What the centre of the window shows",
                             ),
                         ),
                         ("filter", s("The property table's filter text")),
                         (
+                            "status_filter",
+                            json!({"type": ["string", "null"], "description": "Active status filter on the property table"}),
+                        ),
+                        (
+                            "layout_preset",
+                            json!({"type": ["string", "null"], "description": "Active workspace layout preset: triage, cex-debug, signoff, or split"}),
+                        ),
+                        (
+                            "active_app",
+                            json!({"type": ["string", "null"], "description": "Active Formal Apps tab when open"}),
+                        ),
+                        (
+                            "bottom_tab",
+                            json!({"type": ["string", "null"], "description": "Active bottom dock tab"}),
+                        ),
+                        (
+                            "follow_agent",
+                            json!({"type": ["boolean", "null"], "description": "Whether Follow-Agent auto-navigation is active"}),
+                        ),
+                        (
                             "trace",
-                            json!({"type": ["object", "null"], "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)"}),
+                            json!({"type": ["object", "null"], "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations"}),
                         ),
                         (
                             "source",
                             json!({"type": ["object", "null"], "description": "The source in view: file, first_line and last_line of the highlighted lines"}),
+                        ),
+                        (
+                            "schematic",
+                            json!({"type": ["object", "null"], "description": "Open schematic cone state: property and max_depth"}),
+                        ),
+                        (
+                            "walkthrough",
+                            json!({"type": ["object", "null"], "description": "Active guided CEX walkthrough: title, step, total_steps, label"}),
+                        ),
+                        (
+                            "focus_context",
+                            json!({"type": ["array", "null"], "items": {"type": "object"}, "description": "Contextual @signal / @file focus pills pinned by the user"}),
+                        ),
+                        (
+                            "capture",
+                            json!({"type": ["object", "null"], "description": "Latest deterministic SVG/view capture produced by gui_capture_view"}),
                         ),
                     ],
                     &["selected_property", "view"],
@@ -829,7 +1016,7 @@ pub fn gui() -> Vec<Tool> {
         Tool {
             name: "gui_state",
             title: "What the person is looking at",
-            description: "The window of the person working on this session: the property they selected, the view that is open, the open trace with their cursor's frame and the signals in the waveform, and the source lines in view. Use it to answer about \"this property\" or \"this signal\".",
+            description: "The window of the person working on this session: the property they selected, the view and layout preset, the open trace with their cursor's frame, callouts and signals, the source lines in view, schematic state, and any @-focus pills.",
             input: obj(&[], &[]),
             output: window(),
             changes: false,
@@ -863,6 +1050,128 @@ pub fn gui() -> Vec<Tool> {
             title: "Show source lines in the window",
             description: "Open a design file or script in the person's source view and highlight a range of lines.",
             input: obj(&[("file", s("Path, as a property's source or the summary's files give it")), ("first_line", n("From 1")), ("last_line", n("Default: first_line"))], &["file", "first_line"]),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_set_view",
+            title: "Switch window view, layout preset, dock tab, or filter",
+            description: "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`), bottom dock tab, or property filter.",
+            input: obj(
+                &[
+                    ("view", one_of(&["table", "source", "trace", "schematic", "apps"], "Centre view to activate")),
+                    ("layout_preset", one_of(&["triage", "cex-debug", "signoff", "split"], "Multi-pane workspace layout preset")),
+                    ("app_tab", one_of(&["cov", "xprop", "spv", "sec", "csr", "protocol"], "Formal Apps tab to select")),
+                    ("bottom_tab", one_of(&["console", "details", "messages", "log", "info", "profiler", "apps", "proposals"], "Bottom dock tab")),
+                    ("filter", s("Property filter text")),
+                    ("status_filter", json!({"type": ["string", "null"], "description": "Status filter word or null to clear"})),
+                ],
+                &[],
+            ),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_toggle_why_cex",
+            title: "Toggle Why CEX causal root-cause slice overlay",
+            description: "Open or close the `Why CEX` backward causal slice overlay on the open waveform, and optionally filter lanes to causal signals only (`slice_only`).",
+            input: obj(
+                &[
+                    ("open", b("Whether the Why CEX slice bar and cell highlights are shown")),
+                    ("slice_only", b("Optional: show only signals in the active causal slice")),
+                ],
+                &["open"],
+            ),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_annotate_trace",
+            title: "Pin AI callout badges onto waveform cells",
+            description: "Pin visual callout badges onto specific `(signal, frame)` cells in the open waveform (or clear them) so the engineer sees exact root-cause transitions.",
+            input: obj(
+                &[
+                    (
+                        "annotations",
+                        list(
+                            obj(
+                                &[
+                                    ("frame", n("Cycle/frame index from 0")),
+                                    ("signal", s("Signal name or leaf")),
+                                    ("label", s("Short badge text")),
+                                    ("tone", one_of(&["accent", "danger", "ok"], "Optional badge tone")),
+                                ],
+                                &["frame", "signal", "label"],
+                            ),
+                            "Callout pins to show on the waveform",
+                        ),
+                    ),
+                    ("clear", b("Clear existing AI waveform callout pins")),
+                ],
+                &[],
+            ),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_present_walkthrough",
+            title: "Present or step a guided multi-step CEX walkthrough",
+            description: "Publish, step, or dismiss an interactive multi-step root-cause tour bar in the window that synchronizes the waveform cursor, callout pins, and RTL source lines on each step.",
+            input: obj(
+                &[
+                    ("title", s("Walkthrough title")),
+                    (
+                        "steps",
+                        list(
+                            obj(
+                                &[
+                                    ("label", s("Short step title")),
+                                    ("note", s("Explanation shown on the walkthrough bar")),
+                                    ("property", s("Optional trace property to open")),
+                                    ("frame", n("Optional trace frame to jump to")),
+                                    ("signals", list(s(""), "Optional signals to ensure visible / callout")),
+                                    ("file", s("Optional source file to highlight")),
+                                    ("first_line", n("Optional source start line")),
+                                    ("last_line", n("Optional source end line")),
+                                ],
+                                &["label", "note"],
+                            ),
+                            "Ordered walkthrough steps",
+                        ),
+                    ),
+                    ("step", n("0-based step index to jump to")),
+                    ("clear", b("Dismiss the active walkthrough bar")),
+                ],
+                &[],
+            ),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_open_schematic",
+            title: "Open the interactive COI & causal schematic",
+            description: "Open the schematic viewer for property `name` (default: selected property) at `max_depth` register stages.",
+            input: obj(
+                &[
+                    ("name", s("Optional property name (defaults to selected property)")),
+                    ("max_depth", n("Optional register stage depth (default: 2)")),
+                ],
+                &[],
+            ),
+            output: window(),
+            changes: false,
+        },
+        Tool {
+            name: "gui_capture_view",
+            title: "Capture deterministic SVG or visual summary of the active view",
+            description: "Render a standalone SVG of the open waveform or schematic (including Why CEX highlights and AI callout badges) into `window.capture` for visual verification or Markdown reports.",
+            input: obj(
+                &[(
+                    "target",
+                    one_of(&["trace", "schematic", "window"], "View to capture (default: trace)"),
+                )],
+                &[],
+            ),
             output: window(),
             changes: false,
         },

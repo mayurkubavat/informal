@@ -1,6 +1,6 @@
 [
   {
-    "description": "The window of the person working on this session: the property they selected, the view that is open, the open trace with their cursor's frame and the signals in the waveform, and the source lines in view. Use it to answer about \"this property\" or \"this signal\".",
+    "description": "The window of the person working on this session: the property they selected, the view and layout preset, the open trace with their cursor's frame, callouts and signals, the source lines in view, schematic state, and any @-focus pills.",
     "input": {
       "properties": {},
       "required": [],
@@ -19,9 +19,61 @@
         },
         "window": {
           "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "filter": {
               "description": "The property table's filter text",
               "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
             },
             "selected_property": {
               "type": [
@@ -36,8 +88,15 @@
                 "null"
               ]
             },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "trace": {
-              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
               "type": [
                 "object",
                 "null"
@@ -48,9 +107,18 @@
               "enum": [
                 "table",
                 "source",
-                "trace"
+                "trace",
+                "schematic",
+                "apps"
               ],
               "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
             }
           },
           "required": [
@@ -94,9 +162,61 @@
         },
         "window": {
           "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "filter": {
               "description": "The property table's filter text",
               "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
             },
             "selected_property": {
               "type": [
@@ -111,8 +231,15 @@
                 "null"
               ]
             },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "trace": {
-              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
               "type": [
                 "object",
                 "null"
@@ -123,9 +250,18 @@
               "enum": [
                 "table",
                 "source",
-                "trace"
+                "trace",
+                "schematic",
+                "apps"
               ],
               "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
             }
           },
           "required": [
@@ -174,9 +310,61 @@
         },
         "window": {
           "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "filter": {
               "description": "The property table's filter text",
               "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
             },
             "selected_property": {
               "type": [
@@ -191,8 +379,15 @@
                 "null"
               ]
             },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "trace": {
-              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
               "type": [
                 "object",
                 "null"
@@ -203,9 +398,18 @@
               "enum": [
                 "table",
                 "source",
-                "trace"
+                "trace",
+                "schematic",
+                "apps"
               ],
               "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
             }
           },
           "required": [
@@ -252,9 +456,61 @@
         },
         "window": {
           "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "filter": {
               "description": "The property table's filter text",
               "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
             },
             "selected_property": {
               "type": [
@@ -269,8 +525,15 @@
                 "null"
               ]
             },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "trace": {
-              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
               "type": [
                 "object",
                 "null"
@@ -281,9 +544,18 @@
               "enum": [
                 "table",
                 "source",
-                "trace"
+                "trace",
+                "schematic",
+                "apps"
               ],
               "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
             }
           },
           "required": [
@@ -338,9 +610,61 @@
         },
         "window": {
           "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "filter": {
               "description": "The property table's filter text",
               "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
             },
             "selected_property": {
               "type": [
@@ -355,8 +679,15 @@
                 "null"
               ]
             },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "trace": {
-              "description": "The open trace: property, cursor (the frame the person's cursor is on) and signals (those in the waveform)",
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
               "type": [
                 "object",
                 "null"
@@ -367,9 +698,1030 @@
               "enum": [
                 "table",
                 "source",
-                "trace"
+                "trace",
+                "schematic",
+                "apps"
               ],
               "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`), bottom dock tab, or property filter.",
+    "input": {
+      "properties": {
+        "app_tab": {
+          "description": "Formal Apps tab to select",
+          "enum": [
+            "cov",
+            "xprop",
+            "spv",
+            "sec",
+            "csr",
+            "protocol"
+          ],
+          "type": "string"
+        },
+        "bottom_tab": {
+          "description": "Bottom dock tab",
+          "enum": [
+            "console",
+            "details",
+            "messages",
+            "log",
+            "info",
+            "profiler",
+            "apps",
+            "proposals"
+          ],
+          "type": "string"
+        },
+        "filter": {
+          "description": "Property filter text",
+          "type": "string"
+        },
+        "layout_preset": {
+          "description": "Multi-pane workspace layout preset",
+          "enum": [
+            "triage",
+            "cex-debug",
+            "signoff",
+            "split"
+          ],
+          "type": "string"
+        },
+        "status_filter": {
+          "description": "Status filter word or null to clear",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "view": {
+          "description": "Centre view to activate",
+          "enum": [
+            "table",
+            "source",
+            "trace",
+            "schematic",
+            "apps"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "gui_set_view",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace",
+                "schematic",
+                "apps"
+              ],
+              "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Open or close the `Why CEX` backward causal slice overlay on the open waveform, and optionally filter lanes to causal signals only (`slice_only`).",
+    "input": {
+      "properties": {
+        "open": {
+          "description": "Whether the Why CEX slice bar and cell highlights are shown",
+          "type": "boolean"
+        },
+        "slice_only": {
+          "description": "Optional: show only signals in the active causal slice",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "open"
+      ],
+      "type": "object"
+    },
+    "name": "gui_toggle_why_cex",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace",
+                "schematic",
+                "apps"
+              ],
+              "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Pin visual callout badges onto specific `(signal, frame)` cells in the open waveform (or clear them) so the engineer sees exact root-cause transitions.",
+    "input": {
+      "properties": {
+        "annotations": {
+          "description": "Callout pins to show on the waveform",
+          "items": {
+            "properties": {
+              "frame": {
+                "description": "Cycle/frame index from 0",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "label": {
+                "description": "Short badge text",
+                "type": "string"
+              },
+              "signal": {
+                "description": "Signal name or leaf",
+                "type": "string"
+              },
+              "tone": {
+                "description": "Optional badge tone",
+                "enum": [
+                  "accent",
+                  "danger",
+                  "ok"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "frame",
+              "signal",
+              "label"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "clear": {
+          "description": "Clear existing AI waveform callout pins",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "gui_annotate_trace",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace",
+                "schematic",
+                "apps"
+              ],
+              "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Publish, step, or dismiss an interactive multi-step root-cause tour bar in the window that synchronizes the waveform cursor, callout pins, and RTL source lines on each step.",
+    "input": {
+      "properties": {
+        "clear": {
+          "description": "Dismiss the active walkthrough bar",
+          "type": "boolean"
+        },
+        "step": {
+          "description": "0-based step index to jump to",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "steps": {
+          "description": "Ordered walkthrough steps",
+          "items": {
+            "properties": {
+              "file": {
+                "description": "Optional source file to highlight",
+                "type": "string"
+              },
+              "first_line": {
+                "description": "Optional source start line",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "frame": {
+                "description": "Optional trace frame to jump to",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "label": {
+                "description": "Short step title",
+                "type": "string"
+              },
+              "last_line": {
+                "description": "Optional source end line",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "note": {
+                "description": "Explanation shown on the walkthrough bar",
+                "type": "string"
+              },
+              "property": {
+                "description": "Optional trace property to open",
+                "type": "string"
+              },
+              "signals": {
+                "description": "Optional signals to ensure visible / callout",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "label",
+              "note"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Walkthrough title",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "gui_present_walkthrough",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace",
+                "schematic",
+                "apps"
+              ],
+              "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Open the schematic viewer for property `name` (default: selected property) at `max_depth` register stages.",
+    "input": {
+      "properties": {
+        "max_depth": {
+          "description": "Optional register stage depth (default: 2)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Optional property name (defaults to selected property)",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "gui_open_schematic",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace",
+                "schematic",
+                "apps"
+              ],
+              "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "selected_property",
+            "view"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Render a standalone SVG of the open waveform or schematic (including Why CEX highlights and AI callout badges) into `window.capture` for visual verification or Markdown reports.",
+    "input": {
+      "properties": {
+        "target": {
+          "description": "View to capture (default: trace)",
+          "enum": [
+            "trace",
+            "schematic",
+            "window"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "gui_capture_view",
+    "output": {
+      "properties": {
+        "done": {
+          "description": "The action that was done",
+          "type": "string"
+        },
+        "schema": {
+          "const": "informal.gui/1",
+          "type": "string"
+        },
+        "window": {
+          "properties": {
+            "active_app": {
+              "description": "Active Formal Apps tab when open",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bottom_tab": {
+              "description": "Active bottom dock tab",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture": {
+              "description": "Latest deterministic SVG/view capture produced by gui_capture_view",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "filter": {
+              "description": "The property table's filter text",
+              "type": "string"
+            },
+            "focus_context": {
+              "description": "Contextual @signal / @file focus pills pinned by the user",
+              "items": {
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "follow_agent": {
+              "description": "Whether Follow-Agent auto-navigation is active",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "layout_preset": {
+              "description": "Active workspace layout preset: triage, cex-debug, signoff, or split",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schematic": {
+              "description": "Open schematic cone state: property and max_depth",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "selected_property": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "The source in view: file, first_line and last_line of the highlighted lines",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "status_filter": {
+              "description": "Active status filter on the property table",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "description": "The open trace: property, cursor, signals, why_cex_open, slice_only, annotations",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "view": {
+              "description": "What the centre of the window shows",
+              "enum": [
+                "table",
+                "source",
+                "trace",
+                "schematic",
+                "apps"
+              ],
+              "type": "string"
+            },
+            "walkthrough": {
+              "description": "Active guided CEX walkthrough: title, step, total_steps, label",
+              "type": [
+                "object",
+                "null"
+              ]
             }
           },
           "required": [
