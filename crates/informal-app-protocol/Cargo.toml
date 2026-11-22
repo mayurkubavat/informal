@@ -1,0 +1,12 @@
+[package]
+name = "informal-app-protocol"
+description = "Bus protocol app: AXI4-Lite, TileLink-UL and APB rule sets generated as SVA into a session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+informal-session.workspace = true
+informal-app-conn.workspace = true
+serde.workspace = true

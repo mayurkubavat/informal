@@ -624,6 +624,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "informal-app-protocol"
+version = "0.1.0"
+dependencies = [
+ "informal-app-conn",
+ "informal-session",
+ "serde",
+]
+
+[[package]]
 name = "informal-bench"
 version = "0.1.0"
 dependencies = [
@@ -712,6 +721,7 @@ dependencies = [
  "informal-aig",
  "informal-app-conn",
  "informal-app-csr",
+ "informal-app-protocol",
  "informal-bitwuzla",
  "informal-bmc",
  "informal-engine",
