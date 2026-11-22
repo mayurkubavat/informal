@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm", "crates/informal-mcp", "crates/informal-upf", "crates/informal-trace", "crates/informal-session"]
+members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm", "crates/informal-mcp", "crates/informal-upf", "crates/informal-trace", "crates/informal-session", "crates/informal-app-conn"]
 
 [workspace.package]
 version = "0.1.0"
@@ -37,6 +37,7 @@ informal-mcp = { path = "crates/informal-mcp" }
 informal-upf = { path = "crates/informal-upf" }
 informal-trace = { path = "crates/informal-trace" }
 informal-session = { path = "crates/informal-session" }
+informal-app-conn = { path = "crates/informal-app-conn" }
 
 [profile.release]
 lto = "thin"

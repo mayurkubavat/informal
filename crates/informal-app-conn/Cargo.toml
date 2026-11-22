@@ -1,0 +1,10 @@
+[package]
+name = "informal-app-conn"
+description = "Connectivity app: connection spreadsheets and CSVs loaded into a session as assertions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+informal-session.workspace = true
