@@ -32,7 +32,7 @@ is_exempt_rs() {
         crates/informal-sat/src/mini.rs|\
         crates/informal-cli/src/main.rs|\
         crates/informal-session/src/complexity.rs|\
-        crates/informal-fpv/src/csr.rs|\
+        crates/informal-app-csr/src/csr.rs|\
         crates/informal-session/src/sec.rs|\
         crates/informal-fpv/src/compat/help.rs|\
         crates/informal-fpv/src/compat/mod.rs|\

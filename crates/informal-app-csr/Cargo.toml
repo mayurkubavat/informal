@@ -1,0 +1,14 @@
+[package]
+name = "informal-app-csr"
+description = "CSR app: register specifications resolved against the RTL and loaded into a session as reset, read, access, lock and decode assertions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+informal-session.workspace = true
+informal-app-conn.workspace = true
+informal-svlang.workspace = true
+serde.workspace = true
+serde_json.workspace = true
