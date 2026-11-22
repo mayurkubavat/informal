@@ -1,0 +1,13 @@
+[package]
+name = "informal-debug"
+description = "Counterexample explanation (why_cex): the causal slice of a failing property's trace, for FPV, SEC, X-propagation and SPV results"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+informal-ir.workspace = true
+informal-svlang.workspace = true
+informal-session.workspace = true

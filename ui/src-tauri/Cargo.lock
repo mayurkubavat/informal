@@ -1599,6 +1599,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "informal-debug"
+version = "0.1.0"
+dependencies = [
+ "informal-ir",
+ "informal-session",
+ "informal-svlang",
+ "serde",
+]
+
+[[package]]
 name = "informal-engine"
 version = "0.1.0"
 dependencies = [
@@ -1630,6 +1640,7 @@ dependencies = [
  "informal-app-csr",
  "informal-app-protocol",
  "informal-bmc",
+ "informal-debug",
  "informal-engine",
  "informal-ir",
  "informal-session",

@@ -4,12 +4,12 @@
 //! VC Formal scripts.
 
 pub mod compat;
-pub mod why_cex;
 pub mod worker;
 
 pub use informal_app_conn::conn;
 pub use informal_app_csr::csr;
 pub use informal_app_protocol::protocol;
+pub use informal_debug::why_cex;
 pub use informal_session::{
     cache, complexity, cov, lp, miter, progress, proof_core, sec, session, spv, stats, xprop,
 };

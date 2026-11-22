@@ -21,6 +21,7 @@ informal-upf.workspace = true
 informal-trace.workspace = true
 informal-session.workspace = true
 informal-app-protocol.workspace = true
+informal-debug.workspace = true
 informal-app-csr.workspace = true
 informal-app-conn.workspace = true
 libc = "0.2"

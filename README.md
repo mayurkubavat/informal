@@ -108,7 +108,7 @@ See [`bench/README.md`](bench/README.md) to reproduce with `scripts/hwmcc_full.s
 
 | Path | Role |
 | --- | --- |
-| `crates/` | Rust workspace (`informal-{ir,engine,engines-ext,bench,sat,aig,bmc,svlang,bitwuzla,tcl,trace,session,app-conn,app-csr,app-protocol,fpv,llm,mcp,cli}`) |
+| `crates/` | Rust workspace (`informal-{ir,engine,engines-ext,bench,sat,aig,bmc,svlang,bitwuzla,tcl,trace,session,app-conn,app-csr,app-protocol,debug,fpv,llm,mcp,cli}`) |
 | `ui/` | Tauri 2 + React desktop workbench and embedded MCP App bundle |
 | `plugin/` | Antigravity plugin manifest, MCP launcher, and progressive-disclosure FPV skills |
 | `config/` | External engine definitions (`engines.toml`) and Ask-mode LLM providers (`llm.toml`) |
