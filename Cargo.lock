@@ -697,6 +697,7 @@ dependencies = [
  "informal-engine",
  "informal-engines-ext",
  "informal-ir",
+ "informal-session",
  "informal-svlang",
  "informal-tcl",
  "informal-trace",
@@ -746,6 +747,23 @@ dependencies = [
 [[package]]
 name = "informal-sat"
 version = "0.1.0"
+
+[[package]]
+name = "informal-session"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-ir",
+ "informal-svlang",
+ "informal-trace",
+ "informal-upf",
+ "libc",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "informal-svlang"

@@ -1,0 +1,20 @@
+[package]
+name = "informal-session"
+description = "FPV sessions: design and property database, elaboration, the prove flow, cache, progress and statistics, and the formal apps whose state the session holds"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+informal-engine.workspace = true
+informal-ir.workspace = true
+informal-aig.workspace = true
+informal-bmc.workspace = true
+informal-svlang.workspace = true
+informal-upf.workspace = true
+informal-trace.workspace = true
+libc = "0.2"

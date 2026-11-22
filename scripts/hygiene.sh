@@ -20,7 +20,8 @@ fi
 
 # Hard per-file LOC ceiling: <= 850 for .rs in crates/, <= 600 for .ts/.tsx in ui/src/.
 # Frozen legacy exemptions ONLY (ZERO exemptions for informal-upf, informal-liberty,
-# informal-svlang, informal-fpv/{session,miter,why_cex,compat/apps,lp}, informal-mcp/src, FormalApps).
+# informal-svlang, informal-session/{session,miter,lp}, informal-fpv/{why_cex,compat/apps},
+# informal-mcp/src, FormalApps).
 is_exempt_rs() {
     case "$1" in
         crates/informal-bmc/src/lib.rs|\
@@ -30,9 +31,9 @@ is_exempt_rs() {
         crates/informal-bmc/src/certificate.rs|\
         crates/informal-sat/src/mini.rs|\
         crates/informal-cli/src/main.rs|\
-        crates/informal-fpv/src/complexity.rs|\
+        crates/informal-session/src/complexity.rs|\
         crates/informal-fpv/src/csr.rs|\
-        crates/informal-fpv/src/sec.rs|\
+        crates/informal-session/src/sec.rs|\
         crates/informal-fpv/src/compat/help.rs|\
         crates/informal-fpv/src/compat/mod.rs|\
         crates/informal-mcp/tests/session.rs) return 0 ;;

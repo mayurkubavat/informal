@@ -34,7 +34,8 @@ impl Session {
     /// With slang's view of the design, reject a reset expression or clock
     /// that names a signal the top module does not declare. (Unchecked, a
     /// typo would leave the real reset free and give a wrong verdict.)
-    pub(crate) fn check_reset_and_clocks(&self) -> Result<(), String> {
+    #[doc(hidden)]
+    pub fn check_reset_and_clocks(&self) -> Result<(), String> {
         if let Some(r) = &self.reset {
             self.check_names(r)
                 .map_err(|e| format!("reset {{{r}}}: {e}"))?;

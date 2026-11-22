@@ -202,7 +202,8 @@ impl Session {
     }
 
     /// A line for the console: the app's sink when there is one, else stderr.
-    pub(crate) fn log(&self, line: &str) {
+    #[doc(hidden)]
+    pub fn log(&self, line: &str) {
         match &self.sink {
             Some(s) => s.line(line, true),
             None => eprintln!("informal: {line}"),
