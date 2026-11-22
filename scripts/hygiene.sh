@@ -8,7 +8,7 @@ paths=$(git ls-files | grep -E '^(research|docs/review)/|(^|/)(\.claude/|CLAUDE(
 [ -n "$paths" ] && { echo "hygiene: tracked files that must not be in git:"; echo "$paths"; bad=1; }
 text=$(git grep -nIE 'claude\.ai/|noreply@anthropic\.com|Co-Authored-By:' -- . ':!scripts/hygiene.sh' ':!scripts/hooks/' || true)
 [ -n "$text" ] && { echo "hygiene: assistant links or trailers in tracked files:"; echo "$text"; bad=1; }
-lp_names=$(git grep -niE '(^|[^[:alnum:]_])(vclp|vc[_ -]?lp|conformal|questa|spyglass|formality|powerartist|jasper[[:alpha:] ]*lpv|slec|clp)([^[:alnum:]_]|$)' -- . ':!scripts/hygiene.sh' ':!crates/informal-mcp/assets/' || true)
+lp_names=$(git grep -nIiE '(^|[^[:alnum:]_])(vclp|vc[_ -]?lp|conformal|questa|spyglass|formality|powerartist|jasper[[:alpha:] ]*lpv|slec|clp)([^[:alnum:]_]|$)' -- . ':!scripts/hygiene.sh' ':!crates/informal-mcp/assets/' || true)
 [ -n "$lp_names" ] && { echo "hygiene: forbidden third-party LP EDA tool name in tracked files:"; echo "$lp_names"; bad=1; }
 base=$(git merge-base HEAD origin/main 2>/dev/null || true)
 if [ -n "$base" ]; then
