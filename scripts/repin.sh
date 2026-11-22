@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Move the svlang pin: the rev in Cargo.toml, both lock files (workspace and
-# ui/src-tauri) and the lowering record, in one step.
+# Move the svlang pin: the rev or tag in Cargo.toml, both lock files
+# (workspace and ui/src-tauri) and the lowering record, in one step.
 #
 #   scripts/repin.sh              pin svlang's current main
 #   scripts/repin.sh <commit>     pin that commit (full 40-character id)
+#   scripts/repin.sh <tag>        pin that release tag (for example v0.5.0)
+#
+# Either way Cargo.lock records the commit the pin resolves to.
 #
 # It leaves the changes uncommitted and prints which models changed, so the
 # commit can say why. Every model that changed is compared with the one the
@@ -19,8 +22,10 @@ cd "$(dirname "$0")/.."
 DVQ="${DVQ-$HOME/.local/bin/dvq run build --}"; [ -x "$HOME/.local/bin/dvq" ] || DVQ=
 
 url=$(sed -n 's/^svlang *= *{ *git *= *"\([^"]*\)".*/\1/p' Cargo.toml)
-old=$(sed -n 's/^svlang *= *{.*rev *= *"\([0-9a-f]\{40\}\)".*/\1/p' Cargo.toml)
-[ -n "$url" ] && [ -n "$old" ] || { echo "repin.sh: no svlang git pin in Cargo.toml" >&2; exit 1; }
+old_ref=$(sed -nE 's/^svlang *= *\{.*[{ ,]((rev|tag) *= *"[^"]*").*/\1/p' Cargo.toml)
+old=$(sed -nE 's/^source = "git\+[^"]*svlang[^"]*#([0-9a-f]{40})"$/\1/p' Cargo.lock | sort -u)
+[ -n "$url" ] && [ -n "$old_ref" ] && [ ${#old} = 40 ] \
+    || { echo "repin.sh: no svlang git pin in Cargo.toml and Cargo.lock" >&2; exit 1; }
 
 new=${1:-}
 if [ -z "$new" ]; then
@@ -28,10 +33,18 @@ if [ -z "$new" ]; then
     [ -n "$new" ] || { echo "repin.sh: could not read svlang main from $url" >&2; exit 1; }
 fi
 case "$new" in
-    *[!0-9a-f]*) echo "repin.sh: $new is not a commit id" >&2; exit 2 ;;
+    *[!0-9a-f]*)
+        # A tag: pin it by name; an annotated tag's commit is its ^{} line.
+        tag=$new
+        new=$(git ls-remote "$url" "refs/tags/$tag" "refs/tags/$tag^{}" \
+            | awk -v t="refs/tags/$tag" '$2 == t "^{}" { p = $1 } $2 == t { q = $1 } END { print (p ? p : q) }')
+        [ -n "$new" ] || { echo "repin.sh: no tag $tag in $url" >&2; exit 2; }
+        new_ref="tag = \"$tag\"" ;;
+    *)
+        [ ${#new} = 40 ] || { echo "repin.sh: give the full 40-character commit id or a tag" >&2; exit 2; }
+        new_ref="rev = \"$new\"" ;;
 esac
-[ ${#new} = 40 ] || { echo "repin.sh: give the full 40-character commit id" >&2; exit 2; }
-if [ "$new" = "$old" ]; then
+if [ "$new" = "$old" ] && [ "$new_ref" = "$old_ref" ]; then
     echo "svlang is already pinned at ${old:0:7}"
     exit 0
 fi
@@ -49,15 +62,14 @@ run_designs old ""
 [ -z "$(git status --porcelain --untracked-files=no)" ] \
     || { echo "repin.sh: tests/sv/lowering.lock is not current for the pin in Cargo.toml" >&2; exit 1; }
 
-echo "svlang ${old:0:7} -> ${new:0:7}"
-sed -i "s/$old/$new/g" Cargo.toml Cargo.lock ui/src-tauri/Cargo.lock
-# The lock files hold the new rev; if svlang's own dependencies changed
-# between the two commits, let cargo redo that part of each lock.
+echo "svlang ${old:0:7} ($old_ref) -> ${new:0:7} ($new_ref)"
+sed -i -E "/^svlang(-lint|-model)? *=/s|$old_ref|$new_ref|" Cargo.toml
+# Move only the svlang packages in each lock file (and whatever svlang's
+# own dependencies need), nothing else.
 for dir in . ui/src-tauri; do
-    (cd "$dir" && { cargo metadata --locked --format-version 1 >/dev/null 2>&1 \
-        || cargo metadata --format-version 1 >/dev/null; })
+    (cd "$dir" && cargo update -q -p svlang -p svlang-lint -p svlang-model)
 done
-if grep -q "$old" Cargo.toml Cargo.lock ui/src-tauri/Cargo.lock; then
+if [ "$new" != "$old" ] && grep -q "$old" Cargo.toml Cargo.lock ui/src-tauri/Cargo.lock; then
     echo "repin.sh: the old rev is still in a lock file" >&2
     exit 1
 fi
