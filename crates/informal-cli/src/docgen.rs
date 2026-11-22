@@ -248,7 +248,7 @@ fn render_tcl_commands() -> String {
     let mut out = String::from(HEADER);
     out.push_str("# Tcl Command Reference Manual (`informal shell`)\n\n");
     out.push_str(
-        "Complete reference for all commands available in `informal shell`, generated directly from `crates/informal-fpv/src/compat/help.rs`.\n\n",
+        "Complete reference for all commands available in `informal shell`, generated directly from `crates/informal-compat/src/compat/help.rs`.\n\n",
     );
     out.push_str(
         "> **Interactive help:** Inside `informal shell`, run `help`, `help -apps`, `help -all`, or `help <command>` to view this exact documentation.\n\n",

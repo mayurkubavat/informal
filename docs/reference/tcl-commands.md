@@ -2,7 +2,7 @@
 
 # Tcl Command Reference Manual (`informal shell`)
 
-Complete reference for all commands available in `informal shell`, generated directly from `crates/informal-fpv/src/compat/help.rs`.
+Complete reference for all commands available in `informal shell`, generated directly from `crates/informal-compat/src/compat/help.rs`.
 
 > **Interactive help:** Inside `informal shell`, run `help`, `help -apps`, `help -all`, or `help <command>` to view this exact documentation.
 
