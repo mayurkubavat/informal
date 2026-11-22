@@ -2,7 +2,7 @@
 
 Status: implemented 2026-11-08: the survey (T0) and plan below, now built
 (T2). Code: `named_witness` in `crates/informal-bmc/src/lib.rs`,
-`crates/informal-fpv/src/trace.rs`, `Session::write_trace`, and the app's
+`crates/informal-trace/src/lib.rs`, `Session::write_trace`, and the app's
 `read_trace` command. Tests: `crates/informal-fpv/tests/trace.rs`, `flow.rs`, and
 `trace.rs` unit tests.
 

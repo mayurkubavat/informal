@@ -18,6 +18,7 @@ informal-bmc.workspace = true
 informal-tcl.workspace = true
 informal-svlang.workspace = true
 informal-upf.workspace = true
+informal-trace.workspace = true
 libc = "0.2"
 
 [dev-dependencies]

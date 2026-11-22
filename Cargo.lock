@@ -699,6 +699,7 @@ dependencies = [
  "informal-ir",
  "informal-svlang",
  "informal-tcl",
+ "informal-trace",
  "informal-upf",
  "libc",
  "regex",
@@ -761,6 +762,14 @@ dependencies = [
 [[package]]
 name = "informal-tcl"
 version = "0.1.0"
+
+[[package]]
+name = "informal-trace"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+]
 
 [[package]]
 name = "informal-upf"

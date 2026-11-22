@@ -18,10 +18,11 @@ pub mod sec;
 pub mod session;
 pub mod spv;
 pub mod stats;
-pub mod trace;
 pub mod why_cex;
 pub mod worker;
 pub mod xprop;
+
+pub use informal_trace as trace;
 
 pub use compat::{detect_flavor, Flavor, Shell};
 pub use progress::{EngineLine, ProgressKind, PropProgress, ProveProgress, ProveSink};

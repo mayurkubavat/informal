@@ -1,0 +1,11 @@
+[package]
+name = "informal-trace"
+description = "Counterexample and cover traces: engine witnesses replayed on the property's model and written as VCD"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+informal-aig.workspace = true
