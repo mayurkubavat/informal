@@ -28,9 +28,9 @@ informal-sat = { path = "crates/informal-sat" }
 informal-aig = { path = "crates/informal-aig" }
 informal-bmc = { path = "crates/informal-bmc" }
 informal-svlang = { path = "crates/informal-svlang" }
-svlang = { git = "https://github.com/mayurkubavat/svlang.git", tag = "v0.5.0" }
-svlang-lint = { git = "https://github.com/mayurkubavat/svlang.git", tag = "v0.5.0" }
-svlang-model = { git = "https://github.com/mayurkubavat/svlang.git", tag = "v0.5.0" }
+svlang = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }
+svlang-lint = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }
+svlang-model = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }
 informal-bitwuzla = { path = "crates/informal-bitwuzla" }
 informal-llm = { path = "crates/informal-llm" }
 informal-mcp = { path = "crates/informal-mcp" }

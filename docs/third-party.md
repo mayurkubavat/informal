@@ -22,7 +22,7 @@ reading; when a pin moves, change both.
 
 | Tool | License | Commit | Upstream | Used for | Found through |
 | --- | --- | --- | --- | --- | --- |
-| svlang | Apache-2.0 | `v0.5.0` = `fa379f2`: the `tag` in the root `Cargo.toml`, its commit in `Cargo.lock` (`scripts/repin.sh` moves it) | github.com/mayurkubavat/svlang | SystemVerilog front end (crate `informal-svlang`, D14) | Cargo git dependency |
+| svlang | Apache-2.0 | 0.5.1 = `a7501b4` (untagged): the `rev` in the root `Cargo.toml`, its commit in `Cargo.lock` (`scripts/repin.sh` moves it) | github.com/mayurkubavat/svlang | SystemVerilog front end (crate `informal-svlang`, D14) | Cargo git dependency |
 | Bitwuzla | MIT | `9d391d1` (2026-10-30, main) | github.com/bitwuzla/bitwuzla | Word-level BMC `informal-wbmc`; its bundled CaDiCaL is also informal's SAT solver | `INFORMAL_BITWUZLA_DIR`, needs `install/` |
 | CaDiCaL (bundled) | MIT | `rel-3.0.1` with Bitwuzla's patches | via Bitwuzla's meson subproject | SAT for all in-house bit-level engines | linked from Bitwuzla's static library |
 | CaDiCaL (standalone) | MIT | `c607304` = `rel-3.0.1` | github.com/arminbiere/cadical | Fallback when Bitwuzla is not built | `INFORMAL_CADICAL_DIR`, needs `build/libcadical.a` |
