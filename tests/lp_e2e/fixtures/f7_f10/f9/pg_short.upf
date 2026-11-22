@@ -1,0 +1,22 @@
+upf_version 2.1
+set_design_top pg_short
+
+create_supply_port VDD_AON  -direction in
+create_supply_port VDD_HIGH -direction in
+create_supply_port VSS      -direction in
+
+create_supply_net VDD_AON
+create_supply_net VDD_HIGH
+create_supply_net VSS
+
+connect_supply_net VDD_AON  -ports VDD_AON
+connect_supply_net VDD_HIGH -ports VDD_HIGH
+connect_supply_net VSS      -ports VSS
+
+create_supply_set SS_AON  -function {power VDD_AON}  -function {ground VSS}
+create_supply_set SS_HIGH -function {power VDD_HIGH} -function {ground VSS}
+
+create_power_domain PD_TOP -include_scope -supply {primary SS_AON}
+
+add_power_state SS_AON  -state {AON_ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_HIGH -state {HIGH_ON -supply_expr {power == {FULL_ON 1.10} && ground == {FULL_ON 0.0}} -simstate NORMAL}

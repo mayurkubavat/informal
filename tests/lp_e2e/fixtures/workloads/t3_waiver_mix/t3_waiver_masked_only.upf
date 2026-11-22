@@ -1,0 +1,33 @@
+upf_version 2.1
+set_design_top t3_waiver_mix
+
+create_supply_port VDD_AON -direction in
+create_supply_port VSS     -direction in
+create_supply_net  VDD_AON
+create_supply_net  VDD_SW
+create_supply_net  VSS
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON -function {power VDD_AON} -function {ground VSS}
+create_supply_set SS_SW  -function {power VDD_SW}  -function {ground VSS}
+
+create_power_domain PD_TOP -include_scope -supply {primary SS_AON}
+create_power_domain PD_SW  -elements {u_sw} -supply {primary SS_SW}
+
+create_power_switch PSW_SW -domain PD_SW \
+    -input_supply_port {in VDD_AON} \
+    -output_supply_port {out VDD_SW} \
+    -control_port {ctrl pwr_on} \
+    -ack_port {ack pwr_ack} \
+    -on_state {ON_ST in {ctrl}} \
+    -off_state {OFF_ST {!ctrl}}
+
+add_power_state SS_AON -state {AON_ON -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_SW \
+    -state {SW_ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -logic_expr {pwr_on}  -simstate NORMAL} \
+    -state {SW_OFF -supply_expr {power == OFF            && ground == {FULL_ON 0.0}} -logic_expr {!pwr_on} -simstate CORRUPT}
+
+set_isolation iso_others -domain PD_SW -applies_to outputs \
+    -elements {u_sw/sw_manual u_sw/sw_leak} -clamp_value 0 \
+    -isolation_supply_set SS_AON -isolation_signal iso_en -isolation_sense high -location parent

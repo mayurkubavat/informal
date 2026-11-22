@@ -246,13 +246,13 @@ fn simulate(g: &Aig, w: &Witness) -> Result<Vec<Vec<bool>>> {
         })
         .collect();
     let mut out = Vec::with_capacity(w.depth + 1);
-    for f in 0..=w.depth {
+    for (f, frame) in w.frames[..=w.depth].iter().enumerate() {
         let mut val = vec![false; g.nodes.len()];
         let mut li = 0;
         for v in 0..g.nodes.len() {
             val[v] = match g.nodes[v] {
                 Node::Const => false,
-                Node::Input => named(&w.frames[f], v as u32),
+                Node::Input => named(frame, v as u32),
                 Node::Latch => {
                     li += 1;
                     state[li - 1]

@@ -1,0 +1,28 @@
+{
+  "schema": "informal.spec/1",
+  "name": "t3_spec_lp_signoff",
+  "design": {
+    "top": "t3_spec_lp",
+    "clocks": ["clk"],
+    "reset": "!rst_n"
+  },
+  "requirements": [
+    {
+      "id": "REQ-LP-001",
+      "title": "Isolation asserted before switchable domain power-off and PST sleep state reachable",
+      "assertions": ["LowPower::lp_iso_before_pwroff_*"],
+      "covers": ["LowPower::lp_pst_reach_*"]
+    }
+  ],
+  "low_power": {
+    "require_upf": true,
+    "max_open_lp_errors": 0,
+    "require_formal_lpv": true,
+    "allow_manual_lp_waivers": false
+  },
+  "signoff": {
+    "proof_target": "proven",
+    "forbid_vacuous": true,
+    "require_covers": true
+  }
+}

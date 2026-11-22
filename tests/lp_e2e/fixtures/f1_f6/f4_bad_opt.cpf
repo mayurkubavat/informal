@@ -1,0 +1,5 @@
+set_cpf_version 2.0
+set_design soc_basic
+create_power_domain -name PD_TOP -default
+create_power_domain -name PD_CORE -instances {u_core}
+create_isolation_rule -name ir_bad -from PD_CORE -to PD_TOP -unknown_semantic_flag foo

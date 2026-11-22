@@ -1,0 +1,21 @@
+upf_version 2.1
+
+set sub_regs [find_objects . -pattern *reg* -object_type inst]
+if {[llength $sub_regs] == 0} {
+    error "expected find_objects to discover *reg* instances in u_sub"
+}
+
+create_supply_net VDD_SUB
+create_supply_net VSS_SUB
+create_supply_port VDD_AON -direction in
+create_supply_net  VDD_AON
+connect_supply_net VDD_AON -ports VDD_AON
+
+create_supply_set SS_SUB_AON -function {power VDD_AON} -function {ground VSS_SUB}
+create_supply_set SS_SUB     -function {power VDD_SUB} -function {ground VSS_SUB}
+create_power_domain PD_SUB -include_scope -supply {primary SS_SUB}
+
+add_power_state SS_SUB_AON -state {ON -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_SUB     -state {ON -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+
+set_scope ..

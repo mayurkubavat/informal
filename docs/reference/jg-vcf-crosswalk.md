@@ -35,6 +35,13 @@ Quick-reference matrix mapping JasperGold (`jg`), VC Formal (`vcf`), and flavor-
 | `abstract` | Debugging, Complexity, and Abstraction | Apply sound over-approximate counter jump abstractions to accelerate deep proofs |
 | `report_abstractions` | Debugging, Complexity, and Abstraction | List active formal abstractions and their parameters |
 | `set_abstractions` | Debugging, Complexity, and Abstraction | Clear or disable active formal abstractions |
+| `load_upf` | Formal Apps | Load an IEEE 1801 UPF (or CPF) power intent specification into the session |
+| `read_liberty` | Formal Apps | Register Liberty (`.lib`) files for low-power cell and PG-pin analysis |
+| `check_lp` | Formal Apps | Run static power-intent/structural verification (Stages 1–2) and formal low-power checks |
+| `report_lp` | Formal Apps | Print or export low-power verification violations and summary statistics |
+| `set_lp_waiver` | Formal Apps | Add, list, remove, or clear manual low-power rule waivers |
+| `compare_upf` | Formal Apps | Check symbolic domain, PST, and strategy equivalence between two UPF/CPF files |
+| `check_lpv` | Formal Apps | Run low-power verification (concise alias for `check_lp -stage formal`) |
 
 ## JasperGold (`jg`) Commands
 

@@ -1,0 +1,62 @@
+upf_version 3.1
+set_design_top mig_soc
+
+create_supply_port VDD_AON  -direction in
+create_supply_port VDD_HIGH -direction in
+create_supply_port VSS      -direction in
+
+create_supply_net VDD_AON
+create_supply_net VDD_HIGH
+create_supply_net VDD_CPU_SW
+create_supply_net VDD_DSP_SW
+create_supply_net VSS
+
+connect_supply_net VDD_AON  -ports VDD_AON
+connect_supply_net VDD_HIGH -ports VDD_HIGH
+connect_supply_net VSS      -ports VSS
+
+create_supply_set SS_AON  -function {power VDD_AON}    -function {ground VSS}
+create_supply_set SS_HIGH -function {power VDD_HIGH}   -function {ground VSS}
+create_supply_set SS_CPU  -function {power VDD_CPU_SW} -function {ground VSS}
+create_supply_set SS_DSP  -function {power VDD_DSP_SW} -function {ground VSS}
+
+create_power_domain PD_TOP -include_scope
+create_power_domain PD_CPU -elements {u_cpu}
+create_power_domain PD_DSP -elements {u_dsp}
+create_power_domain PD_MEM -elements {u_mem}
+
+associate_supply_set SS_AON  -handle PD_TOP.primary
+associate_supply_set SS_CPU  -handle PD_CPU.primary
+associate_supply_set SS_DSP  -handle PD_DSP.primary
+associate_supply_set SS_HIGH -handle PD_MEM.primary
+
+create_power_switch PSW_CPU -domain PD_CPU \
+    -input_supply_port {in VDD_AON} -output_supply_port {out VDD_CPU_SW} \
+    -control_port {ctrl pwr_cpu} -ack_port {ack ack_cpu} \
+    -on_state {ON_ST in {ctrl}} -off_state {OFF_ST {!ctrl}}
+
+create_power_switch PSW_DSP -domain PD_DSP \
+    -input_supply_port {in VDD_AON} -output_supply_port {out VDD_DSP_SW} \
+    -control_port {ctrl pwr_dsp} -ack_port {ack ack_dsp} \
+    -on_state {ON_ST in {ctrl}} -off_state {OFF_ST {!ctrl}}
+
+add_power_state SS_AON  -state {AON_ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_HIGH -state {HIGH_ON -supply_expr {power == {FULL_ON 1.10} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_CPU \
+    -state {CPU_ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -logic_expr {pwr_cpu}  -simstate NORMAL} \
+    -state {CPU_OFF -supply_expr {power == OFF            && ground == {FULL_ON 0.0}} -logic_expr {!pwr_cpu} -simstate CORRUPT}
+add_power_state SS_DSP \
+    -state {DSP_ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -logic_expr {pwr_dsp}  -simstate NORMAL} \
+    -state {DSP_OFF -supply_expr {power == OFF            && ground == {FULL_ON 0.0}} -logic_expr {!pwr_dsp} -simstate CORRUPT}
+
+set_isolation iso_cpu -domain PD_CPU -applies_to outputs -clamp_value 0 \
+    -isolation_supply_set SS_AON -isolation_signal iso_cpu -isolation_sense high -location parent
+set_isolation iso_dsp -domain PD_DSP -applies_to outputs -clamp_value 0 \
+    -isolation_supply_set SS_AON -isolation_signal iso_dsp -isolation_sense high -location parent
+
+set_retention ret_cpu -domain PD_CPU -retention_supply_set SS_AON \
+    -save_signal {ret_save high} -restore_signal {ret_restore high}
+set_retention_elements ret_cpu_el -domain PD_CPU -elements {u_cpu/q_cpu}
+
+set_level_shifter ls_dsp_to_mem -domain PD_MEM -applies_to inputs -rule low_to_high -location self
+set_level_shifter ls_mem_to_top -domain PD_MEM -applies_to outputs -rule high_to_low -location self

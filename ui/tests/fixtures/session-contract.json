@@ -252,7 +252,7 @@
   "orchestration": "auto",
   "max_trace_length": 200,
   "engine_filter": [],
-  "workdir": "/Users/mkubavat/Silicon/git/informal/crates/informal-fpv/informal_work",
+  "workdir": "informal_work",
   "hierarchy": [],
   "frontend": "",
   "environment_depth": 20,

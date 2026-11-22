@@ -1,0 +1,36 @@
+{
+  "schema": "informal.spec/1",
+  "name": "F1 Regfile Signoff Spec",
+  "design": {
+    "top": "f1_regfile",
+    "clocks": ["clk"],
+    "reset": "!rst_n"
+  },
+  "boundary": {
+    "allowed_assume_inputs": ["wr_en", "clr", "din"],
+    "forbidden_assume_signals": ["q", "full", "cnt"]
+  },
+  "requirements": [
+    {
+      "id": "REQ-RF-001",
+      "title": "Count never exceeds bound 6",
+      "assertions": ["a_bound"],
+      "covers": ["c_full"]
+    },
+    {
+      "id": "REQ-RF-002",
+      "title": "Clear resets occupancy and shadow matches output",
+      "assertions": ["a_clr", "a_shadow"],
+      "covers": ["c_full"]
+    }
+  ],
+  "signoff": {
+    "proof_target": "proven",
+    "max_overconstraints": 0,
+    "max_dead_ends": 0,
+    "require_dead_end_check": true,
+    "forbid_vacuous": true,
+    "require_covers": true,
+    "forbid_under_ai": true
+  }
+}

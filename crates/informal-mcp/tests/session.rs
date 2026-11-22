@@ -1228,3 +1228,639 @@ fn spec_audit_verifies_requirements_boundaries_and_signoff_gates() {
     );
     assert_eq!(cheated["summary"]["overconstrained"], 5);
 }
+
+#[test]
+fn spec_audit_forbid_under_ai_gate_blocks_ai_dependent_proofs() {
+    let Some(api) = api(Mode::Auto, "spec-forbid-ai") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/fifo/fifo.jg.tcl"}),
+    );
+
+    // Add a legal primary-input AI assumption and re-prove `a_count_max` under it.
+    call(
+        &api,
+        "proposal_add",
+        json!({
+            "kind": "assume",
+            "name": "m_ai_din",
+            "expr": "din == 8'h00",
+            "rationale": "AI input constraint for provenance gate test"
+        }),
+    );
+    call(&api, "prove", json!({"properties": ["a_count_max"]}));
+    let prop = call(&api, "property_get", json!({"name": "a_count_max"}));
+    assert_eq!(prop["property"]["status"], "proven");
+    assert_eq!(prop["property"]["under_ai"], json!(["m_ai_din"]));
+
+    let make_spec = |forbid_under_ai: bool| {
+        json!({
+            "schema": "informal.spec/1",
+            "design": {"top": "fifo", "clocks": ["clk"], "reset": "!rst_n"},
+            "boundary": {
+                "allowed_assume_inputs": ["push", "pop", "din"],
+                "forbidden_assume_signals": [
+                    "full", "empty", "dout", "status", "count", "wp", "rp", "mem", "u_wp.*", "u_rp.*"
+                ]
+            },
+            "requirements": [
+                {"id": "REQ-AI-1", "title": "Occupancy bounded", "assertions": ["a_count_max"], "covers": ["c_full"]}
+            ],
+            "signoff": {
+                "proof_target": "proven",
+                "forbid_under_ai": forbid_under_ai
+            }
+        })
+    };
+
+    // Allowed when `forbid_under_ai` is false.
+    let ok_when_allowed = call(&api, "spec_audit", json!({"spec": make_spec(false)}));
+    assert_eq!(ok_when_allowed["signoff_ready"], true);
+    assert_eq!(ok_when_allowed["summary"]["verified"], 1);
+    assert_eq!(
+        ok_when_allowed["requirements"][0]["assertions"][0]["under_ai"],
+        json!(["m_ai_din"])
+    );
+
+    // Blocked when `forbid_under_ai` is true.
+    let blocked = call(&api, "spec_audit", json!({"spec": make_spec(true)}));
+    assert_eq!(blocked["signoff_ready"], false);
+    assert_eq!(blocked["summary"]["verified"], 0);
+    assert_eq!(blocked["summary"]["undetermined"], 1);
+    assert_eq!(blocked["requirements"][0]["status"], "undetermined");
+    assert!(blocked["requirements"][0]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s
+            .as_str()
+            .unwrap()
+            .contains("stands on AI-added assumption/cutpoint [m_ai_din]")));
+    let ai_gate = blocked["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["gate"] == "ai_provenance")
+        .unwrap();
+    assert_eq!(ai_gate["ok"], false);
+    assert_eq!(ai_gate["actual"], "1 under_ai dependencies");
+    assert!(ai_gate["detail"]
+        .as_str()
+        .unwrap()
+        .contains("a_count_max -> m_ai_din"));
+
+    // Removing the AI assumption and re-proving restores signoff readiness.
+    call(&api, "proposal_undo", json!({}));
+    call(&api, "prove", json!({"properties": ["a_count_max"]}));
+    let recovered = call(&api, "spec_audit", json!({"spec": make_spec(true)}));
+    assert_eq!(recovered["signoff_ready"], true);
+    let ai_gate_ok = recovered["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["gate"] == "ai_provenance")
+        .unwrap();
+    assert_eq!(ai_gate_ok["ok"], true);
+    assert_eq!(ai_gate_ok["actual"], "0 under_ai dependencies");
+}
+
+#[test]
+fn spec_audit_require_dead_end_check_gate_fails_when_unchecked() {
+    let Some(api) = api(Mode::ReadOnly, "spec-dead-end-req") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/fifo/fifo.jg.tcl"}),
+    );
+
+    let spec = json!({
+        "schema": "informal.spec/1",
+        "design": {"top": "fifo", "clocks": ["clk"], "reset": "!rst_n"},
+        "boundary": {
+            "allowed_assume_inputs": ["push", "pop", "din"],
+            "forbidden_assume_signals": [
+                "full", "empty", "dout", "status", "count", "wp", "rp", "mem", "u_wp.*", "u_rp.*"
+            ]
+        },
+        "requirements": [
+            {"id": "REQ-DE-1", "title": "Occupancy bounded", "assertions": ["a_count_max"], "covers": ["c_full"]}
+        ],
+        "signoff": {
+            "proof_target": "proven",
+            "require_dead_end_check": true
+        }
+    });
+
+    // When `check_dead_end` is false, `zero_dead_ends` gate fails signoff even though REQ-DE-1 is verified.
+    let unchecked = call(
+        &api,
+        "spec_audit",
+        json!({"spec": spec, "check_dead_end": false}),
+    );
+    assert_eq!(unchecked["signoff_ready"], false);
+    assert_eq!(unchecked["summary"]["verified"], 1);
+    assert!(unchecked["uncovered_requirements"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(unchecked["boundary_audit"]["ok"], true);
+    assert_eq!(unchecked["boundary_audit"]["dead_end_checked"], false);
+    assert_eq!(unchecked["boundary_audit"]["dead_end_found"], false);
+    let de_gate = unchecked["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["gate"] == "zero_dead_ends")
+        .unwrap();
+    assert_eq!(de_gate["ok"], false);
+    assert_eq!(de_gate["actual"], "not checked (pass check_dead_end=true)");
+    assert!(de_gate["expected"]
+        .as_str()
+        .unwrap()
+        .contains("(2QBF required)"));
+    assert!(unchecked["next_actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a.as_str().unwrap().contains("check_dead_end=true")));
+
+    // Re-running with `check_dead_end: true` discharges the gate.
+    let checked = call(
+        &api,
+        "spec_audit",
+        json!({"spec": spec, "check_dead_end": true}),
+    );
+    assert_eq!(checked["signoff_ready"], true);
+    assert_eq!(checked["boundary_audit"]["dead_end_checked"], true);
+    assert_eq!(checked["boundary_audit"]["dead_end_found"], false);
+    let de_gate_ok = checked["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["gate"] == "zero_dead_ends")
+        .unwrap();
+    assert_eq!(de_gate_ok["ok"], true);
+}
+
+#[test]
+fn spec_audit_allow_internal_assumes_waives_internal_state_only() {
+    let Some(api) = api(Mode::Auto, "spec-allow-internal") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/fifo/fifo.jg.tcl"}),
+    );
+    call(
+        &api,
+        "tcl_eval",
+        json!({"command": "assume -name m_internal_cnt {count <= 3'd4}"}),
+    );
+
+    let make_spec = |forbidden: Value, allow_internal: Value| {
+        json!({
+            "schema": "informal.spec/1",
+            "design": {"top": "fifo", "clocks": ["clk"], "reset": "!rst_n"},
+            "boundary": {
+                "allowed_assume_inputs": ["push", "pop", "din"],
+                "forbidden_assume_signals": forbidden,
+                "allow_internal_assumes": allow_internal
+            },
+            "requirements": [
+                {"id": "REQ-INT-1", "title": "Occupancy bounded", "assertions": ["a_count_max"], "covers": ["c_full"]}
+            ],
+            "signoff": {"proof_target": "proven", "max_overconstraints": 0}
+        })
+    };
+
+    // 1. Unwaived internal_state assumption is flagged as over-constraint.
+    let unwaived = call(
+        &api,
+        "spec_audit",
+        json!({"spec": make_spec(json!(["full", "empty", "dout", "status"]), json!([]))}),
+    );
+    assert_eq!(unwaived["signoff_ready"], false);
+    assert_eq!(unwaived["boundary_audit"]["ok"], false);
+    assert_eq!(unwaived["summary"]["overconstrained"], 1);
+    assert_eq!(
+        unwaived["boundary_audit"]["overconstrained_assumptions"][0]["name"],
+        "m_internal_cnt"
+    );
+    assert_eq!(
+        unwaived["boundary_audit"]["overconstrained_assumptions"][0]["roles"],
+        json!(["internal_state"])
+    );
+    assert_eq!(
+        unwaived["boundary_audit"]["overconstrained_assumptions"][0]["forbidden_signals"],
+        json!(["count"])
+    );
+
+    // 2. Explicitly waiving `count` via `boundary.allow_internal_assumes` passes.
+    let waived = call(
+        &api,
+        "spec_audit",
+        json!({"spec": make_spec(json!(["full", "empty", "dout", "status"]), json!(["count"]))}),
+    );
+    assert_eq!(waived["signoff_ready"], true);
+    assert_eq!(waived["boundary_audit"]["ok"], true);
+    assert!(waived["boundary_audit"]["overconstrained_assumptions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(waived["summary"]["overconstrained"], 0);
+    assert_eq!(waived["summary"]["verified"], 1);
+
+    // 3. `forbidden_assume_signals` takes precedence over `allow_internal_assumes`.
+    let forbidden_override = call(
+        &api,
+        "spec_audit",
+        json!({"spec": make_spec(json!(["full", "empty", "dout", "status", "count"]), json!(["count"]))}),
+    );
+    assert_eq!(forbidden_override["signoff_ready"], false);
+    assert_eq!(forbidden_override["boundary_audit"]["ok"], false);
+    assert!(
+        forbidden_override["boundary_audit"]["overconstrained_assumptions"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("boundary.forbidden_assume_signals")
+    );
+}
+
+#[test]
+fn spec_audit_bounded_proven_target_respects_min_bound_and_proven() {
+    let Some(api) = api(Mode::Auto, "spec-bounded") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/counter/counter.jg.tcl"}),
+    );
+
+    // `q != 4'd9` fails at depth 10, so `-bound 4` yields `bounded_proven` at bound 4.
+    call(
+        &api,
+        "tcl_eval",
+        json!({"command": "assert -name a_never9_b4 -bound 4 {q != 4'd9}"}),
+    );
+    call(&api, "prove", json!({"properties": ["a_never9_b4"]}));
+    let prop = call(&api, "property_get", json!({"name": "a_never9_b4"}));
+    assert_eq!(prop["property"]["status"], "bounded_proven");
+    assert_eq!(prop["property"]["depth"], 4);
+
+    let make_spec = |proof_target: &str, min_bound: u32| {
+        json!({
+            "schema": "informal.spec/1",
+            "design": {"top": "counter", "clocks": ["clk"], "reset": "!rst_n"},
+            "boundary": {
+                "allowed_assume_inputs": ["en"],
+                "forbidden_assume_signals": ["q", "done", "nxt", "wrap"]
+            },
+            "requirements": [
+                {"id": "REQ-BOUND", "title": "Bounded check", "assertions": ["a_never9_b4"], "covers": ["c_done"]},
+                {"id": "REQ-PROVEN", "title": "Unbounded check", "assertions": ["a_max"], "covers": ["c_done"]}
+            ],
+            "signoff": {
+                "proof_target": proof_target,
+                "min_bound": min_bound
+            }
+        })
+    };
+
+    // 1. `proof_target: "proven"` rejects `bounded_proven`.
+    let strict_unbounded = call(&api, "spec_audit", json!({"spec": make_spec("proven", 0)}));
+    assert_eq!(strict_unbounded["signoff_ready"], false);
+    assert_eq!(strict_unbounded["summary"]["verified"], 1);
+    assert_eq!(strict_unbounded["summary"]["undetermined"], 1);
+    assert_eq!(
+        strict_unbounded["requirements"][0]["status"],
+        "undetermined"
+    );
+    assert_eq!(strict_unbounded["requirements"][1]["status"], "verified");
+
+    // 2. `proof_target: "bounded_proven"` with `min_bound: 5` fails bound 4 < 5, while `proven` passes.
+    let too_shallow = call(
+        &api,
+        "spec_audit",
+        json!({"spec": make_spec("bounded_proven", 5)}),
+    );
+    assert_eq!(too_shallow["signoff_ready"], false);
+    assert_eq!(too_shallow["summary"]["verified"], 1);
+    assert_eq!(too_shallow["summary"]["undetermined"], 1);
+    assert_eq!(too_shallow["requirements"][0]["status"], "undetermined");
+    assert_eq!(too_shallow["requirements"][1]["status"], "verified");
+
+    // 3. `proof_target: "bounded_proven"` with `min_bound: 4` passes both `bounded_proven` (4 >= 4) and `proven`.
+    let meets_bound = call(
+        &api,
+        "spec_audit",
+        json!({"spec": make_spec("bounded_proven", 4)}),
+    );
+    assert_eq!(meets_bound["signoff_ready"], true);
+    assert_eq!(meets_bound["summary"]["verified"], 2);
+    assert_eq!(meets_bound["summary"]["undetermined"], 0);
+    assert_eq!(meets_bound["requirements"][0]["status"], "verified");
+    assert_eq!(meets_bound["requirements"][1]["status"], "verified");
+}
+
+#[test]
+fn spec_audit_dead_end_found_gates_signoff_and_marks_overconstrained() {
+    let Some(api) = api(Mode::Auto, "spec-dead-end-found") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/counter/counter.jg.tcl"}),
+    );
+
+    // Baseline `counter/fvp.spec.json` is clean with `check_dead_end: true`.
+    let clean = call(&api, "spec_audit", json!({"check_dead_end": true}));
+    assert_eq!(clean["signoff_ready"], true);
+    assert_eq!(clean["boundary_audit"]["dead_end_found"], false);
+
+    // `counter.jg.tcl` already has `m_en_burst {en |=> en}`. Adding `en |=> !en` on primary input `en`
+    // keeps `en == 0` alive forever (`conflict: false`) and obeys the primary-input boundary,
+    // but traps any trace with `en == 1` into a 2QBF dead-end on the next cycle.
+    call(
+        &api,
+        "tcl_eval",
+        json!({"command": "assume -name m_en_trap {en |=> !en}"}),
+    );
+
+    let trapped = call(&api, "spec_audit", json!({"check_dead_end": true}));
+    assert_eq!(trapped["signoff_ready"], false);
+    assert_eq!(trapped["boundary_audit"]["ok"], false);
+    assert_eq!(trapped["boundary_audit"]["conflict"], false);
+    assert!(trapped["boundary_audit"]["overconstrained_assumptions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(trapped["boundary_audit"]["dead_end_checked"], true);
+    assert_eq!(trapped["boundary_audit"]["dead_end_found"], true);
+    assert_eq!(trapped["summary"]["overconstrained"], 3);
+    assert_eq!(trapped["requirements"][0]["status"], "overconstrained");
+    assert!(trapped["requirements"][0]["next_action"]
+        .as_str()
+        .unwrap()
+        .contains("2QBF dead-end trap state"));
+
+    let gate_ok = |g: &str| -> bool {
+        trapped["gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["gate"] == g)
+            .unwrap()["ok"]
+            .as_bool()
+            .unwrap()
+    };
+    assert!(gate_ok("zero_overconstraints"));
+    assert!(!gate_ok("zero_dead_ends"));
+}
+
+#[test]
+fn spec_audit_detects_disabled_assertion_in_named_task() {
+    let Some(api) = api(Mode::Auto, "spec-task-disabled") else {
+        return;
+    };
+    call(
+        &api,
+        "session_open",
+        json!({"script": "tests/fpv/fifo/fifo.jg.tcl"}),
+    );
+
+    // Create a named task `t_sub` and disable `a_count_max` ONLY in `t_sub` (`<embedded>` remains enabled).
+    call(
+        &api,
+        "tcl_eval",
+        json!({"command": "task -create t_sub -copy_asserts -copy_covers; assert -disable -task t_sub a_count_max"}),
+    );
+    call(
+        &api,
+        "prove",
+        json!({"task": "t_sub", "properties": ["a_full_empty", "c_full"]}),
+    );
+
+    let spec = json!({
+        "schema": "informal.spec/1",
+        "design": {"top": "fifo", "clocks": ["clk"], "reset": "!rst_n"},
+        "boundary": {
+            "allowed_assume_inputs": ["push", "pop", "din"],
+            "forbidden_assume_signals": ["full", "empty", "dout", "status", "count", "wp", "rp", "mem", "u_wp.*", "u_rp.*"]
+        },
+        "requirements": [
+            {"id": "REQ-DISABLED", "title": "Disabled in task", "assertions": ["a_count_max"], "covers": ["c_full"]},
+            {"id": "REQ-ENABLED", "title": "Enabled in task", "assertions": ["a_full_empty"], "covers": ["c_full"]}
+        ],
+        "signoff": {"proof_target": "proven"}
+    });
+
+    let audit = call(&api, "spec_audit", json!({"task": "t_sub", "spec": spec}));
+    assert_eq!(audit["task"], "t_sub");
+    assert_eq!(audit["signoff_ready"], false);
+    assert_eq!(audit["summary"]["missing_assert"], 1);
+    assert_eq!(audit["summary"]["verified"], 1);
+    assert_eq!(audit["requirements"][0]["status"], "missing_assert");
+    assert_eq!(audit["requirements"][1]["status"], "verified");
+    assert!(audit["requirements"][0]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s
+            .as_str()
+            .unwrap()
+            .contains("assertion `t_sub::a_count_max` exists but is disabled")));
+}
+
+#[test]
+fn mcp_xprop_and_spv_cex_emit_traces_and_why_cex_slices() {
+    let engines = informal_bmc::engines();
+    if engines.is_empty() {
+        informal_engine::tool_missing("the in-house engines need CaDiCaL");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("informal-mcp-xprop-spv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let sv = dir.join("dut.sv");
+    std::fs::write(
+        &sv,
+        "\
+module dut(
+    input logic clk,
+    input logic rst_n,
+    input logic load_en,
+    input logic [7:0] pub_data,
+    input logic [7:0] secret_key,
+    output logic [7:0] clean_out,
+    output logic [7:0] leaky_out,
+    output logic [7:0] pub_o,
+    output logic [7:0] leak_o
+);
+    logic [7:0] uninit_q;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            clean_out <= 8'd0;
+            pub_o <= 8'd0;
+            leak_o <= 8'd0;
+        end else begin
+            clean_out <= pub_data;
+            pub_o <= pub_data;
+            leak_o <= secret_key;
+        end
+    end
+    always_ff @(posedge clk) begin
+        if (load_en)
+            uninit_q <= pub_data;
+    end
+    assign leaky_out = uninit_q;
+endmodule
+",
+    )
+    .unwrap();
+
+    let work = dir.join("work");
+    let opts = Options {
+        mode: Mode::Auto,
+        root: dir.clone(),
+        workdir: work.clone(),
+        max_time: Duration::from_secs(60),
+    };
+    let api = Arc::new(Api::spawn(engines, work, opts));
+
+    call(
+        &api,
+        "session_open",
+        json!({
+            "files": [sv.display().to_string()],
+            "top": "dut",
+            "clock": "clk",
+            "reset": "!rst_n"
+        }),
+    );
+
+    // 1. check_xprop: clean_out is proven without trace, leaky_out emits trace + why_cex.
+    call(
+        &api,
+        "check_xprop",
+        json!({"action": "init", "targets": ["outputs"]}),
+    );
+    let xp_done = call(&api, "check_xprop", json!({"action": "prove"}));
+    let xp_items = xp_done["items"].as_array().unwrap();
+    let xp_clean = xp_items
+        .iter()
+        .find(|i| i["name"] == "dut.clean_out")
+        .unwrap();
+    assert_eq!(xp_clean["status"], "proven");
+    assert!(xp_clean.get("trace").is_none());
+
+    let xp_clean_err = api
+        .call("why_cex", &json!({"name": "dut.clean_out"}))
+        .unwrap_err();
+    assert_eq!(xp_clean_err.code, "no_trace");
+
+    let xp_leaky = xp_items
+        .iter()
+        .find(|i| i["name"] == "dut.leaky_out")
+        .unwrap();
+    assert_eq!(xp_leaky["status"], "cex");
+    let xp_trace = xp_leaky["trace"].as_str().expect("xprop trace path");
+    assert!(Path::new(xp_trace).is_file());
+    assert!(Path::new(xp_trace).with_extension("trace.btor2").is_file());
+    let xp_vcd_text = std::fs::read_to_string(xp_trace).unwrap();
+    informal_mcp::vcd::parse(&xp_vcd_text).expect("xprop VCD must parse");
+
+    let xp_why = call(&api, "why_cex", json!({"name": "dut.leaky_out"}));
+    assert_eq!(xp_why["schema"], "informal.why_cex/1");
+    assert_eq!(xp_why["status"], "cex");
+    assert!(!xp_why["events"].as_array().unwrap().is_empty());
+
+    // 2. check_spv: iso_pub is proven without trace, leak_sec emits trace + why_cex.
+    call(
+        &api,
+        "check_spv",
+        json!({
+            "action": "create",
+            "name": "iso_pub",
+            "from": ["secret_key"],
+            "to": ["pub_o"]
+        }),
+    );
+    call(
+        &api,
+        "check_spv",
+        json!({
+            "action": "create",
+            "name": "leak_sec",
+            "from": ["secret_key"],
+            "to": ["leak_o"]
+        }),
+    );
+    let spv_done = call(&api, "check_spv", json!({"action": "prove"}));
+    let spv_rules = spv_done["rules"].as_array().unwrap();
+    let spv_clean = spv_rules.iter().find(|r| r["name"] == "iso_pub").unwrap();
+    assert_eq!(spv_clean["status"], "proven");
+    assert!(spv_clean.get("trace").is_none());
+
+    let spv_clean_err = api
+        .call("why_cex", &json!({"name": "iso_pub"}))
+        .unwrap_err();
+    assert_eq!(spv_clean_err.code, "no_trace");
+
+    let spv_leak = spv_rules.iter().find(|r| r["name"] == "leak_sec").unwrap();
+    assert_eq!(spv_leak["status"], "cex");
+    let spv_trace = spv_leak["trace"].as_str().expect("spv trace path");
+    assert!(Path::new(spv_trace).is_file());
+    assert!(Path::new(spv_trace).with_extension("trace.btor2").is_file());
+    let spv_vcd_text = std::fs::read_to_string(spv_trace).unwrap();
+    informal_mcp::vcd::parse(&spv_vcd_text).expect("spv VCD must parse");
+
+    let spv_why = call(&api, "why_cex", json!({"name": "leak_sec"}));
+    assert_eq!(spv_why["schema"], "informal.why_cex/1");
+    assert_eq!(spv_why["status"], "cex");
+    assert!(!spv_why["events"].as_array().unwrap().is_empty());
+
+    // 3. SVA properties inside formal tasks literally named `xprop` / `spv` / `sec` must resolve
+    //    via `why_cex` (falling back to `s.props` when no X-prop/SPV/SEC item matches).
+    call(
+        &api,
+        "tcl_eval",
+        json!({
+            "command": concat!(
+                "task -create xprop; ",
+                "assert -name xprop_task_prop -task xprop {pub_o == 8'h00}; ",
+                "assert -name xprop_task_clean -task xprop {clean_out == clean_out}; ",
+                "task -create spv; ",
+                "assert -name spv_task_prop -task spv {pub_o == 8'h00}; ",
+                "prove -task xprop -all; ",
+                "prove -task spv -all"
+            )
+        }),
+    );
+
+    let xp_task_why = call(&api, "why_cex", json!({"name": "xprop::xprop_task_prop"}));
+    assert_eq!(xp_task_why["schema"], "informal.why_cex/1");
+    assert_eq!(xp_task_why["property"], "xprop::xprop_task_prop");
+    assert_eq!(xp_task_why["status"], "cex");
+    assert!(!xp_task_why["events"].as_array().unwrap().is_empty());
+
+    let spv_task_why = call(&api, "why_cex", json!({"name": "spv::spv_task_prop"}));
+    assert_eq!(spv_task_why["schema"], "informal.why_cex/1");
+    assert_eq!(spv_task_why["property"], "spv::spv_task_prop");
+    assert_eq!(spv_task_why["status"], "cex");
+    assert!(!spv_task_why["events"].as_array().unwrap().is_empty());
+
+    let xp_task_clean_err = api
+        .call("why_cex", &json!({"name": "xprop::xprop_task_clean"}))
+        .unwrap_err();
+    assert_eq!(xp_task_clean_err.code, "no_trace");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

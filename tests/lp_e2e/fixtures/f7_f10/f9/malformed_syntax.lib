@@ -1,0 +1,19 @@
+library (malformed_lp_lib) {
+    delay_model : table_lookup;
+    nom_process : 1.0;
+    nom_temperature : 25.0;
+    nom_voltage : 0.90;
+    voltage_map (VDD, 0.90);
+    voltage_map (VSS, 0.00);
+    cell (BUF_OK) {
+        pg_pin (VDD) { pg_type : primary_power; voltage_name : VDD; }
+        pg_pin (VSS) { pg_type : primary_ground; voltage_name : VSS; }
+        pin (A) { direction : input; related_power_pin : "VDD"; }
+        pin (Y) { direction : output; function : "A"; related_power_pin : "VDD"; }
+    }
+    cell (BROKEN_X1 {
+        pg_pin (VDD) {
+            pg_type : primary_power;
+        }
+    }
+}

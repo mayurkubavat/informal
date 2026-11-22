@@ -272,7 +272,7 @@ Server-hosted playbooks dynamically hydrated with the active session's top modul
 
 ### `why_cex`
 
-**Root-cause slice of a counterexample trace** — Dynamic backward slice from a falsified assertion (`cex`) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.
+**Root-cause slice of a counterexample trace** — Dynamic backward slice from a falsified assertion (`cex`, including `check_sec`, `check_xprop`, and `check_spv` counterexamples) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.
 
 - **Availability:** All modes (`read-only`, `propose`, `auto`)
 - **Mutates session:** no
@@ -281,7 +281,7 @@ Server-hosted playbooks dynamically hydrated with the active session's top modul
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `max_events` | integer | no | Maximum causal events to return (default 64) |
-| `name` | string | yes | Property name |
+| `name` | string | yes | Property, SEC check, X-prop item, or SPV rule name |
 
 ### `cex_diagnose`
 

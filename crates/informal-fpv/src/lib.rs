@@ -9,6 +9,7 @@ pub mod complexity;
 pub mod conn;
 pub mod cov;
 pub mod csr;
+pub mod lp;
 pub mod miter;
 pub mod progress;
 pub mod proof_core;

@@ -1,0 +1,44 @@
+set_cpf_version 2.0
+set_hierarchy_separator /
+set_design mig_soc
+
+create_power_nets  -nets VDD_AON    -voltage 0.90
+create_power_nets  -nets VDD_HIGH   -voltage 1.10
+create_power_nets  -nets VDD_CPU_SW -internal -voltage 0.90
+create_power_nets  -nets VDD_DSP_SW -internal -voltage 0.90
+create_ground_nets -nets VSS
+
+create_power_domain -name PD_TOP -default
+create_power_domain -name PD_CPU -instances {u_cpu} -shutoff_condition {!pwr_cpu}
+create_power_domain -name PD_DSP -instances {u_dsp} -shutoff_condition {!pwr_dsp}
+create_power_domain -name PD_MEM -instances {u_mem}
+
+create_nominal_condition -name NC_AON  -voltage 0.90
+create_nominal_condition -name NC_HIGH -voltage 1.10
+create_nominal_condition -name NC_ON   -voltage 0.90
+create_nominal_condition -name NC_OFF  -voltage 0.00 -state off
+
+create_power_mode -name ALL_ON   -domain_conditions {PD_TOP@NC_AON PD_CPU@NC_ON  PD_DSP@NC_ON  PD_MEM@NC_HIGH} -default
+create_power_mode -name CPU_SLP  -domain_conditions {PD_TOP@NC_AON PD_CPU@NC_OFF PD_DSP@NC_ON  PD_MEM@NC_HIGH}
+create_power_mode -name DSP_SLP  -domain_conditions {PD_TOP@NC_AON PD_CPU@NC_ON  PD_DSP@NC_OFF PD_MEM@NC_HIGH}
+create_power_mode -name BOTH_SLP -domain_conditions {PD_TOP@NC_AON PD_CPU@NC_OFF PD_DSP@NC_OFF PD_MEM@NC_HIGH}
+
+update_power_domain -name PD_TOP -primary_power_net VDD_AON    -primary_ground_net VSS
+update_power_domain -name PD_CPU -primary_power_net VDD_CPU_SW -primary_ground_net VSS
+update_power_domain -name PD_DSP -primary_power_net VDD_DSP_SW -primary_ground_net VSS
+update_power_domain -name PD_MEM -primary_power_net VDD_HIGH   -primary_ground_net VSS
+
+create_power_switch_rule -name PSW_CPU -domain PD_CPU -external_power_net VDD_AON
+create_power_switch_rule -name PSW_DSP -domain PD_DSP -external_power_net VDD_AON
+
+create_isolation_rule -name iso_cpu -from PD_CPU -isolation_condition {iso_cpu} -isolation_output low -isolation_target from
+create_isolation_rule -name iso_dsp -from PD_DSP -isolation_condition {iso_dsp} -isolation_output low -isolation_target from
+
+create_state_retention_rule -name ret_cpu -domain PD_CPU -instances {u_cpu/q_cpu} \
+    -save_edge {ret_save} -restore_edge {ret_restore} -secondary_power_net VDD_AON
+
+create_level_shifter_rule -name ls_dsp_to_mem -from PD_DSP -to PD_MEM
+create_level_shifter_rule -name ls_top_to_mem -from PD_TOP -to PD_MEM
+create_level_shifter_rule -name ls_mem_to_top -from PD_MEM -to PD_TOP
+
+end_design

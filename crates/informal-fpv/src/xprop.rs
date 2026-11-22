@@ -11,7 +11,8 @@
 //! `proven` certifies zero X-leakage across all reachable post-reset cycles.
 
 use crate::miter::{
-    build_miter_btor2, collect_xprop_sinks, parse_full_model, resolve_signal, MiterSpec,
+    build_miter_btor2, collect_xprop_sinks, parse_full_model, replay_miter_cex, resolve_signal,
+    MiterSpec,
 };
 use crate::session::{glob, Session};
 use informal_engine::{portfolio, CheckRequest, ModelFormat, Verdict};
@@ -61,6 +62,8 @@ pub struct XpropItem {
     pub status: XpropStatus,
     pub engine: Option<String>,
     pub ms: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -217,24 +220,29 @@ pub fn prove(
                 status: XpropStatus::Waived,
                 engine: None,
                 ms: 0,
+                trace: None,
             });
             continue;
         }
         let spec = MiterSpec {
             diverging_inputs: diverging_inputs.clone(),
             diverging_nodes: diverging_nodes.clone(),
+            conditional_diverging_nodes: Vec::new(),
+            conditional_state_corruptions: Vec::new(),
             uninit_states_diverge: true,
             tied_uninit_states: tied_uninit_states.clone(),
             skip_steps,
             guard_ref: None,
             target: (nref, w, format!("xprop_{name}")),
+            emit_trace_outputs: true,
         };
         let miter_btor = build_miter_btor2(&m, &spec)?;
+        let (engine_btor, _) = informal_svlang::split_trace(&miter_btor);
         let seq = XPROP_SEQ.fetch_add(1, Ordering::Relaxed);
         let path = s
             .workdir
             .join(format!("xprop_{}_{seq}.btor2", std::process::id()));
-        std::fs::write(&path, &miter_btor).map_err(|e| format!("check_xprop: {e}"))?;
+        std::fs::write(&path, engine_btor).map_err(|e| format!("check_xprop: {e}"))?;
         let req = CheckRequest {
             model: path.clone(),
             format: ModelFormat::Btor2,
@@ -245,10 +253,26 @@ pub fn prove(
         let run = portfolio::run_until(&engines, &req, None, Some(s.stop.as_ref()));
         let _ = std::fs::remove_file(&path);
         let eng = run.winner.as_ref().map(|w| w.engine.clone());
-        let status = match portfolio::verdict(&run) {
-            Verdict::Safe => XpropStatus::Proven,
-            Verdict::Unsafe { depth } => XpropStatus::Cex { depth },
-            Verdict::Unknown { .. } => XpropStatus::Undetermined,
+        let (status, trace) = match portfolio::verdict(&run) {
+            Verdict::Safe => (XpropStatus::Proven, None),
+            Verdict::Unsafe { mut depth } => {
+                let witness = run.winner.as_ref().and_then(|w| w.witness.as_deref());
+                let tag = format!("xprop_{name}");
+                match replay_miter_cex(s, &tag, &miter_btor, witness, depth) {
+                    Ok((vcd_path, d)) => {
+                        depth.get_or_insert(d as u32);
+                        (XpropStatus::Cex { depth }, Some(vcd_path))
+                    }
+                    Err(Some(why)) => {
+                        s.log(&format!(
+                            "check_xprop {name}: counterexample did not replay ({why}); marked undetermined"
+                        ));
+                        (XpropStatus::Undetermined, None)
+                    }
+                    Err(None) => (XpropStatus::Cex { depth }, None),
+                }
+            }
+            Verdict::Unknown { .. } => (XpropStatus::Undetermined, None),
         };
         items.push(XpropItem {
             name,
@@ -256,6 +280,7 @@ pub fn prove(
             status,
             engine: eng,
             ms: run.wall_ms,
+            trace,
         });
     }
 
@@ -275,11 +300,18 @@ pub fn format_report(state: &XpropState) -> String {
     for it in &state.items {
         let detail = match it.status {
             XpropStatus::Proven => format!("{:.2} s (X-clean)", it.ms as f64 / 1000.0),
-            XpropStatus::Cex { depth } => format!(
-                "X-leakage at depth {} in {:.2} s",
-                depth.map_or("?".into(), |d| d.to_string()),
-                it.ms as f64 / 1000.0
-            ),
+            XpropStatus::Cex { depth } => {
+                let tr = it
+                    .trace
+                    .as_deref()
+                    .map(|p| format!(" [trace: {p}]"))
+                    .unwrap_or_default();
+                format!(
+                    "X-leakage at depth {} in {:.2} s{tr}",
+                    depth.map_or("?".into(), |d| d.to_string()),
+                    it.ms as f64 / 1000.0
+                )
+            }
             XpropStatus::Waived => "waived".into(),
             _ => String::new(),
         };

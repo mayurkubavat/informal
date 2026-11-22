@@ -1,0 +1,15 @@
+[package]
+name = "informal-upf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "IEEE 1801 UPF and Cadence CPF front end, resolver, symbolic PST SAT solver, and UPF equivalence checker"
+
+[dependencies]
+informal-tcl.workspace = true
+informal-sat.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+regex.workspace = true

@@ -18,7 +18,7 @@ Complete reference for all commands available in `informal shell`, generated dir
 - **Properties, Cut Points, and Tasks** (12 commands)
 - **Proving, Engines, and Reporting** (22 commands)
 - **Debugging, Complexity, and Abstraction** (12 commands)
-- **Formal Apps** (7 commands)
+- **Formal Apps** (14 commands)
 - **Environment, Vacuity, Lowering, and Proof Cache** (6 commands)
 - **Shell Utilities** (5 commands)
 
@@ -1467,6 +1467,187 @@ check_protocol (-create | -prove | -report | -list | -clear) [options]
 ```tcl
 check_protocol -create -protocol apb -role slave -prove
 check_protocol -report
+```
+
+### `load_upf` (`common`)
+
+Load an IEEE 1801 UPF (or CPF) power intent specification into the session
+
+```tcl
+load_upf <file> [-scope <inst>] [-version <v>] [-cpf] [-format upf|cpf]
+```
+
+| Option | Description |
+| --- | --- |
+| `-scope <inst>` | Scope instance path for hierarchical UPF loading |
+| `-version <v>` | UPF/CPF version (`1.0`, `2.0`, `2.1`, `3.0`, `3.1`, `4.0`, `cpf1.1`, `cpf2.0`) |
+| `-cpf` | Parse the input file as CPF |
+| `-format <upf\|cpf>` | Explicitly select `upf` or `cpf` input format |
+
+**Accepted & ignored vendor options:** `-silent`
+
+**Cross-flavor equivalent:** `read_upf`
+
+**Notes:** Resolves against the elaborated RTL design when present, or in standalone Stage 1 mode before `elaborate`.
+
+```tcl
+load_upf soc.upf -version 2.1
+```
+
+### `read_liberty` (`common`)
+
+Register Liberty (`.lib`) files for low-power cell and PG-pin analysis
+
+```tcl
+read_liberty <file...> [-lib <file>]
+```
+
+| Option | Description |
+| --- | --- |
+| `-lib <file>` | Additional Liberty `.lib` file path |
+
+**Accepted & ignored vendor options:** `-silent`
+
+**Notes:** Records `.lib` paths on the session; full streaming `.lib` parsing arrives in Stage 3–4.
+
+```tcl
+read_liberty stdcells.lib
+```
+
+### `check_lp` (`common`)
+
+Run static power-intent/structural verification (Stages 1–2) and formal low-power checks
+
+```tcl
+check_lp [-stage upf|rtl|design|netlist|pg|formal|all] [-prove_corruption] [-prove_waivers] [-sec] [-lec] [-timeout <dur>] [-tol_mv <mV>] [-clear] [-json] [-report] [-file <F> [-force]]
+```
+
+| Option | Description |
+| --- | --- |
+| `-stage <st>` | Stage to run: `upf`, `rtl`/`design`, `netlist`, `pg`, `formal`, or `all` (default) |
+| `-prove_corruption` | Enable 2-copy formal corruption checking (WS4) |
+| `-prove_waivers` | Automatically prove and certify static crossing waivers (WS4) |
+| `-sec` | Enable power-aware sequential equivalence check (WS4) |
+| `-lec` | Enable RTL+UPF vs Netlist+UPF power-aware equivalence check (WS5) |
+| `-timeout / -time_limit <dur>` | Per-check timeout (e.g. `30s`, `5m`) |
+| `-tol_mv <mV>` | Voltage comparison tolerance in millivolts (default `1.0`) |
+| `-clear` | Clear accumulated LP check results |
+| `-json` | Return structured JSON report |
+| `-report` | Print summary report |
+| `-file <F>` | Write output to file (`-force` overwrites) |
+
+**Accepted & ignored vendor options:** `-bg`, `-silent`
+
+**Cross-flavor equivalent:** Common: `check_lpv`
+
+**Notes:** Stage 1 checks IEEE 1801 UPF / CPF & symbolic PST SAT consistency; Stage 2 checks RTL crossings using `StructuralGraph` and bus-level `CrossingGroup`s.
+
+```tcl
+check_lp -stage rtl
+```
+
+### `report_lp` (`common`)
+
+Print or export low-power verification violations and summary statistics
+
+```tcl
+report_lp [-summary] [-verbose] [-rule <glob>] [-status open|waived|formally_waived|cex] [-stage <st>] [-json] [-file <F> [-force]]
+```
+
+| Option | Description |
+| --- | --- |
+| `-summary` | Print per-rule summary counts (default) |
+| `-verbose` | Print detailed per-violation locations, crossings, and PST witnesses |
+| `-rule <glob>` | Filter violations by rule ID glob |
+| `-status <st>` | Filter by status: `open`, `waived`, `formally_waived`, or `cex` |
+| `-stage <st>` | Filter by stage (`upf`, `rtl`, `netlist`, `pg`, `formal`) |
+| `-json` | Emit structured JSON report (`informal.lp/1`) |
+| `-file <F>` | Write report to file (`-force` overwrites) |
+
+**Accepted & ignored vendor options:** `-silent`
+
+```tcl
+report_lp -verbose -status open
+```
+
+### `set_lp_waiver` (`common`)
+
+Add, list, remove, or clear manual low-power rule waivers
+
+```tcl
+set_lp_waiver -add -rule <glob> [-signal <glob>] [-src_domain <d>] [-dst_domain <d>] [-comment <txt>] | set_lp_waiver -list | set_lp_waiver -remove <id> | set_lp_waiver -clear
+```
+
+| Option | Description |
+| --- | --- |
+| `-add` | Add a new waiver and return its integer ID |
+| `-list` | Return active waivers as a Tcl list |
+| `-remove <id>` | Remove waiver by ID and reopen newly unmatched violations |
+| `-clear` | Remove all manual waivers |
+| `-rule <glob>` | Rule ID glob pattern (required with `-add`) |
+| `-signal <glob>` | Optional signal path glob filter |
+| `-src_domain <glob>` | Optional source power domain filter |
+| `-dst_domain <glob>` | Optional destination power domain filter |
+| `-comment <txt>` | Optional waiver rationale |
+
+**Cross-flavor equivalent:** `waive_lp`
+
+```tcl
+set_lp_waiver -add -rule ISO_MISSING -signal *m_data*
+```
+
+### `compare_upf` (`common`)
+
+Check symbolic domain, PST, and strategy equivalence between two UPF/CPF files
+
+```tcl
+compare_upf -golden <file> -revised <file> [-golden_cpf] [-revised_cpf] [-scope <inst>] [-tol_uv <uV>] [-tol_mv <mV>] [-json]
+```
+
+| Option | Description |
+| --- | --- |
+| `-golden <file>` | Golden UPF or CPF file |
+| `-revised <file>` | Revised UPF or CPF file |
+| `-golden_cpf` | Parse golden file as CPF |
+| `-revised_cpf` | Parse revised file as CPF |
+| `-scope <inst>` | Scope instance path |
+| `-tol_uv <uV>` | Voltage tolerance in microvolts |
+| `-tol_mv <mV>` | Voltage tolerance in millivolts |
+| `-json` | Emit structured JSON comparison report |
+
+**Accepted & ignored vendor options:** `-silent`
+
+**Notes:** Returns non-zero error on mismatch unless `-json` is specified.
+
+```tcl
+compare_upf -golden golden.upf -revised revised.upf
+```
+
+### `check_lpv` (`common`)
+
+Run low-power verification (concise alias for `check_lp -stage formal`)
+
+```tcl
+check_lpv [-stage upf|rtl|design|netlist|pg|formal|all] [-prove_corruption] [-prove_waivers] [-sec] [-lec] [-timeout <dur>] [-json] [-report] [-file <F> [-force]]
+```
+
+| Option | Description |
+| --- | --- |
+| `-stage <st>` | Stage to run (defaults to `formal`) |
+| `-aag / -prove` | Enable automatic LP assertion generation and proving |
+| `-timeout / -time_limit <dur>` | Per-check timeout |
+| `-json` | Return structured JSON report |
+| `-report` | Print summary report |
+| `-file <F>` | Write output to file (`-force` overwrites) |
+
+**Accepted & ignored vendor options:** `-bg`, `-silent`
+
+**Cross-flavor equivalent:** Common: `check_lp -stage formal`
+
+**Notes:** Alias for `check_lp` defaulting to `-stage formal`.
+
+```tcl
+check_lpv -stage formal
 ```
 
 ## Environment, Vacuity, Lowering, and Proof Cache

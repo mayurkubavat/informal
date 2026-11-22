@@ -17,6 +17,7 @@ informal-aig.workspace = true
 informal-bmc.workspace = true
 informal-tcl.workspace = true
 informal-svlang.workspace = true
+informal-upf.workspace = true
 libc = "0.2"
 
 [dev-dependencies]

@@ -25,6 +25,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -97,6 +98,10 @@ pub struct SecState {
     pub setup: Option<SecSetup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<SecCheck>,
+    #[serde(skip)]
+    pub spec_compiled: Option<Arc<informal_svlang::CompiledDesign>>,
+    #[serde(skip)]
+    pub imp_compiled: Option<Arc<informal_svlang::CompiledDesign>>,
 }
 
 impl SecState {
@@ -173,6 +178,8 @@ pub fn setup_sec(s: &mut Session, mut setup: SecSetup) -> Result<(String, String
         let it = setup.imp_top.clone().unwrap_or_else(|| "imp".into());
         s.sec.setup = Some(setup);
         s.sec.checks.clear();
+        s.sec.spec_compiled = None;
+        s.sec.imp_compiled = None;
         return Ok((st, it));
     }
     if setup.spec_files.is_empty() || setup.imp_files.is_empty() {
@@ -189,7 +196,9 @@ pub fn setup_sec(s: &mut Session, mut setup: SecSetup) -> Result<(String, String
         isunknown_is_false: s.design.isunknown_is_false,
         ..Default::default()
     };
-    let d_spec = informal_svlang::compile(&req_spec);
+    let spec_cd = informal_svlang::compile_cached(s.sec.spec_compiled.as_ref(), &req_spec)
+        .map_err(|e| format!("check_sec (spec compile errors):\nerror: {e}"))?;
+    let d_spec = informal_svlang::design_from_compiled(&spec_cd, &req_spec);
     let spec_errs: Vec<String> = d_spec.errors().take(10).map(|e| e.to_string()).collect();
     if !spec_errs.is_empty() {
         return Err(format!(
@@ -218,7 +227,9 @@ pub fn setup_sec(s: &mut Session, mut setup: SecSetup) -> Result<(String, String
         isunknown_is_false: s.design.isunknown_is_false,
         ..Default::default()
     };
-    let d_imp = informal_svlang::compile(&req_imp);
+    let imp_cd = informal_svlang::compile_cached(s.sec.imp_compiled.as_ref(), &req_imp)
+        .map_err(|e| format!("check_sec (imp compile errors):\nerror: {e}"))?;
+    let d_imp = informal_svlang::design_from_compiled(&imp_cd, &req_imp);
     let imp_errs: Vec<String> = d_imp.errors().take(10).map(|e| e.to_string()).collect();
     if !imp_errs.is_empty() {
         return Err(format!(
@@ -239,6 +250,8 @@ pub fn setup_sec(s: &mut Session, mut setup: SecSetup) -> Result<(String, String
 
     let st = setup.spec_top.clone().unwrap_or_default();
     let it = setup.imp_top.clone().unwrap_or_default();
+    s.sec.spec_compiled = Some(spec_cd);
+    s.sec.imp_compiled = Some(imp_cd);
     s.sec.setup = Some(setup);
     s.sec.checks.clear();
     Ok((st, it))
@@ -797,14 +810,17 @@ pub fn prove_sec(
         isunknown_is_false: s.design.isunknown_is_false,
         ..Default::default()
     };
-    let d_spec = informal_svlang::compile(&base_spec);
-    let l_spec = informal_svlang::lower(&base_spec);
+    let spec_cd = informal_svlang::compile_cached(s.sec.spec_compiled.as_ref(), &base_spec)
+        .map_err(|e| format!("check_sec (spec lower failed): {e}"))?;
+    let l_spec = informal_svlang::lower_from_compiled(&spec_cd, &base_spec);
     if !l_spec.ok {
         return Err(format!(
             "check_sec (spec lower failed): {}",
             l_spec.errors.join("; ")
         ));
     }
+    s.sec.spec_compiled = Some(Arc::clone(&spec_cd));
+    let d_spec = informal_svlang::design_from_compiled(&spec_cd, &base_spec);
 
     let base_imp = informal_svlang::Request {
         files: setup.imp_files.clone(),
@@ -819,14 +835,17 @@ pub fn prove_sec(
         isunknown_is_false: s.design.isunknown_is_false,
         ..Default::default()
     };
-    let d_imp = informal_svlang::compile(&base_imp);
-    let l_imp = informal_svlang::lower(&base_imp);
+    let imp_cd = informal_svlang::compile_cached(s.sec.imp_compiled.as_ref(), &base_imp)
+        .map_err(|e| format!("check_sec (imp lower failed): {e}"))?;
+    let l_imp = informal_svlang::lower_from_compiled(&imp_cd, &base_imp);
     if !l_imp.ok {
         return Err(format!(
             "check_sec (imp lower failed): {}",
             l_imp.errors.join("; ")
         ));
     }
+    s.sec.imp_compiled = Some(Arc::clone(&imp_cd));
+    let d_imp = informal_svlang::design_from_compiled(&imp_cd, &base_imp);
 
     let m_spec = parse_full_model(&l_spec.btor2)?;
     let m_imp = parse_full_model(&l_imp.btor2)?;

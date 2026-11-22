@@ -321,7 +321,7 @@
     },
     {
       "changes": false,
-      "description": "Dynamic backward slice from a falsified assertion (`cex`) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.",
+      "description": "Dynamic backward slice from a falsified assertion (`cex`, including `check_sec`, `check_xprop`, and `check_spv` counterexamples) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.",
       "gui_only": false,
       "name": "why_cex",
       "reply_schema": "informal.why_cex/1",
@@ -1398,6 +1398,295 @@
       ],
       "summary": "Clear or disable active formal abstractions",
       "usage": "set_abstractions (-clear | -off)"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "`read_upf`",
+      "example": "load_upf soc.upf -version 2.1",
+      "flavor": "common",
+      "ignored_options": [
+        "-silent"
+      ],
+      "name": "load_upf",
+      "notes": "Resolves against the elaborated RTL design when present, or in standalone Stage 1 mode before `elaborate`.",
+      "options": [
+        {
+          "desc": "Scope instance path for hierarchical UPF loading",
+          "flag": "-scope <inst>"
+        },
+        {
+          "desc": "UPF/CPF version (`1.0`, `2.0`, `2.1`, `3.0`, `3.1`, `4.0`, `cpf1.1`, `cpf2.0`)",
+          "flag": "-version <v>"
+        },
+        {
+          "desc": "Parse the input file as CPF",
+          "flag": "-cpf"
+        },
+        {
+          "desc": "Explicitly select `upf` or `cpf` input format",
+          "flag": "-format <upf|cpf>"
+        }
+      ],
+      "summary": "Load an IEEE 1801 UPF (or CPF) power intent specification into the session",
+      "usage": "load_upf <file> [-scope <inst>] [-version <v>] [-cpf] [-format upf|cpf]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": null,
+      "example": "read_liberty stdcells.lib",
+      "flavor": "common",
+      "ignored_options": [
+        "-silent"
+      ],
+      "name": "read_liberty",
+      "notes": "Records `.lib` paths on the session; full streaming `.lib` parsing arrives in Stage 3–4.",
+      "options": [
+        {
+          "desc": "Additional Liberty `.lib` file path",
+          "flag": "-lib <file>"
+        }
+      ],
+      "summary": "Register Liberty (`.lib`) files for low-power cell and PG-pin analysis",
+      "usage": "read_liberty <file...> [-lib <file>]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "Common: `check_lpv`",
+      "example": "check_lp -stage rtl",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent"
+      ],
+      "name": "check_lp",
+      "notes": "Stage 1 checks IEEE 1801 UPF / CPF & symbolic PST SAT consistency; Stage 2 checks RTL crossings using `StructuralGraph` and bus-level `CrossingGroup`s.",
+      "options": [
+        {
+          "desc": "Stage to run: `upf`, `rtl`/`design`, `netlist`, `pg`, `formal`, or `all` (default)",
+          "flag": "-stage <st>"
+        },
+        {
+          "desc": "Enable 2-copy formal corruption checking (WS4)",
+          "flag": "-prove_corruption"
+        },
+        {
+          "desc": "Automatically prove and certify static crossing waivers (WS4)",
+          "flag": "-prove_waivers"
+        },
+        {
+          "desc": "Enable power-aware sequential equivalence check (WS4)",
+          "flag": "-sec"
+        },
+        {
+          "desc": "Enable RTL+UPF vs Netlist+UPF power-aware equivalence check (WS5)",
+          "flag": "-lec"
+        },
+        {
+          "desc": "Per-check timeout (e.g. `30s`, `5m`)",
+          "flag": "-timeout / -time_limit <dur>"
+        },
+        {
+          "desc": "Voltage comparison tolerance in millivolts (default `1.0`)",
+          "flag": "-tol_mv <mV>"
+        },
+        {
+          "desc": "Clear accumulated LP check results",
+          "flag": "-clear"
+        },
+        {
+          "desc": "Return structured JSON report",
+          "flag": "-json"
+        },
+        {
+          "desc": "Print summary report",
+          "flag": "-report"
+        },
+        {
+          "desc": "Write output to file (`-force` overwrites)",
+          "flag": "-file <F>"
+        }
+      ],
+      "summary": "Run static power-intent/structural verification (Stages 1–2) and formal low-power checks",
+      "usage": "check_lp [-stage upf|rtl|design|netlist|pg|formal|all] [-prove_corruption] [-prove_waivers] [-sec] [-lec] [-timeout <dur>] [-tol_mv <mV>] [-clear] [-json] [-report] [-file <F> [-force]]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": null,
+      "example": "report_lp -verbose -status open",
+      "flavor": "common",
+      "ignored_options": [
+        "-silent"
+      ],
+      "name": "report_lp",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Print per-rule summary counts (default)",
+          "flag": "-summary"
+        },
+        {
+          "desc": "Print detailed per-violation locations, crossings, and PST witnesses",
+          "flag": "-verbose"
+        },
+        {
+          "desc": "Filter violations by rule ID glob",
+          "flag": "-rule <glob>"
+        },
+        {
+          "desc": "Filter by status: `open`, `waived`, `formally_waived`, or `cex`",
+          "flag": "-status <st>"
+        },
+        {
+          "desc": "Filter by stage (`upf`, `rtl`, `netlist`, `pg`, `formal`)",
+          "flag": "-stage <st>"
+        },
+        {
+          "desc": "Emit structured JSON report (`informal.lp/1`)",
+          "flag": "-json"
+        },
+        {
+          "desc": "Write report to file (`-force` overwrites)",
+          "flag": "-file <F>"
+        }
+      ],
+      "summary": "Print or export low-power verification violations and summary statistics",
+      "usage": "report_lp [-summary] [-verbose] [-rule <glob>] [-status open|waived|formally_waived|cex] [-stage <st>] [-json] [-file <F> [-force]]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "`waive_lp`",
+      "example": "set_lp_waiver -add -rule ISO_MISSING -signal *m_data*",
+      "flavor": "common",
+      "ignored_options": [],
+      "name": "set_lp_waiver",
+      "notes": "",
+      "options": [
+        {
+          "desc": "Add a new waiver and return its integer ID",
+          "flag": "-add"
+        },
+        {
+          "desc": "Return active waivers as a Tcl list",
+          "flag": "-list"
+        },
+        {
+          "desc": "Remove waiver by ID and reopen newly unmatched violations",
+          "flag": "-remove <id>"
+        },
+        {
+          "desc": "Remove all manual waivers",
+          "flag": "-clear"
+        },
+        {
+          "desc": "Rule ID glob pattern (required with `-add`)",
+          "flag": "-rule <glob>"
+        },
+        {
+          "desc": "Optional signal path glob filter",
+          "flag": "-signal <glob>"
+        },
+        {
+          "desc": "Optional source power domain filter",
+          "flag": "-src_domain <glob>"
+        },
+        {
+          "desc": "Optional destination power domain filter",
+          "flag": "-dst_domain <glob>"
+        },
+        {
+          "desc": "Optional waiver rationale",
+          "flag": "-comment <txt>"
+        }
+      ],
+      "summary": "Add, list, remove, or clear manual low-power rule waivers",
+      "usage": "set_lp_waiver -add -rule <glob> [-signal <glob>] [-src_domain <d>] [-dst_domain <d>] [-comment <txt>] | set_lp_waiver -list | set_lp_waiver -remove <id> | set_lp_waiver -clear"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": null,
+      "example": "compare_upf -golden golden.upf -revised revised.upf",
+      "flavor": "common",
+      "ignored_options": [
+        "-silent"
+      ],
+      "name": "compare_upf",
+      "notes": "Returns non-zero error on mismatch unless `-json` is specified.",
+      "options": [
+        {
+          "desc": "Golden UPF or CPF file",
+          "flag": "-golden <file>"
+        },
+        {
+          "desc": "Revised UPF or CPF file",
+          "flag": "-revised <file>"
+        },
+        {
+          "desc": "Parse golden file as CPF",
+          "flag": "-golden_cpf"
+        },
+        {
+          "desc": "Parse revised file as CPF",
+          "flag": "-revised_cpf"
+        },
+        {
+          "desc": "Scope instance path",
+          "flag": "-scope <inst>"
+        },
+        {
+          "desc": "Voltage tolerance in microvolts",
+          "flag": "-tol_uv <uV>"
+        },
+        {
+          "desc": "Voltage tolerance in millivolts",
+          "flag": "-tol_mv <mV>"
+        },
+        {
+          "desc": "Emit structured JSON comparison report",
+          "flag": "-json"
+        }
+      ],
+      "summary": "Check symbolic domain, PST, and strategy equivalence between two UPF/CPF files",
+      "usage": "compare_upf -golden <file> -revised <file> [-golden_cpf] [-revised_cpf] [-scope <inst>] [-tol_uv <uV>] [-tol_mv <mV>] [-json]"
+    },
+    {
+      "category": "formal_apps",
+      "equivalent": "Common: `check_lp -stage formal`",
+      "example": "check_lpv -stage formal",
+      "flavor": "common",
+      "ignored_options": [
+        "-bg",
+        "-silent"
+      ],
+      "name": "check_lpv",
+      "notes": "Alias for `check_lp` defaulting to `-stage formal`.",
+      "options": [
+        {
+          "desc": "Stage to run (defaults to `formal`)",
+          "flag": "-stage <st>"
+        },
+        {
+          "desc": "Enable automatic LP assertion generation and proving",
+          "flag": "-aag / -prove"
+        },
+        {
+          "desc": "Per-check timeout",
+          "flag": "-timeout / -time_limit <dur>"
+        },
+        {
+          "desc": "Return structured JSON report",
+          "flag": "-json"
+        },
+        {
+          "desc": "Print summary report",
+          "flag": "-report"
+        },
+        {
+          "desc": "Write output to file (`-force` overwrites)",
+          "flag": "-file <F>"
+        }
+      ],
+      "summary": "Run low-power verification (concise alias for `check_lp -stage formal`)",
+      "usage": "check_lpv [-stage upf|rtl|design|netlist|pg|formal|all] [-prove_corruption] [-prove_waivers] [-sec] [-lec] [-timeout <dur>] [-json] [-report] [-file <F> [-force]]"
     },
     {
       "category": "design_setup",

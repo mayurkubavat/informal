@@ -1,0 +1,38 @@
+set_cpf_version 2.0
+set_hierarchy_separator /
+set_design soc_cpf_top
+
+create_power_nets  -nets VDD_AON     -voltage 0.90
+create_power_nets  -nets VDD_BK      -voltage 0.90
+create_power_nets  -nets VDD_HIGH    -voltage 1.10
+create_power_nets  -nets VDD_CORE_SW -internal -voltage 0.90
+create_ground_nets -nets VSS
+
+create_power_domain -name PD_TOP  -default
+create_power_domain -name PD_CORE -instances {u_core} -shutoff_condition {sleep_core}
+create_power_domain -name PD_HIGH -instances {u_high}
+
+create_nominal_condition -name NC_AON  -voltage 0.90
+create_nominal_condition -name NC_CORE -voltage 0.90
+create_nominal_condition -name NC_HIGH -voltage 1.10
+create_nominal_condition -name NC_OFF  -voltage 0.00 -state off
+
+create_power_mode -name PM_ON  -domain_conditions {PD_TOP@NC_AON PD_CORE@NC_CORE PD_HIGH@NC_HIGH} -default
+create_power_mode -name PM_OFF -domain_conditions {PD_TOP@NC_AON PD_CORE@NC_OFF  PD_HIGH@NC_HIGH}
+
+update_power_domain -name PD_TOP  -primary_power_net VDD_AON     -primary_ground_net VSS
+update_power_domain -name PD_CORE -primary_power_net VDD_CORE_SW -primary_ground_net VSS
+update_power_domain -name PD_HIGH -primary_power_net VDD_HIGH    -primary_ground_net VSS
+
+create_power_switch_rule -name PSW_CORE -domain PD_CORE -external_power_net VDD_AON
+
+# Mismatch: requests clamp HIGH (-isolation_output high) while netlist instantiates ISO_LO_X1
+create_isolation_rule -name ISO_CORE -from PD_CORE -pins {u_core/core_sig} \
+    -isolation_condition {iso_en} -isolation_output high -isolation_target to
+
+create_state_retention_rule -name RET_CORE -domain PD_CORE -instances {u_core/u_ret} \
+    -save_edge {ret_save} -restore_edge {ret_restore} -secondary_power_net VDD_BK
+
+create_level_shifter_rule -name LS_CORE -from PD_TOP -to PD_HIGH -pins {u_high/a}
+
+end_design

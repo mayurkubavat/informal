@@ -943,8 +943,8 @@ impl<'g> Ic3<'g> {
         if self.single {
             self.add_frame_clause(level, &clause);
         } else {
-            for i in 1..=level {
-                self.solvers[i].sat.add_clause(&clause);
+            for solver in &mut self.solvers[1..=level] {
+                solver.sat.add_clause(&clause);
             }
         }
         let held = self.level_of.entry(cube.clone()).or_insert(0);

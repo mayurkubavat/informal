@@ -8,7 +8,9 @@
 //! of clock cycles (including covert storage channels through registers/FIFOs);
 //! `cex` witnesses an exact information-leakage path.
 
-use crate::miter::{build_miter_btor2, parse_full_model, resolve_signal, MiterSpec};
+use crate::miter::{
+    build_miter_btor2, parse_full_model, replay_miter_cex, resolve_signal, MiterSpec,
+};
 use crate::session::Session;
 use informal_engine::{portfolio, CheckRequest, ModelFormat, Verdict};
 use informal_ir::Op;
@@ -55,6 +57,8 @@ pub struct SpvRule {
     pub status: SpvStatus,
     pub engine: Option<String>,
     pub ms: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<String>,
 }
 
 pub fn prove_spv(
@@ -88,6 +92,7 @@ pub fn prove_spv(
 
     for idx in indices {
         let rule = s.spv[idx].clone();
+        s.spv[idx].trace = None;
         // If `-cond` is an arbitrary SVA boolean expression (not just a single signal),
         // bind it temporarily as a cover check in `lower` or resolve directly as a signal!
         let guard_helper_name = format!("__spv_cond_{idx}");
@@ -185,11 +190,14 @@ pub fn prove_spv(
         let mut worst_status = SpvStatus::Proven;
         let mut winner_eng: Option<String> = None;
         let mut total_ms = 0u128;
+        let mut trace_path: Option<String> = None;
 
         for sink in sinks {
             let spec = MiterSpec {
                 diverging_inputs: diverging_inputs.clone(),
                 diverging_nodes: diverging_nodes.clone(),
+                conditional_diverging_nodes: Vec::new(),
+                conditional_state_corruptions: Vec::new(),
                 uninit_states_diverge: false,
                 tied_uninit_states: HashSet::new(),
                 skip_steps,
@@ -199,6 +207,7 @@ pub fn prove_spv(
                     sink.width,
                     format!("spv_{}_{}", rule.name, sink.name),
                 ),
+                emit_trace_outputs: true,
             };
             let miter_btor = match build_miter_btor2(&m, &spec) {
                 Ok(b) => b,
@@ -207,11 +216,12 @@ pub fn prove_spv(
                     break;
                 }
             };
+            let (engine_btor, _) = informal_svlang::split_trace(&miter_btor);
             let seq = SPV_SEQ.fetch_add(1, Ordering::Relaxed);
             let path = s
                 .workdir
                 .join(format!("spv_{}_{seq}.btor2", std::process::id()));
-            std::fs::write(&path, &miter_btor).map_err(|e| format!("check_spv: {e}"))?;
+            std::fs::write(&path, engine_btor).map_err(|e| format!("check_spv: {e}"))?;
             let req = CheckRequest {
                 model: path.clone(),
                 format: ModelFormat::Btor2,
@@ -227,8 +237,26 @@ pub fn prove_spv(
             }
             match portfolio::verdict(&run) {
                 Verdict::Safe => {}
-                Verdict::Unsafe { depth } => {
-                    worst_status = SpvStatus::Cex { depth };
+                Verdict::Unsafe { mut depth } => {
+                    let witness = run.winner.as_ref().and_then(|w| w.witness.as_deref());
+                    let tag = format!("spv_{}", rule.name);
+                    match replay_miter_cex(s, &tag, &miter_btor, witness, depth) {
+                        Ok((vcd_path, d)) => {
+                            depth.get_or_insert(d as u32);
+                            trace_path = Some(vcd_path);
+                            worst_status = SpvStatus::Cex { depth };
+                        }
+                        Err(Some(why)) => {
+                            s.log(&format!(
+                                "check_spv {}: counterexample did not replay ({why}); marked undetermined",
+                                rule.name
+                            ));
+                            worst_status = SpvStatus::Undetermined;
+                        }
+                        Err(None) => {
+                            worst_status = SpvStatus::Cex { depth };
+                        }
+                    }
                     break;
                 }
                 Verdict::Unknown { .. } => {
@@ -240,6 +268,7 @@ pub fn prove_spv(
         s.spv[idx].status = worst_status;
         s.spv[idx].engine = winner_eng;
         s.spv[idx].ms = total_ms;
+        s.spv[idx].trace = trace_path;
     }
     Ok(())
 }
@@ -255,11 +284,18 @@ pub fn format_report(rules: &[SpvRule]) -> String {
     for r in rules {
         let detail = match &r.status {
             SpvStatus::Proven => format!("{:.2} s (isolated)", r.ms as f64 / 1000.0),
-            SpvStatus::Cex { depth } => format!(
-                "leak at depth {} in {:.2} s",
-                depth.map_or("?".into(), |d| d.to_string()),
-                r.ms as f64 / 1000.0
-            ),
+            SpvStatus::Cex { depth } => {
+                let tr = r
+                    .trace
+                    .as_deref()
+                    .map(|p| format!(" [trace: {p}]"))
+                    .unwrap_or_default();
+                format!(
+                    "leak at depth {} in {:.2} s{tr}",
+                    depth.map_or("?".into(), |d| d.to_string()),
+                    r.ms as f64 / 1000.0
+                )
+            }
             SpvStatus::Error(e) => e.clone(),
             _ => String::new(),
         };

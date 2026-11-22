@@ -1,0 +1,82 @@
+$comment LP swimlane CEX trace with ON -> ISO -> RET -> OFF -> ON transitions $end
+$timescale 1ns $end
+$scope module top $end
+$var wire 1 ! clk $end
+$var wire 1 " rst_n $end
+$var reg 8 # data_out [7:0] $end
+$upscope $end
+$scope module lp $end
+$scope module pd $end
+$scope module PD_CORE $end
+$var wire 1 $ on $end
+$var wire 1 % iso $end
+$var wire 1 & ret $end
+$var wire 1 ' corrupt $end
+$upscope $end
+$scope module PD_RET $end
+$var wire 1 ( on $end
+$var wire 1 ) iso $end
+$var wire 1 * ret $end
+$var wire 1 + corrupt $end
+$upscope $end
+$upscope $end
+$upscope $end
+$scope module informal $end
+$var wire 1 , a_lp_prop $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+1!
+0"
+b00000000 #
+1$
+0%
+0&
+0'
+1(
+0)
+0*
+0+
+0,
+$end
+#5
+0!
+#10
+1!
+1"
+b00101010 #
+#15
+0!
+#20
+1!
+1%
+#25
+0!
+#30
+1!
+0$
+1&
+1'
+1*
+#35
+0!
+#40
+1!
+0&
+0*
+#45
+0!
+#50
+1!
+1$
+0%
+0'
+#55
+0!
+#60
+1!
+b11111111 #
+1,
+#65
+0!

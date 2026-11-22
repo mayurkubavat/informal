@@ -1,0 +1,7 @@
+upf_version 2.1
+
+create_supply_net VDD_LEAF
+create_supply_net VSS_LEAF
+create_supply_set SS_LEAF -function {power VDD_LEAF} -function {ground VSS_LEAF}
+create_power_domain PD_LEAF -include_scope -supply {primary SS_LEAF}
+add_power_state SS_LEAF -state {ON -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}

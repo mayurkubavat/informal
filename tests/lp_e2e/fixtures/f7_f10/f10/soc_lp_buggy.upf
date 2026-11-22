@@ -1,0 +1,43 @@
+upf_version 2.1
+set_design_top soc_lp
+
+create_supply_port VDD_AON -direction in
+create_supply_port VDD_BK  -direction in
+create_supply_port VSS     -direction in
+
+create_supply_net VDD_AON
+create_supply_net VDD_BK
+create_supply_net VDD_CORE
+create_supply_net VSS
+
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VDD_BK  -ports VDD_BK
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON  -function {power VDD_AON}  -function {ground VSS}
+create_supply_set SS_BK   -function {power VDD_BK}   -function {ground VSS}
+create_supply_set SS_CORE -function {power VDD_CORE} -function {ground VSS}
+
+create_power_domain PD_AON  -include_scope    -supply {primary SS_AON}
+create_power_domain PD_CORE -elements {u_core} -supply {primary SS_CORE}
+create_power_domain PD_RET  -elements {u_ret}  -supply {primary SS_BK}
+
+create_power_switch PSW_CORE -domain PD_CORE \
+    -input_supply_port {in VDD_AON} \
+    -output_supply_port {out VDD_CORE} \
+    -control_port {ctrl pwr_sw_en} \
+    -ack_port {ack pwr_ack} \
+    -on_state {ON_ST in {ctrl}} \
+    -off_state {OFF_ST {!ctrl}}
+
+add_power_state SS_AON \
+    -state {AON_ON -supply_expr {power == {FULL_ON 0.80} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+
+add_power_state SS_BK \
+    -state {RET -supply_expr {power == {FULL_ON 0.80} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+
+add_power_state SS_CORE \
+    -state {ON  -supply_expr {power == {FULL_ON 0.80} && ground == {FULL_ON 0.0}} -logic_expr {pwr_sw_en}  -simstate NORMAL} \
+    -state {OFF -supply_expr {power == OFF          && ground == {FULL_ON 0.0}} -logic_expr {!pwr_sw_en} -simstate CORRUPT}
+
+# Intentional bug: omits set_isolation on PD_CORE -> PD_AON / PD_RET crossings (ISO_MISSING)

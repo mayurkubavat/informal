@@ -80,18 +80,47 @@ endmodule
     assert!(rep.contains("xprop_dut.leaky_out"));
     {
         let s = sh.session.borrow();
-        let find = |n: &str| s.xprop.items.iter().find(|i| i.name == n).unwrap().status;
-        assert_eq!(find("xprop_dut.clean_out"), XpropStatus::Proven);
+        let item = |n: &str| s.xprop.items.iter().find(|i| i.name == n).unwrap();
+        assert_eq!(item("xprop_dut.clean_out").status, XpropStatus::Proven);
+        assert!(item("xprop_dut.clean_out").trace.is_none());
+        assert!(informal_fpv::why_cex::slice_property_cex(&s, "xprop_dut.clean_out", 64).is_err());
         assert_eq!(
-            find("xprop_dut.reconv_out"),
+            item("xprop_dut.reconv_out").status,
             XpropStatus::Proven,
             "2-copy miter must not suffer ternary mux X-pessimism"
         );
-        assert!(matches!(
-            find("xprop_dut.leaky_out"),
-            XpropStatus::Cex { .. }
-        ));
+        assert!(item("xprop_dut.reconv_out").trace.is_none());
+        let leaky = item("xprop_dut.leaky_out");
+        assert!(matches!(leaky.status, XpropStatus::Cex { .. }));
+        let tp = leaky
+            .trace
+            .as_deref()
+            .expect("leaky_out CEX must emit VCD trace");
+        assert!(std::path::Path::new(tp).is_file());
+        assert!(std::path::Path::new(tp)
+            .with_extension("trace.btor2")
+            .is_file());
+        let vcd_text = std::fs::read_to_string(tp).unwrap();
+        assert!(vcd_text.contains("$enddefinitions $end"));
+        assert!(vcd_text.contains("$scope module m0 $end"));
+        assert!(vcd_text.contains("$scope module m1 $end"));
+        assert!(vcd_text.contains("leaky_out"));
+        assert!(vcd_text.contains("uninit_pipe_q__m0"));
+        assert!(vcd_text.contains("uninit_pipe_q__m1"));
+        let slice = informal_fpv::why_cex::slice_property_cex(&s, "xprop_dut.leaky_out", 64)
+            .expect("why_cex must slice xprop CEX");
+        assert_eq!(slice.status, "cex");
+        assert!(!slice.events.is_empty());
+        assert!(slice
+            .active_signals
+            .iter()
+            .any(|sig| sig.contains("uninit_pipe_q")));
     }
+
+    let why_json = sh.eval("why_cex -json xprop_dut.leaky_out").unwrap();
+    let why_v: serde_json::Value = serde_json::from_str(&why_json).unwrap();
+    assert_eq!(why_v["status"], "cex");
+    assert!(!why_v["events"].as_array().unwrap().is_empty());
 
     sh.eval("check_xprop -waiver -add -instance leaky_out -comment {datapath qualified by valid}")
         .unwrap();
@@ -163,15 +192,55 @@ endmodule
     assert!(rep.contains("iso_pub"));
     {
         let s = sh.session.borrow();
-        let status_of = |n: &str| s.spv.iter().find(|r| r.name == n).unwrap().status.clone();
-        assert_eq!(status_of("iso_pub"), SpvStatus::Proven);
-        assert_eq!(status_of("iso_dbg_locked"), SpvStatus::Proven);
-        assert!(matches!(status_of("leak_dbg_open"), SpvStatus::Cex { .. }));
+        let rule_of = |n: &str| s.spv.iter().find(|r| r.name == n).unwrap();
+        assert_eq!(rule_of("iso_pub").status, SpvStatus::Proven);
+        assert!(rule_of("iso_pub").trace.is_none());
+        assert!(informal_fpv::why_cex::slice_property_cex(&s, "iso_pub", 64).is_err());
+        assert_eq!(rule_of("iso_dbg_locked").status, SpvStatus::Proven);
+        assert!(rule_of("iso_dbg_locked").trace.is_none());
+        assert!(matches!(
+            rule_of("leak_dbg_open").status,
+            SpvStatus::Cex { .. }
+        ));
         assert!(
-            matches!(status_of("leak_covert_2cyc"), SpvStatus::Cex { depth: Some(d) } if d >= 2),
+            matches!(rule_of("leak_covert_2cyc").status, SpvStatus::Cex { depth: Some(d) } if d >= 2),
             "expected multi-cycle covert storage channel leak, got {:?}",
-            status_of("leak_covert_2cyc")
+            rule_of("leak_covert_2cyc").status
         );
+
+        for name in ["leak_dbg_open", "leak_covert_2cyc"] {
+            let r = rule_of(name);
+            let tp = r
+                .trace
+                .as_deref()
+                .unwrap_or_else(|| panic!("{name} must emit VCD trace"));
+            assert!(std::path::Path::new(tp).is_file());
+            assert!(std::path::Path::new(tp)
+                .with_extension("trace.btor2")
+                .is_file());
+            let vcd_text = std::fs::read_to_string(tp).unwrap();
+            assert!(vcd_text.contains("$enddefinitions $end"));
+            assert!(vcd_text.contains("$scope module m0 $end"));
+            assert!(vcd_text.contains("$scope module m1 $end"));
+            assert!(vcd_text.contains("secret_key__m0"));
+            assert!(vcd_text.contains("secret_key__m1"));
+
+            let slice = informal_fpv::why_cex::slice_property_cex(&s, name, 64)
+                .unwrap_or_else(|e| panic!("why_cex failed for {name}: {e}"));
+            assert_eq!(slice.status, "cex");
+            assert!(!slice.events.is_empty());
+            assert!(slice
+                .active_signals
+                .iter()
+                .any(|sig| sig.contains("secret_key")));
+        }
+    }
+
+    for name in ["leak_dbg_open", "leak_covert_2cyc"] {
+        let why_json = sh.eval(&format!("why_cex -json {name}")).unwrap();
+        let why_v: serde_json::Value = serde_json::from_str(&why_json).unwrap();
+        assert_eq!(why_v["status"], "cex");
+        assert!(!why_v["events"].as_array().unwrap().is_empty());
     }
 }
 

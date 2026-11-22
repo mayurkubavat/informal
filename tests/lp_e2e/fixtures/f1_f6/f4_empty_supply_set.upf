@@ -1,0 +1,25 @@
+upf_version 2.1
+set_design_top soc_basic
+
+create_supply_port VDD_AON -direction in
+create_supply_port VSS     -direction in
+create_supply_net  VDD_AON
+create_supply_net  VSS
+create_supply_net  VDD_CORE
+create_supply_net  VDD_EMPTY
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON   -function {power VDD_AON}   -function {ground VSS}
+create_supply_set SS_CORE  -function {power VDD_CORE}  -function {ground VSS}
+create_supply_set SS_EMPTY -function {power VDD_EMPTY} -function {ground VSS}
+
+create_power_domain PD_TOP  -include_scope -supply {primary SS_AON}
+create_power_domain PD_CORE -elements {u_core} -supply {primary SS_CORE}
+create_power_domain PD_SUB  -elements {u_sub}  -supply {primary SS_EMPTY}
+
+add_power_state SS_AON  -state {AON_ON -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_CORE \
+    -state {ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -logic_expr {u_pmu/pwr_en}  -simstate NORMAL} \
+    -state {OFF -supply_expr {power == OFF            && ground == {FULL_ON 0.0}} -logic_expr {!u_pmu/pwr_en} -simstate CORRUPT}
+# Note: SS_EMPTY intentionally has ZERO add_power_state entries!

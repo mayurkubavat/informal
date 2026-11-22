@@ -699,6 +699,7 @@ dependencies = [
  "informal-ir",
  "informal-svlang",
  "informal-tcl",
+ "informal-upf",
  "libc",
  "regex",
  "serde",
@@ -751,6 +752,7 @@ version = "0.1.0"
 dependencies = [
  "informal-ir",
  "serde",
+ "sha2",
  "svlang",
  "svlang-lint",
  "svlang-model",
@@ -759,6 +761,18 @@ dependencies = [
 [[package]]
 name = "informal-tcl"
 version = "0.1.0"
+
+[[package]]
+name = "informal-upf"
+version = "0.1.0"
+dependencies = [
+ "informal-sat",
+ "informal-tcl",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "ipnet"

@@ -29,6 +29,8 @@ fn repo_root() -> PathBuf {
 
 fn canonical_session() -> Session {
     let mut s = Session::new(Vec::new(), PathBuf::from("informal_work"));
+    // Keep the contract fixture portable across worktrees, staging clones, and machines.
+    s.workdir = PathBuf::from("informal_work");
     s.design.top = Some("axi_lite_demo".into());
     s.design.files = vec![PathBuf::from("axi_lite_demo.sv")];
     s.elaborated = true;

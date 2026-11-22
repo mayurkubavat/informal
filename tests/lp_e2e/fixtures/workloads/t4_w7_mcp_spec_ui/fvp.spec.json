@@ -1,0 +1,28 @@
+{
+  "schema": "informal.spec/1",
+  "name": "t4_w7_lp_subsystem_signoff",
+  "design": {
+    "top": "lp_subsystem",
+    "clocks": ["clk"],
+    "reset": "!rst_n"
+  },
+  "requirements": [
+    {
+      "id": "REQ-LP-001",
+      "title": "Isolation asserted before power off",
+      "assertions": ["lp_subsystem.a_iso_before_off"],
+      "covers": ["lp_subsystem.c_sleep_reached"]
+    }
+  ],
+  "low_power": {
+    "require_upf": true,
+    "max_open_lp_errors": 0,
+    "require_formal_lpv": true,
+    "allow_manual_lp_waivers": false
+  },
+  "signoff": {
+    "proof_target": "proven",
+    "forbid_vacuous": true,
+    "require_covers": true
+  }
+}

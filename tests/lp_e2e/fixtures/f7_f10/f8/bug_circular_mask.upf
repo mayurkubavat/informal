@@ -1,0 +1,48 @@
+upf_version 2.1
+set_design_top bug_circular_mask
+
+create_supply_port VDD_AON -direction in
+create_supply_port VSS     -direction in
+
+create_supply_net VDD_AON
+create_supply_net VDD_A
+create_supply_net VDD_B
+create_supply_net VSS
+
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON -function {power VDD_AON} -function {ground VSS}
+create_supply_set SS_A   -function {power VDD_A}   -function {ground VSS}
+create_supply_set SS_B   -function {power VDD_B}   -function {ground VSS}
+
+create_power_domain PD_TOP -include_scope -supply {primary SS_AON}
+create_power_domain PD_A   -elements {u_a} -supply {primary SS_A}
+create_power_domain PD_B   -elements {u_b} -supply {primary SS_B}
+
+create_power_switch PSW_A -domain PD_A \
+    -input_supply_port {in VDD_AON} \
+    -output_supply_port {out VDD_A} \
+    -control_port {ctrl pwr_ctrl_a} \
+    -ack_port {ack pwr_ack_a} \
+    -on_state {ON_ST in {ctrl}} \
+    -off_state {OFF_ST {!ctrl}}
+
+create_power_switch PSW_B -domain PD_B \
+    -input_supply_port {in VDD_AON} \
+    -output_supply_port {out VDD_B} \
+    -control_port {ctrl pwr_ctrl_b} \
+    -ack_port {ack pwr_ack_b} \
+    -on_state {ON_ST in {ctrl}} \
+    -off_state {OFF_ST {!ctrl}}
+
+add_power_state SS_AON \
+    -state {AON_ON -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+
+add_power_state SS_A \
+    -state {ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -logic_expr {pwr_ctrl_a}  -simstate NORMAL} \
+    -state {OFF -supply_expr {power == OFF          && ground == {FULL_ON 0.0}} -logic_expr {!pwr_ctrl_a} -simstate CORRUPT}
+
+add_power_state SS_B \
+    -state {ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -logic_expr {pwr_ctrl_b}  -simstate NORMAL} \
+    -state {OFF -supply_expr {power == OFF          && ground == {FULL_ON 0.0}} -logic_expr {!pwr_ctrl_b} -simstate CORRUPT}

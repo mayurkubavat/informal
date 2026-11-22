@@ -1,0 +1,63 @@
+upf_version 2.1
+
+create_supply_port VDD_AON
+create_supply_port VDD_IO
+create_supply_port VSS
+
+create_supply_net VDD_AON
+create_supply_net VDD_CORE
+create_supply_net VDD_SRAM
+create_supply_net VDD_IO
+create_supply_net VSS
+
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VDD_IO  -ports VDD_IO
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON  -function {power VDD_AON}  -function {ground VSS}
+create_supply_set SS_CORE -function {power VDD_CORE} -function {ground VSS}
+create_supply_set SS_SRAM -function {power VDD_SRAM} -function {ground VSS}
+create_supply_set SS_IO   -function {power VDD_IO}   -function {ground VSS}
+
+add_power_state SS_AON  -state {ON  -supply_expr {power == {FULL_ON 0.9} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_IO   -state {ON  -supply_expr {power == {FULL_ON 1.8} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_CORE -state {ON  -supply_expr {power == {FULL_ON 0.9} && ground == {FULL_ON 0.0}} -simstate NORMAL} \
+                        -state {OFF -supply_expr {power == OFF} -simstate CORRUPT}
+add_power_state SS_SRAM -state {ON  -supply_expr {power == {FULL_ON 0.9} && ground == {FULL_ON 0.0}} -simstate NORMAL} \
+                        -state {RET -supply_expr {power == {FULL_ON 0.7} && ground == {FULL_ON 0.0}} -simstate CORRUPT} \
+                        -state {OFF -supply_expr {power == OFF} -simstate CORRUPT}
+
+create_power_domain PD_TOP  -include_scope -supply {primary SS_AON}
+create_power_domain PD_PMU  -elements {u_pmu}  -supply {primary SS_AON}
+create_power_domain PD_IO   -elements {u_io}   -supply {primary SS_IO}
+create_power_domain PD_CORE -elements {u_core} -supply {primary SS_CORE}
+create_power_domain PD_SRAM -elements {u_sram} -supply {primary SS_SRAM} -supply {default_retention SS_AON}
+
+create_power_switch psw_core -domain PD_CORE \
+  -input_supply_port {in VDD_AON} -output_supply_port {out VDD_CORE} \
+  -control_port {sleep u_pmu/psw_en} \
+  -on_state {ON in {sleep}} -off_state {OFF {!sleep}}
+
+create_power_switch psw_sram -domain PD_SRAM \
+  -input_supply_port {in VDD_AON} -output_supply_port {out VDD_SRAM} \
+  -control_port {sleep u_pmu/psw_en} \
+  -on_state {ON in {sleep}} -off_state {OFF {!sleep}}
+
+set_isolation iso_core -domain PD_CORE -applies_to outputs \
+  -clamp_value 0 -isolation_supply_set SS_AON \
+  -isolation_signal u_pmu/iso_en -isolation_sense high -location parent
+
+set_isolation iso_sram -domain PD_SRAM -applies_to outputs \
+  -clamp_value 0 -isolation_supply_set SS_AON \
+  -isolation_signal u_pmu/iso_en -isolation_sense high -location parent
+
+set_level_shifter ls_io_out -domain PD_IO -applies_to outputs \
+  -rule high_to_low -location parent
+
+set_level_shifter ls_io_in -domain PD_IO -applies_to inputs \
+  -rule low_to_high -location parent
+
+set_retention ret_sram -domain PD_SRAM -retention_supply_set SS_AON \
+  -save_signal {u_pmu/save_en high} -restore_signal {u_pmu/rest_en high}
+
+set_retention ret_core_none -domain PD_CORE -no_retention

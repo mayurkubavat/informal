@@ -1,0 +1,24 @@
+upf_version 2.1
+set_design_top f5_uv_tol
+
+create_supply_port VDD_AON -direction in
+create_supply_port VSS     -direction in
+create_supply_net  VDD_AON
+create_supply_net  VSS
+create_supply_net  VDD_SRC
+create_supply_net  VDD_DST
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON -function {power VDD_AON} -function {ground VSS}
+create_supply_set SS_SRC -function {power VDD_SRC} -function {ground VSS}
+create_supply_set SS_DST -function {power VDD_DST} -function {ground VSS}
+
+create_power_domain PD_TOP -include_scope -supply {primary SS_AON}
+create_power_domain PD_SRC -elements {u_src} -supply {primary SS_SRC}
+create_power_domain PD_DST -elements {u_dst} -supply {primary SS_DST}
+
+# 0.9000 V vs 0.9005 V -> 500 uV difference (<= 1000 uV default tolerance)
+add_power_state SS_AON -state {AON_ON -supply_expr {power == {FULL_ON 0.9000} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_SRC -state {ON     -supply_expr {power == {FULL_ON 0.9000} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_DST -state {ON     -supply_expr {power == {FULL_ON 0.9005} && ground == {FULL_ON 0.0}} -simstate NORMAL}

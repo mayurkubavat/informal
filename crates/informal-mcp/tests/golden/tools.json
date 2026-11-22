@@ -1881,7 +1881,7 @@
   },
   {
     "changes": false,
-    "description": "Dynamic backward slice from a falsified assertion (`cex`) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.",
+    "description": "Dynamic backward slice from a falsified assertion (`cex`, including `check_sec`, `check_xprop`, and `check_spv` counterexamples) or reached cover (`covered`) at failure frame T back to frame 0: walks only active mux arms (`ite`), controlling boolean operands, and register state transitions, pruning untaken datapaths and idle hold cycles.",
     "input": {
       "properties": {
         "max_events": {
@@ -1890,7 +1890,7 @@
           "type": "integer"
         },
         "name": {
-          "description": "Property name",
+          "description": "Property, SEC check, X-prop item, or SPV rule name",
           "type": "string"
         }
       },
@@ -2710,6 +2710,9 @@
               },
               "status": {
                 "type": "string"
+              },
+              "trace": {
+                "type": "string"
               }
             },
             "required": [
@@ -2813,6 +2816,9 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "trace": {
+                "type": "string"
               }
             },
             "required": [

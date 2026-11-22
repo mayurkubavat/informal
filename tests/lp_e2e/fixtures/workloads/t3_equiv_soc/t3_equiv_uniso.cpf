@@ -1,0 +1,28 @@
+set_cpf_version 2.0
+set_hierarchy_separator /
+set_design soc_equiv_top
+
+create_power_nets  -nets VDD_AON -voltage 0.90
+create_power_nets  -nets VDD_IO  -voltage 1.20
+create_power_nets  -nets VDD_CORE_SW -internal -voltage 0.90
+create_ground_nets -nets VSS
+
+create_power_domain -name PD_TOP  -default
+create_power_domain -name PD_CORE -instances {u_core} -shutoff_condition {!pwr_en}
+create_power_domain -name PD_IO   -instances {u_io}
+
+create_nominal_condition -name NC_AON  -voltage 0.90
+create_nominal_condition -name NC_CORE -voltage 0.90
+create_nominal_condition -name NC_IO   -voltage 1.20
+create_nominal_condition -name NC_OFF  -voltage 0.00 -state off
+
+create_power_mode -name PM_ACTIVE -domain_conditions {PD_TOP@NC_AON PD_CORE@NC_CORE PD_IO@NC_IO} -default
+create_power_mode -name PM_SLEEP  -domain_conditions {PD_TOP@NC_AON PD_CORE@NC_OFF  PD_IO@NC_IO}
+
+update_power_domain -name PD_TOP  -primary_power_net VDD_AON     -primary_ground_net VSS
+update_power_domain -name PD_CORE -primary_power_net VDD_CORE_SW -primary_ground_net VSS
+update_power_domain -name PD_IO   -primary_power_net VDD_IO      -primary_ground_net VSS
+
+create_power_switch_rule -name PSW_CORE -domain PD_CORE -external_power_net VDD_AON
+
+end_design

@@ -1,0 +1,34 @@
+upf_version 2.1
+
+create_supply_port VDD_AON
+create_supply_port VSS
+
+create_supply_net VDD_AON
+create_supply_net VDD_SRC
+create_supply_net VSS
+
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON -function {power VDD_AON} -function {ground VSS}
+create_supply_set SS_SRC -function {power VDD_SRC} -function {ground VSS}
+
+add_power_state SS_AON -state {ON  -supply_expr {power == {FULL_ON 0.9} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_SRC -state {ON  -supply_expr {power == {FULL_ON 0.9} && ground == {FULL_ON 0.0}} -simstate NORMAL} \
+                       -state {OFF -supply_expr {power == OFF} -simstate CORRUPT}
+
+create_power_domain PD_TOP -include_scope -supply {primary SS_AON}
+create_power_domain PD_DST -elements {u_dst} -supply {primary SS_AON}
+create_power_domain PD_SRC -elements {u_src} -supply {primary SS_SRC}
+
+create_power_switch psw_src -domain PD_SRC \
+  -input_supply_port {in VDD_AON} -output_supply_port {out VDD_SRC} \
+  -control_port {pwr_en u_pmu/pmu_pwr_en} \
+  -on_state {ON in {pwr_en}} -off_state {OFF {!pwr_en}}
+
+set_isolation iso_valid -domain PD_SRC -applies_to outputs \
+  -elements {u_src/m_valid} \
+  -clamp_value 0 -isolation_supply_set SS_AON \
+  -isolation_signal u_pmu/pmu_iso_en -isolation_sense high -location parent
+
+set_retention ret_src_none -domain PD_SRC -no_retention

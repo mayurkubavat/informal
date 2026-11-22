@@ -1,0 +1,8 @@
+set_cpf_version 2.0
+set_hierarchy_separator /
+set_design soc_cpf_top
+
+create_power_domain -name PD_TOP -default
+create_power_domain -name PD_CORE -instances {u_core} -unknown_semantic_opt 1
+
+end_design

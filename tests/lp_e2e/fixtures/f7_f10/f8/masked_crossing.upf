@@ -1,0 +1,33 @@
+upf_version 2.1
+set_design_top masked_crossing
+
+create_supply_port VDD_AON -direction in
+create_supply_port VSS     -direction in
+
+create_supply_net VDD_AON
+create_supply_net VDD_SRC
+create_supply_net VSS
+
+connect_supply_net VDD_AON -ports VDD_AON
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_AON -function {power VDD_AON} -function {ground VSS}
+create_supply_set SS_SRC -function {power VDD_SRC} -function {ground VSS}
+
+create_power_domain PD_TOP -include_scope   -supply {primary SS_AON}
+create_power_domain PD_SRC -elements {u_src} -supply {primary SS_SRC}
+
+create_power_switch PSW_SRC -domain PD_SRC \
+    -input_supply_port {in VDD_AON} \
+    -output_supply_port {out VDD_SRC} \
+    -control_port {ctrl pwr_ctrl} \
+    -ack_port {ack pwr_ack} \
+    -on_state {ON_ST in {ctrl}} \
+    -off_state {OFF_ST {!ctrl}}
+
+add_power_state SS_AON \
+    -state {AON_ON -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+
+add_power_state SS_SRC \
+    -state {ON  -supply_expr {power == {FULL_ON 0.90} && ground == {FULL_ON 0.0}} -logic_expr {pwr_ctrl}  -simstate NORMAL} \
+    -state {OFF -supply_expr {power == OFF          && ground == {FULL_ON 0.0}} -logic_expr {!pwr_ctrl} -simstate CORRUPT}

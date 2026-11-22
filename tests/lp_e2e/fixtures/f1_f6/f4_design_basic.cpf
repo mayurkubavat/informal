@@ -1,0 +1,18 @@
+set_cpf_version 2.0
+set_design soc_basic
+
+create_power_domain -name PD_TOP -default
+create_power_domain -name PD_CORE -instances {u_core u_sub} -shutoff_condition {!u_pmu/pwr_en}
+
+create_nominal_condition -name NC_AON  -voltage 0.90
+create_nominal_condition -name NC_CORE -voltage 0.90
+create_nominal_condition -name NC_OFF  -voltage 0.00 -state off
+
+create_power_mode -name PM_ALL_ON -domain_conditions {PD_TOP@NC_AON PD_CORE@NC_CORE} -default
+create_power_mode -name PM_SLEEP  -domain_conditions {PD_TOP@NC_AON PD_CORE@NC_OFF}
+
+create_power_switch_rule -name PSW_CORE -domain PD_CORE -enable_condition {u_pmu/pwr_en}
+create_isolation_rule -name ISO_CORE -from PD_CORE -to PD_TOP -isolation_condition {u_pmu/iso_en} -isolation_output low
+update_isolation_rules -names ISO_CORE -location parent
+create_level_shifter_rule -name LS_CORE -from PD_CORE -to PD_TOP
+create_state_retention_rule -name RET_CORE -domain PD_CORE -save_edge {u_pmu/ret_save} -restore_edge {u_pmu/ret_restore}

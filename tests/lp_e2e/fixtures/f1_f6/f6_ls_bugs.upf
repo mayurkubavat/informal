@@ -1,0 +1,31 @@
+upf_version 2.1
+set_design_top f6_ls_bugs
+
+create_supply_port VDD_075 -direction in
+create_supply_port VDD_110 -direction in
+create_supply_port VSS     -direction in
+create_supply_net  VDD_075
+create_supply_net  VDD_110
+create_supply_net  VSS
+connect_supply_net VDD_075 -ports VDD_075
+connect_supply_net VDD_110 -ports VDD_110
+connect_supply_net VSS     -ports VSS
+
+create_supply_set SS_075 -function {power VDD_075} -function {ground VSS}
+create_supply_set SS_110 -function {power VDD_110} -function {ground VSS}
+
+create_power_domain PD_TOP -include_scope -supply {primary SS_075}
+create_power_domain PD_LO1 -elements {u_lo_1} -supply {primary SS_075}
+create_power_domain PD_HI1 -elements {u_hi_1} -supply {primary SS_110}
+create_power_domain PD_LO2 -elements {u_lo_2} -supply {primary SS_075}
+create_power_domain PD_HI2 -elements {u_hi_2} -supply {primary SS_110}
+
+add_power_state SS_075 -state {ON_075 -supply_expr {power == {FULL_ON 0.75} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+add_power_state SS_110 -state {ON_110 -supply_expr {power == {FULL_ON 1.10} && ground == {FULL_ON 0.0}} -simstate NORMAL}
+
+# Bug 1: PD_LO1 -> PD_HI1 has no level shifter -> LS_MISSING
+# Bug 2: PD_LO2 -> PD_HI2 declares high_to_low for a 0.75 -> 1.10 crossing -> LS_DIR_MISMATCH
+set_level_shifter ls_bad_dir -domain PD_LO2 -applies_to outputs -rule high_to_low -location parent
+
+set_port_attributes -ports {clk rst_n din} -driver_supply SS_075 -receiver_supply SS_075
+set_port_attributes -ports {dout_missing dout_dir} -driver_supply SS_110 -receiver_supply SS_110

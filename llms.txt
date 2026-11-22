@@ -28,7 +28,7 @@
 ## Auto-Generated Reference Manuals
 
 - [CLI Reference](docs/reference/cli.md): Every `informal` subcommand, flag, exit code, and environment variable
-- [Tcl Command Reference](docs/reference/tcl-commands.md): All 78 Tcl commands (`common`, `jg`, `vcf`) matching interactive `help`
+- [Tcl Command Reference](docs/reference/tcl-commands.md): All 85 Tcl commands (`common`, `jg`, `vcf`) matching interactive `help`
 - [JG <-> VCF Crosswalk](docs/reference/jg-vcf-crosswalk.md): Side-by-side JasperGold and VC Formal command map
 - [SVA & Lowering Support](docs/reference/sva-support.md): Supported IEEE 1800 SVA operators, liveness, and explicit lowering rejections
 - [MCP Tools & Prompts Reference](docs/reference/mcp-tools.md): All 48 MCP tools, 4 prompts, and `informal.error/1` Poka-Yoke schema

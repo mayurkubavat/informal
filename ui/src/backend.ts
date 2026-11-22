@@ -300,6 +300,7 @@ export interface XpropItemView {
   status: string | { cex?: { depth?: number | null } };
   engine?: string | null;
   ms?: number;
+  trace?: string | null;
 }
 
 export interface XpropStateView {
@@ -315,6 +316,7 @@ export interface SpvRuleView {
   cond?: string | null;
   status: string | { cex?: { depth?: number | null } };
   engine?: string | null;
+  trace?: string | null;
 }
 
 export interface SecCheckView {

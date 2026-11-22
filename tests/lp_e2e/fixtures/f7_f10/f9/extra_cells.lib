@@ -1,0 +1,161 @@
+library (extra_lp_lib) {
+    delay_model : table_lookup;
+    nom_process : 1.0;
+    nom_temperature : 25.0;
+    nom_voltage : 0.90;
+    voltage_map (VDD, 0.90);
+    voltage_map (VDDH, 1.10);
+    voltage_map (VDDL, 0.90);
+    voltage_map (VDD_BK, 0.90);
+    voltage_map (VDD_PERI, 0.90);
+    voltage_map (VDD_ARRAY, 0.90);
+    voltage_map (VSS, 0.00);
+
+    type (bus4) {
+        base_type : array;
+        data_type : bit;
+        bit_width : 4;
+        bit_from : 3;
+        bit_to : 0;
+        downto : true;
+    }
+
+    cell (LS_HL_X1) {
+        is_level_shifter : true;
+        level_shifter_type : HL;
+        valid_location : "both";
+        input_voltage_range (1.00, 1.25);
+        output_voltage_range (0.65, 1.00);
+        pg_pin (VDDH) {
+            pg_type : primary_power;
+            voltage_name : VDDH;
+        }
+        pg_pin (VDDL) {
+            pg_type : backup_power;
+            voltage_name : VDDL;
+        }
+        pg_pin (VSS) {
+            pg_type : primary_ground;
+            voltage_name : VSS;
+        }
+        pin (A) {
+            direction : input;
+            level_shifter_data_pin : true;
+            related_power_pin : "VDDH";
+            related_ground_pin : "VSS";
+        }
+        pin (Y) {
+            direction : output;
+            function : "A";
+            related_power_pin : "VDDL";
+            related_ground_pin : "VSS";
+            power_down_function : "!VDDH + !VDDL + VSS";
+        }
+    }
+
+    cell (DFF_X1) {
+        pg_pin (VDD) {
+            pg_type : primary_power;
+            voltage_name : VDD;
+        }
+        pg_pin (VSS) {
+            pg_type : primary_ground;
+            voltage_name : VSS;
+        }
+        ff (IQ, IQN) {
+            clocked_on : "CK";
+            next_state : "D";
+        }
+        pin (CK) {
+            direction : input;
+            clock : true;
+            related_power_pin : "VDD";
+            related_ground_pin : "VSS";
+        }
+        pin (D) {
+            direction : input;
+            related_power_pin : "VDD";
+            related_ground_pin : "VSS";
+        }
+        pin (Q) {
+            direction : output;
+            function : "IQ";
+            related_power_pin : "VDD";
+            related_ground_pin : "VSS";
+            power_down_function : "!VDD + VSS";
+        }
+    }
+
+    cell (ISO_HI_X1) {
+        is_isolation_cell : true;
+        isolation_enable_condition : "ISO";
+        pg_pin (VDD_BK) {
+            pg_type : backup_power;
+            voltage_name : VDD_BK;
+        }
+        pg_pin (VSS) {
+            pg_type : primary_ground;
+            voltage_name : VSS;
+        }
+        pin (A) {
+            direction : input;
+            isolation_cell_data_pin : true;
+            related_power_pin : "VDD_BK";
+            related_ground_pin : "VSS";
+        }
+        pin (ISO) {
+            direction : input;
+            isolation_cell_enable_pin : true;
+            isolation_enable_pin : true;
+            related_power_pin : "VDD_BK";
+            related_ground_pin : "VSS";
+        }
+        pin (Y) {
+            direction : output;
+            function : "A | ISO";
+            related_power_pin : "VDD_BK";
+            related_ground_pin : "VSS";
+            power_down_function : "!VDD_BK + VSS";
+        }
+    }
+
+    cell (SRAM_MACRO_BAD_PIN) {
+        is_macro_cell : true;
+        pg_pin (VDD_PERI) {
+            pg_type : primary_power;
+            voltage_name : VDD_PERI;
+        }
+        pg_pin (VDD_ARRAY) {
+            pg_type : backup_power;
+            voltage_name : VDD_ARRAY;
+        }
+        pg_pin (VSS) {
+            pg_type : primary_ground;
+            voltage_name : VSS;
+        }
+        pin (CK) {
+            direction : input;
+            clock : true;
+            related_power_pin : "VDD_PERI";
+            related_ground_pin : "VSS";
+        }
+        pin (CE) {
+            direction : input;
+            related_power_pin : "VDD_PERI";
+            related_ground_pin : "VSS";
+        }
+        bus (DIN) {
+            bus_type : bus4;
+            direction : input;
+            related_power_pin : "VDD_ARRAY";
+            related_ground_pin : "VSS";
+        }
+        bus (DOUT) {
+            bus_type : bus4;
+            direction : output;
+            related_power_pin : "VDD_PERI";
+            related_ground_pin : "VSS";
+            power_down_function : "!VDD_PERI + VSS";
+        }
+    }
+}
