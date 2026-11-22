@@ -691,6 +691,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "informal-compat"
+version = "0.1.0"
+dependencies = [
+ "informal-app-conn",
+ "informal-app-csr",
+ "informal-app-protocol",
+ "informal-debug",
+ "informal-session",
+ "informal-tcl",
+ "informal-upf",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "informal-debug"
 version = "0.1.0"
 dependencies = [
@@ -734,17 +750,16 @@ dependencies = [
  "informal-app-protocol",
  "informal-bitwuzla",
  "informal-bmc",
+ "informal-compat",
  "informal-debug",
  "informal-engine",
  "informal-engines-ext",
- "informal-ir",
  "informal-session",
  "informal-svlang",
  "informal-tcl",
  "informal-trace",
  "informal-upf",
  "libc",
- "regex",
  "serde",
  "serde_json",
 ]

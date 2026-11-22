@@ -1,0 +1,19 @@
+[package]
+name = "informal-compat"
+description = "The JasperGold / VC Formal compatible Tcl shell: vendor-style script commands over an FPV session and its formal apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+informal-tcl.workspace = true
+informal-upf.workspace = true
+informal-session.workspace = true
+informal-app-conn.workspace = true
+informal-app-csr.workspace = true
+informal-app-protocol.workspace = true
+informal-debug.workspace = true

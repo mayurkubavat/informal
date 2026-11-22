@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm", "crates/informal-mcp", "crates/informal-upf", "crates/informal-trace", "crates/informal-session", "crates/informal-app-conn", "crates/informal-app-csr", "crates/informal-app-protocol", "crates/informal-debug"]
+members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm", "crates/informal-mcp", "crates/informal-upf", "crates/informal-trace", "crates/informal-session", "crates/informal-app-conn", "crates/informal-app-csr", "crates/informal-app-protocol", "crates/informal-debug", "crates/informal-compat"]
 
 [workspace.package]
 version = "0.1.0"
@@ -41,6 +41,7 @@ informal-app-conn = { path = "crates/informal-app-conn" }
 informal-app-csr = { path = "crates/informal-app-csr" }
 informal-app-protocol = { path = "crates/informal-app-protocol" }
 informal-debug = { path = "crates/informal-debug" }
+informal-compat = { path = "crates/informal-compat" }
 
 [profile.release]
 lto = "thin"

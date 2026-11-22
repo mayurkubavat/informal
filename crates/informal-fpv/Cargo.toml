@@ -8,11 +8,9 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 informal-engine.workspace = true
-informal-ir.workspace = true
 informal-aig.workspace = true
 informal-bmc.workspace = true
 informal-tcl.workspace = true
@@ -22,6 +20,7 @@ informal-trace.workspace = true
 informal-session.workspace = true
 informal-app-protocol.workspace = true
 informal-debug.workspace = true
+informal-compat.workspace = true
 informal-app-csr.workspace = true
 informal-app-conn.workspace = true
 libc = "0.2"

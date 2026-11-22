@@ -2,13 +2,17 @@
 //! and its properties, an SVA subset compiler, the prove flow over the
 //! engine portfolio, and Tcl command sets compatible with JasperGold and
 //! VC Formal scripts.
+//!
+//! The code lives in `informal-session`, `informal-trace`, `informal-debug`,
+//! `informal-compat` and the `informal-app-*` crates; this crate re-exports
+//! each of them at its `informal_fpv::` path and holds the shell worker.
 
-pub mod compat;
 pub mod worker;
 
 pub use informal_app_conn::conn;
 pub use informal_app_csr::csr;
 pub use informal_app_protocol::protocol;
+pub use informal_compat::compat;
 pub use informal_debug::why_cex;
 pub use informal_session::{
     cache, complexity, cov, lp, miter, progress, proof_core, sec, session, spv, stats, xprop,
