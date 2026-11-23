@@ -676,7 +676,7 @@
       "flavor": "common",
       "ignored_options": [],
       "name": "check_assumptions",
-      "notes": "With `-dead_end`, returns `alive` or `dead_end at step ...`; with `-conflict`, returns a list of conflicting assumptions; otherwise returns the allowed trace depth. Automatically run before `prove` when vacuity checking is on.",
+      "notes": "With `-dead_end`, returns `alive` or `dead_end at step ...`; with `-conflict`, returns a list of conflicting assumptions; otherwise returns the allowed trace depth. Automatically run before `prove` when vacuity checking is on. With `-live`, returns `vacuous` (no fair infinite trace: every liveness proof under these assumptions is vacuous), `consistent` (a fair lasso was found), `undetermined` (bounded or out of time, which shows nothing either way) or `none` (no fairness assumption, nothing to check); `-live -conflict` returns the assumptions that allow no fair trace. `-live` is not run before `prove`.",
       "options": [
         {
           "desc": "Unrolling depth for environment consistency check (default 20)",
@@ -689,10 +689,14 @@
         {
           "desc": "Run 2QBF trap-state check detecting reachable states with no legal next input",
           "flag": "-dead_end"
+        },
+        {
+          "desc": "Check with the liveness engines whether an infinite trace meets the constraints and every fairness assumption (`s_eventually` assume) infinitely often; takes `-conflict` but not `-depth` or `-dead_end`",
+          "flag": "-live"
         }
       ],
-      "summary": "Check assumption satisfiability, UNSAT conflict cores, and 2QBF dead-end trap states",
-      "usage": "check_assumptions [-depth N] [-conflict] [-dead_end]"
+      "summary": "Check assumption satisfiability, UNSAT conflict cores, 2QBF dead-end trap states, and fairness vacuity",
+      "usage": "check_assumptions [-depth N] [-conflict] [-dead_end] | check_assumptions -live [-conflict]"
     },
     {
       "category": "environment_and_cache",

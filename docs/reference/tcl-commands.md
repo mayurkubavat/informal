@@ -1675,10 +1675,10 @@ set_lowering isunknown_is_false on
 
 ### `check_assumptions` (`common`)
 
-Check assumption satisfiability, UNSAT conflict cores, and 2QBF dead-end trap states
+Check assumption satisfiability, UNSAT conflict cores, 2QBF dead-end trap states, and fairness vacuity
 
 ```tcl
-check_assumptions [-depth N] [-conflict] [-dead_end]
+check_assumptions [-depth N] [-conflict] [-dead_end] | check_assumptions -live [-conflict]
 ```
 
 | Option | Description |
@@ -1686,8 +1686,9 @@ check_assumptions [-depth N] [-conflict] [-dead_end]
 | `-depth N` | Unrolling depth for environment consistency check (default 20) |
 | `-conflict` | Compute a minimal conflicting subset of assumptions when overconstrained |
 | `-dead_end` | Run 2QBF trap-state check detecting reachable states with no legal next input |
+| `-live` | Check with the liveness engines whether an infinite trace meets the constraints and every fairness assumption (`s_eventually` assume) infinitely often; takes `-conflict` but not `-depth` or `-dead_end` |
 
-**Notes:** With `-dead_end`, returns `alive` or `dead_end at step ...`; with `-conflict`, returns a list of conflicting assumptions; otherwise returns the allowed trace depth. Automatically run before `prove` when vacuity checking is on.
+**Notes:** With `-dead_end`, returns `alive` or `dead_end at step ...`; with `-conflict`, returns a list of conflicting assumptions; otherwise returns the allowed trace depth. Automatically run before `prove` when vacuity checking is on. With `-live`, returns `vacuous` (no fair infinite trace: every liveness proof under these assumptions is vacuous), `consistent` (a fair lasso was found), `undetermined` (bounded or out of time, which shows nothing either way) or `none` (no fairness assumption, nothing to check); `-live -conflict` returns the assumptions that allow no fair trace. `-live` is not run before `prove`.
 
 ```tcl
 check_assumptions -depth 20 -conflict -dead_end

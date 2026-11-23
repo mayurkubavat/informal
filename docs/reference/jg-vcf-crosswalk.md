@@ -13,7 +13,7 @@ Quick-reference matrix mapping JasperGold (`jg`), VC Formal (`vcf`), and flavor-
 | `echo` | Shell Utilities | Print arguments separated by spaces to standard output |
 | `session` | Shell Utilities | Dump the complete FPV session state as pretty-printed JSON |
 | `set_lowering` | Environment, Vacuity, Lowering, and Proof Cache | Toggle opt-in SystemVerilog lowering relaxations |
-| `check_assumptions` | Environment, Vacuity, Lowering, and Proof Cache | Check assumption satisfiability, UNSAT conflict cores, and 2QBF dead-end trap states |
+| `check_assumptions` | Environment, Vacuity, Lowering, and Proof Cache | Check assumption satisfiability, UNSAT conflict cores, 2QBF dead-end trap states, and fairness vacuity |
 | `set_vacuity` | Environment, Vacuity, Lowering, and Proof Cache | Enable or disable automatic environment and precondition vacuity checks |
 | `set_engines` | Proving, Engines, and Reporting | Restrict the proof portfolio to named engines |
 | `set_prove_cache` | Environment, Vacuity, Lowering, and Proof Cache | Enable or disable the content-addressed SHA-256 proof cache |

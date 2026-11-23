@@ -22,8 +22,8 @@ pub use informal_trace as trace;
 pub use compat::{detect_flavor, Flavor, Shell};
 pub use progress::{EngineLine, ProgressKind, PropProgress, ProveProgress, ProveSink};
 pub use session::{
-    Effort, Environment, Kind, Orchestration, Property, Session, SourceLoc, Status, Task, Vacuity,
-    EMBEDDED,
+    Effort, Environment, FairEnvironment, Fairness, Kind, Orchestration, Property, Session,
+    SourceLoc, Status, Task, Vacuity, EMBEDDED,
 };
 pub use stats::{DesignInfo, ProofStats, PropertyInfo};
 pub use worker::{Reply, Request, Worker};

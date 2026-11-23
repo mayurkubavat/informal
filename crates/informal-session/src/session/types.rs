@@ -485,3 +485,48 @@ impl Environment {
         self.allowed.is_some_and(|a| a < self.asked)
     }
 }
+
+/// What the fairness check (`check_assumptions -live`, docs/vacuity.md)
+/// found: whether an infinite trace exists that meets every constraint of
+/// the task and every fairness assumption infinitely often.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FairEnvironment {
+    /// The task whose model was checked.
+    pub task: String,
+    /// The fairness assumptions (the model's `fair` lines, by the name of
+    /// the assumption each comes from).
+    pub fairness: Vec<String>,
+    pub verdict: Fairness,
+    /// When vacuous and narrowing was asked for (`-conflict`): a smallest
+    /// set of assumptions (and `reset`) that allows no fair trace on its
+    /// own, as for [`Environment::conflict_set`].
+    pub conflict_set: Vec<String>,
+}
+
+/// The verdict of the fairness check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fairness {
+    /// The task has no fairness assumption: nothing to check.
+    NoFairness,
+    /// A fair infinite trace exists (an engine found a lasso).
+    Satisfiable,
+    /// No fair infinite trace exists: the fairness assumptions are
+    /// unsatisfiable together with the constraints, so every liveness
+    /// proof under them is vacuous. Without them an infinite trace exists,
+    /// or that run did not decide.
+    Vacuous,
+    /// No infinite trace exists even without the fairness assumptions: the
+    /// constraints alone end every trace (a conflict or a dead end), which
+    /// makes every liveness proof vacuous.
+    VacuousConstraints,
+    /// Not decided (a bounded result, out of time, or no engine for
+    /// liveness), with the engines' reason.
+    Unknown(String),
+}
+
+impl Fairness {
+    /// No fair trace exists, whatever the cause.
+    pub fn vacuous(&self) -> bool {
+        matches!(self, Fairness::Vacuous | Fairness::VacuousConstraints)
+    }
+}

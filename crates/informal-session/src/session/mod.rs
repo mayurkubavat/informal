@@ -21,8 +21,8 @@ mod types;
 mod vacuity_env;
 
 pub use types::{
-    Clock, Design, Effort, Environment, Kind, Orchestration, Property, Session, SourceLoc, Status,
-    Task, Vacuity, EMBEDDED,
+    Clock, Design, Effort, Environment, FairEnvironment, Fairness, Kind, Orchestration, Property,
+    Session, SourceLoc, Status, Task, Vacuity, EMBEDDED,
 };
 
 use crate::trace;

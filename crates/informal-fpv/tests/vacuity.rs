@@ -2,7 +2,7 @@
 //! every proof vacuous, and the shell says so. Skipped without the in-house
 //! engines (CaDiCaL).
 
-use informal_fpv::{Flavor, Session, Shell, Vacuity};
+use informal_fpv::{Fairness, Flavor, Session, Shell, Vacuity};
 use std::path::{Path, PathBuf};
 
 fn root() -> PathBuf {
@@ -317,4 +317,153 @@ fn liveness_and_until_precondition_covers_detect_vacuity() {
     let report = sh.eval("report").unwrap();
     assert!(report.contains("[vacuous]"), "{report}");
     assert!(report.contains("[non-vacuous]"), "{report}");
+}
+
+/// The verdict of `check_assumptions -live` through the session, after the
+/// shell command has given its word.
+fn fairness(sh: &Shell) -> Fairness {
+    sh.session.borrow_mut().fairness_now(false).unwrap().verdict
+}
+
+/// A list result, sorted: the order of a conflicting set follows the
+/// model's lines.
+fn sorted(list: String) -> Vec<String> {
+    let mut v: Vec<String> = list.split_whitespace().map(String::from).collect();
+    v.sort();
+    v
+}
+
+/// `check_assumptions -live`: a fairness assumption that no trace can meet
+/// with the other assumptions makes every liveness proof vacuous, and
+/// `-conflict` names the assumptions that cause it. When the constraints
+/// end every trace on their own, the cause is told apart.
+#[test]
+fn contradictory_fairness_is_vacuous() {
+    let Some(sh) = shell("fair.sv", "fair") else {
+        return;
+    };
+    sh.eval("assume -name m_fair {s_eventually gnt}; assume -name m_never {!gnt}; assume -name m_idle {!req |=> !req}")
+        .unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "vacuous");
+    assert_eq!(fairness(&sh), Fairness::Vacuous);
+    // m_idle takes no part in the contradiction.
+    assert_eq!(
+        sorted(sh.eval("check_assumptions -live -conflict").unwrap()),
+        ["m_fair", "m_never"]
+    );
+
+    // The same assumptions written in the RTL.
+    let work = std::env::temp_dir().join(format!("informal-vac-fair-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let sv = work.join("fair_rtl.sv");
+    std::fs::write(
+        &sv,
+        "module fair_rtl(input logic clk, rst, req, gnt);\n\
+           m_fair: assume property (@(posedge clk) s_eventually gnt);\n\
+           m_never: assume property (@(posedge clk) !gnt);\n\
+           a_live: assert property (@(posedge clk) disable iff (rst) req |-> s_eventually gnt);\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let rtl = Shell::new(
+        Session::new(informal_bmc::engines(), work.join("run")),
+        Flavor::Jg,
+    );
+    rtl.eval(&format!(
+        "analyze -sv12 {{{}}}; elaborate -top fair_rtl; clock clk; reset -expression {{rst}}",
+        sv.display()
+    ))
+    .unwrap();
+    assert_eq!(rtl.eval("check_assumptions -live").unwrap(), "vacuous");
+    assert_eq!(
+        sorted(rtl.eval("check_assumptions -live -conflict").unwrap()),
+        ["fair_rtl.m_fair", "fair_rtl.m_never"]
+    );
+
+    // Constraints that allow no trace past step 3, with a fairness
+    // assumption on top that either of them alone lets hold: vacuous, but
+    // not because of the fairness, and the set leaves it out.
+    let Some(sh) = shell("counter.sv", "counter") else {
+        return;
+    };
+    sh.eval("assume -name m_on {en}; assume -name m_stop {cnt == 2 |-> !en}; assume -name m_fair {s_eventually cnt == 2}")
+        .unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "vacuous");
+    assert_eq!(fairness(&sh), Fairness::VacuousConstraints);
+    assert_eq!(
+        sorted(sh.eval("check_assumptions -live -conflict").unwrap()),
+        ["m_on", "m_stop"]
+    );
+}
+
+/// A fairness assumption the environment can meet: the engines find a fair
+/// lasso, so it is consistent and nothing conflicts.
+#[test]
+fn satisfiable_fairness_is_consistent() {
+    let Some(sh) = shell("fair.sv", "fair") else {
+        return;
+    };
+    sh.eval("assume -name m_fair {s_eventually gnt}; assume -name m_one {req |-> !gnt}")
+        .unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "consistent");
+    assert_eq!(fairness(&sh), Fairness::Satisfiable);
+    assert_eq!(sh.eval("check_assumptions -live -conflict").unwrap(), "");
+    // Switching the contradicting assumption off makes it consistent again.
+    sh.eval("assume -name m_never {!gnt}").unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "vacuous");
+    sh.eval("assume -disable m_never").unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "consistent");
+}
+
+/// No fairness assumption (only safety ones, or none): nothing to check,
+/// whatever the safety assumptions say.
+#[test]
+fn no_fairness_assumption_has_nothing_to_check() {
+    let Some(sh) = shell("fair.sv", "fair") else {
+        return;
+    };
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "none");
+    sh.eval("assume -name m_never {!gnt}").unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "none");
+    assert_eq!(fairness(&sh), Fairness::NoFairness);
+    assert_eq!(sh.eval("check_assumptions -live -conflict").unwrap(), "");
+    // A fairness assumption that is switched off does not count.
+    sh.eval("assume -name m_fair {s_eventually gnt}; assume -disable m_fair")
+        .unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "none");
+}
+
+/// `-live` takes `-conflict` but not `-depth` or `-dead_end`, which bound
+/// finite traces; and a search that cannot finish (bounded model checking
+/// only, which never proves that no lasso exists) is undetermined, never
+/// consistent.
+#[test]
+fn live_option_combinations_and_undetermined() {
+    let Some(sh) = shell("fair.sv", "fair") else {
+        return;
+    };
+    sh.eval("assume -name m_fair {s_eventually gnt}; assume -name m_never {!gnt}")
+        .unwrap();
+    for other in ["-depth 5", "-dead_end", "-dead_end -conflict"] {
+        let e = sh
+            .eval(&format!("check_assumptions -live {other}"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("-live") && e.contains(other.split(' ').next().unwrap()),
+            "{e}"
+        );
+    }
+    // The finite checks still run without -live.
+    assert_eq!(sh.eval("check_assumptions -depth 5").unwrap(), "5");
+
+    sh.eval("set_max_trace_length 10; informal::set_engines informal-bmc")
+        .unwrap();
+    assert_eq!(sh.eval("check_assumptions -live").unwrap(), "undetermined");
+    assert!(matches!(fairness(&sh), Fairness::Unknown(_)));
+    let e = sh
+        .eval("check_assumptions -live -conflict")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("could not decide"), "{e}");
 }

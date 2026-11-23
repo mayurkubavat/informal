@@ -1,5 +1,5 @@
 use super::{expand_env, note, Args};
-use crate::session::{glob, Kind, Session};
+use crate::session::{glob, Fairness, Kind, Session};
 use informal_tcl::Value;
 use std::path::PathBuf;
 
@@ -209,8 +209,22 @@ pub(super) fn get_task_list(s: &mut Session, _: &[String]) -> Result<Value, Stri
 /// the assumptions and reset allow traces of N model steps (`-conflict`
 /// returns the minimal conflicting assumption core) or reach a trap state
 /// from which no next input satisfies the assumptions (`-dead_end`).
+/// `check_assumptions -live [-conflict]` checks instead whether an infinite
+/// trace meets the constraints and the fairness assumptions (docs/vacuity.md).
 pub(super) fn check_assumptions(s: &mut Session, a: &[String]) -> Result<Value, String> {
-    let a = Args::parse(a, &[("-depth", 1), ("-conflict", 0), ("-dead_end", 0)], &[])?;
+    let a = Args::parse(
+        a,
+        &[
+            ("-depth", 1),
+            ("-conflict", 0),
+            ("-dead_end", 0),
+            ("-live", 0),
+        ],
+        &[],
+    )?;
+    if a.flag("-live") {
+        return check_fairness(s, &a);
+    }
     let depth = match a.val("-depth") {
         None => s.environment_depth.max(1),
         Some(v) => v
@@ -254,6 +268,44 @@ pub(super) fn check_assumptions(s: &mut Session, a: &[String]) -> Result<Value, 
         Some(n) => Ok(Value::from(n.to_string())),
         None => Err("check_assumptions: could not decide (no in-house BMC, or out of time)".into()),
     }
+}
+
+/// `check_assumptions -live [-conflict]`: whether an infinite trace meets
+/// every constraint of the current task and every fairness assumption
+/// infinitely often. Returns `consistent` (a fair lasso was found),
+/// `vacuous` (none exists: every liveness proof under these assumptions is
+/// vacuous), `undetermined` (a bounded or timed-out search, which shows
+/// nothing either way) or `none` (no fairness assumption to check). With
+/// `-conflict`, the assumptions that allow no fair trace, as a list (empty
+/// when none was shown). `-depth` and `-dead_end` bound finite traces and
+/// do not combine with it.
+fn check_fairness(s: &mut Session, a: &Args) -> Result<Value, String> {
+    for other in ["-depth", "-dead_end"] {
+        if a.flag(other) {
+            return Err(format!(
+                "check_assumptions: -live checks infinite fair traces and takes no {other}; run check_assumptions {other} on its own"
+            ));
+        }
+    }
+    if s.dry_run {
+        return Ok(().into());
+    }
+    let narrow = a.flag("-conflict");
+    let env = s
+        .fairness_now(narrow)
+        .map_err(|e| format!("check_assumptions -live: {e}"))?;
+    Ok(match (&env.verdict, narrow) {
+        (Fairness::Unknown(reason), true) => {
+            return Err(format!(
+                "check_assumptions -live: could not decide ({reason})"
+            ))
+        }
+        (_, true) => Value::List(env.conflict_set),
+        (Fairness::NoFairness, false) => Value::from("none"),
+        (Fairness::Satisfiable, false) => Value::from("consistent"),
+        (Fairness::Vacuous | Fairness::VacuousConstraints, false) => Value::from("vacuous"),
+        (Fairness::Unknown(_), false) => Value::from("undetermined"),
+    })
 }
 
 pub(super) fn set_prove_cache(s: &mut Session, a: &[String]) -> Result<Value, String> {

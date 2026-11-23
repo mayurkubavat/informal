@@ -190,45 +190,19 @@ impl Session {
     /// allows a trace (not always the smallest of all such sets). A probe
     /// that cannot decide keeps its owner in the set.
     fn conflict_set(&self, model: &str, n: u32) -> Vec<String> {
-        let owners = self.constraint_owners(model);
-        let mut names: Vec<&str> = Vec::new();
-        for (_, o) in &owners {
-            if !names.contains(&o.as_str()) {
-                names.push(o);
-            }
-        }
-        // One probe each; past this many, list them all rather than wait.
-        if names.is_empty() || names.len() > 64 {
-            return names.into_iter().map(String::from).collect();
-        }
-        let mut dropped: Vec<&str> = Vec::new();
-        let mut kept = Vec::new();
-        for &name in &names {
-            dropped.push(name);
-            let without: String = model
-                .lines()
-                .enumerate()
-                .filter(|(i, _)| {
-                    !owners
-                        .iter()
-                        .any(|(j, o)| j == i && dropped.contains(&o.as_str()))
-                })
-                .flat_map(|(_, l)| [l, "\n"])
-                .collect();
-            if self.trace_of_length(&without, n) != Some(false) {
-                dropped.pop();
-                kept.push(name.to_string());
-            }
-        }
-        kept
+        let owners = self.constraint_owners(model, false);
+        narrow(model, &owners, |m| {
+            self.trace_of_length(m, n) == Some(false)
+        })
     }
 
-    /// The constraint lines of `model` that belong to an assumption or to
-    /// the reset, by line index, with the owner's name: the assumption's
-    /// property name, or `reset`. svlang names each constraint line after
-    /// its assumption's label (`top.m_x`, or `m_x` for a script
-    /// assumption); a clock's wave is the model's own and is never listed.
-    fn constraint_owners(&self, model: &str) -> Vec<(usize, String)> {
+    /// The constraint lines of `model` (and its `fair` lines when `fair`)
+    /// that belong to an assumption or to the reset, by line index, with
+    /// the owner's name: the assumption's property name, or `reset`.
+    /// svlang names each constraint and fair line after its assumption's
+    /// label (`top.m_x`, or `m_x` for a script assumption); a clock's wave
+    /// is the model's own and is never listed.
+    fn constraint_owners(&self, model: &str, fair: bool) -> Vec<(usize, String)> {
         let assumes: Vec<&str> = self
             .props
             .iter()
@@ -240,8 +214,10 @@ impl Session {
             .enumerate()
             .filter_map(|(i, l)| {
                 let w: Vec<&str> = l.split_whitespace().collect();
-                if w.get(1) != Some(&"constraint") {
-                    return None;
+                match w.get(1).copied() {
+                    Some("constraint") => {}
+                    Some("fair") if fair => {}
+                    _ => return None,
                 }
                 let sym = *w.get(3)?;
                 if sym.ends_with("_reset") && sym.starts_with("svlang") {
@@ -363,6 +339,216 @@ impl Session {
             )),
         }
     }
+
+    /// The fairness check (`check_assumptions -live`): is there an infinite
+    /// trace of `task`'s model that meets every constraint at every step
+    /// and every fairness assumption infinitely often? The model keeps its
+    /// constraint and fair lines and gets one liveness target that always
+    /// holds, so the liveness engines find a lasso iff such a trace exists
+    /// and prove the target iff none does. When none does, a second run
+    /// without the fair lines tells whether the fairness assumptions are
+    /// the cause or the constraints end every trace on their own. With
+    /// `narrow_set`, a vacuous result also gets a conflicting set, found
+    /// as the environment check finds its own (one liveness run a probe).
+    pub fn check_fairness(&self, task: &str, btor: &str, narrow_set: bool) -> FairEnvironment {
+        let (model, _) = informal_svlang::split_trace(btor);
+        let owners = self.constraint_owners(model, true);
+        let mut fairness: Vec<String> = Vec::new();
+        for (i, l) in model.lines().enumerate() {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            if w.get(1) != Some(&"fair") {
+                continue;
+            }
+            let name = match owners.iter().find(|(j, _)| *j == i) {
+                Some((_, o)) => o.clone(),
+                None => w.get(3).unwrap_or(&"(unnamed)").to_string(),
+            };
+            if !fairness.contains(&name) {
+                fairness.push(name);
+            }
+        }
+        let mut env = FairEnvironment {
+            task: task.to_string(),
+            fairness,
+            verdict: Fairness::NoFairness,
+            conflict_set: Vec::new(),
+        };
+        if env.fairness.is_empty() {
+            return env;
+        }
+        env.verdict = match self.fair_trace(model) {
+            Ok(true) => Fairness::Satisfiable,
+            Err(reason) => Fairness::Unknown(reason),
+            Ok(false) => {
+                let unfair: String = model
+                    .lines()
+                    .filter(|l| l.split_whitespace().nth(1) != Some("fair"))
+                    .flat_map(|l| [l, "\n"])
+                    .collect();
+                // Undecided here: the contradiction is proven, its cause
+                // is not narrowed.
+                match self.fair_trace(&unfair) {
+                    Ok(false) => Fairness::VacuousConstraints,
+                    _ => Fairness::Vacuous,
+                }
+            }
+        };
+        if narrow_set && env.verdict.vacuous() {
+            env.conflict_set = narrow(model, &owners, |m| self.fair_trace(m) == Ok(false));
+        }
+        env
+    }
+
+    /// Whether `model` (its targets ignored) has an infinite trace that
+    /// meets every constraint and every fair line infinitely often:
+    /// `Ok(true)` when an engine found one (a lasso), `Ok(false)` when one
+    /// proved there is none, and `Err` with the engines' reason otherwise
+    /// (a bounded search, out of time, stopped).
+    fn fair_trace(&self, model: &str) -> Result<bool, String> {
+        let text = fair_model(model);
+        let path = self.workdir.join("environment_fair.btor2");
+        std::fs::create_dir_all(&self.workdir).map_err(|e| e.to_string())?;
+        std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+        let req = CheckRequest {
+            model: path.clone(),
+            format: ModelFormat::Btor2,
+            timeout: self.time_limit,
+            effort: self.effort,
+            max_depth: self.max_trace_length,
+        };
+        // A justice target: the liveness engines (informal-klive and those
+        // that read justice lines).
+        let live = informal_bmc::select_for_btor_with_effort(
+            &self.active_engines(),
+            &text,
+            !self.engine_filter.is_empty(),
+            self.effort,
+        );
+        let o = portfolio::run_until(&live, &req, None, Some(self.stop.as_ref()));
+        let _ = std::fs::remove_file(&path);
+        match portfolio::verdict(&o) {
+            Verdict::Unsafe { .. } => Ok(true),
+            Verdict::Safe => Ok(false),
+            Verdict::Unknown { reason } => Err(reason),
+        }
+    }
+
+    /// Elaborate and lower if needed, then run the fairness check on the
+    /// current task and report its result.
+    pub fn fairness_now(&mut self, narrow_set: bool) -> anyhow::Result<FairEnvironment> {
+        if !self.elaborated {
+            self.elaborate(None)?;
+        }
+        self.check_reset_and_clocks().map_err(|e| anyhow!(e))?;
+        let task = self.current_task.clone();
+        let (btor, _) = self.lower(&task).map_err(|e| anyhow!(e))?;
+        let env = self.check_fairness(&task, &btor, narrow_set);
+        self.report_fairness(&env);
+        Ok(env)
+    }
+
+    /// Say what the fairness check found; vacuity is said loudly.
+    pub(super) fn report_fairness(&self, env: &FairEnvironment) {
+        let task = match env.task.as_str() {
+            EMBEDDED => String::new(),
+            t => format!(" of task {t}"),
+        };
+        let fair = env.fairness.join(", ");
+        let set = match env.conflict_set.as_slice() {
+            [] => String::new(),
+            set => format!(
+                "; these conflict, and dropping any one of them allows a fair trace: {}",
+                set.join(", ")
+            ),
+        };
+        match &env.verdict {
+            Fairness::NoFairness => self.log(&format!(
+                "fairness check: the assumptions{task} have no fairness assumption (s_eventually), so there is nothing to check"
+            )),
+            Fairness::Satisfiable => self.note(&format!(
+                "fairness check: an infinite trace meets the constraints{task} and {fair} infinitely often"
+            )),
+            Fairness::Unknown(reason) => self.log(&format!(
+                "fairness check: could not tell whether an infinite trace meets the constraints{task} and {fair} ({reason}), so this shows nothing about the vacuity of liveness proofs"
+            )),
+            Fairness::Vacuous => self.log(&format!(
+                "VACUOUS (fairness): no infinite trace meets the constraints{task} and {fair} infinitely often: the fairness assumptions are unsatisfiable together with the constraints, so every liveness proof under them is vacuous{set}"
+            )),
+            Fairness::VacuousConstraints => self.log(&format!(
+                "VACUOUS ENVIRONMENT (liveness): the constraints{task} allow no infinite trace even without {fair}, so every liveness proof is vacuous; check_assumptions -depth N or -dead_end shows where traces end{set}"
+            )),
+        }
+    }
+}
+
+/// Of `owners` (line index, owner name), drop each owner in turn and keep
+/// it out while `conflicts` still holds for `model` without the lines of
+/// every owner dropped so far. What is left is a smallest conflicting set
+/// in the sense that dropping any one member makes `conflicts` fail (not
+/// always the smallest of all such sets). Past 64 owners, all are listed.
+fn narrow(
+    model: &str,
+    owners: &[(usize, String)],
+    conflicts: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut names: Vec<&str> = Vec::new();
+    for (_, o) in owners {
+        if !names.contains(&o.as_str()) {
+            names.push(o);
+        }
+    }
+    // One probe each; past this many, list them all rather than wait.
+    if names.is_empty() || names.len() > 64 {
+        return names.into_iter().map(String::from).collect();
+    }
+    let mut dropped: Vec<&str> = Vec::new();
+    let mut kept = Vec::new();
+    for &name in &names {
+        dropped.push(name);
+        let without: String = model
+            .lines()
+            .enumerate()
+            .filter(|(i, _)| {
+                !owners
+                    .iter()
+                    .any(|(j, o)| j == i && dropped.contains(&o.as_str()))
+            })
+            .flat_map(|(_, l)| [l, "\n"])
+            .collect();
+        if !conflicts(&without) {
+            dropped.pop();
+            kept.push(name.to_string());
+        }
+    }
+    kept
+}
+
+/// `model` with its targets (bad, justice) dropped and one liveness target
+/// that always holds: an engine finds it violated iff some infinite trace
+/// meets every constraint and every fair line infinitely often.
+fn fair_model(model: &str) -> String {
+    let mut out = String::new();
+    let mut top = 0u64;
+    for l in model.lines() {
+        let mut w = l.split_whitespace();
+        if let Some(id) = w.next().and_then(|x| x.parse::<u64>().ok()) {
+            top = top.max(id);
+        }
+        if matches!(w.next(), Some("bad" | "justice")) {
+            continue;
+        }
+        out += l;
+        out.push('\n');
+    }
+    out += &format!(
+        "{} sort bitvec 1\n{} one {}\n{} justice 1 {} informal_fair_trace\n",
+        top + 1,
+        top + 2,
+        top + 1,
+        top + 3,
+        top + 2,
+    );
+    out
 }
 
 /// The model has `constraint` lines (assumptions, and the reset).

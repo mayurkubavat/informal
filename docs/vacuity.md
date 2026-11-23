@@ -47,6 +47,42 @@ flavor) runs the same check on its own and returns the number of steps the
 environment allows, up to N; with `-conflict` it returns the conflicting
 assumptions instead, as a list (empty when they do not conflict).
 
+**The fairness check** (`check_assumptions -live`, on request only) asks
+whether an infinite trace exists that meets every constraint of the
+current task at every step and every fairness assumption infinitely often.
+A fairness assumption is an `assume` with `s_eventually` (a `fair` line in
+the model). The check keeps the model's constraint and fair lines, drops
+its targets, adds one liveness target that always holds, and runs the
+liveness engines on it (informal-klive, and any engine that reads justice
+lines). The command returns:
+
+| Result | Meaning |
+|---|---|
+| `vacuous` | proved: no fair infinite trace exists, so every liveness proof under these assumptions is vacuous |
+| `consistent` | an engine found a fair lasso |
+| `undetermined` | a bounded search or one that ran out of time: this says nothing about vacuity either way |
+| `none` | the task has no fairness assumption; there is nothing to check |
+
+When the result is `vacuous`, a second run without the fair lines tells
+the cause apart. Usually the fairness assumptions contradict the others:
+
+```
+informal: VACUOUS (fairness): no infinite trace meets the constraints and
+m_fair infinitely often: the fairness assumptions are unsatisfiable
+together with the constraints, so every liveness proof under them is
+vacuous
+```
+
+If the second run proves that no infinite trace exists even without them,
+the constraints end every trace on their own (`VACUOUS ENVIRONMENT
+(liveness)`), and `check_assumptions -depth N` or `-dead_end` shows where. With `-conflict`, `-live` returns the
+assumptions that allow no fair trace together, as a list, found as above
+by dropping each in turn (one liveness run each); it is empty when the
+result is `consistent` or `none`, and the command fails when the result is
+`undetermined`. `-live` checks infinite traces, so it does not take
+`-depth` or `-dead_end`; run those as separate commands. The fairness
+check is not run before `prove`, and its result does not mark proofs.
+
 Steps are model steps: one per clock cycle for a design on one rising edge,
 two per cycle when the model drives the clocks (both edges, several clocks).
 The reset's own steps count.
@@ -101,6 +137,11 @@ the precondition covers.
 - When the in-house BMC is not available (no CaDiCaL) or does not finish
   within the time limit (at most 60 s a probe), the log says the check
   could not decide, and no vacuity is set.
+- The fairness check is as strong as the liveness engines: within the
+  prove time limit (`set_prove_time_limit`) a run that neither proves nor
+  finds a lasso is `undetermined`, and a bound set with
+  `set_max_trace_length` usually leaves it so. Each `-conflict` probe is
+  one more such run.
 
 ## Planned, in this order
 
