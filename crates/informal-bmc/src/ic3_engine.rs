@@ -1,8 +1,9 @@
 //! Single-threaded (`informal-ic3`, `informal-ic3-cadical`) and multi-worker
 //! (`informal-ic3-mt`) IC3/PDR engine wrappers.
 
+use crate::hub::{seed_from_hub, HubBridge};
 use crate::prep::{fold_on, prepare_ctx_fold, result, solver, unknown, Checked, FORMATS};
-use crate::verify::{certified, mine_into, mine_invariant, stored_invariant, unsafe_certified_at};
+use crate::verify::{certified, mine_invariant, stored_invariant, unsafe_certified_at};
 use crate::{cnf, ic3, invariant};
 use informal_engine::{
     Capabilities, CheckRequest, Effort, Engine, EngineDomain, EngineKind, EngineResult, RunContext,
@@ -54,6 +55,8 @@ impl Engine for Ic3Engine {
             proves: true,
             finds_bugs: true,
             liveness: true,
+            lemma_export: true,
+            lemma_import: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Ic3,
             min_effort: if self.mini {
@@ -100,6 +103,12 @@ impl Engine for Ic3Engine {
                 }
             });
         let mut kept = stored_invariant(&g, ctx, self.name());
+        let (mut hub_bridge, from_hub) = seed_from_hub(&g, ctx, self.name());
+        if !from_hub.is_empty() {
+            kept.extend(from_hub);
+            kept.sort();
+            kept.dedup();
+        }
         let mut attempt = 0u32;
         let (ic3, v) = loop {
             let mut slice = ctx.clone();
@@ -135,7 +144,11 @@ impl Engine for Ic3Engine {
                         && ctx.deadline.saturating_duration_since(Instant::now())
                             >= Duration::from_millis(500)))
             {
-                mine_into(&g, &mut ic3, ctx, self.name());
+                let mined = mine_invariant(&g, ctx, self.name());
+                if let Some(h) = &hub_bridge {
+                    h.publish_standing(&mined);
+                }
+                ic3.assume_invariant(mined);
             }
             if std::env::var_os("INFORMAL_IC3_HOUDINI").is_none() {
                 // H2 on by default here: gap set 1 -> 3 at 300 s, sample 20 -> 21.
@@ -159,10 +172,14 @@ impl Engine for Ic3Engine {
                 ic3.set_config(cfg);
             }
             ic3.assume_invariant(kept.clone());
+            if let Some(h) = hub_bridge.take() {
+                ic3.attach_hub(h);
+            }
             let v = ic3.check(&slice);
             if restart == 0.0 || !matches!(v, Verdict::Unknown { .. }) || ctx.should_stop() {
                 break (ic3, v);
             }
+            hub_bridge = ic3.take_hub();
             // The slice ran out: what survives is the inductive core.
             let th = Instant::now();
             let mut cands = ic3.lemmas();
@@ -172,6 +189,9 @@ impl Engine for Ic3Engine {
             let rest = ctx.deadline.saturating_duration_since(th);
             h.deadline = th + (rest / 10).min(Duration::from_secs(20));
             if let Some(core) = invariant::houdini(&g, cands, || solver(&h), &h) {
+                if let Some(hub) = &hub_bridge {
+                    hub.publish_standing(&core);
+                }
                 kept = core;
             }
             if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
@@ -351,6 +371,8 @@ impl Engine for Ic3Mt {
             proves: true,
             finds_bugs: true,
             liveness: true,
+            lemma_export: true,
+            lemma_import: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Ic3,
             min_effort: Effort::Standard,
@@ -370,12 +392,24 @@ impl Engine for Ic3Mt {
             Err(e) => return Ok(result(self.name(), unknown(e), t0)),
         };
         let pool = Arc::new(ic3::LemmaPool::default());
-        // H15: proved once here, assumed by every worker.
+        // H15 + Phase 2: proved once here, assumed by every worker.
         let mut stored = stored_invariant(&g, ctx, self.name());
+        let (hub_seed, from_hub) = seed_from_hub(&g, ctx, self.name());
+        let seed_cursor = hub_seed.as_ref().map_or(0, HubBridge::standing_cursor);
+        let seed_pub_id = hub_seed.as_ref().map(HubBridge::publisher_id);
+        if !from_hub.is_empty() {
+            stored.extend(from_hub);
+            stored.sort();
+            stored.dedup();
+        }
         if matches!(req.effort, Effort::High | Effort::Max)
             && ctx.deadline.saturating_duration_since(Instant::now()) >= Duration::from_millis(500)
         {
-            stored.extend(mine_invariant(&g, ctx, self.name()));
+            let mined = mine_invariant(&g, ctx, self.name());
+            if let Some(hub) = &hub_seed {
+                hub.publish_standing(&mined);
+            }
+            stored.extend(mined);
             stored.sort();
             stored.dedup();
         }
@@ -462,6 +496,15 @@ impl Engine for Ic3Mt {
                             return unknown("latch inits that are not constants").into();
                         };
                         ic3.share(pool, id);
+                        if let Some(mut hub) = HubBridge::new(g, inner, self.name()) {
+                            hub = hub
+                                .with_standing_cursor(seed_cursor)
+                                .with_frame_publish(id == 0);
+                            if let Some(pid) = seed_pub_id {
+                                hub = hub.with_publisher_id(pid);
+                            }
+                            ic3.attach_hub(hub);
+                        }
                         ic3.assume_invariant(stored);
                         let v = ic3.check(inner);
                         let v = certified(req, g, &ic3, v, inner);

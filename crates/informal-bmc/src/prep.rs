@@ -37,6 +37,7 @@ pub(crate) struct Loaded {
     pub(crate) latch_map: LatchMap,
     pub(crate) input_map: InputMap,
     pub(crate) design_hash: u64,
+    pub(crate) property_hash: u64,
     pub(crate) folded: Option<Folded>,
     /// The loaded model's latch literals, by latch index.
     pub(crate) latch_lits: Vec<informal_aig::Lit>,
@@ -50,8 +51,10 @@ pub(crate) fn prepare(req: &CheckRequest, fold: bool) -> Result<Loaded, String> 
     if g.bads.is_empty() {
         return Err("model has no bad-state property".into());
     }
-    // Only needed (and only computed) when the invariant store is on.
-    let design_hash = store::dir().map_or(0, |_| store::design_hash(&g));
+    // Always compute design & property hashes so cached `Prepared` slots carry
+    // stable identities for both `INFORMAL_INV_STORE` and `LemmaHub`.
+    let design_hash = store::design_hash(&g);
+    let property_hash = store::property_hash(&g);
     if fold {
         if let Some((f, info, fl, fi)) = pre::fold_clock(&g) {
             let (s, _, map, imap) = pre::simplify_maps(&f);
@@ -75,6 +78,7 @@ pub(crate) fn prepare(req: &CheckRequest, fold: bool) -> Result<Loaded, String> 
                 input_map: pre::compose_inputs(&fi, &f, &imap),
                 aig: s,
                 design_hash,
+                property_hash,
                 folded: Some(Folded {
                     clock: info.clock,
                     phase: info.phase,
@@ -90,6 +94,7 @@ pub(crate) fn prepare(req: &CheckRequest, fold: bool) -> Result<Loaded, String> 
         latch_map: map,
         input_map: imap,
         design_hash,
+        property_hash,
         folded: None,
         latch_lits: g.latches.iter().map(|l| l.lit).collect(),
     })
@@ -106,8 +111,10 @@ pub struct Prepared {
     pub latch_map: LatchMap,
     /// From the loaded model's inputs to `aig`'s (UNSAFE certificates).
     pub input_map: InputMap,
-    /// [`store::design_hash`] of the loaded model (0 when the store is off).
+    /// [`store::design_hash`] of the loaded model (transition + constraint cone).
     pub design_hash: u64,
+    /// [`store::property_hash`] of the loaded model (design + bad outputs).
+    pub property_hash: u64,
     /// Set when the model was clock-folded: certificates then check two
     /// steps of the loaded model per step of this one.
     pub folded: Option<Folded>,
@@ -268,6 +275,7 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
         latch_map: map,
         input_map: imap,
         design_hash,
+        property_hash,
         mut folded,
         latch_lits,
     } = prepare(req, fold)?;
@@ -368,6 +376,7 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
         latch_map: map,
         input_map: imap,
         design_hash,
+        property_hash,
         folded,
         merged,
     })

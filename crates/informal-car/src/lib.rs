@@ -43,6 +43,8 @@ impl Engine for CarEngine {
             proves: true,
             finds_bugs: true,
             liveness: true,
+            lemma_export: true,
+            lemma_import: !self.backward,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Car,
             min_effort: Effort::Standard,

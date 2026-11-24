@@ -32,6 +32,8 @@ impl Engine for ImcEngine {
             proves: true,
             finds_bugs: true,
             liveness: true,
+            lemma_export: true,
+            lemma_import: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Interpolation,
             min_effort: Effort::Standard,

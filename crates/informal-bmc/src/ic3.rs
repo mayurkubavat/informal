@@ -308,6 +308,8 @@ pub struct Ic3<'g> {
     epoch: u32,
     cfg: Config,
     share: Option<Share>,
+    /// Optional cross-engine [`crate::hub::HubBridge`] (`Phase 2 — LemmaHub`).
+    hub: Option<crate::hub::HubBridge>,
     /// Per AIG variable: how often it occurred in recent lemmas (decayed).
     act: Vec<f64>,
     act_inc: f64,
@@ -453,6 +455,7 @@ impl<'g> Ic3<'g> {
             epoch: 0,
             cfg,
             share: None,
+            hub: None,
             act: vec![0.0; g.nodes.len() + aux_cap],
             act_inc: 1.0,
             trace: std::env::var_os("INFORMAL_IC3_TRACE")
@@ -609,11 +612,33 @@ impl<'g> Ic3<'g> {
         self.share = Some(Share { pool, id, seen: 0 });
     }
 
+    /// Attach a cross-engine [`crate::hub::HubBridge`] for live cooperative
+    /// lemma export and zero-trust import.
+    pub fn attach_hub(&mut self, bridge: crate::hub::HubBridge) {
+        self.hub = Some(bridge);
+    }
+
+    /// Detach and return the attached [`crate::hub::HubBridge`], if any.
+    pub fn take_hub(&mut self) -> Option<crate::hub::HubBridge> {
+        self.hub.take()
+    }
+
     fn publish(&self, cube: &Cube, level: usize) {
+        if self.share.is_none() && self.hub.is_none() {
+            return;
+        }
+        // Other IC3s and external engines do not know this one's derived predicates.
+        let expanded = self.expand(cube);
         if let Some(sh) = &self.share {
-            // Other IC3s do not know this one's derived predicates.
-            for c in self.expand(cube) {
-                sh.pool.publish(&c, level, sh.id);
+            for c in &expanded {
+                sh.pool.publish(c, level, sh.id);
+            }
+        }
+        if let Some(hub) = &self.hub {
+            if level != usize::MAX && level >= 2 {
+                for c in &expanded {
+                    hub.publish_frame(c, level as u32);
+                }
             }
         }
     }
@@ -787,6 +812,9 @@ impl<'g> Ic3<'g> {
     /// standing invariant a publisher's lemmas rely on must be in the
     /// pool, so Houdini's moves are published at level usize::MAX.
     fn import(&mut self, ctx: &RunContext) {
+        if self.hub.is_some() {
+            self.import_from_hub(ctx);
+        }
         let mode = self.cfg.import;
         if mode == Import::Off {
             return;
@@ -823,6 +851,73 @@ impl<'g> Ic3<'g> {
             self.stats_import_seen += 1;
             self.adopt(c, l, true);
         }
+    }
+
+    /// Zero-trust import of standing and bounded frame lemmas from `LemmaHub`.
+    /// Lock-free no-op when neither hub cursor has moved.
+    fn import_from_hub(&mut self, ctx: &RunContext) {
+        let has_work = self
+            .hub
+            .as_ref()
+            .is_some_and(|h| h.has_new_standing() || (self.top() >= 1 && h.has_new_frames()));
+        if !has_work || ctx.should_stop() {
+            return;
+        }
+        let Some(mut hub) = self.hub.take() else {
+            return;
+        };
+        if hub.has_new_standing() {
+            let existing: Vec<Cube> = self.inf.iter().flat_map(|c| self.expand(c)).collect();
+            let new_inv = hub.poll_standing_verified(
+                self.g,
+                &existing,
+                ctx,
+                std::time::Duration::from_millis(50),
+            );
+            if !new_inv.is_empty() {
+                for c in &new_inv {
+                    self.level_of.insert(c.clone(), usize::MAX);
+                }
+                self.stats_imported += new_inv.len();
+                self.assume_invariant(new_inv);
+            }
+        }
+        if self.top() >= 1 && hub.has_new_frames() && !ctx.should_stop() {
+            let cands = hub.poll_frame_candidates();
+            for (c, l) in cands {
+                if ctx.should_stop() {
+                    break;
+                }
+                self.stats_import_seen += 1;
+                if self.intersects_init(&c) {
+                    hub.record_frame_result(false);
+                    continue;
+                }
+                let target = (l as usize).min(self.top());
+                if target < 1
+                    || self.level_of.get(&c).is_some_and(|&x| x >= target)
+                    || self.already_blocked(&c, target)
+                {
+                    continue;
+                }
+                let mut lvl = target;
+                let mut accepted = false;
+                while lvl >= 1 && !self.already_blocked(&c, lvl) {
+                    self.stats_import_queries += 1;
+                    if self.relative_inductive(&c, lvl, false).is_ok() {
+                        self.trace_src = "import";
+                        self.add_lemma_quiet(c, lvl);
+                        self.trace_src = "po";
+                        self.stats_imported += 1;
+                        accepted = true;
+                        break;
+                    }
+                    lvl -= 1;
+                }
+                hub.record_frame_result(accepted);
+            }
+        }
+        self.hub = Some(hub);
     }
 
     /// One pool entry (`fresh`) or one raise of an entry we cut before.
@@ -2039,6 +2134,9 @@ impl<'g> Ic3<'g> {
         }
         let had: std::collections::HashSet<&Cube> = self.inf.iter().collect();
         let new: Vec<Cube> = inv.iter().filter(|c| !had.contains(c)).cloned().collect();
+        if let Some(hub) = &self.hub {
+            hub.publish_standing(&new);
+        }
         for c in &new {
             self.level_of.insert(c.clone(), usize::MAX);
             if self.cfg.import != Import::Checked {
@@ -2120,6 +2218,9 @@ impl<'g> Ic3<'g> {
         let new: Vec<Cube> = inv.into_iter().filter(|q| !had.contains(q)).collect();
         if new.is_empty() {
             return false;
+        }
+        if let Some(hub) = &self.hub {
+            hub.publish_standing(&new);
         }
         for q in &new {
             self.level_of.insert(q.clone(), usize::MAX);

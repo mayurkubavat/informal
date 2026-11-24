@@ -3,7 +3,7 @@ use super::vacuity_env::has_constraints;
 use crate::progress::Tracker;
 use anyhow::{anyhow, bail};
 use informal_engine::portfolio::EngineRun;
-use informal_engine::{portfolio, CheckRequest, Engine, ModelFormat, Progress, Verdict};
+use informal_engine::{portfolio, CheckRequest, Engine, LemmaHub, ModelFormat, Progress, Verdict};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -365,6 +365,7 @@ impl Session {
         effort: Effort,
         timeout: Duration,
         allow_bounded_promote: bool,
+        lemma_hub: Option<Arc<LemmaHub>>,
     ) -> (
         Status,
         Option<String>,
@@ -496,7 +497,7 @@ impl Session {
         let stop = Some(self.stop.as_ref());
         let before = crate::stats::Usage::now();
         let o = match tracker {
-            None => portfolio::run_until(engines, &req, None, stop),
+            None => portfolio::run_with_hub(engines, &req, None, stop, lemma_hub),
             Some((t, slot)) => std::thread::scope(|sc| {
                 let (tx, rx) = mpsc::channel::<Progress>();
                 // Ends when the portfolio returns and drops the last sender.
@@ -508,7 +509,7 @@ impl Session {
                         }
                     }
                 });
-                portfolio::run_until(engines, &req, Some(tx), stop)
+                portfolio::run_with_hub(engines, &req, Some(tx), stop, lemma_hub)
             }),
         };
         let usage = before.zip(crate::stats::Usage::now());

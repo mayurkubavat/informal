@@ -10,6 +10,7 @@
 //! for proofs, aigsim for counterexamples) can confirm from files.
 
 pub mod certificate;
+pub mod lemma_hub;
 pub mod memory;
 pub mod portfolio;
 pub mod selector;
@@ -28,6 +29,7 @@ pub fn tool_missing(what: &str) {
 }
 
 pub use certificate::Certificate;
+pub use lemma_hub::{CanonicalClause, HubStats, LemmaHub, LemmaScope, SharedLemma};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -273,6 +275,8 @@ pub struct RunContext {
     pub cancel: CancelToken,
     pub deadline: Instant,
     pub progress: Option<Sender<Progress>>,
+    /// Optional cooperative proof-sharing hub (`Phase 2 — LemmaHub`).
+    pub lemma_hub: Option<Arc<LemmaHub>>,
 }
 
 impl RunContext {
@@ -281,7 +285,13 @@ impl RunContext {
             cancel: CancelToken::new(),
             deadline: Instant::now() + timeout,
             progress: None,
+            lemma_hub: None,
         }
+    }
+    /// Attach a shared [`LemmaHub`] to this context.
+    pub fn with_lemma_hub(mut self, hub: Arc<LemmaHub>) -> Self {
+        self.lemma_hub = Some(hub);
+        self
     }
     /// True once the run should stop: cancelled or out of time.
     pub fn should_stop(&self) -> bool {

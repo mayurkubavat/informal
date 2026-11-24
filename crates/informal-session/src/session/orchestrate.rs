@@ -2,7 +2,7 @@ use super::types::*;
 use super::{drop_assumptions, has_target, only_target, target_name, trace_model};
 use crate::progress::Tracker;
 use informal_engine::portfolio::EngineRun;
-use informal_engine::Engine;
+use informal_engine::{Engine, LemmaHub};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -123,6 +123,45 @@ impl Session {
         base: usize,
         batch_deadline: Option<Instant>,
     ) -> (usize, bool) {
+        let lemma_hub = LemmaHub::is_enabled().then(|| Arc::new(LemmaHub::new()));
+        let res = self.prove_targets_with_hub(
+            targets,
+            lowered,
+            engines,
+            tracker,
+            base,
+            batch_deadline,
+            lemma_hub.as_ref(),
+        );
+        self.last_lemma_stats = lemma_hub.as_ref().map(|h| h.stats());
+        if let Some(st) = &self.last_lemma_stats {
+            if std::env::var_os("INFORMAL_IC3_STATS").is_some()
+                && (st.published_standing > 0 || st.accepted > 0)
+            {
+                eprintln!(
+                    "lemma_hub: published {} standing / {} frame, accepted {} / rejected {} (dedup {})",
+                    st.published_standing,
+                    st.published_frame,
+                    st.accepted,
+                    st.rejected,
+                    st.deduplicated
+                );
+            }
+        }
+        res
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prove_targets_with_hub(
+        &mut self,
+        targets: &[usize],
+        lowered: Result<(&str, &[informal_svlang::RtlProperty]), &str>,
+        engines: &[Arc<dyn Engine>],
+        tracker: Option<&Tracker>,
+        base: usize,
+        batch_deadline: Option<Instant>,
+        lemma_hub: Option<&Arc<LemmaHub>>,
+    ) -> (usize, bool) {
         let budget_for = |cap: Duration| -> Option<Duration> {
             match batch_deadline {
                 None => Some(cap),
@@ -168,6 +207,7 @@ impl Session {
                         self.effort,
                         prop_timeout,
                         true,
+                        lemma_hub.cloned(),
                     ),
                 };
                 if self.record_target_result(i, slot, tracker, outcome) {
@@ -232,6 +272,7 @@ impl Session {
                     self.effort,
                     p1_timeout,
                     true,
+                    lemma_hub.cloned(),
                 );
                 if self.record_target_result(i, slot, tracker, outcome) {
                     for &(_, pi, _, _) in &pending {
@@ -250,6 +291,7 @@ impl Session {
                 Effort::Low,
                 p1_timeout,
                 false,
+                lemma_hub.cloned(),
             );
             let spent = t0.elapsed();
             if self.stop.load(Ordering::SeqCst) {
@@ -307,6 +349,7 @@ impl Session {
                 self.effort,
                 p2_timeout,
                 true,
+                lemma_hub.cloned(),
             );
             if self.record_target_result(i, slot, tracker, outcome) {
                 for &(_, pi, _, _) in &pending[p_idx + 1..] {

@@ -73,14 +73,15 @@ pub fn certify_lemmas(
             .map_err(|e| format!("cannot reload the model: {e:#}"))?;
         if let Some(f) = &p.folded {
             // A folded model's invariant is a 2-step one on the loaded
-            // model, on the clock's initial phase (not stored: the store
-            // holds invariants of every reachable state).
+            // model, on the clock's initial phase (not stored on disk: the
+            // disk store holds invariants of every reachable state; LemmaHub
+            // scopes folded invariants by `(clock, phase)`).
             let mut inv = certify::lift_folded(&orig, &p.latch_map, p, lemmas, f.ok)?;
             inv.extend(certify::equalities(&p.merged));
             certify::check_folded(&orig, &inv, &|| solver(ctx))?;
-            cert = Some(Certificate::TwoStep {
-                clauses: without_ok(inv),
-            });
+            let clean = without_ok(inv);
+            crate::hub::publish_certified_to_hub(&orig, p, &clean, ctx);
+            cert = Some(Certificate::TwoStep { clauses: clean });
             return Ok(());
         }
         let mut inv = certify::lift(&orig, &p.latch_map, p, lemmas)?;
@@ -89,6 +90,7 @@ pub fn certify_lemmas(
         if store::dir().is_some() {
             store_invariant(&orig, p.design_hash, &inv);
         }
+        crate::hub::publish_certified_to_hub(&orig, p, &inv, ctx);
         cert = Some(Certificate::Invariant { clauses: inv });
         Ok(())
     })();
@@ -396,9 +398,11 @@ pub fn kind_certified(
             inv.extend(certify::equalities(&p.merged));
             let differ =
                 certify::check_kind_folded(&orig, &inv, k, &|| solver(ctx), &|| ctx.should_stop())?;
+            let clean = without_ok(inv);
+            crate::hub::publish_certified_to_hub(&orig, p, &clean, ctx);
             cert = Some(Certificate::TwoStepKInduction {
                 k: k as u32,
-                clauses: without_ok(inv),
+                clauses: clean,
                 simple_path: differ > 0,
             });
             return Ok(());
@@ -410,6 +414,7 @@ pub fn kind_certified(
         let differ = certify::check_kind_paths(&orig, &inv, true, k, &|| solver(ctx), &|| {
             ctx.should_stop()
         })?;
+        crate::hub::publish_certified_to_hub(&orig, p, &inv, ctx);
         cert = Some(Certificate::KInduction {
             k: k as u32,
             clauses: inv,

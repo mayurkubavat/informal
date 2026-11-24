@@ -9,7 +9,7 @@
 //! certification via [`informal_bmc::certify_lemmas`].
 
 use informal_aig::{is_neg, neg, var, Aig, Init, Lit, Node, FALSE, TRUE};
-use informal_bmc::{ic3, solver};
+use informal_bmc::{ic3, seed_from_hub, solver, Prepared};
 use informal_engine::{RunContext, Verdict};
 use informal_sat::{Answer, Sat};
 use std::collections::HashMap;
@@ -25,11 +25,12 @@ pub enum InnOutcome {
 }
 
 /// Run IC3-INN (internal-signal promotion + DynAMic/EXCTG/coupled IC3) on `g`.
-pub fn run_ic3_inn(g: &Aig, ctx: &RunContext) -> InnOutcome {
+pub fn run_ic3_inn(g: &Prepared, ctx: &RunContext) -> InnOutcome {
     if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
         return InnOutcome::Aborted("latch inits that are not constants".into());
     }
 
+    let (hub, from_hub) = seed_from_hub(g, ctx, "informal-ic3-inn");
     let (inn_g, aux_defs) = build_inn_aig(g);
     let c = ctx.clone();
     let cfg = ic3::Config {
@@ -44,6 +45,12 @@ pub fn run_ic3_inn(g: &Aig, ctx: &RunContext) -> InnOutcome {
     let Some(mut ic3) = ic3::Ic3::with_config(&inn_g, Box::new(move || solver(&c)), cfg) else {
         return InnOutcome::Aborted("ic3-inn init failed".into());
     };
+    if !from_hub.is_empty() {
+        ic3.assume_invariant(from_hub);
+    }
+    if let Some(h) = hub {
+        ic3.attach_hub(h);
+    }
     match ic3.check(ctx) {
         Verdict::Safe => {
             let Some(inn_lemmas) = ic3.invariant() else {

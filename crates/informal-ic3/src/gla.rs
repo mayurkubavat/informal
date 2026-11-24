@@ -13,10 +13,11 @@
 
 use informal_aig::{is_neg, neg, var, Aig, Init, Lit, Node, FALSE};
 use informal_bmc::cnf;
-use informal_bmc::{ic3, solver, PreparedTrace};
+use informal_bmc::{ic3, invariant, seed_from_hub, solver, Prepared, PreparedTrace};
 use informal_engine::{Progress, RunContext, Verdict};
 use informal_sat::Answer;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// Outcome of GLA-CEGAR on a prepared AIG.
 pub enum GlaOutcome {
@@ -30,7 +31,7 @@ pub enum GlaOutcome {
 }
 
 /// Run Gate-Level Abstraction + CEGAR on prepared AIG `g`.
-pub fn run_gla(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> GlaOutcome {
+pub fn run_gla(g: &Prepared, max_depth: Option<usize>, ctx: &RunContext) -> GlaOutcome {
     if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
         return GlaOutcome::Aborted("latch inits that are not constants".into());
     }
@@ -39,6 +40,7 @@ pub fn run_gla(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> GlaOutcom
         return run_concrete_ic3(g, ctx);
     }
 
+    let (mut hub, mut standing) = seed_from_hub(g, ctx, "informal-gla");
     // Seed initial localization: latches in the combinational cone of `bads` and `constraints`.
     let mut visible = direct_cone_latches(g);
     let mut round = 0usize;
@@ -46,6 +48,16 @@ pub fn run_gla(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> GlaOutcom
     loop {
         if ctx.should_stop() {
             return GlaOutcome::Aborted(ctx.stop_reason().into());
+        }
+        if let Some(h) = &mut hub {
+            if h.has_new_standing() {
+                standing.extend(h.poll_standing_verified(
+                    g,
+                    &standing,
+                    ctx,
+                    Duration::from_millis(50),
+                ));
+            }
         }
         round += 1;
         let vis_count = visible.iter().filter(|&&v| v).count();
@@ -67,35 +79,34 @@ pub fn run_gla(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> GlaOutcom
         let Some(mut ic3) = ic3::Ic3::with_config(&abs_g, Box::new(move || solver(&c)), cfg) else {
             return GlaOutcome::Aborted("ic3 init failed on abstract model".into());
         };
-        match ic3.check(ctx) {
+        if !standing.is_empty() {
+            let abs_cands = map_conc_cubes_to_abs(g, &abs_g, &abs_to_conc, &standing);
+            if !abs_cands.is_empty() {
+                let now = Instant::now();
+                let rest = ctx.deadline.saturating_duration_since(now);
+                let mut h = ctx.clone();
+                h.deadline = now + Duration::from_millis(50).min(rest / 10);
+                if let Some(abs_inv) = invariant::houdini(&abs_g, abs_cands, || solver(&h), &h) {
+                    ic3.assume_invariant(abs_inv);
+                }
+            }
+        }
+        let res = ic3.check(ctx);
+        // Any standing invariant proved on over-approximate `abs_g` holds on
+        // every concrete trace of `g`: share it even before CEGAR refinement.
+        if let Some(h) = &hub {
+            let abs_standing = ic3.standing_invariant();
+            if !abs_standing.is_empty() {
+                let conc = map_abs_cubes_to_conc(&abs_g, g, &abs_to_conc, &abs_standing);
+                h.publish_standing(&conc);
+            }
+        }
+        match res {
             Verdict::Safe => {
                 let Some(abs_lemmas) = ic3.invariant() else {
                     return GlaOutcome::Aborted("missing abstract invariant".into());
                 };
-                // Map abstract latch literals back to concrete `g` latch literals.
-                let mut abs_var_to_conc: HashMap<u32, Lit> =
-                    HashMap::with_capacity(abs_to_conc.len());
-                for (ai, &ci) in abs_to_conc.iter().enumerate() {
-                    abs_var_to_conc.insert(var(abs_g.latches[ai].lit), g.latches[ci].lit);
-                }
-                let conc_lemmas: Vec<ic3::Cube> = abs_lemmas
-                    .into_iter()
-                    .map(|cube| {
-                        let mut mapped: ic3::Cube = cube
-                            .into_iter()
-                            .map(|al| {
-                                let cl = abs_var_to_conc[&var(al)];
-                                if is_neg(al) {
-                                    neg(cl)
-                                } else {
-                                    cl
-                                }
-                            })
-                            .collect();
-                        mapped.sort_unstable();
-                        mapped
-                    })
-                    .collect();
+                let conc_lemmas = map_abs_cubes_to_conc(&abs_g, g, &abs_to_conc, &abs_lemmas);
                 return GlaOutcome::Safe(conc_lemmas);
             }
             Verdict::Unsafe { depth: Some(d) } => {
@@ -135,6 +146,60 @@ pub fn run_gla(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> GlaOutcom
             _ => return GlaOutcome::Aborted(ctx.stop_reason().into()),
         }
     }
+}
+
+fn map_abs_cubes_to_conc(
+    abs_g: &Aig,
+    g: &Aig,
+    abs_to_conc: &[usize],
+    cubes: &[ic3::Cube],
+) -> Vec<ic3::Cube> {
+    let mut abs_var_to_conc: HashMap<u32, Lit> = HashMap::with_capacity(abs_to_conc.len());
+    for (ai, &ci) in abs_to_conc.iter().enumerate() {
+        abs_var_to_conc.insert(var(abs_g.latches[ai].lit), g.latches[ci].lit);
+    }
+    cubes
+        .iter()
+        .map(|cube| {
+            let mut mapped: ic3::Cube = cube
+                .iter()
+                .map(|&al| {
+                    let cl = abs_var_to_conc[&var(al)];
+                    if is_neg(al) {
+                        neg(cl)
+                    } else {
+                        cl
+                    }
+                })
+                .collect();
+            mapped.sort_unstable();
+            mapped
+        })
+        .collect()
+}
+
+fn map_conc_cubes_to_abs(
+    g: &Aig,
+    abs_g: &Aig,
+    abs_to_conc: &[usize],
+    cubes: &[ic3::Cube],
+) -> Vec<ic3::Cube> {
+    let mut conc_var_to_abs: HashMap<u32, Lit> = HashMap::with_capacity(abs_to_conc.len());
+    for (ai, &ci) in abs_to_conc.iter().enumerate() {
+        conc_var_to_abs.insert(var(g.latches[ci].lit), abs_g.latches[ai].lit);
+    }
+    cubes
+        .iter()
+        .filter_map(|cube| {
+            let mut mapped = Vec::with_capacity(cube.len());
+            for &cl in cube {
+                let al = *conc_var_to_abs.get(&var(cl))?;
+                mapped.push(if is_neg(cl) { neg(al) } else { al });
+            }
+            mapped.sort_unstable();
+            Some(mapped)
+        })
+        .collect()
 }
 
 fn run_concrete_ic3(g: &Aig, ctx: &RunContext) -> GlaOutcome {

@@ -461,6 +461,9 @@ pub struct Session {
     /// Extract minimal proof cores during `prove -with_proof_core`.
     #[serde(skip)]
     pub with_proof_core: bool,
+    /// Telemetry from the most recent task's cooperative [`informal_engine::LemmaHub`].
+    #[serde(skip)]
+    pub last_lemma_stats: Option<informal_engine::HubStats>,
 }
 
 /// What the environment check found (docs/vacuity.md).

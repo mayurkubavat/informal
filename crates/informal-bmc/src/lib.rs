@@ -11,6 +11,7 @@ pub mod certificate;
 pub mod certify;
 pub mod cnf;
 pub mod deadend;
+pub mod hub;
 pub mod ic3;
 pub mod ic3_engine;
 pub mod invariant;
@@ -26,6 +27,7 @@ use informal_engine::{Effort, Engine};
 use std::sync::Arc;
 
 pub use bmc::Bmc;
+pub use hub::{publish_certified_to_hub, seed_from_hub, HubBridge, LatchCodec};
 pub use ic3_engine::{Ic3Engine, Ic3Mt};
 pub use informal_aig::load as load_aig;
 pub use kind::{KInduction, KindIc3};

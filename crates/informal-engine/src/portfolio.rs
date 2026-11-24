@@ -5,7 +5,8 @@
 //! once" with the learned selector and online time-slicing.
 
 use crate::{
-    memory, CancelToken, CheckRequest, Engine, EngineResult, Progress, RunContext, Verdict,
+    memory, CancelToken, CheckRequest, Engine, EngineResult, HubStats, LemmaHub, Progress,
+    RunContext, Verdict,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -28,6 +29,9 @@ pub struct PortfolioOutcome {
     /// One record per engine that ran, in the order the engines were given:
     /// how it ended, its time and the depth it reached (the proof profiler).
     pub profile: Vec<EngineRun>,
+    /// Telemetry from the cooperative [`LemmaHub`], when sharing was active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lemma_stats: Option<HubStats>,
 }
 
 /// How one engine's run in a portfolio ended.
@@ -83,20 +87,38 @@ pub fn run_until(
     progress: Option<mpsc::Sender<Progress>>,
     stop: Option<&AtomicBool>,
 ) -> PortfolioOutcome {
+    run_with_hub(engines, req, progress, stop, None)
+}
+
+/// [`run_until`], optionally reusing a caller-supplied [`LemmaHub`] (for
+/// multi-property shared-cone sessions). When `hub` is `None` and at least two
+/// eligible engines participate (with `INFORMAL_LEMMA_HUB` not set to `"0"`),
+/// a fresh portfolio-scoped [`LemmaHub`] is created automatically so engines
+/// exchange proved lemmas live.
+pub fn run_with_hub(
+    engines: &[Arc<dyn Engine>],
+    req: &CheckRequest,
+    progress: Option<mpsc::Sender<Progress>>,
+    stop: Option<&AtomicBool>,
+    hub: Option<Arc<LemmaHub>>,
+) -> PortfolioOutcome {
     let start = Instant::now();
+    let eligible: Vec<_> = engines
+        .iter()
+        .filter(|e| e.capabilities().formats.contains(&req.format))
+        .cloned()
+        .collect();
+    let active_hub = hub.or_else(|| {
+        (LemmaHub::is_enabled() && eligible.len() >= 2).then(|| Arc::new(LemmaHub::new()))
+    });
     let mut ctx = RunContext::new(req.timeout);
+    ctx.lemma_hub = active_hub.clone();
     // Engines report to this run; a forwarder keeps each engine's deepest
     // bound for the profile and passes reports on to the caller.
     let (ptx, prx) = mpsc::channel::<Progress>();
     ctx.progress = Some(ptx);
     let bounds: Mutex<HashMap<String, u32>> = Mutex::default();
     let (tx, rx) = mpsc::channel();
-
-    let eligible: Vec<_> = engines
-        .iter()
-        .filter(|e| e.capabilities().formats.contains(&req.format))
-        .cloned()
-        .collect();
 
     let finished = AtomicBool::new(false);
     let (mut out, mut profile) = std::thread::scope(|s| {
@@ -168,6 +190,7 @@ pub fn run_until(
             wall_ms: 0,
             conflicts: Vec::new(),
             profile: Vec::new(),
+            lemma_stats: None,
         };
         let mut profile: Vec<RawRun> = Vec::new();
         for (slot, name, ms, r) in rx {
@@ -218,6 +241,7 @@ pub fn run_until(
     });
     // Every thread has joined, so the forwarder has seen every bound.
     out.wall_ms = start.elapsed().as_millis();
+    out.lemma_stats = active_hub.as_ref().map(|h| h.stats());
     let winner = out.winner.as_ref().map(|w| w.engine.clone());
     let bounds = bounds.into_inner().unwrap();
     profile.sort_by_key(|p| p.0);

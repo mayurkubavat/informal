@@ -78,6 +78,7 @@ impl Session {
             counter_abstractions: Vec::new(),
             prove_bound: None,
             with_proof_core: false,
+            last_lemma_stats: None,
         }
     }
 

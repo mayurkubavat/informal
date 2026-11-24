@@ -14,10 +14,11 @@
 
 use informal_aig::{is_neg, var, Aig, Init, Lit, Node};
 use informal_bmc::cnf::{self, Template};
-use informal_bmc::{ic3, solver, PreparedTrace};
+use informal_bmc::{ic3, seed_from_hub, solver, Prepared, PreparedTrace};
 use informal_engine::{Progress, RunContext};
 use informal_sat::{Answer, InterpAig, Interpolator, Sat};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Maximum CNF blocked cubes extracted from an interpolant fixpoint invariant.
 pub const MAX_CERT_CUBES: usize = 4_096;
@@ -301,7 +302,7 @@ fn encode_or_all(
 }
 
 /// Run McMillan's IMC algorithm on prepared AIG `g`.
-pub fn run_imc(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> ImcOutcome {
+pub fn run_imc(g: &Prepared, max_depth: Option<usize>, ctx: &RunContext) -> ImcOutcome {
     if !Interpolator::available() {
         return ImcOutcome::Aborted("CaDiCaL proof tracer unavailable".into());
     }
@@ -327,6 +328,15 @@ pub fn run_imc(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> ImcOutcom
         DepthZero::Aborted(r) => return ImcOutcome::Aborted(r),
     }
 
+    let (mut hub, mut standing) = seed_from_hub(g, ctx, "informal-imc");
+    let latch_idx: HashMap<u32, usize> = g
+        .latches
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (var(l.lit), i))
+        .collect();
+    let mut inv_idx = cubes_to_latch_idx(&standing, &latch_idx);
+
     let mut k = 1usize;
     loop {
         if ctx.should_stop() {
@@ -334,6 +344,15 @@ pub fn run_imc(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> ImcOutcom
         }
         if max_depth.is_some_and(|m| k > m) {
             return ImcOutcome::Aborted(format!("bound {} reached", k - 1));
+        }
+        if let Some(h) = &mut hub {
+            if h.has_new_standing() {
+                let added = h.poll_standing_verified(g, &standing, ctx, Duration::from_millis(50));
+                if !added.is_empty() {
+                    inv_idx.extend(cubes_to_latch_idx(&added, &latch_idx));
+                    standing.extend(added);
+                }
+            }
         }
         ctx.report(Progress {
             engine: "informal-imc".into(),
@@ -349,7 +368,7 @@ pub fn run_imc(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> ImcOutcom
             if ctx.should_stop() {
                 return ImcOutcome::Aborted(ctx.stop_reason().into());
             }
-            match solve_partition(g, &tpl, &saig, r_root, k, iter == 0, ctx) {
+            match solve_partition(g, &tpl, &saig, r_root, &inv_idx, k, iter == 0, ctx) {
                 PartResult::RealCex {
                     depth,
                     trace,
@@ -364,10 +383,13 @@ pub fn run_imc(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> ImcOutcom
                 PartResult::Spurious => break, // widen k
                 PartResult::Interpolant(itp, s1_to_latch) => {
                     let i_root = saig.import_interp(&itp, &s1_to_latch);
-                    if is_contained(g, &tpl, &saig, i_root, r_root, ctx) {
-                        // Fixpoint reached: extract minimal CNF blocked cubes for `R`!
+                    if is_contained(g, &tpl, &saig, i_root, r_root, &inv_idx, ctx) {
+                        // Fixpoint reached: extract minimal CNF blocked cubes for `R & standing`.
                         return match extract_blocked_cubes(g, &saig, r_root, ctx) {
-                            Ok(lemmas) => ImcOutcome::Safe(lemmas),
+                            Ok(mut lemmas) => {
+                                lemmas.extend(standing.iter().cloned());
+                                ImcOutcome::Safe(lemmas)
+                            }
                             Err(reason) => ImcOutcome::Aborted(reason),
                         };
                     }
@@ -377,6 +399,30 @@ pub fn run_imc(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> ImcOutcom
             }
         }
         k += 1;
+    }
+}
+
+fn cubes_to_latch_idx(
+    cubes: &[ic3::Cube],
+    latch_idx: &HashMap<u32, usize>,
+) -> Vec<Vec<(usize, bool)>> {
+    cubes
+        .iter()
+        .filter_map(|c| {
+            c.iter()
+                .map(|&l| Some((*latch_idx.get(&var(l))?, is_neg(l))))
+                .collect()
+        })
+        .collect()
+}
+
+fn push_inv_clauses(inv_idx: &[Vec<(usize, bool)>], svars: &[i32], clauses: &mut Vec<Vec<i32>>) {
+    for cube in inv_idx {
+        let cl: Vec<i32> = cube
+            .iter()
+            .map(|&(li, neg)| if neg { svars[li] } else { -svars[li] })
+            .collect();
+        clauses.push(cl);
     }
 }
 
@@ -441,11 +487,13 @@ enum PartResult {
     Aborted(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn solve_partition(
     g: &Aig,
     tpl: &Template,
     saig: &StateAig,
     r_root: u32,
+    inv_idx: &[Vec<(usize, bool)>],
     k: usize,
     is_exact_init: bool,
     ctx: &RunContext,
@@ -482,6 +530,7 @@ fn solve_partition(
         a_clauses.push(cl.to_vec());
     })[0];
     a_clauses.push(vec![r_lit]);
+    push_inv_clauses(inv_idx, &s0_vars, &mut a_clauses);
     for &con in &g.constraints {
         a_clauses.push(vec![flit(&f0, con)]);
     }
@@ -496,6 +545,7 @@ fn solve_partition(
     let mut b_clauses: Vec<Vec<i32>> = Vec::new();
     let tru_b = fresh(&mut next_var);
     b_clauses.push(vec![tru_b]);
+    push_inv_clauses(inv_idx, &s1_vars, &mut b_clauses);
     let mut prev_latches = s1_vars.clone();
     let mut frame_inputs: Vec<Vec<i32>> = Vec::with_capacity(k);
     let mut hit_lits: Vec<i32> = Vec::with_capacity(k);
@@ -564,13 +614,14 @@ fn solve_partition(
     }
 }
 
-/// Checks whether `I(s) & C(s, i) => R(s)` (i.e. `I & C & !R` is UNSAT).
+/// Checks whether `I(s) & standing(s) & C(s, i) => R(s)` (i.e. `I & standing & C & !R` is UNSAT).
 fn is_contained(
     g: &Aig,
     tpl: &Template,
     saig: &StateAig,
     i_root: u32,
     r_root: u32,
+    inv_idx: &[Vec<(usize, bool)>],
     ctx: &RunContext,
 ) -> bool {
     if i_root == 0 || r_root == 1 || i_root == r_root {
@@ -587,6 +638,7 @@ fn is_contained(
             x
         })
         .collect();
+    push_inv_clauses(inv_idx, &s_vars, &mut clauses);
     if !g.constraints.is_empty() {
         let (f, _) = encode_frame(g, tpl, &s_vars, tru, &mut next_var, |c| {
             clauses.push(c.to_vec());

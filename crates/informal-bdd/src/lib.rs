@@ -54,6 +54,7 @@ impl Engine for BddEngine {
             proves: true,
             finds_bugs: true,
             liveness: true,
+            lemma_export: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Bdd,
             min_effort: Effort::Standard,

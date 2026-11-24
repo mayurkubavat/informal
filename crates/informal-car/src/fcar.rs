@@ -10,9 +10,10 @@
 
 use informal_aig::{is_neg, neg, var, Aig, Init, Lit};
 use informal_bmc::unroll::Unroll;
-use informal_bmc::{ic3, solver, PreparedTrace};
+use informal_bmc::{ic3, seed_from_hub, solver, Prepared, PreparedTrace};
 use informal_engine::{Progress, RunContext};
 use informal_sat::Answer;
+use std::time::Duration;
 
 /// Outcome of a CAR run on a prepared AIG.
 pub enum CarOutcome {
@@ -34,10 +35,11 @@ struct UState {
 }
 
 /// Run Forward CAR on prepared AIG `g`.
-pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutcome {
+pub fn run_fcar(g: &Prepared, max_depth: Option<usize>, ctx: &RunContext) -> CarOutcome {
     if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
         return CarOutcome::Aborted("latch inits that are not constants".into());
     }
+    let (mut hub, mut standing) = seed_from_hub(g, ctx, "informal-car");
 
     // 0. Depth-0 base check: `Init & C & Bad`.
     let mut base = Unroll::new(g, solver(ctx), false);
@@ -87,6 +89,9 @@ pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutco
 
     let mut act_step = vec![act0_step];
     let mut act_bad = vec![bad_u.new_var()];
+    for cube in &standing {
+        add_permanent_cube(&mut step_u, &mut bad_u, cube);
+    }
     // `frames[lvl]` holds cubes whose highest confirmed blocked level is `lvl`.
     let mut frames: Vec<Vec<ic3::Cube>> = vec![Vec::new()];
     let mut u_states: Vec<UState> = Vec::new();
@@ -98,6 +103,16 @@ pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutco
         }
         if max_depth.is_some_and(|m| k >= m) {
             return CarOutcome::Aborted(format!("bound {k} reached"));
+        }
+
+        if let Some(h) = &mut hub {
+            if h.has_new_standing() {
+                let added = h.poll_standing_verified(g, &standing, ctx, Duration::from_millis(50));
+                for cube in &added {
+                    add_permanent_cube(&mut step_u, &mut bad_u, cube);
+                }
+                standing.extend(added);
+            }
         }
 
         k += 1;
@@ -118,7 +133,7 @@ pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutco
             if ctx.should_stop() {
                 return CarOutcome::Aborted(ctx.stop_reason().into());
             }
-            if is_blocked_at(g, &frames, k, &u_states[uid].state) {
+            if is_blocked_at(g, &standing, &frames, k, &u_states[uid].state) {
                 continue;
             }
             if let Some(res) = block_dfs(
@@ -128,6 +143,7 @@ pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutco
                 &mut bad_u,
                 &act_step,
                 &act_bad,
+                &standing,
                 &mut frames,
                 &mut u_states,
                 uid,
@@ -171,6 +187,7 @@ pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutco
                         &mut bad_u,
                         &act_step,
                         &act_bad,
+                        &standing,
                         &mut frames,
                         &mut u_states,
                         uid,
@@ -200,6 +217,9 @@ pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutco
                         lvl + 1,
                         &cube,
                     );
+                    if let Some(h) = &hub {
+                        h.publish_frame(&cube, (lvl + 1) as u32);
+                    }
                     frames[lvl + 1].push(cube);
                 } else {
                     keep.push(cube);
@@ -207,7 +227,7 @@ pub fn run_fcar(g: &Aig, max_depth: Option<usize>, ctx: &RunContext) -> CarOutco
             }
             frames[lvl] = keep;
             if frames[lvl].is_empty() {
-                let mut inv = Vec::new();
+                let mut inv = standing.clone();
                 for f in &frames[(lvl + 1)..=k] {
                     inv.extend(f.iter().cloned());
                 }
@@ -225,6 +245,7 @@ fn block_dfs(
     bad_u: &mut Unroll,
     act_step: &[i32],
     act_bad: &[i32],
+    standing: &[ic3::Cube],
     frames: &mut [Vec<ic3::Cube>],
     u_states: &mut Vec<UState>,
     start_uid: usize,
@@ -236,7 +257,7 @@ fn block_dfs(
         if ctx.should_stop() {
             return Some(CarOutcome::Aborted(ctx.stop_reason().into()));
         }
-        if is_blocked_at(g, frames, lvl, &u_states[uid].state) {
+        if is_blocked_at(g, standing, frames, lvl, &u_states[uid].state) {
             continue;
         }
         let mut assume = frame_assumptions(act_step, lvl - 1);
@@ -313,22 +334,41 @@ fn frame_assumptions(act_step: &[i32], lvl: usize) -> Vec<i32> {
     }
 }
 
-fn is_blocked_at(g: &Aig, frames: &[Vec<ic3::Cube>], lvl: usize, state: &[bool]) -> bool {
+fn is_blocked_at(
+    g: &Aig,
+    standing: &[ic3::Cube],
+    frames: &[Vec<ic3::Cube>],
+    lvl: usize,
+    state: &[bool],
+) -> bool {
     let mut latch_idx = std::collections::HashMap::with_capacity(g.latches.len());
     for (i, l) in g.latches.iter().enumerate() {
         latch_idx.insert(var(l.lit), i);
     }
+    let covers = |cube: &ic3::Cube| {
+        cube.iter().all(|&al| {
+            let i = latch_idx[&var(al)];
+            state[i] ^ is_neg(al)
+        })
+    };
+    if standing.iter().any(covers) {
+        return true;
+    }
     for f in &frames[lvl..] {
-        for cube in f {
-            if cube.iter().all(|&al| {
-                let i = latch_idx[&var(al)];
-                state[i] ^ is_neg(al)
-            }) {
-                return true;
-            }
+        if f.iter().any(covers) {
+            return true;
         }
     }
     false
+}
+
+/// Add a Houdini-verified standing invariant cube as a permanent (unguarded)
+/// clause in both `step_u` and `bad_u` frame 0.
+fn add_permanent_cube(step_u: &mut Unroll, bad_u: &mut Unroll, cube: &ic3::Cube) {
+    let cs: Vec<i32> = cube.iter().map(|&al| -step_u.lit(0, al)).collect();
+    step_u.sat.add_clause(&cs);
+    let cb: Vec<i32> = cube.iter().map(|&al| -bad_u.lit(0, al)).collect();
+    bad_u.sat.add_clause(&cb);
 }
 
 fn ensure_disjoint_from_init(g: &Aig, init_u: &mut Unroll, cube: &mut ic3::Cube, state: &[bool]) {

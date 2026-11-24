@@ -104,6 +104,51 @@ pub fn design_hash(g: &Aig) -> u64 {
     h
 }
 
+/// A hash of the specific property on top of [`design_hash`]: mixes in
+/// `g.bads` and the combinational cone feeding them so sibling properties of
+/// the same design get identical [`design_hash`] values but distinct
+/// `property_hash` values.
+pub fn property_hash(g: &Aig) -> u64 {
+    let mut h = design_hash(g) ^ 0x9e37_79b9_7f4a_7c15u64;
+    let mut add = |x: u64| {
+        h ^= x;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        h ^= h >> 29;
+    };
+    let mut need = vec![false; g.nodes.len()];
+    let mut stack: Vec<u32> = g.bads.iter().map(|&b| var(b)).collect();
+    while let Some(v) = stack.pop() {
+        if std::mem::replace(&mut need[v as usize], true) {
+            continue;
+        }
+        if let Node::And(a, b) = g.nodes[v as usize] {
+            stack.push(var(a));
+            stack.push(var(b));
+        }
+    }
+    add(g.bads.len() as u64);
+    for &b in &g.bads {
+        add(b as u64);
+    }
+    for (v, n) in g.nodes.iter().enumerate() {
+        if !need[v] {
+            continue;
+        }
+        add(v as u64);
+        match *n {
+            Node::Const => add(1),
+            Node::Input => add(2),
+            Node::Latch => add(3),
+            Node::And(a, b) => {
+                add(4);
+                add(a as u64);
+                add(b as u64);
+            }
+        }
+    }
+    h
+}
+
 fn path(dir: &std::path::Path, hash: u64) -> PathBuf {
     dir.join(format!("{hash:016x}.inv"))
 }

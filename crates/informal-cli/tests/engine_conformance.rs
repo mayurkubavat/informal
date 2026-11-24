@@ -787,6 +787,14 @@ fn portfolio_differential_zero_conflicts_across_canonical_matrix() {
 
         let req = CheckRequest::new(case.path.clone(), case.format, Duration::from_secs(20));
         let outcome = portfolio::run(&selected, &req, None);
+        if selected.len() >= 2 && informal_engine::LemmaHub::is_enabled() {
+            assert!(
+                outcome.lemma_stats.is_some(),
+                "portfolio run with {} engines on {} did not attach LemmaHub",
+                selected.len(),
+                case.name
+            );
+        }
         assert!(
             outcome.conflicts.is_empty(),
             "engine conflict on {}: {:?}",

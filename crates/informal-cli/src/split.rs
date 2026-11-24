@@ -159,6 +159,7 @@ pub fn run(o: &Options, engines: &[Arc<dyn Engine>]) -> anyhow::Result<Outcome> 
                         cancel: stop.clone(),
                         deadline: end,
                         progress: None,
+                        lemma_hub: None,
                     };
                     let v = match prover.check(&request(&files[i], end - now), &ctx) {
                         Ok(r) => r.verdict,
