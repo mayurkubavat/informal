@@ -1,0 +1,15 @@
+[package]
+name = "informal-bdd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Zero-dependency exact symbolic ROBDD model checking engine for InFormal"
+
+[dependencies]
+anyhow.workspace = true
+informal-aig.workspace = true
+informal-bmc.workspace = true
+informal-engine.workspace = true
+
+[dev-dependencies]
+informal-sat.workspace = true

@@ -294,6 +294,7 @@ mod tests {
             informal_bmc::engines()
                 .into_iter()
                 .chain(informal_liveness::engines())
+                .chain(informal_bdd::engines())
                 .chain(informal_bitwuzla::engines())
                 .collect(),
             work.clone(),

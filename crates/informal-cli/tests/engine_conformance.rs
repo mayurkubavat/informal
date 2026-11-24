@@ -375,6 +375,7 @@ fn in_house_fleet() -> Option<Vec<Arc<dyn Engine>>> {
         return None;
     }
     all.extend(informal_liveness::engines());
+    all.extend(informal_bdd::engines());
     all.extend(informal_bitwuzla::engines());
     Some(all)
 }

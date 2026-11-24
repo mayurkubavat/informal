@@ -633,6 +633,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "informal-bdd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-sat",
+]
+
+[[package]]
 name = "informal-bench"
 version = "0.1.0"
 dependencies = [
@@ -675,6 +686,7 @@ dependencies = [
  "anyhow",
  "clap",
  "informal-aig",
+ "informal-bdd",
  "informal-bench",
  "informal-bitwuzla",
  "informal-bmc",

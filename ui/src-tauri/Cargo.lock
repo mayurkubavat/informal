@@ -1534,6 +1534,7 @@ dependencies = [
 name = "informal-app"
 version = "0.1.0"
 dependencies = [
+ "informal-bdd",
  "informal-bitwuzla",
  "informal-bmc",
  "informal-engines-ext",
@@ -1573,6 +1574,16 @@ dependencies = [
  "informal-app-conn",
  "informal-session",
  "serde",
+]
+
+[[package]]
+name = "informal-bdd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
 ]
 
 [[package]]

@@ -22,6 +22,7 @@ informal-tcl.workspace = true
 informal-fpv.workspace = true
 informal-bmc.workspace = true
 informal-liveness.workspace = true
+informal-bdd.workspace = true
 informal-svlang.workspace = true
 informal-aig.workspace = true
 informal-bitwuzla.workspace = true

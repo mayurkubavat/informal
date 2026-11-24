@@ -253,6 +253,7 @@ enum Cmd {
 fn in_house(isolate: bool) -> anyhow::Result<Vec<std::sync::Arc<dyn informal_engine::Engine>>> {
     let mut engines = informal_bmc::engines();
     engines.extend(informal_liveness::engines());
+    engines.extend(informal_bdd::engines());
     engines.extend(informal_bitwuzla::engines());
     if !isolate {
         return Ok(engines);
