@@ -147,7 +147,7 @@ pub(super) fn rtl_and_spec() -> Vec<Tool> {
                     ("property", s("")),
                     ("max_depth", n("")),
                     ("truncated", b("")),
-                    ("nodes", list(json!({"type": "object"}), "Schematic nodes with id, label, signal, kind, op, width, distance, causal, hotspot, expandable, ports")),
+                    ("nodes", list(json!({"type": "object"}), "Schematic nodes with id, label, signal, kind, op, width, distance, causal, hotspot, expandable, power_domain (when UPF loaded), ports")),
                     ("edges", list(json!({"type": "object"}), "Schematic edges with id, source, source_port, target, target_port, width, inverted, causal, signal")),
                 ],
                 &["schema", "property", "max_depth", "truncated", "nodes", "edges"],

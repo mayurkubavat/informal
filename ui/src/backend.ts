@@ -336,6 +336,60 @@ export interface SecStateView {
   checks?: SecCheckView[];
 }
 
+export interface LpLoadSpecView {
+  path: string;
+  scope?: string | null;
+  version?: string | null;
+  is_cpf?: boolean;
+}
+
+export interface LpAutoFormalMetaView {
+  engine: string;
+  ms: number;
+  assumptions: string[];
+  stopats: string[];
+  reset?: string | null;
+  task: string;
+}
+
+export interface LpViolationView {
+  id: number;
+  rule_id: string;
+  severity: "error" | "warning" | "note" | string;
+  stage: string;
+  domain_src?: string | null;
+  domain_dst?: string | null;
+  signal: string;
+  width_bits: number;
+  raw_crossings: number;
+  message: string;
+  upf_loc?: { file: string; line: number } | null;
+  rtl_loc?: string | null;
+  status: "open" | "waived" | "formally_waived" | "cex" | string;
+  waiver_id?: number | null;
+  formal_prop?: string | null;
+  trace?: string | null;
+  auto_formal_meta?: LpAutoFormalMetaView | null;
+}
+
+export interface LpWaiverView {
+  id: number;
+  rule_glob: string;
+  signal_glob?: string | null;
+  src_domain?: string | null;
+  dst_domain?: string | null;
+  comment?: string | null;
+}
+
+export interface LpStateView {
+  upf_files?: LpLoadSpecView[];
+  liberty_files?: string[];
+  pst_consistent?: boolean | null;
+  waivers?: LpWaiverView[];
+  violations?: LpViolationView[];
+  stages_run?: string[];
+}
+
 export interface SchematicPortView {
   id: string;
   label: string;
@@ -352,6 +406,7 @@ export interface SchematicNodeView {
   causal: boolean;
   hotspot: boolean;
   expandable: boolean;
+  power_domain?: string;
   ports: SchematicPortView[];
 }
 export interface SchematicEdgeView {
@@ -440,6 +495,7 @@ export interface SessionView {
   xprop?: XpropStateView;
   spv?: SpvRuleView[];
   sec?: SecStateView;
+  lp?: LpStateView;
 }
 
 export interface Reply {

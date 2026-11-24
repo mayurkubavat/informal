@@ -13,6 +13,7 @@ informal-engine.workspace = true
 informal-fpv.workspace = true
 informal-ir.workspace = true
 informal-svlang.workspace = true
+informal-upf.workspace = true
 
 [dev-dependencies]
 informal-bmc.workspace = true

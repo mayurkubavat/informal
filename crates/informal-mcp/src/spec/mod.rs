@@ -9,6 +9,7 @@
 
 mod audit;
 mod boundary;
+mod lp_gates;
 mod schema;
 #[cfg(test)]
 mod tests;
@@ -16,6 +17,6 @@ mod tests;
 pub use audit::audit_session;
 pub use boundary::{discover_spec_file, wildcard_match};
 pub use schema::{
-    AuditRuntime, BoundarySpec, DesignIntent, FvpSpec, RequirementSpec, SignoffGates, AUDIT_SCHEMA,
-    SPEC_SCHEMA,
+    AuditRuntime, BoundarySpec, DesignIntent, FvpSpec, LowPowerGates, RequirementSpec,
+    SignoffGates, AUDIT_SCHEMA, SPEC_SCHEMA,
 };

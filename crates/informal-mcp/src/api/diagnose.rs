@@ -553,23 +553,33 @@ impl Api {
         let name = req_str(args, "name")?;
         let max_depth = opt_u64(args, "max_depth")?.unwrap_or(2) as u32;
         let max_nodes = opt_u64(args, "max_nodes")?.unwrap_or(80) as usize;
-        let (prop_name, model, active_signals) = self.on_shell(false, move |sh| {
-            let s = sh.session.borrow();
-            let p = find(&s, &name)?;
-            if s.props[p].kind == Kind::Assume {
-                return Err(err(
-                    "rejected",
-                    "an assumption is not a target and has no schematic cone",
-                ));
-            }
-            let model = s.model_for(p).map_err(|e| err("rejected", e))?;
-            let active = informal_fpv::why_cex::slice_property_cex(&s, &s.props[p].name, 64)
-                .map(|r| r.active_signals)
-                .unwrap_or_default();
-            Ok((s.props[p].name.clone(), model, active))
-        })??;
-        let g = cone::schematic(&model, max_depth, max_nodes, &active_signals)
+        let (prop_name, model, active_signals, top, resolved_lp) =
+            self.on_shell(false, move |sh| {
+                let s = sh.session.borrow();
+                let p = find(&s, &name)?;
+                if s.props[p].kind == Kind::Assume {
+                    return Err(err(
+                        "rejected",
+                        "an assumption is not a target and has no schematic cone",
+                    ));
+                }
+                let model = s.model_for(p).map_err(|e| err("rejected", e))?;
+                let active = informal_fpv::why_cex::slice_property_cex(&s, &s.props[p].name, 64)
+                    .map(|r| r.active_signals)
+                    .unwrap_or_default();
+                Ok((
+                    s.props[p].name.clone(),
+                    model,
+                    active,
+                    s.design.top.clone(),
+                    s.lp.resolved.clone(),
+                ))
+            })??;
+        let mut g = cone::schematic(&model, max_depth, max_nodes, &active_signals)
             .map_err(|e| err("internal", e))?;
+        if let Some(ref resolved) = resolved_lp {
+            super::lp::annotate_schematic_domains(&mut g, top.as_deref(), resolved);
+        }
         Ok(json!({
             "schema": "informal.schematic/1",
             "property": prop_name,

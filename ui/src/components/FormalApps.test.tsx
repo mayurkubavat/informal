@@ -115,4 +115,70 @@ describe("Tier 10 UI: why_cex causal slice & FormalApps", () => {
     await userEvent.click(screen.getByRole("button", { name: "Generate VIP" }));
     expect(onRunTcl).toHaveBeenCalledWith("check_protocol -create -protocol tlul -role slave");
   });
+
+  it("renders Low Power tab with LP violations, certified auto-waiver badge, and dispatches check_lp", async () => {
+    const onRunTcl = vi.fn();
+    const onSelectTask = vi.fn();
+    const onMode = vi.fn();
+    const lpSession: SessionView = {
+      design: { files: ["soc_lp.sv"], top: "soc_lp", defines: [] },
+      elaborated: true,
+      clocks: [{ signal: "clk", edge: "posedge" }],
+      reset: "!rst_n",
+      props: [prop("LowPower::lp_iso_before_pwroff_PD_CORE", { task: "LowPower" }, { status: "proven" })],
+      time_limit: { secs: 60, nanos: 0 },
+      workdir: "informal_work",
+      lp: {
+        upf_files: [{ path: "/proj/soc_lp.upf" }],
+        pst_consistent: true,
+        stages_run: ["upf", "rtl", "formal"],
+        violations: [
+          {
+            id: 1,
+            rule_id: "ISO_MISSING",
+            severity: "error",
+            stage: "rtl",
+            domain_src: "PD_CORE",
+            domain_dst: "PD_AON",
+            signal: "u_core/dout",
+            width_bits: 8,
+            raw_crossings: 8,
+            message: "unisolated crossing",
+            status: "formally_waived",
+            auto_formal_meta: {
+              engine: "informal-ic3-mt",
+              ms: 12,
+              assumptions: [],
+              stopats: [],
+              task: "<embedded>",
+            },
+          },
+          {
+            id: 2,
+            rule_id: "ISO_MISSING",
+            severity: "error",
+            stage: "rtl",
+            domain_src: "PD_CORE",
+            domain_dst: "PD_AON",
+            signal: "u_core/leak",
+            width_bits: 4,
+            raw_crossings: 4,
+            message: "corruptible leak",
+            status: "cex",
+          },
+        ],
+      },
+    };
+
+    render(
+      <FormalApps session={lpSession} mode="lp" onMode={onMode} idle={true} onRunTcl={onRunTcl} onSelectTask={onSelectTask} />,
+    );
+    expect(screen.getByText("soc_lp.upf")).toBeInTheDocument();
+    expect(screen.getByText("u_core/dout [8b]")).toBeInTheDocument();
+    expect(screen.getByText("formally_waived")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Prove Formal LPV" }));
+    expect(onRunTcl).toHaveBeenCalledWith("check_lp -stage all -prove_corruption");
+    await userEvent.click(screen.getByRole("button", { name: "LowPower Task (1)" }));
+    expect(onSelectTask).toHaveBeenCalledWith("LowPower");
+  });
 });

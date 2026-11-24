@@ -4,6 +4,7 @@
 
 mod apps;
 mod diagnose;
+mod lp;
 mod prove;
 mod session;
 mod spec_lint;
@@ -322,6 +323,17 @@ impl Api {
             "check_cov" => args.get("action").and_then(Value::as_str) == Some("measure"),
             "check_conn" | "check_xprop" | "check_spv" | "check_sec" | "check_csr"
             | "check_protocol" => args.get("action").and_then(Value::as_str) == Some("prove"),
+            "load_upf" => args.get("liberty").is_some_and(|v| !v.is_null()),
+            "check_lp" => {
+                let formal_flag = ["prove_corruption", "prove_waivers", "sec", "lec"]
+                    .iter()
+                    .any(|k| args.get(*k).and_then(Value::as_bool).unwrap_or(false));
+                let stage_long = matches!(
+                    args.get("stage").and_then(Value::as_str),
+                    None | Some("all" | "formal" | "netlist" | "pg")
+                );
+                formal_flag || stage_long
+            }
             _ => false,
         }
     }
@@ -340,6 +352,10 @@ impl Api {
             "cex_properties": "none",
             "undetermined_properties": "none",
             "spec_file": Value::Null,
+            "lp_domains": "none",
+            "lp_files": "none",
+            "lp_stages": "none",
+            "lp_open_violations": 0,
         });
         if self.state.is_busy() {
             return ctx;
@@ -375,6 +391,29 @@ impl Api {
                 .collect();
             let spec_file = spec::discover_spec_file(&s, &root)
                 .map(|p| p.display().to_string());
+            let lp_domains: Vec<String> = s
+                .lp
+                .resolved
+                .as_ref()
+                .map(|r| r.intent.domains.iter().map(|d| d.name.clone()).collect())
+                .unwrap_or_default();
+            let lp_files: Vec<String> = s
+                .lp
+                .upf_files
+                .iter()
+                .map(|u| u.path.display().to_string())
+                .collect();
+            let lp_open_violations = s
+                .lp
+                .violations
+                .iter()
+                .filter(|v| {
+                    matches!(
+                        v.status,
+                        informal_fpv::lp::LpStatus::Open | informal_fpv::lp::LpStatus::FormalCex
+                    )
+                })
+                .count();
             json!({
                 "top": top,
                 "clocks": clocks,
@@ -384,6 +423,10 @@ impl Api {
                 "cex_properties": if cex.is_empty() { "none".into() } else { cex.join(", ") },
                 "undetermined_properties": if undet.is_empty() { "none".into() } else { undet.join(", ") },
                 "spec_file": spec_file,
+                "lp_domains": if lp_domains.is_empty() { "none".into() } else { lp_domains.join(", ") },
+                "lp_files": if lp_files.is_empty() { "none".into() } else { lp_files.join(", ") },
+                "lp_stages": if s.lp.stages_run.is_empty() { "none".into() } else { s.lp.stages_run.join(", ") },
+                "lp_open_violations": lp_open_violations,
             })
         }) {
             if let (Some(dst), Some(src)) = (ctx.as_object_mut(), live.as_object()) {
@@ -440,6 +483,9 @@ impl Api {
             "check_sec" => self.check_sec(args, false),
             "check_csr" => self.check_csr(args, false),
             "check_protocol" => self.check_protocol(args, false),
+            "load_upf" => self.load_upf(args, false),
+            "check_lp" => self.check_lp(args, false),
+            "lp_diagnose" => self.lp_diagnose(args),
             "prove" => self.prove_start(args),
             "prove_status" => self.prove_status(),
             "prove_stop" => {
@@ -465,6 +511,8 @@ impl Api {
                 | "check_sec"
                 | "check_csr"
                 | "check_protocol"
+                | "load_upf"
+                | "check_lp"
         ) {
             self.changed(tool);
         }
@@ -486,6 +534,8 @@ impl Api {
             "check_sec" => self.check_sec(args, true),
             "check_csr" => self.check_csr(args, true),
             "check_protocol" => self.check_protocol(args, true),
+            "load_upf" => self.load_upf(args, true),
+            "check_lp" => self.check_lp(args, true),
             _ => Err(err("not_found", format!("no long tool named {tool}"))),
         };
         drop(long);

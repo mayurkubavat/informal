@@ -444,10 +444,15 @@ fn render_mcp_tools() -> String {
         .filter(|t| !core.iter().any(|c| c.name == t.name))
         .collect();
 
+    let prompt_count = prompts::list()
+        .get("prompts")
+        .and_then(|v| v.as_array())
+        .map_or(0, Vec::len);
     out.push_str(&format!(
-        "- **Core session tools:** {}\n- **Desktop window tools (`gui_*`):** {}\n- **Server-hosted MCP prompts:** 4\n\n",
+        "- **Core session tools:** {}\n- **Desktop window tools (`gui_*`):** {}\n- **Server-hosted MCP prompts:** {}\n\n",
         core.len(),
-        gui_tools.len()
+        gui_tools.len(),
+        prompt_count
     ));
 
     out.push_str("## Error Contract (`informal.error/1`)\n\n");
@@ -527,7 +532,10 @@ fn render_spec_schema() -> String {
     out.push_str("| `boundary` | object | no | Legal primary-input assumption boundary and forbidden signals |\n");
     out.push_str("| `requirements` | array | yes | List of `REQ-*` verification items mapped to assertions, covers, and assumptions |\n");
     out.push_str(
-        "| `signoff` | object | no | Quantitative signoff gates evaluated by `spec_audit` |\n\n",
+        "| `signoff` | object | no | Quantitative signoff gates evaluated by `spec_audit` |\n",
+    );
+    out.push_str(
+        "| `low_power` | object | no | Optional IEEE 1801 UPF/CPF and formal LPV signoff gates (`require_upf`, `max_open_lp_errors`, `require_formal_lpv`, `allow_manual_lp_waivers`) |\n\n",
     );
 
     out.push_str("## `design` Intent\n\n");
@@ -565,6 +573,13 @@ fn render_spec_schema() -> String {
     out.push_str("| `forbid_under_ai` | boolean | `false` | Block signoff while proofs depend on unpromoted AI-added assumptions/cut points |\n");
     out.push_str("| `coi_coverage_floor` | number | `null` | Optional minimum COI formal coverage percentage (`0.0..=100.0`) |\n");
     out.push_str("| `mutation_score_floor` | number | `null` | Optional minimum mutant-kill score percentage (`0.0..=100.0`) |\n\n");
+
+    out.push_str("## `low_power` Signoff Gates\n\n");
+    out.push_str("| Field | Type | Default | Description |\n| --- | --- | --- | --- |\n");
+    out.push_str("| `require_upf` | boolean | `false` | Require at least one UPF/CPF file to be loaded via `load_upf` |\n");
+    out.push_str("| `max_open_lp_errors` | integer | `null` | Maximum allowed open or formal-CEX low-power error violations (e.g. `0`) |\n");
+    out.push_str("| `require_formal_lpv` | boolean | `false` | Require formal LPV (`check_lp` formal/corruption stage) with zero failing `LowPower` CEXs |\n");
+    out.push_str("| `allow_manual_lp_waivers` | boolean | `true` | Permit manual `set_lp_waiver` waivers; set `false` to accept only certified `formally_waived` proofs |\n\n");
 
     out.push_str("## Per-Requirement Audit Verdicts\n\n");
     out.push_str("| Verdict | Meaning |\n| --- | --- |\n");
@@ -664,10 +679,15 @@ fn render_index_json(root: &Command) -> String {
 }
 
 fn render_llms_txt() -> String {
+    let tool_count = tools::for_mode(Mode::Auto, true).len();
+    let prompt_count = prompts::list()
+        .get("prompts")
+        .and_then(|v| v.as_array())
+        .map_or(0, Vec::len);
     format!(
         r#"# InFormal
 
-> Open-source IEEE 1800 SystemVerilog formal property verification (FPV) tool, Formal Apps suite (`check_cov`, `check_conn`, `check_xprop`, `check_spv`, `check_sec`, `check_csr`, `check_protocol`), JasperGold/VC Formal Tcl shell, desktop workbench, and verifier-gated Model Context Protocol (MCP) server.
+> Open-source IEEE 1800 SystemVerilog formal property verification (FPV) tool, Formal Apps suite (`check_cov`, `check_conn`, `check_xprop`, `check_spv`, `check_sec`, `check_csr`, `check_protocol`, `check_lp`), JasperGold/VC Formal Tcl shell, desktop workbench, and verifier-gated Model Context Protocol (MCP) server.
 
 ## Start Here
 
@@ -698,7 +718,7 @@ fn render_llms_txt() -> String {
 - [Tcl Command Reference](docs/reference/tcl-commands.md): All {} Tcl commands (`common`, `jg`, `vcf`) matching interactive `help`
 - [JG <-> VCF Crosswalk](docs/reference/jg-vcf-crosswalk.md): Side-by-side JasperGold and VC Formal command map
 - [SVA & Lowering Support](docs/reference/sva-support.md): Supported IEEE 1800 SVA operators, liveness, and explicit lowering rejections
-- [MCP Tools & Prompts Reference](docs/reference/mcp-tools.md): All 48 MCP tools, 4 prompts, and `informal.error/1` Poka-Yoke schema
+- [MCP Tools & Prompts Reference](docs/reference/mcp-tools.md): All {tool_count} MCP tools, {prompt_count} prompts, and `informal.error/1` Poka-Yoke schema
 - [Formal Spec Schema](docs/reference/spec-schema.md): `fvp.spec.json` (`informal.spec/1`) contract for `spec_audit`
 - [Machine-Readable Catalog (JSON)](docs/reference/index.json): Complete CLI, Tcl, MCP tool, and prompt metadata
 "#,

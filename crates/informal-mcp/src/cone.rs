@@ -32,6 +32,9 @@ pub struct SchematicNode {
     pub hotspot: bool,
     /// `true` if this is a register at the `max_depth` cut boundary whose fan-in can be expanded.
     pub expandable: bool,
+    /// Power domain name owning this node when IEEE 1801 UPF/CPF is loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power_domain: Option<String>,
     pub ports: Vec<SchematicPort>,
 }
 
@@ -144,6 +147,7 @@ pub fn schematic(
         causal: true,
         hotspot: false,
         expandable: false,
+        power_domain: None,
         ports: vec![SchematicPort {
             id: format!("{target_nid}.chk"),
             label: "chk".into(),
@@ -283,6 +287,7 @@ pub fn schematic(
             causal,
             hotspot,
             expandable,
+            power_domain: None,
             ports,
         });
     }

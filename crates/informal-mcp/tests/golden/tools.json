@@ -3326,6 +3326,563 @@
     }
   },
   {
+    "changes": true,
+    "description": "Parse and resolve an IEEE 1801 UPF (1.0–4.0) or CPF (1.1–2.0) power-intent file against the elaborated design, optionally loading Liberty `.lib` files alongside it.",
+    "input": {
+      "properties": {
+        "cpf": {
+          "description": "Load file as Cadence CPF (alias for `format: \"cpf\"`)",
+          "type": "boolean"
+        },
+        "file": {
+          "description": "Path to UPF or CPF file below the workspace root",
+          "type": "string"
+        },
+        "format": {
+          "description": "Optional format override (`upf` or `cpf`; auto-detected from file extension when omitted)",
+          "enum": [
+            "upf",
+            "cpf"
+          ],
+          "type": "string"
+        },
+        "liberty": {
+          "description": "Optional Liberty `.lib` file path(s) below the workspace root",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "description": "Optional hierarchical instance scope for scoped UPF loading",
+          "type": "string"
+        },
+        "version": {
+          "description": "Optional UPF version override",
+          "enum": [
+            "1.0",
+            "2.0",
+            "2.1",
+            "3.0",
+            "3.1",
+            "4.0"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    },
+    "name": "load_upf",
+    "output": {
+      "properties": {
+        "diagnostics": {
+          "description": "UPF/CPF parse and resolution diagnostics",
+          "items": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "file": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "severity",
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "domains": {
+          "description": "Resolved power domains",
+          "items": {
+            "properties": {
+              "elements": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "instance_count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "is_top": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "primary_supply_set": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "scope",
+              "is_top",
+              "elements",
+              "instance_count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "file": {
+          "description": "Canonical loaded UPF/CPF path",
+          "type": "string"
+        },
+        "pst": {
+          "properties": {
+            "consistent": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "illegal_combinations": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "power_states": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tables": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tables",
+            "power_states",
+            "illegal_combinations"
+          ],
+          "type": "object"
+        },
+        "schema": {
+          "const": "informal.upf/1",
+          "type": "string"
+        },
+        "strategies": {
+          "properties": {
+            "isolation": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "level_shifter": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "power_switch": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "repeater": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "retention": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "isolation",
+            "level_shifter",
+            "retention",
+            "power_switch",
+            "repeater"
+          ],
+          "type": "object"
+        },
+        "supply_nets": {
+          "description": "Resolved supply nets",
+          "items": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "ports": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "scope",
+              "ports"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "supply_sets": {
+          "description": "Resolved supply sets",
+          "items": {
+            "properties": {
+              "ground_net": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "power_net": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "states": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "states"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "upf_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "file",
+        "domains",
+        "supply_sets",
+        "supply_nets",
+        "pst",
+        "strategies",
+        "diagnostics"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": true,
+    "description": "Execute UPF consistency (`upf`), RTL crossing checks (`rtl`/`design`), gate/PG netlist checks (`netlist`, `pg`), formal low-power AAG/corruption/certified auto-waiver verification (`formal`, `prove_corruption`, `prove_waivers`), or power-aware equivalence (`sec`, `lec`).",
+    "input": {
+      "properties": {
+        "lec": {
+          "description": "Run power-aware combinational equivalence check (`LowPower` LEC)",
+          "type": "boolean"
+        },
+        "prove_corruption": {
+          "description": "Run exact 2-copy corruption propagation proofs",
+          "type": "boolean"
+        },
+        "prove_waivers": {
+          "description": "Run closed-loop certified auto-waiver proofs on open crossing violations",
+          "type": "boolean"
+        },
+        "sec": {
+          "description": "Run power-aware sequential equivalence check (`LowPower` SEC)",
+          "type": "boolean"
+        },
+        "stage": {
+          "description": "Verification stage to run (default: `all`)",
+          "enum": [
+            "upf",
+            "rtl",
+            "design",
+            "netlist",
+            "pg",
+            "formal",
+            "all"
+          ],
+          "type": "string"
+        },
+        "tol_mv": {
+          "description": "Voltage comparison tolerance in millivolts (default: 1.0)",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "check_lp",
+    "output": {
+      "properties": {
+        "pst_consistent": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "schema": {
+          "const": "informal.lp/1",
+          "type": "string"
+        },
+        "stages_run": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stats": "<stats>",
+        "summary": {
+          "properties": {
+            "by_rule": {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "cex": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "errors": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "formally_waived": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "notes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "open": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "waived": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warnings": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "errors",
+            "warnings",
+            "notes",
+            "open",
+            "waived",
+            "formally_waived",
+            "cex",
+            "by_rule"
+          ],
+          "type": "object"
+        },
+        "violations": {
+          "description": "LP violations with id, rule_id, severity, stage, domain_src, domain_dst, signal, status, pst_witness, upf_loc, rtl_loc, formal_prop, trace, auto_formal_meta",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "waivers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "stages_run",
+        "summary",
+        "violations"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "changes": false,
+    "description": "Read-only diagnostic dossier for a low-power violation: fuses violation metadata, symbolic PST witness, UPF source snippet, RTL crossing path and driver snippets, `why_cex` backward causal slice (when a formal CEX exists), and deterministic remediation guidance.",
+    "input": {
+      "properties": {
+        "id": {
+          "description": "Violation ID from `check_lp` (integer e.g. `1`, or formatted string e.g. `\"LP-0001\"`)",
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "max_events": {
+          "description": "Maximum `why_cex` causal events when a formal trace exists (default: 24, max: 64)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rule": {
+          "description": "Optional rule ID filter when `id` is omitted (e.g. `ISO_MISSING`)",
+          "type": "string"
+        },
+        "signal": {
+          "description": "Optional signal substring filter when `id` is omitted",
+          "type": "string"
+        },
+        "source_context_lines": {
+          "description": "Context lines above/below UPF and RTL source snippets (default: 4, max: 12)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "violation": {
+          "description": "Optional violation selector alias (ID, rule ID, or formal property name)",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "lp_diagnose",
+    "output": {
+      "properties": {
+        "driver_snippets": {
+          "description": "RTL source and driver snippets around the crossing signal",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "hint": {
+          "description": "Deterministic remediation guidance",
+          "type": "string"
+        },
+        "pst_witness": {
+          "type": "object"
+        },
+        "rtl_crossing_path": {
+          "properties": {
+            "domain_dst": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "domain_src": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "raw_crossings": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rtl_loc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "signal": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "width_bits": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "signal",
+            "width_bits",
+            "raw_crossings",
+            "summary"
+          ],
+          "type": "object"
+        },
+        "rtl_loc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "const": "informal.lp_diagnose/1",
+          "type": "string"
+        },
+        "upf_loc": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "upf_snippet": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "violation": {
+          "type": "object"
+        },
+        "why_cex": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "violation",
+        "pst_witness",
+        "rtl_crossing_path",
+        "driver_snippets",
+        "hint"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "changes": false,
     "description": "Open or refresh the interactive InFormal verification workbench (MCP App side pane or full-page view): property status table, waveform viewer, causal schematic, RTL source, and Formal Apps.",
     "input": {
@@ -3420,7 +3977,7 @@
           "type": "integer"
         },
         "nodes": {
-          "description": "Schematic nodes with id, label, signal, kind, op, width, distance, causal, hotspot, expandable, ports",
+          "description": "Schematic nodes with id, label, signal, kind, op, width, distance, causal, hotspot, expandable, power_domain (when UPF loaded), ports",
           "items": {
             "type": "object"
           },

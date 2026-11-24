@@ -4,9 +4,9 @@
 
 Complete JSON-RPC Model Context Protocol reference generated directly from `crates/informal-mcp/src/{tools,prompts}.rs`.
 
-- **Core session tools:** 37
+- **Core session tools:** 40
 - **Desktop window tools (`gui_*`):** 12
-- **Server-hosted MCP prompts:** 4
+- **Server-hosted MCP prompts:** 5
 
 ## Error Contract (`informal.error/1`)
 
@@ -33,6 +33,7 @@ Server-hosted playbooks dynamically hydrated with the active session's top modul
 | `close_undetermined` | `property` | Structured convergence ladder for `undetermined` properties: inspect complexity/telemetry via `convergence_diagnose`, mine inductive helper invariants with `proposal_validate(kind="assert")`, or apply sound cutpoint/blackbox/case-split abstractions. |
 | `spec_to_sva` | `requirement` (req), `module` | Spec-driven SVA engineering hydrated with the DUT's exact input/output port boundary: write reset-guarded safety assertions paired with non-vacuity witness covers and verify them via `proposal_validate` before proposing. |
 | `audit_signoff` | `spec_file` | Run a complete signoff gate across the live session: `spec_audit` against `fvp.spec.json` (if present), `formal_lint`, assumption over-constraint/vacuity audit, `under_ai` provenance review, cover reachability, and `check_cov` COI/UNR coverage. |
+| `audit_low_power` | `upf_file`, `spec_file` | End-to-end low-power signoff workflow: load UPF/CPF via `load_upf`, run static + formal LPV (`check_lp` with `prove_corruption` and `prove_waivers`), triage open/CEX violations with `lp_diagnose` and `why_cex`, and verify `low_power` signoff gates with `spec_audit`. |
 
 ## Core Session Tools
 
@@ -438,6 +439,57 @@ Server-hosted playbooks dynamically hydrated with the active session's top modul
 | `protocol` | enum (`tlul` \| `axi4lite` \| `apb`) | no | Required when action is `create` |
 | `role` | enum (`master` \| `slave` \| `monitor`) | no | Default: `slave` |
 
+### `load_upf`
+
+**Load IEEE 1801 UPF or CPF power intent** — Parse and resolve an IEEE 1801 UPF (1.0–4.0) or CPF (1.1–2.0) power-intent file against the elaborated design, optionally loading Liberty `.lib` files alongside it.
+
+- **Availability:** `propose` (waits for approval) / `auto` (applied immediately); hidden in `read-only`
+- **Mutates session:** yes (by mode)
+- **Reply schema:** `informal.upf/1`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `cpf` | boolean | no | Load file as Cadence CPF (alias for `format: "cpf"`) |
+| `file` | string | yes | Path to UPF or CPF file below the workspace root |
+| `format` | enum (`upf` \| `cpf`) | no | Optional format override (`upf` or `cpf`; auto-detected from file extension when omitted) |
+| `liberty` | array\<string\> | no | Optional Liberty `.lib` file path(s) below the workspace root |
+| `scope` | string | no | Optional hierarchical instance scope for scoped UPF loading |
+| `version` | enum (`1.0` \| `2.0` \| `2.1` \| `3.0` \| `3.1` \| `4.0`) | no | Optional UPF version override |
+
+### `check_lp`
+
+**Run static and formal low-power verification** — Execute UPF consistency (`upf`), RTL crossing checks (`rtl`/`design`), gate/PG netlist checks (`netlist`, `pg`), formal low-power AAG/corruption/certified auto-waiver verification (`formal`, `prove_corruption`, `prove_waivers`), or power-aware equivalence (`sec`, `lec`).
+
+- **Availability:** `propose` (waits for approval) / `auto` (applied immediately); hidden in `read-only`
+- **Mutates session:** yes (by mode)
+- **Reply schema:** `informal.lp/1`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `lec` | boolean | no | Run power-aware combinational equivalence check (`LowPower` LEC) |
+| `prove_corruption` | boolean | no | Run exact 2-copy corruption propagation proofs |
+| `prove_waivers` | boolean | no | Run closed-loop certified auto-waiver proofs on open crossing violations |
+| `sec` | boolean | no | Run power-aware sequential equivalence check (`LowPower` SEC) |
+| `stage` | enum (`upf` \| `rtl` \| `design` \| `netlist` \| `pg` \| `formal` \| `all`) | no | Verification stage to run (default: `all`) |
+| `tol_mv` | number | no | Voltage comparison tolerance in millivolts (default: 1.0) |
+
+### `lp_diagnose`
+
+**Single-call low-power violation diagnostic dossier** — Read-only diagnostic dossier for a low-power violation: fuses violation metadata, symbolic PST witness, UPF source snippet, RTL crossing path and driver snippets, `why_cex` backward causal slice (when a formal CEX exists), and deterministic remediation guidance.
+
+- **Availability:** All modes (`read-only`, `propose`, `auto`)
+- **Mutates session:** no
+- **Reply schema:** `informal.lp_diagnose/1`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | any | no | Violation ID from `check_lp` (integer e.g. `1`, or formatted string e.g. `"LP-0001"`) |
+| `max_events` | integer | no | Maximum `why_cex` causal events when a formal trace exists (default: 24, max: 64) |
+| `rule` | string | no | Optional rule ID filter when `id` is omitted (e.g. `ISO_MISSING`) |
+| `signal` | string | no | Optional signal substring filter when `id` is omitted |
+| `source_context_lines` | integer | no | Context lines above/below UPF and RTL source snippets (default: 4, max: 12) |
+| `violation` | string | no | Optional violation selector alias (ID, rule ID, or formal property name) |
+
 ### `open_workbench`
 
 **InFormal** — Open or refresh the interactive InFormal verification workbench (MCP App side pane or full-page view): property status table, waveform viewer, causal schematic, RTL source, and Formal Apps.
@@ -612,7 +664,7 @@ Offered when connected to a running `InFormal.app` session (`informal mcp --conn
 
 ### `gui_set_view`
 
-**Switch window view, layout preset, dock tab, or filter** — Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`), bottom dock tab, or property filter.
+**Switch window view, layout preset, dock tab, or filter** — Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`, `lp`), bottom dock tab, or property filter.
 
 - **Availability:** Desktop window (`--connect` / InFormal.app), all modes
 - **Mutates session:** no
@@ -620,7 +672,7 @@ Offered when connected to a running `InFormal.app` session (`informal mcp --conn
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `app_tab` | enum (`cov` \| `xprop` \| `spv` \| `sec` \| `csr` \| `protocol`) | no | Formal Apps tab to select |
+| `app_tab` | enum (`cov` \| `xprop` \| `spv` \| `sec` \| `csr` \| `protocol` \| `lp`) | no | Formal Apps tab to select |
 | `bottom_tab` | enum (`console` \| `details` \| `messages` \| `log` \| `info` \| `profiler` \| `apps` \| `proposals`) | no | Bottom dock tab |
 | `filter` | string | no | Property filter text |
 | `layout_preset` | enum (`triage` \| `cex-debug` \| `signoff` \| `split`) | no | Multi-pane workspace layout preset |

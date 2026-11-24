@@ -141,6 +141,9 @@ reply (`tools/list`).
 | | `check_sec` | Dual-design sequential (`SEC`, optional `latency`) and combinational keypoint (`LEC`) equivalence checking | yes |
 | | `check_csr` | Automated CSR / RAL formal verification from OpenTitan HJSON, CSV, or UVM `uvm_reg_block` `.sv` (`CSR` task) | yes |
 | | `check_protocol` | 1-command formal bus VIP SVA generator for `tlul`, `axi4lite`, and `apb` (`Protocol` task) | yes |
+| Low Power | `load_upf` | Load and resolve IEEE 1801 UPF (1.0–4.0) or CPF (1.1–2.0) power intent (and optional Liberty `.lib` files) | yes |
+| | `check_lp` | Run static UPF/RTL/gate/PG low-power checks, formal LPV AAG/2-copy corruption proofs, certified auto-waivers, and power-aware SEC/LEC | yes |
+| | `lp_diagnose` | Read-only low-power violation dossier: PST witness, UPF snippet, RTL crossing path & driver snippets, `why_cex` slice, and remediation hint | no |
 | Proposals | `proposal_validate` | Zero-side-effect scratch-task soundness oracle: checks syntax, `SV-FPV-001` DUT-output assumption hygiene, environment consistency + UNSAT conflict core, 2QBF dead-end freedom, cover non-regression, vacuity, and target impact before `proposal_add` | no |
 | | `proposal_add` | Propose an assumption, helper assertion, cover or cut point | yes, by mode |
 | | `proposal_list` | Every proposal and its state | no |
@@ -177,7 +180,7 @@ frame number does not carry over there.
 
 The server also advertises `prompts` (`prompts/list`, `prompts/get`) with
 live-session-hydrated verification playbooks: `triage_cex`,
-`close_undetermined`, `spec_to_sva`, and `audit_signoff`.
+`close_undetermined`, `spec_to_sva`, `audit_signoff`, and `audit_low_power`.
 
 A tool that fails answers with `isError` and
 `{"schema": "informal.error/1", "code": ..., "message": ...}`, plus optional

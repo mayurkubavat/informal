@@ -40,4 +40,12 @@ describe("SchematicView ELK layout & themed SVG export", () => {
     expect(darkSvg).toContain('fill="#e6e3dc"');
     expect(darkSvg).not.toContain('fill="#fdfcfa"');
   });
+
+  it("renders UPF power_domain badges on schematic nodes when present", async () => {
+    const graph = mockSchematic("a_never9", 2);
+    graph.nodes[0] = { ...graph.nodes[0], power_domain: "PD_CORE" };
+    const laid = await computeElkLayout(graph);
+    const svg = renderSchematicSvg(laid, {}, false);
+    expect(svg).toContain("PD_CORE");
+  });
 });

@@ -146,12 +146,12 @@ pub(super) fn all_gui() -> Vec<Tool> {
         Tool {
             name: "gui_set_view",
             title: "Switch window view, layout preset, dock tab, or filter",
-            description: "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`), bottom dock tab, or property filter.",
+            description: "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`, `lp`), bottom dock tab, or property filter.",
             input: obj(
                 &[
                     ("view", one_of(&["table", "source", "trace", "schematic", "apps"], "Centre view to activate")),
                     ("layout_preset", one_of(&["triage", "cex-debug", "signoff", "split"], "Multi-pane workspace layout preset")),
-                    ("app_tab", one_of(&["cov", "xprop", "spv", "sec", "csr", "protocol"], "Formal Apps tab to select")),
+                    ("app_tab", one_of(&["cov", "xprop", "spv", "sec", "csr", "protocol", "lp"], "Formal Apps tab to select")),
                     ("bottom_tab", one_of(&["console", "details", "messages", "log", "info", "profiler", "apps", "proposals"], "Bottom dock tab")),
                     ("filter", s("Property filter text")),
                     ("status_filter", json!({"type": ["string", "null"], "description": "Status filter word or null to clear"})),

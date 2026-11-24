@@ -1,6 +1,6 @@
 # InFormal
 
-> Open-source IEEE 1800 SystemVerilog formal property verification (FPV) tool, Formal Apps suite (`check_cov`, `check_conn`, `check_xprop`, `check_spv`, `check_sec`, `check_csr`, `check_protocol`), JasperGold/VC Formal Tcl shell, desktop workbench, and verifier-gated Model Context Protocol (MCP) server.
+> Open-source IEEE 1800 SystemVerilog formal property verification (FPV) tool, Formal Apps suite (`check_cov`, `check_conn`, `check_xprop`, `check_spv`, `check_sec`, `check_csr`, `check_protocol`, `check_lp`), JasperGold/VC Formal Tcl shell, desktop workbench, and verifier-gated Model Context Protocol (MCP) server.
 
 ## Start Here
 
@@ -31,6 +31,6 @@
 - [Tcl Command Reference](docs/reference/tcl-commands.md): All 85 Tcl commands (`common`, `jg`, `vcf`) matching interactive `help`
 - [JG <-> VCF Crosswalk](docs/reference/jg-vcf-crosswalk.md): Side-by-side JasperGold and VC Formal command map
 - [SVA & Lowering Support](docs/reference/sva-support.md): Supported IEEE 1800 SVA operators, liveness, and explicit lowering rejections
-- [MCP Tools & Prompts Reference](docs/reference/mcp-tools.md): All 48 MCP tools, 4 prompts, and `informal.error/1` Poka-Yoke schema
+- [MCP Tools & Prompts Reference](docs/reference/mcp-tools.md): All 52 MCP tools, 5 prompts, and `informal.error/1` Poka-Yoke schema
 - [Formal Spec Schema](docs/reference/spec-schema.md): `fvp.spec.json` (`informal.spec/1`) contract for `spec_audit`
 - [Machine-Readable Catalog (JSON)](docs/reference/index.json): Complete CLI, Tcl, MCP tool, and prompt metadata

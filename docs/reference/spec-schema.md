@@ -14,6 +14,7 @@ Machine-verifiable Formal Verification Plan & Signoff Contract (`fvp.spec.json`,
 | `boundary` | object | no | Legal primary-input assumption boundary and forbidden signals |
 | `requirements` | array | yes | List of `REQ-*` verification items mapped to assertions, covers, and assumptions |
 | `signoff` | object | no | Quantitative signoff gates evaluated by `spec_audit` |
+| `low_power` | object | no | Optional IEEE 1801 UPF/CPF and formal LPV signoff gates (`require_upf`, `max_open_lp_errors`, `require_formal_lpv`, `allow_manual_lp_waivers`) |
 
 ## `design` Intent
 
@@ -56,6 +57,15 @@ Machine-verifiable Formal Verification Plan & Signoff Contract (`fvp.spec.json`,
 | `forbid_under_ai` | boolean | `false` | Block signoff while proofs depend on unpromoted AI-added assumptions/cut points |
 | `coi_coverage_floor` | number | `null` | Optional minimum COI formal coverage percentage (`0.0..=100.0`) |
 | `mutation_score_floor` | number | `null` | Optional minimum mutant-kill score percentage (`0.0..=100.0`) |
+
+## `low_power` Signoff Gates
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `require_upf` | boolean | `false` | Require at least one UPF/CPF file to be loaded via `load_upf` |
+| `max_open_lp_errors` | integer | `null` | Maximum allowed open or formal-CEX low-power error violations (e.g. `0`) |
+| `require_formal_lpv` | boolean | `false` | Require formal LPV (`check_lp` formal/corruption stage) with zero failing `LowPower` CEXs |
+| `allow_manual_lp_waivers` | boolean | `true` | Permit manual `set_lp_waiver` waivers; set `false` to accept only certified `formally_waived` proofs |
 
 ## Per-Requirement Audit Verdicts
 

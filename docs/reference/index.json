@@ -172,6 +172,23 @@
       "description": "Run a complete signoff gate across the live session: `spec_audit` against `fvp.spec.json` (if present), `formal_lint`, assumption over-constraint/vacuity audit, `under_ai` provenance review, cover reachability, and `check_cov` COI/UNR coverage.",
       "name": "audit_signoff",
       "title": "Formal verification signoff & soundness audit"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Optional path to a UPF/CPF file to load if not already loaded in the session",
+          "name": "upf_file",
+          "required": false
+        },
+        {
+          "description": "Optional path to `fvp.spec.json` containing `low_power` signoff gates",
+          "name": "spec_file",
+          "required": false
+        }
+      ],
+      "description": "End-to-end low-power signoff workflow: load UPF/CPF via `load_upf`, run static + formal LPV (`check_lp` with `prove_corruption` and `prove_waivers`), triage open/CEX violations with `lp_diagnose` and `why_cex`, and verify `low_power` signoff gates with `spec_audit`.",
+      "name": "audit_low_power",
+      "title": "Low-power IEEE 1801 UPF/CPF & formal LPV signoff audit"
     }
   ],
   "mcp_tools": [
@@ -408,6 +425,30 @@
       "title": "Formal bus protocol VIP SVA generator (`tlul`, `axi4lite`, `apb`)"
     },
     {
+      "changes": true,
+      "description": "Parse and resolve an IEEE 1801 UPF (1.0–4.0) or CPF (1.1–2.0) power-intent file against the elaborated design, optionally loading Liberty `.lib` files alongside it.",
+      "gui_only": false,
+      "name": "load_upf",
+      "reply_schema": "informal.upf/1",
+      "title": "Load IEEE 1801 UPF or CPF power intent"
+    },
+    {
+      "changes": true,
+      "description": "Execute UPF consistency (`upf`), RTL crossing checks (`rtl`/`design`), gate/PG netlist checks (`netlist`, `pg`), formal low-power AAG/corruption/certified auto-waiver verification (`formal`, `prove_corruption`, `prove_waivers`), or power-aware equivalence (`sec`, `lec`).",
+      "gui_only": false,
+      "name": "check_lp",
+      "reply_schema": "informal.lp/1",
+      "title": "Run static and formal low-power verification"
+    },
+    {
+      "changes": false,
+      "description": "Read-only diagnostic dossier for a low-power violation: fuses violation metadata, symbolic PST witness, UPF source snippet, RTL crossing path and driver snippets, `why_cex` backward causal slice (when a formal CEX exists), and deterministic remediation guidance.",
+      "gui_only": false,
+      "name": "lp_diagnose",
+      "reply_schema": "informal.lp_diagnose/1",
+      "title": "Single-call low-power violation diagnostic dossier"
+    },
+    {
       "changes": false,
       "description": "Open or refresh the interactive InFormal verification workbench (MCP App side pane or full-page view): property status table, waveform viewer, causal schematic, RTL source, and Formal Apps.",
       "gui_only": false,
@@ -513,7 +554,7 @@
     },
     {
       "changes": false,
-      "description": "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`), bottom dock tab, or property filter.",
+      "description": "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`, `lp`), bottom dock tab, or property filter.",
       "gui_only": true,
       "name": "gui_set_view",
       "reply_schema": "informal.gui/1",

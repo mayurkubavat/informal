@@ -62,9 +62,7 @@ pub(super) fn parse_vcd_bits(vcd_text: &str) -> Result<ParsedVcd, String> {
         if let Some(ts) = l.strip_prefix('#') {
             if let Ok(t) = ts.parse::<usize>() {
                 if t % 10 == 0 {
-                    let f = t / 10;
-                    cur_frame = Some(f);
-                    max_frame = max_frame.max(f);
+                    cur_frame = Some(t / 10);
                 } else {
                     cur_frame = None;
                 }
@@ -76,6 +74,7 @@ pub(super) fn parse_vcd_bits(vcd_text: &str) -> Result<ParsedVcd, String> {
             if let Some((bits, code)) = rest.split_once(' ') {
                 if let Some(&idx) = by_code.get(code.trim()) {
                     changes.push((f, idx, bits.to_string()));
+                    max_frame = max_frame.max(f);
                 }
             }
         } else {
@@ -84,6 +83,7 @@ pub(super) fn parse_vcd_bits(vcd_text: &str) -> Result<ParsedVcd, String> {
                 let code = chars.as_str().trim();
                 if let Some(&idx) = by_code.get(code) {
                     changes.push((f, idx, bch.to_string()));
+                    max_frame = max_frame.max(f);
                 }
             }
         }

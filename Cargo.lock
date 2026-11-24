@@ -804,6 +804,7 @@ dependencies = [
  "informal-fpv",
  "informal-ir",
  "informal-svlang",
+ "informal-upf",
  "serde",
  "serde_json",
 ]

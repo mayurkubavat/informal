@@ -108,6 +108,33 @@ impl Default for SignoffGates {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LowPowerGates {
+    /// Require at least one IEEE 1801 UPF or CPF file to be loaded (`load_upf`).
+    #[serde(default)]
+    pub require_upf: bool,
+    /// Maximum allowed open/CEX low-power error violations (e.g. `0`).
+    #[serde(default)]
+    pub max_open_lp_errors: Option<usize>,
+    /// Require formal LPV (`check_lp -stage formal` / `prove_corruption`) with zero failing `LowPower` CEXs.
+    #[serde(default)]
+    pub require_formal_lpv: bool,
+    /// Allow manual `set_lp_waiver` waivers (default `true`; when `false`, only `formally_waived` certified waivers pass).
+    #[serde(default = "default_true")]
+    pub allow_manual_lp_waivers: bool,
+}
+
+impl Default for LowPowerGates {
+    fn default() -> Self {
+        Self {
+            require_upf: false,
+            max_open_lp_errors: None,
+            require_formal_lpv: false,
+            allow_manual_lp_waivers: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FvpSpec {
     pub schema: String,
     #[serde(default)]
@@ -120,6 +147,8 @@ pub struct FvpSpec {
     pub requirements: Vec<RequirementSpec>,
     #[serde(default)]
     pub signoff: SignoffGates,
+    #[serde(default)]
+    pub low_power: Option<LowPowerGates>,
 }
 
 impl FvpSpec {

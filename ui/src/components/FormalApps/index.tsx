@@ -2,12 +2,13 @@ import { useState } from "react";
 import type { SessionView } from "../../backend";
 import { CovTab } from "./CovTab";
 import { CsrConnTab } from "./CsrConnTab";
+import { LpTab } from "./LpTab";
 import { ProtocolTab } from "./ProtocolTab";
 import { SecTab } from "./SecTab";
 import { SpvTab } from "./SpvTab";
 import { XpropTab } from "./XpropTab";
 
-export type AppMode = "cov" | "xprop" | "spv" | "sec" | "csr" | "protocol";
+export type AppMode = "cov" | "xprop" | "spv" | "sec" | "csr" | "protocol" | "lp";
 
 export function normalizeStatus(
   st: string | { cex?: { depth?: number | null } } | undefined,
@@ -45,6 +46,7 @@ export function FormalApps({
   const connProps = (session?.props ?? []).filter((p) => p.task === "Connectivity");
   const csrProps = (session?.props ?? []).filter((p) => p.task === "CSR");
   const protoProps = (session?.props ?? []).filter((p) => p.task === "Protocol");
+  const lpViolations = session?.lp?.violations ?? [];
 
   return (
     <div className="formal-apps" aria-label="Formal verification apps">
@@ -57,6 +59,7 @@ export function FormalApps({
             ["sec", `SEC / LEC (${secChecks.length})`],
             ["csr", `CSR / Conn (${csrProps.length + connProps.length})`],
             ["protocol", `Bus VIP (${protoProps.length})`],
+            ["lp", `Low Power (${lpViolations.length})`],
           ] as [AppMode, string][]
         ).map(([k, label]) => (
           <button
@@ -98,6 +101,9 @@ export function FormalApps({
             onRunTcl={onRunTcl}
             onSelectTask={onSelectTask}
           />
+        )}
+        {mode === "lp" && (
+          <LpTab session={session} idle={idle} onRunTcl={onRunTcl} onSelectTask={onSelectTask} />
         )}
       </div>
     </div>

@@ -1752,6 +1752,7 @@ export default function App() {
       { id: "app-sec", group: "Formal Apps", label: "Open SEC / LEC Equivalence", run: () => openApps("sec") },
       { id: "app-csr", group: "Formal Apps", label: "Open CSR / RAL Verification", run: () => openApps("csr") },
       { id: "app-proto", group: "Formal Apps", label: "Open Bus Protocol VIP", run: () => openApps("protocol") },
+      { id: "app-lp", group: "Formal Apps", label: "Open Low Power (UPF / LPV)", run: () => openApps("lp") },
       { id: "theme-light", group: "Theme", label: "Switch Theme: Light", run: () => setTheme("light") },
       { id: "theme-dark", group: "Theme", label: "Switch Theme: Dark", run: () => setTheme("dark") },
       { id: "flavor-jg", group: "Flavor", label: "Tcl Flavor: JasperGold", disabled: !idle, run: () => changeFlavor("jg") },
@@ -1975,6 +1976,7 @@ export default function App() {
             <option value="spv">SPV</option>
             <option value="csr">CSR</option>
             <option value="protocol">Protocol VIP</option>
+            <option value="lp">Low Power</option>
           </select>
         </label>
         <label className="field">

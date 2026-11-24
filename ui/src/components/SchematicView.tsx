@@ -235,6 +235,13 @@ export function renderSchematicSvg(
     const fill = n.hotspot ? pal.hotspotFill : n.causal ? pal.causalFill : pal.nodeFill;
     out.push(`<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="${n.causal || n.hotspot ? 1.8 : 1.2}" />`);
     out.push(`<text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + 4}" text-anchor="middle" fill="${pal.text}" font-weight="600">${escapeXml(n.label)}</text>`);
+    if (n.power_domain) {
+      const bw = Math.max(32, n.power_domain.length * 5.6 + 8);
+      const bx = n.x + n.w - bw;
+      const by = n.y - 12;
+      out.push(`<rect x="${bx}" y="${by}" width="${bw}" height="12" rx="3" fill="${pal.accent}" />`);
+      out.push(`<text x="${bx + bw / 2}" y="${by + 9}" text-anchor="middle" fill="#ffffff" font-size="8.5" font-weight="600">${escapeXml(n.power_domain)}</text>`);
+    }
     const v = n.signal ? values[n.signal] ?? values[n.signal.split(".").pop() ?? ""] : undefined;
     if (v) {
       out.push(`<text x="${n.x + n.w / 2}" y="${n.y + n.h + 12}" text-anchor="middle" fill="${pal.accent}" font-size="10">${escapeXml(v)}</text>`);
@@ -462,6 +469,21 @@ export function SchematicView({
         ctx.fillText("⊕", n.x - 8, n.y + n.h / 2 + 4);
       }
 
+      // UPF power domain tag badge
+      if (n.power_domain) {
+        ctx.font = '600 8.5px "IBM Plex Mono", ui-monospace, monospace';
+        const bw = Math.max(32, n.power_domain.length * 5.6 + 8);
+        const bx = n.x + n.w - bw;
+        const by = n.y - 12;
+        ctx.fillStyle = valCol;
+        ctx.beginPath();
+        ctx.roundRect(bx, by, bw, 12, 3);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "center";
+        ctx.fillText(n.power_domain, bx + bw / 2, by + 9);
+      }
+
       // Live trace value at cursor cycle
       const liveVal = n.signal
         ? activeTraceValues[n.signal] ?? activeTraceValues[n.signal.split(".").pop() ?? ""]
@@ -545,6 +567,7 @@ export function SchematicView({
           <span className="mono strong">{selectedNode.signal ?? selectedNode.label}</span>
           <span className="muted small">
             {selectedNode.kind} · {selectedNode.width}b · stage {selectedNode.distance}
+            {selectedNode.power_domain ? ` · domain ${selectedNode.power_domain}` : ""}
             {selectedNode.causal ? " · Why-CEX active" : ""}
             {selectedNode.hotspot ? " · Complexity hotspot" : ""}
           </span>
@@ -624,7 +647,7 @@ export function SchematicView({
             {laid.nodes.map((n) => (
               <li key={n.id}>
                 <button type="button" onClick={() => setSelectedNodeId(n.id)}>
-                  {n.signal ?? n.label} ({n.kind}, {n.width} bits{n.causal ? ", active causal path" : ""}{n.hotspot ? ", complexity hotspot" : ""})
+                  {n.signal ?? n.label} ({n.kind}, {n.width} bits{n.power_domain ? `, domain ${n.power_domain}` : ""}{n.causal ? ", active causal path" : ""}{n.hotspot ? ", complexity hotspot" : ""})
                 </button>
               </li>
             ))}

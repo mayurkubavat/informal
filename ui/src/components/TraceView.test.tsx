@@ -116,4 +116,54 @@ describe("TraceView", () => {
     rerender(<TraceView tabs={<div />} prop={cex} path="informal_work/a_never9.vcd" text={vcdText} cursorRequest={{ cycle: 99, n: 2 }} onView={onView} />);
     expect(screen.getByRole("status", { name: "Cursor" })).toHaveTextContent("cycle 11");
   });
+
+  it("pins lp.pd.* power-domain swimlanes and displays domain states across cycles", () => {
+    const lpVcd = [
+      "$timescale 1ns $end",
+      "$scope module top $end",
+      "$var wire 1 ! clk $end",
+      "$var wire 1 \" dout $end",
+      "$upscope $end",
+      "$scope module lp $end",
+      "$scope module pd $end",
+      "$scope module PD_CORE $end",
+      "$var wire 1 # on $end",
+      "$var wire 1 $ iso $end",
+      "$var wire 1 % ret $end",
+      "$var wire 1 & corrupt $end",
+      "$upscope $end",
+      "$upscope $end",
+      "$upscope $end",
+      "$enddefinitions $end",
+      "#0",
+      "0!",
+      "0\"",
+      "1#",
+      "0$",
+      "0%",
+      "0&",
+      "#10",
+      "1!",
+      "1$",
+      "#20",
+      "0!",
+      "#30",
+      "1!",
+      "0#",
+      "1%",
+      "1&",
+      "#40",
+      "",
+    ].join("\n");
+    const lpProp = prop(
+      "LowPower::lp_iso_before_pwroff_PD_CORE",
+      { expr: "pwr_off |-> iso", trace: "informal_work/lp.vcd" },
+      { status: "cex", engine: "informal-bmc", depth: 2, ms: 5 },
+    );
+    render(<TraceView tabs={<div />} prop={lpProp} path="informal_work/lp.vcd" text={lpVcd} />);
+    const swimlanes = screen.getByRole("region", { name: "Power domain swimlanes" });
+    expect(swimlanes).toHaveTextContent("PD_CORE: RET");
+    const names = [...document.querySelectorAll(".trace-names .trace-name .ellipsis")].map((e) => e.textContent);
+    expect(names[1]).toMatch(/^lp\.pd\.PD_CORE\./);
+  });
 });

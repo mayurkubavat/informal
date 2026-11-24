@@ -59,6 +59,23 @@ const PROMPTS: &[PromptSpec] = &[
             false,
         )],
     },
+    PromptSpec {
+        name: "audit_low_power",
+        title: "Low-power IEEE 1801 UPF/CPF & formal LPV signoff audit",
+        description: "End-to-end low-power signoff workflow: load UPF/CPF via `load_upf`, run static + formal LPV (`check_lp` with `prove_corruption` and `prove_waivers`), triage open/CEX violations with `lp_diagnose` and `why_cex`, and verify `low_power` signoff gates with `spec_audit`.",
+        arguments: &[
+            (
+                "upf_file",
+                "Optional path to a UPF/CPF file to load if not already loaded in the session",
+                false,
+            ),
+            (
+                "spec_file",
+                "Optional path to `fvp.spec.json` containing `low_power` signoff gates",
+                false,
+            ),
+        ],
+    },
 ];
 
 pub fn list() -> Value {
@@ -97,6 +114,10 @@ pub fn get(name: &str, args: &Value, ctx: &Value) -> Result<Value, String> {
     let outputs = ctx["outputs"].as_str().unwrap_or("(unknown)");
     let cex_list = ctx["cex_properties"].as_str().unwrap_or("none");
     let undet_list = ctx["undetermined_properties"].as_str().unwrap_or("none");
+    let lp_domains = ctx["lp_domains"].as_str().unwrap_or("none");
+    let lp_files = ctx["lp_files"].as_str().unwrap_or("none");
+    let lp_stages = ctx["lp_stages"].as_str().unwrap_or("none");
+    let lp_open = ctx["lp_open_violations"].as_u64().unwrap_or(0);
 
     let arg = |k: &str| {
         args.get(k)
@@ -216,6 +237,42 @@ pub fn get(name: &str, args: &Value, ctx: &Value) -> Result<Value, String> {
                      3. **Vacuity & AI Provenance**: Inspect every `proven` assertion via `property_get` for `vacuity` (`non-vacuous` vs `vacuous` / `not checked`) and `under_ai` dependencies.\n\
                      4. **Assumption Sanity & Covers**: Verify environment assumptions are conflict-free and dead-end-free, and no witness `cover` is unexpectedly `unreachable`.\n\
                      5. **Formal Coverage**: Check COI/UNR coverage via `check_cov` if initialized, and summarize concrete signoff blockers."
+                ),
+            )
+        }
+        "audit_low_power" => {
+            let upf_arg = arg("upf_file");
+            let load_step = match upf_arg {
+                Some(f) => format!(
+                    "1. **Power Intent**: Call `load_upf(file=\"{f}\")` (and supply `liberty` for gate/PG netlists) to resolve power domains, supply sets, and PST states."
+                ),
+                None if lp_files == "none" => {
+                    "1. **Power Intent**: Call `load_upf(file=...)` to load the design's IEEE 1801 UPF or CPF specification (and optional `liberty` `.lib` files for gate/PG stages).".into()
+                }
+                None => format!(
+                    "1. **Power Intent**: UPF/CPF already loaded ({lp_files}; domains: {lp_domains}). Re-run `load_upf` only after editing power intent."
+                ),
+            };
+            let sf = arg("spec_file").or_else(|| ctx["spec_file"].as_str());
+            let spec_step = match sf {
+                Some(p) => format!(
+                    "5. **Signoff Gate**: Call `spec_audit(spec_file=\"{p}\")` to verify `low_power` gates (`require_upf`, `max_open_lp_errors`, `require_formal_lpv`, `allow_manual_lp_waivers`) and confirm `signoff_ready == true`."
+                ),
+                None => "5. **Signoff Gate**: If `fvp.spec.json` defines `low_power` gates, call `spec_audit` to verify `signoff_ready == true` and zero uncertified manual waivers.".into(),
+            };
+            (
+                PROMPTS[4].description,
+                format!(
+                    "Perform a complete IEEE 1801 low-power verification signoff audit on `{top}` (clocks: {clocks}; reset: {reset}; mode: {mode}).\n\
+                     Loaded UPF/CPF files: {lp_files}\n\
+                     Resolved power domains: {lp_domains}\n\
+                     LP stages run: {lp_stages}; open/CEX LP violations: {lp_open}\n\n\
+                     Follow this low-power verification protocol:\n\
+                     {load_step}\n\
+                     2. **Static & Formal LP Check**: Run `check_lp(stage=\"all\", prove_corruption=true, prove_waivers=true)` to execute Stage 1 UPF/PST consistency, Stage 2 RTL crossing checks (or Stages 3–4 gate/PG checks when Liberty cells are present), Stage 5 AAG sequence assertions, 2-copy corruption proofs, and certified auto-waivers.\n\
+                     3. **Single-Call Root-Cause Diagnosis**: For every remaining `open` or `cex` violation, call `lp_diagnose(id=...)` to inspect the PST witness, UPF snippet, RTL crossing path, driver snippets, and attached `why_cex` causal slice.\n\
+                     4. **Visual & Cone Cross-Check**: Inspect failing `LowPower::*` properties with `why_cex`, `trace_get` (checking `lp.pd.<domain>.*` swimlanes), and `schematic_get` (with per-node `power_domain` tags). Never mask a real corruption leak with a manual waiver when formal 2-copy analysis produced a CEX.\n\
+                     {spec_step}"
                 ),
             )
         }

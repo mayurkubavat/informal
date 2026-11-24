@@ -22,6 +22,52 @@ const VIRT_THRESHOLD = 64;
 const SEMANTIC_CELL_CAP = 2000;
 
 const helper = (s: Signal) => s.path === "informal" || s.path.startsWith("informal.");
+const isLpDomainSig = (s: Signal) => s.path.startsWith("lp.pd.");
+
+type LpDomainTrack = {
+  domain: string;
+  on?: Signal;
+  iso?: Signal;
+  ret?: Signal;
+  corrupt?: Signal;
+};
+
+type LpDomainStateWord = "ON" | "ISO" | "RET" | "OFF" | "CORRUPT";
+
+function extractLpDomainTracks(vcd: Vcd | null): LpDomainTrack[] {
+  if (!vcd) return [];
+  const map = new Map<string, LpDomainTrack>();
+  for (const s of vcd.signals) {
+    if (!isLpDomainSig(s)) continue;
+    const parts = s.path.split(".");
+    if (parts.length < 4) continue;
+    const domain = parts[2];
+    const kind = parts[3];
+    let tr = map.get(domain);
+    if (!tr) {
+      tr = { domain };
+      map.set(domain, tr);
+    }
+    if (kind === "on") tr.on = s;
+    else if (kind === "iso") tr.iso = s;
+    else if (kind === "ret") tr.ret = s;
+    else if (kind === "corrupt") tr.corrupt = s;
+  }
+  return Array.from(map.values()).sort((a, b) => a.domain.localeCompare(b.domain));
+}
+
+function lpDomainStateAt(vcd: Vcd, tr: LpDomainTrack, t: number): LpDomainStateWord {
+  const bit = (s?: Signal) => (s ? vcd.valuesAt(s, t) : null);
+  const on = bit(tr.on);
+  const iso = bit(tr.iso);
+  const ret = bit(tr.ret);
+  const corrupt = bit(tr.corrupt);
+  if (ret === "1") return "RET";
+  if (on === "0") return corrupt === "1" ? "CORRUPT" : "OFF";
+  if (iso === "1") return "ISO";
+  if (corrupt === "1") return "CORRUPT";
+  return "ON";
+}
 
 function matchesCausalPath(vcdPath: string, causalSig: string): boolean {
   if (vcdPath === causalSig) return true;
@@ -131,13 +177,18 @@ export function TraceView({
   useEffect(() => {
     if (!vcd) return;
     shownFor.current = vcd;
-    shownRef.current = vcd.signals.filter((s) => !helper(s)).map((s) => s.path);
+    const visible = vcd.signals.filter((s) => !helper(s));
+    const lpSigs = visible.filter((s) => isLpDomainSig(s)).map((s) => s.path);
+    const rtlSigs = visible.filter((s) => !isLpDomainSig(s)).map((s) => s.path);
+    shownRef.current = [...lpSigs, ...rtlSigs];
     setShown(shownRef.current);
     setCursor(Math.max(0, Math.min(n - 1, depth)));
     setAdding(false);
     setSliceOnlyLocal(false);
     reveal.current = true;
   }, [vcd, n, depth]);
+
+  const lpDomainTracks = useMemo(() => extractLpDomainTracks(vcd), [vcd]);
 
   const byPath = useMemo(() => new Map(vcd?.signals.map((s) => [s.path, s]) ?? []), [vcd]);
 
@@ -737,6 +788,24 @@ export function TraceView({
         </div>
       )}
 
+      {vcd && lpDomainTracks.length > 0 && (
+        <div className="lp-swimlanes" role="region" aria-label="Power domain swimlanes">
+          <span className="small strong">Power Domains:</span>
+          {lpDomainTracks.map((tr) => {
+            const curState = n > 0 ? lpDomainStateAt(vcd, tr, cycles[Math.max(0, Math.min(n - 1, cursor))]) : "ON";
+            return (
+              <span
+                key={tr.domain}
+                className={`lp-domain-pill mono lp-state-${curState.toLowerCase()}`}
+                title={`${tr.domain} state at cycle ${cursor}: ${curState}`}
+              >
+                {tr.domain}: {curState}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {!vcd ? (
         <p className="empty">{error ? `Could not read ${path}: ${error}` : `Loading ${path}…`}</p>
       ) : (
@@ -764,11 +833,13 @@ export function TraceView({
             {lanes.slice(firstVisibleLane, lastVisibleLane).map((s) => {
               const causal = isCausalSig(s.path);
               const isSel = selectedSig === s.path;
+              const isLp = isLpDomainSig(s);
               return (
                 <div
                   key={s.path}
-                  className={`trace-name ${causal ? "causal-sig" : ""} ${isSel ? "selected-sig" : ""}`}
+                  className={`trace-name ${causal ? "causal-sig" : ""} ${isLp ? "lp-domain-sig" : ""} ${isSel ? "selected-sig" : ""}`}
                   data-causal={causal ? "true" : undefined}
+                  data-lp-domain={isLp ? s.path.split(".")[2] : undefined}
                   onClick={() => setSelectedSig(s.path)}
                   title={`${s.path}${s.width > 1 ? ` [${s.width - 1}:0]` : ""}${causal ? " (in active causal slice)" : ""}`}
                 >

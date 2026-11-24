@@ -8,6 +8,7 @@ mod apps;
 mod core;
 mod diagnose;
 mod gui;
+mod lp;
 
 pub struct Tool {
     pub name: &'static str,
@@ -196,6 +197,7 @@ pub fn all() -> Vec<Tool> {
     out.extend(diagnose::cex_and_convergence());
     out.push(core::prove_cache());
     out.extend(apps::all());
+    out.extend(lp::all());
     out.push(gui::open_workbench());
     out.extend(diagnose::rtl_and_spec());
     out.push(core::tcl_eval());
@@ -218,7 +220,7 @@ pub fn ui_meta(name: &str) -> Option<Value> {
             }
         })),
         "prove" | "why_cex" | "cex_diagnose" | "trace_get" | "schematic_get" | "check_csr"
-        | "check_sec" | "check_cov" => Some(json!({
+        | "check_sec" | "check_cov" | "load_upf" | "check_lp" | "lp_diagnose" => Some(json!({
             "ui": {"resourceUri": APP_URI}
         })),
         _ => None,

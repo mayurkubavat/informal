@@ -609,6 +609,14 @@ pub fn audit_session(s: &Session, spec: &FvpSpec, rt: &AuditRuntime) -> Value {
         }));
     }
 
+    if let Some(ref lp_gates) = spec.low_power {
+        let (lp_gate, lp_actions) = super::lp_gates::evaluate_low_power_gate(s, lp_gates);
+        for act in lp_actions {
+            push_action(&act);
+        }
+        gates.push(lp_gate);
+    }
+
     let gates_ok = gates.iter().all(|g| g["ok"].as_bool().unwrap_or(false));
     let signoff_ready = s.elaborated && all_reqs_verified && gates_ok;
 

@@ -727,7 +727,7 @@
     }
   },
   {
-    "description": "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`), bottom dock tab, or property filter.",
+    "description": "Switch the centre view (`table`, `source`, `trace`, `schematic`, `apps`), workspace layout preset (`triage`, `cex-debug`, `signoff`, `split`), Formal App tab (`cov`, `xprop`, `spv`, `sec`, `csr`, `protocol`, `lp`), bottom dock tab, or property filter.",
     "input": {
       "properties": {
         "app_tab": {
@@ -738,7 +738,8 @@
             "spv",
             "sec",
             "csr",
-            "protocol"
+            "protocol",
+            "lp"
           ],
           "type": "string"
         },

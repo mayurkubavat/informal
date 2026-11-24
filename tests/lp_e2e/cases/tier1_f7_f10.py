@@ -1198,11 +1198,14 @@ def _case_f10_t1_05(ctx: E2EContext) -> None:
     assert_eq(vcd.value_at("lp.pd.PD_CORE.iso", 50), "0", "PD_CORE wakeup ON @50 iso")
 
     # Verify WS6 UI LP components ("lp" FormalApps tab, domain tags, lp.pd.* swimlanes)
-    formal_apps_src = (ui_dir / "src" / "components" / "FormalApps.tsx").read_text(encoding="utf-8")
+    formal_apps_path = ui_dir / "src" / "components" / "FormalApps.tsx"
+    if not formal_apps_path.exists():
+        formal_apps_path = ui_dir / "src" / "components" / "FormalApps" / "index.tsx"
+    formal_apps_src = formal_apps_path.read_text(encoding="utf-8")
     schematic_src = (ui_dir / "src" / "components" / "SchematicView.tsx").read_text(encoding="utf-8")
     trace_src = (ui_dir / "src" / "components" / "TraceView.tsx").read_text(encoding="utf-8")
     if '"lp"' not in formal_apps_src:
-        raise AssertionError("Expected 'lp' tab in ui/src/components/FormalApps.tsx")
+        raise AssertionError(f"Expected 'lp' tab in {formal_apps_path}")
     if "power_domain" not in schematic_src:
         raise AssertionError("Expected power_domain tag support in ui/src/components/SchematicView.tsx")
     if "lp.pd." not in trace_src:
