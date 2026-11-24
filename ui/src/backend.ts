@@ -630,6 +630,9 @@ export const backend = {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<string[]>("shell_complete", { prefix });
     }
+    if (httpBridge) {
+      return bridgeRpc<string[]>("shell_complete", { prefix });
+    }
     return mockComplete(prefix);
   },
   // A design file or script for the source view. The app only reads files
@@ -673,7 +676,7 @@ export const backend = {
         // fallback in mock
       }
     }
-    if (!inTauri) return mockWhyCex(name);
+    if (!inTauri && !httpBridge) return mockWhyCex(name);
     const r = await call("shell_eval", { script: `why_cex -json {${name}}` });
     if (!r.ok) throw new Error(r.result);
     return JSON.parse(r.result) as WhyCexReport;
@@ -723,6 +726,12 @@ export const backend = {
         args: { name, max_depth: maxDepth, max_nodes: maxNodes },
       });
     }
+    if (httpBridge) {
+      return bridgeRpc<SchematicGraphView>("workbench_tool", {
+        tool: "schematic_get",
+        args: { name, max_depth: maxDepth, max_nodes: maxNodes },
+      });
+    }
     return mockSchematic(name, maxDepth);
   },
   // Live `svlang lint` (`formal-ready` `SV-FPV-001..005` + quick-fixes).
@@ -741,6 +750,13 @@ export const backend = {
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       const res = await invoke<{ findings: FormalLintFindingView[] }>("workbench_tool", {
+        tool: "formal_lint",
+        args: file ? { file } : {},
+      });
+      return res.findings ?? [];
+    }
+    if (httpBridge) {
+      const res = await bridgeRpc<{ findings: FormalLintFindingView[] }>("workbench_tool", {
         tool: "formal_lint",
         args: file ? { file } : {},
       });
@@ -776,6 +792,19 @@ export const backend = {
       });
       return { applied: Boolean(res.applied) };
     }
+    if (httpBridge) {
+      const res = await bridgeRpc<{ applied?: boolean }>("workbench_tool", {
+        tool: "formal_fix_apply",
+        args: {
+          file: fix.file,
+          start: fix.start,
+          end: fix.end,
+          replacement: fix.replacement,
+          rationale: rationale ?? fix.description,
+        },
+      });
+      return { applied: Boolean(res.applied) };
+    }
     return mockApplyFormalFix(fix);
   },
   // RTL Go-to-Driver and Go-to-Load navigation.
@@ -790,6 +819,12 @@ export const backend = {
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<SignalNavView>("workbench_tool", {
+        tool: "signal_nav",
+        args: { signal },
+      });
+    }
+    if (httpBridge) {
+      return bridgeRpc<SignalNavView>("workbench_tool", {
         tool: "signal_nav",
         args: { signal },
       });

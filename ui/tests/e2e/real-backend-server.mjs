@@ -27,7 +27,7 @@ export function findInformalBinary() {
 }
 
 class McpClient {
-  constructor(bin, workdir) {
+  constructor(bin, workdir, rootDir = REPO_ROOT) {
     this.proc = spawn(
       bin,
       [
@@ -35,13 +35,13 @@ class McpClient {
         "--mode",
         "auto",
         "--root",
-        REPO_ROOT,
+        rootDir,
         "--workdir",
         workdir,
         "--engines",
         path.join(REPO_ROOT, "config/engines.toml"),
       ],
-      { cwd: REPO_ROOT, stdio: ["pipe", "pipe", "pipe"] },
+      { cwd: rootDir, stdio: ["pipe", "pipe", "pipe"] },
     );
     this.nextId = 1;
     this.pending = new Map();
@@ -187,13 +187,14 @@ endmodule
   return sv;
 }
 
-export async function startRealBackendBridge() {
+export async function startRealBackendBridge(opts = {}) {
   const bin = findInformalBinary();
   if (!bin) throw new Error("No compiled informal binary found in target/{release,debug}/informal");
   const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "informal-real-e2e-"));
+  const rootDir = opts.root || REPO_ROOT;
   const tplDir = path.join(workdir, "templates");
   fs.mkdirSync(tplDir, { recursive: true });
-  const mcp = new McpClient(bin, workdir);
+  const mcp = new McpClient(bin, workdir, rootDir);
   await mcp.init();
   let flavor = "jg";
 
@@ -212,6 +213,8 @@ export async function startRealBackendBridge() {
     if (cmd === "current_flavor") return flavor;
     if (cmd === "shell_flavor") {
       flavor = String(args.flavor || "jg");
+      const ns = flavor === "vcf" ? "vcf" : "jg";
+      await mcp.evalTcl(`namespace eval :: { namespace import -force ::${ns}::* }`);
       return { ok: true, result: flavor, session: await mcp.session() };
     }
     if (cmd === "shell_eval") {
@@ -252,7 +255,24 @@ export async function startRealBackendBridge() {
     if (cmd === "llm_providers") return [];
     if (cmd === "ui_state") return null;
     if (cmd === "surfer_available") return false;
-    if (cmd === "shell_complete") return [];
+    if (cmd === "shell_complete") {
+      const prefix = String(args.prefix || "").trim();
+      if (!prefix) return [];
+      const sess = await mcp.session();
+      const propHits = (sess.props || [])
+        .map((p) => p.name)
+        .filter((n) => n.startsWith(prefix))
+        .sort();
+      const cmdRes = await mcp.evalTcl(`info commands ::${prefix}*`);
+      const cmdHits = cmdRes.ok && cmdRes.result
+        ? String(cmdRes.result)
+            .split(/\s+/)
+            .map((c) => c.replace(/^::/, ""))
+            .filter((c) => c && !c.endsWith("_cmd"))
+            .sort()
+        : [];
+      return [...new Set([...cmdHits, ...propHits])];
+    }
     return null;
   }
 
@@ -289,6 +309,7 @@ export async function startRealBackendBridge() {
   const { port } = server.address();
   return {
     url: `http://127.0.0.1:${port}`,
+    workdir,
     async stop() {
       mcp.close();
       await new Promise((resolve) => server.close(resolve));
