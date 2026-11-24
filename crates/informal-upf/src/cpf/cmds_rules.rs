@@ -367,7 +367,7 @@ pub(crate) fn cmd_create_isolation_rule(
         .to_string();
     let from = args.val("-from").map(|d| st.qualify_ref(d));
     let to = args.val("-to").map(|d| st.qualify_ref(d));
-    let (domain, applies_to) = match (&from, &to) {
+    let (domain, mut applies_to) = match (&from, &to) {
         (Some(f), _) => (f.clone(), Some(AppliesTo::Outputs)),
         (None, Some(t)) => (t.clone(), Some(AppliesTo::Inputs)),
         (None, None) => {
@@ -385,25 +385,33 @@ pub(crate) fn cmd_create_isolation_rule(
         Some(cond) => parse_cpf_signal_sense(cond, st),
         None => (None, None),
     };
-    let location = match args
+    // `-isolation_target from|to` selects which side's pins are targeted in CPF;
+    // physical placement (`location`) is controlled by `update_isolation_rules -location`.
+    match args
         .val("-isolation_target")
         .map(|s| s.to_ascii_lowercase())
         .as_deref()
     {
-        Some("from") => Some(StrategyLocation::Self_),
-        Some("to") => Some(if from.is_some() {
-            StrategyLocation::Parent
-        } else {
-            StrategyLocation::Self_
-        }),
+        Some("from") => {
+            if from.is_some() {
+                applies_to = Some(AppliesTo::Outputs);
+            }
+        }
+        Some("to") => {
+            if from.is_none() && to.is_some() {
+                applies_to = Some(AppliesTo::Inputs);
+            }
+        }
         Some(other) => {
             return Err(loc_err(
                 loc.as_ref(),
                 &format!("create_isolation_rule: invalid -isolation_target `{other}`"),
             ))
         }
-        None => None,
-    };
+        None => {}
+    }
+    let location = None;
+    let source_filter = if to.is_some() { from } else { None };
     let elements = args
         .all("-pins")
         .flat_map(|v| st.qualify_list(&v[0]))
@@ -428,7 +436,7 @@ pub(crate) fn cmd_create_isolation_rule(
         applies_to_clamp: None,
         elements,
         exclude_elements,
-        source_filter: from,
+        source_filter,
         sink_filter: to,
         diff_supply_only: false,
         no_isolation: false,
@@ -526,7 +534,8 @@ pub(crate) fn cmd_create_level_shifter_rule(
     let from = args.val("-from").map(|d| st.qualify_ref(d));
     let to = args.val("-to").map(|d| st.qualify_ref(d));
     let (domain, applies_to) = match (&from, &to) {
-        (Some(f), _) => (f.clone(), Some(AppliesTo::Outputs)),
+        (Some(f), Some(_)) => (f.clone(), Some(AppliesTo::Both)),
+        (Some(f), None) => (f.clone(), Some(AppliesTo::Outputs)),
         (None, Some(t)) => (t.clone(), Some(AppliesTo::Inputs)),
         (None, None) => {
             return Err(loc_err(

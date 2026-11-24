@@ -401,7 +401,8 @@ impl ObjectFinder for DesignFinder {
             return Vec::new();
         }
         if let Some(ref g) = self.fast_graph {
-            return self.find_objects_fast(g, scope_path, patterns, obj_type, transitive, direction);
+            return self
+                .find_objects_fast(g, scope_path, patterns, obj_type, transitive, direction);
         }
         let mut out = BTreeSet::new();
         match obj_type {

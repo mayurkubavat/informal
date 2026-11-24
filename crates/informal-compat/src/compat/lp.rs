@@ -147,9 +147,7 @@ fn check_lp_impl(s: &mut Session, a: &[String], default_stage: LpStage) -> Resul
         None => DEFAULT_VOLTAGE_TOL_UV,
     };
     if s.dry_run {
-        if (stage == LpStage::Formal
-            || a.flag("-prove_corruption")
-            || a.flag("-prove_waivers"))
+        if (stage == LpStage::Formal || a.flag("-prove_corruption") || a.flag("-prove_waivers"))
             && !s.tasks.iter().any(|t| t.name == "LowPower")
         {
             let _ = s.create_task("LowPower");
@@ -377,14 +375,20 @@ pub(super) fn compare_upf(s: &mut Session, a: &[String]) -> Result<Value, String
         s.design.top.as_deref(),
     ));
 
-    let g_res = if a.flag("-golden_cpf") {
+    let is_cpf_path = |p: &std::path::Path| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("cpf"))
+    };
+
+    let g_res = if a.flag("-golden_cpf") || is_cpf_path(&golden_path) {
         load_cpf(&golden_path, scope, None, finder.clone())
     } else {
         upf_load_upf(&golden_path, scope, None, finder.clone())
     }
     .map_err(|e| format!("compare_upf (-golden): {e}"))?;
 
-    let r_res = if a.flag("-revised_cpf") {
+    let r_res = if a.flag("-revised_cpf") || is_cpf_path(&revised_path) {
         load_cpf(&revised_path, scope, None, finder.clone())
     } else {
         upf_load_upf(&revised_path, scope, None, finder.clone())

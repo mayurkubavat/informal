@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::ir::{
-    AppliesTo, ClampValue, IsolationStrategy, LevelShifterStrategy, LsRule, RetentionStrategy,
-    SupplySetId,
+    AppliesTo, ClampValue, IsolationStrategy, LevelShifterStrategy, LsRule, PowerDomainId,
+    RetentionStrategy, Sense, SupplySetId,
 };
 use crate::pst::PstSat;
 use crate::resolve::{lookup_scoped, resolve_ss_handle, ResolvedPowerIntent};
@@ -458,8 +458,23 @@ fn ls_diff_reasons(
 pub(crate) fn compare_level_shifters(
     golden: &ResolvedPowerIntent,
     revised: &ResolvedPowerIntent,
+    matched_domains: &[(String, PowerDomainId, PowerDomainId)],
+    g_sat: &mut PstSat,
+    tol_uv: i64,
+    cross_format: bool,
     diffs: &mut Vec<UpfDiffItem>,
 ) {
+    if cross_format {
+        super::cross_format::compare_level_shifters_cross_format(
+            golden,
+            revised,
+            matched_domains,
+            g_sat,
+            tol_uv,
+            diffs,
+        );
+        return;
+    }
     let mut g_map: BTreeMap<LsKey, Vec<&LevelShifterStrategy>> = BTreeMap::new();
     for ls in &golden.intent.level_shifter_strategies {
         g_map.entry(ls_key(golden, ls)).or_default().push(ls);
@@ -558,11 +573,26 @@ fn ret_strategy_always_on(
         && sat.can_corrupt_state_while_on(pd_ss, ret_ss).is_some()
 }
 
+fn sense_compat(a: Option<Sense>, b: Option<Sense>, cross_format: bool) -> bool {
+    if a == b {
+        return true;
+    }
+    cross_format
+        && matches!(
+            (a, b),
+            (Some(Sense::High), Some(Sense::Posedge))
+                | (Some(Sense::Posedge), Some(Sense::High))
+                | (Some(Sense::Low), Some(Sense::Negedge))
+                | (Some(Sense::Negedge), Some(Sense::Low))
+        )
+}
+
 fn ret_diff_reasons(
     g: &RetentionStrategy,
     r: &RetentionStrategy,
     g_always_on: bool,
     r_always_on: bool,
+    cross_format: bool,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
     if g.no_retention != r.no_retention {
@@ -571,7 +601,7 @@ fn ret_diff_reasons(
             g.no_retention, r.no_retention
         ));
     }
-    if g.save_sense != r.save_sense
+    if !sense_compat(g.save_sense, r.save_sense, cross_format)
         || norm_opt_signal(g.save_signal.as_deref()) != norm_opt_signal(r.save_signal.as_deref())
     {
         reasons.push(format!(
@@ -579,7 +609,7 @@ fn ret_diff_reasons(
             g.save_signal, g.save_sense, r.save_signal, r.save_sense
         ));
     }
-    if g.restore_sense != r.restore_sense
+    if !sense_compat(g.restore_sense, r.restore_sense, cross_format)
         || norm_opt_signal(g.restore_signal.as_deref())
             != norm_opt_signal(r.restore_signal.as_deref())
     {
@@ -632,6 +662,7 @@ pub(crate) fn compare_retention_strategies(
     revised: &ResolvedPowerIntent,
     g_sat: &mut PstSat,
     r_sat: &mut PstSat,
+    cross_format: bool,
     diffs: &mut Vec<UpfDiffItem>,
 ) {
     let mut g_map: BTreeMap<RetKey, Vec<&RetentionStrategy>> = BTreeMap::new();
@@ -676,7 +707,7 @@ pub(crate) fn compare_retention_strategies(
             domain_of: |ret: &RetentionStrategy| ret.domain.as_str(),
             loc_of: |ret: &RetentionStrategy| &ret.loc,
             diff_pair: Box::new(move |g, r| {
-                ret_diff_reasons(g, r, g_ok_cache[&g.id.0], r_ok_cache[&r.id.0])
+                ret_diff_reasons(g, r, g_ok_cache[&g.id.0], r_ok_cache[&r.id.0], cross_format)
             }),
         },
         diffs,

@@ -25,10 +25,16 @@ pub(crate) fn check_crossing(
         return;
     }
 
-    let Some(src_ss) = ctx.resolved.primary_ss(src_pd) else {
+    let Some(src_ss) = ctx
+        .effective_port_supply(group.src_cell, group.src_base_net, false)
+        .or_else(|| ctx.resolved.primary_ss(src_pd))
+    else {
         return;
     };
-    let Some(dst_ss) = ctx.resolved.primary_ss(dst_pd) else {
+    let Some(dst_ss) = ctx
+        .effective_port_supply(group.dst_cell, group.dst_base_net, true)
+        .or_else(|| ctx.resolved.primary_ss(dst_pd))
+    else {
         return;
     };
 
@@ -79,23 +85,23 @@ pub(crate) fn check_crossing(
         }
         StrategyMatch::Matched(iso) => {
             // 2. `ISO_REDUNDANT` (do not flag when source has activity-triggered corruption states).
-            let src_has_act_corrupt = ctx
-                .resolved
-                .ss_states
-                .get(src_ss.0 as usize)
-                .is_some_and(|states| {
-                    states.iter().any(|st| {
-                        !st.illegal
-                            && st.simstate.is_some_and(|s| {
-                                matches!(
-                                    s,
-                                    informal_upf::SimState::CorruptOnActivity
-                                        | informal_upf::SimState::CorruptStateOnActivity
-                                        | informal_upf::SimState::CorruptStateOnChange
-                                )
-                            })
-                    })
-                });
+            let src_has_act_corrupt =
+                ctx.resolved
+                    .ss_states
+                    .get(src_ss.0 as usize)
+                    .is_some_and(|states| {
+                        states.iter().any(|st| {
+                            !st.illegal
+                                && st.simstate.is_some_and(|s| {
+                                    matches!(
+                                        s,
+                                        informal_upf::SimState::CorruptOnActivity
+                                            | informal_upf::SimState::CorruptStateOnActivity
+                                            | informal_upf::SimState::CorruptStateOnChange
+                                    )
+                                })
+                        })
+                    });
             if corrupt_witness.is_none() && !iso.force_isolation && !src_has_act_corrupt {
                 sink.push(
                     "ISO_REDUNDANT",
@@ -292,7 +298,7 @@ fn check_iso_location(
 
     if let Some((msg, w)) = bad_reason {
         sink.push(
-            "ISO_LOCATION",
+            "ISO_LOCATION_INVALID",
             None,
             Some(src_name.to_string()),
             Some(dst_name.to_string()),
@@ -424,6 +430,41 @@ fn check_iso_ctrl_and_clamp(
 
     // Inline RTL clamp gate checks (`ISO_CTRL_POLARITY_MISMATCH` & `ISO_CLAMP_MISMATCH`).
     let clamps = collect_relevant_clamps(ctx, group);
+    if clamps.is_empty() && iso.isolation_sense == Some(Sense::High) {
+        if let Some(cone) = iso_cone.as_ref() {
+            let odd_inverted_from_active_high = !cone.roots.is_empty()
+                && cone.roots.iter().all(|r| {
+                    if r.polarity != Polarity::Negative {
+                        return false;
+                    }
+                    let root_name = ctx.graph.net(r.net).name.to_ascii_lowercase();
+                    !(root_name.ends_with("_n")
+                        || root_name.ends_with("_b")
+                        || root_name.ends_with("_l")
+                        || root_name.ends_with("_low")
+                        || root_name.ends_with("_bar"))
+                });
+            if odd_inverted_from_active_high {
+                let root_desc = ctx.graph.net(cone.roots[0].net).upf_path.clone();
+                sink.push(
+                    "ISO_CTRL_POLARITY_MISMATCH",
+                    None,
+                    Some(src_name.to_string()),
+                    Some(dst_name.to_string()),
+                    sig_disp.to_string(),
+                    group.width_bits,
+                    group.raw_crossings,
+                    format!(
+                        "isolation control `{iso_sig_raw}` for `{}` has odd inversion relative to root `{root_desc}` while UPF specifies `-isolation_sense high`",
+                        iso.name
+                    ),
+                    iso.loc.clone(),
+                    rtl_loc.clone(),
+                    None,
+                );
+            }
+        }
+    }
     for ic in clamps {
         let (ctrl_related, eff_sense_opt) =
             analyze_clamp_ctrl(ctx, &ic, iso_net_opt, iso_cone.as_ref());

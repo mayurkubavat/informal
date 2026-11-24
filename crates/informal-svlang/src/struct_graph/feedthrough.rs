@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use super::ft_alias::{
     collect_dst_sub_intervals, collect_parent_alias_reach, net_has_local_non_childpin_driver,
-    project_range,
+    project_range, resolve_pure_wire_ft_upstream,
 };
 use super::ft_classify::{classify_feedthrough_in_cell, ClassifyRoute};
 use super::{
@@ -92,23 +92,34 @@ pub fn extract_crossings(
                     if let Some(ic) = conn.inline_clamp {
                         inline_clamps.push(ic);
                     }
-                    collect_downstream_from_parent_net(
+                    let sources = resolve_pure_wire_ft_upstream(
                         graph,
-                        domain_of,
                         child_cell,
-                        d_child,
                         internal_net,
                         conn.pin_range,
-                        Some(pin.id),
-                        parent_cell,
-                        d_parent,
-                        pnet,
-                        conn.parent_range,
-                        conn.loc,
-                        &inline_clamps,
-                        &mut seen_keys,
-                        &mut edges,
-                    );
+                    )
+                    .unwrap_or_else(|| {
+                        vec![(child_cell, internal_net, conn.pin_range, Some(pin.id))]
+                    });
+                    for (src_c, src_n, src_r, src_bpin) in sources {
+                        collect_downstream_from_parent_net(
+                            graph,
+                            domain_of,
+                            src_c,
+                            domain_of(src_c),
+                            src_n,
+                            src_r,
+                            src_bpin,
+                            parent_cell,
+                            d_parent,
+                            pnet,
+                            conn.parent_range,
+                            conn.loc,
+                            &inline_clamps,
+                            &mut seen_keys,
+                            &mut edges,
+                        );
+                    }
                 }
             }
             Some(svlang::PortDir::Input) => {

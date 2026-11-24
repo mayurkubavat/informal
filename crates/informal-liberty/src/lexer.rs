@@ -95,7 +95,10 @@ impl<'a> Lexer<'a> {
         let tok = self.next_tok()?;
         match tok.kind {
             TokKind::LParen => Ok(tok.line),
-            other => Err(self.err(tok.line, format!("expected `(`, found {}", tok_desc(&other)))),
+            other => Err(self.err(
+                tok.line,
+                format!("expected `(`, found {}", tok_desc(&other)),
+            )),
         }
     }
 
@@ -103,7 +106,10 @@ impl<'a> Lexer<'a> {
         let tok = self.next_tok()?;
         match tok.kind {
             TokKind::RParen => Ok(tok.line),
-            other => Err(self.err(tok.line, format!("expected `)`, found {}", tok_desc(&other)))),
+            other => Err(self.err(
+                tok.line,
+                format!("expected `)`, found {}", tok_desc(&other)),
+            )),
         }
     }
 
@@ -111,7 +117,10 @@ impl<'a> Lexer<'a> {
         let tok = self.next_tok()?;
         match tok.kind {
             TokKind::LBrace => Ok(tok.line),
-            other => Err(self.err(tok.line, format!("expected `{{`, found {}", tok_desc(&other)))),
+            other => Err(self.err(
+                tok.line,
+                format!("expected `{{`, found {}", tok_desc(&other)),
+            )),
         }
     }
 
@@ -177,8 +186,7 @@ impl<'a> Lexer<'a> {
                     b'\\' => {
                         // Line continuation: `\ \r?\n`
                         let mut k = self.pos + 1;
-                        while k < self.bytes.len()
-                            && matches!(self.bytes[k], b' ' | b'\t' | b'\r')
+                        while k < self.bytes.len() && matches!(self.bytes[k], b' ' | b'\t' | b'\r')
                         {
                             k += 1;
                         }

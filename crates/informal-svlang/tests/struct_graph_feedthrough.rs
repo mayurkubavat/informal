@@ -739,7 +739,7 @@ endmodule
         (6, FeedthroughKind::Combinational, false),
         (7, FeedthroughKind::Combinational, false),
         (8, FeedthroughKind::Combinational, false),
-        (9, FeedthroughKind::PureWire, false),
+        (9, FeedthroughKind::Buffered, false),
         (10, FeedthroughKind::Combinational, false),
         (11, FeedthroughKind::Combinational, false),
     ] {

@@ -58,13 +58,12 @@ pub fn check_ls_cell(
         for pnet in pin_parent_nets(ctx.graph, pid) {
             for drv in resolve_driving_sources(ctx.graph, ctx.liberty, pnet, 6) {
                 match drv {
-                    SignalEndpoint::LeafPin { cell: sc, pin: spid } => {
+                    SignalEndpoint::LeafPin {
+                        cell: sc,
+                        pin: spid,
+                    } => {
                         let smod = ctx.graph.cell(sc).module.clone();
-                        if ctx
-                            .liberty
-                            .cell(&smod)
-                            .is_some_and(|l| l.is_isolation_cell)
-                        {
+                        if ctx.liberty.cell(&smod).is_some_and(|l| l.is_isolation_cell) {
                             src_is_iso = true;
                         }
                         let spn = ctx.graph.pin(spid).name.clone();
@@ -90,13 +89,12 @@ pub fn check_ls_cell(
         for pnet in pin_parent_nets(ctx.graph, pid) {
             for ld in resolve_sink_loads(ctx.graph, ctx.liberty, pnet, 6) {
                 match ld {
-                    SignalEndpoint::LeafPin { cell: dc, pin: dpid } => {
+                    SignalEndpoint::LeafPin {
+                        cell: dc,
+                        pin: dpid,
+                    } => {
                         let dmod = ctx.graph.cell(dc).module.clone();
-                        if ctx
-                            .liberty
-                            .cell(&dmod)
-                            .is_some_and(|l| l.is_isolation_cell)
-                        {
+                        if ctx.liberty.cell(&dmod).is_some_and(|l| l.is_isolation_cell) {
                             feeds_iso = true;
                         }
                         let dpn = ctx.graph.pin(dpid).name.clone();

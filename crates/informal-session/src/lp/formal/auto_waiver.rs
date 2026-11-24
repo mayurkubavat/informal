@@ -53,14 +53,13 @@ pub fn run_prove_waivers(
     graph: &StructuralGraph,
     resolved: &ResolvedPowerIntent,
 ) -> Result<(), String> {
-    let open_indices: Vec<usize> = s
-        .lp
-        .violations
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| v.status == LpStatus::Open && is_waivable_crossing_rule(&v.rule_id))
-        .map(|(i, _)| i)
-        .collect();
+    let open_indices: Vec<usize> =
+        s.lp.violations
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.status == LpStatus::Open && is_waivable_crossing_rule(&v.rule_id))
+            .map(|(i, _)| i)
+            .collect();
     if open_indices.is_empty() {
         return Ok(());
     }
@@ -108,10 +107,8 @@ pub fn run_prove_waivers(
     for vi in open_indices {
         let v_snap = s.lp.violations[vi].clone();
         let matched = match_crossings_for_violation(&pa.crossings, graph, &v_snap, top_ref);
-        let target_div_nodes: HashSet<u32> = matched
-            .iter()
-            .filter_map(|c| c.divergence_node)
-            .collect();
+        let target_div_nodes: HashSet<u32> =
+            matched.iter().filter_map(|c| c.divergence_node).collect();
 
         if target_div_nodes.is_empty() {
             continue;

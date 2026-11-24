@@ -56,8 +56,7 @@ pub fn run_formal_lp(s: &mut Session, opts: &CheckLpOpts) -> Result<(), String> 
     let resolved = ensure_resolved_with_finder(s, &finder)?;
     s.lp.resolved = Some(resolved.clone());
 
-    let run_aag_phase = opts.stage == LpStage::Formal
-        || (opts.stage == LpStage::All && opts.prove_corruption);
+    let run_aag_phase = opts.stage == LpStage::Formal || opts.stage == LpStage::All;
     if run_aag_phase {
         aag::run_aag(s, graph, &resolved)?;
     }

@@ -716,20 +716,5 @@ pub(crate) fn finalize_cpf_ex(
     }
     cs.updated_domain_conditions.clear();
 
-    for sw in &mut intent.power_switches {
-        if sw.output_supply_ports.is_empty()
-            && sw
-                .on_states
-                .iter()
-                .any(|s| s.supply_port.as_deref() == Some("vdd_in"))
-        {
-            let dom_key = sw.domain.trim_start_matches('/');
-            if let Some(pd) = intent.domains.iter().find(|d| d.name == dom_key) {
-                if let Some(ref pwr) = pd.legacy_primary_power_net {
-                    sw.output_supply_ports
-                        .push(("vdd_out".to_string(), pwr.clone()));
-                }
-            }
-        }
-    }
+    super::finalize_defaults::apply_cpf_arch_defaults(intent, cs);
 }

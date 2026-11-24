@@ -28,7 +28,10 @@ impl BoolExpr {
         if toks.is_empty() {
             return Err("empty UPF boolean expression".to_string());
         }
-        let mut p = Parser { toks: &toks, pos: 0 };
+        let mut p = Parser {
+            toks: &toks,
+            pos: 0,
+        };
         let expr = p.parse_or()?;
         if p.pos < p.toks.len() {
             return Err(format!(
@@ -117,11 +120,15 @@ impl BoolExpr {
             Self::Lit { val, width } => format!("{width}'d{val}"),
             Self::Sig(s) => normalize_sva_signal(s, scope, top),
             Self::Not(x) => format!("(!({}))", x.to_sva(scope, top)),
-            Self::And(a, b) => format!("(({}) && ({}))", a.to_sva(scope, top), b.to_sva(scope, top)),
+            Self::And(a, b) => {
+                format!("(({}) && ({}))", a.to_sva(scope, top), b.to_sva(scope, top))
+            }
             Self::Or(a, b) => format!("(({}) || ({}))", a.to_sva(scope, top), b.to_sva(scope, top)),
             Self::Xor(a, b) => format!("(({}) ^ ({}))", a.to_sva(scope, top), b.to_sva(scope, top)),
             Self::Eq(a, b) => format!("(({}) == ({}))", a.to_sva(scope, top), b.to_sva(scope, top)),
-            Self::Neq(a, b) => format!("(({}) != ({}))", a.to_sva(scope, top), b.to_sva(scope, top)),
+            Self::Neq(a, b) => {
+                format!("(({}) != ({}))", a.to_sva(scope, top), b.to_sva(scope, top))
+            }
         }
     }
 }
@@ -294,12 +301,19 @@ fn extract_one_domain(resolved: &ResolvedPowerIntent, pd_id: PowerDomainId) -> D
 
 /// Returns `Some(on_expr)` if `ss_id` can turn off, or `None` if `ss_id` is always-on.
 pub fn supply_set_on_expr(resolved: &ResolvedPowerIntent, ss_id: SupplySetId) -> Option<BoolExpr> {
-    if let Some(pnet) = resolved.ss_power_net.get(ss_id.0 as usize).copied().flatten() {
+    if let Some(pnet) = resolved
+        .ss_power_net
+        .get(ss_id.0 as usize)
+        .copied()
+        .flatten()
+    {
         let net_name = &resolved.intent.supply_nets[pnet.0 as usize].name;
         for sw in &resolved.intent.power_switches {
-            if sw.output_supply_ports.iter().any(|(_, n)| {
-                n == net_name || qualify_in_scope(&sw.scope, n) == *net_name
-            }) {
+            if sw
+                .output_supply_ports
+                .iter()
+                .any(|(_, n)| n == net_name || qualify_in_scope(&sw.scope, n) == *net_name)
+            {
                 if let Some(on) = switch_on_expr(sw) {
                     return Some(on);
                 }
@@ -323,9 +337,11 @@ fn find_domain_power_switch(
         if let Some(pnet) = resolved.ss_power_net.get(ss.0 as usize).copied().flatten() {
             let net_name = &resolved.intent.supply_nets[pnet.0 as usize].name;
             for sw in &resolved.intent.power_switches {
-                if sw.output_supply_ports.iter().any(|(_, n)| {
-                    n == net_name || qualify_in_scope(&sw.scope, n) == *net_name
-                }) {
+                if sw
+                    .output_supply_ports
+                    .iter()
+                    .any(|(_, n)| n == net_name || qualify_in_scope(&sw.scope, n) == *net_name)
+                {
                     return Some(sw);
                 }
             }
@@ -419,7 +435,9 @@ fn supply_set_state_exprs(
             SimState::Normal => on_list.push(expr),
             SimState::Corrupt | SimState::Off | SimState::NotNormal => corrupt_list.push(expr),
             SimState::CorruptOnActivity => coa_list.push(expr),
-            SimState::CorruptStateOnActivity | SimState::CorruptStateOnChange => csoa_list.push(expr),
+            SimState::CorruptStateOnActivity | SimState::CorruptStateOnChange => {
+                csoa_list.push(expr)
+            }
         }
     }
 
@@ -522,8 +540,7 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
             }
             '0'..='9' => {
                 let start = i;
-                while i < b.len()
-                    && (b[i].is_ascii_alphanumeric() || b[i] == b'\'' || b[i] == b'_')
+                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'\'' || b[i] == b'_')
                 {
                     i += 1;
                 }

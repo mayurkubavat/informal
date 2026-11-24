@@ -504,3 +504,207 @@ pub(super) fn collect_pre_comb_nets(
     }
     out
 }
+
+pub(super) type UpstreamOrigin = (CellId, NetSegId, BitRange, Option<PinId>);
+
+/// If `child_cell`'s output `internal_net[pin_range]` is driven purely by passive
+/// `Identity` wires from input pin(s) of `child_cell` (no local gates, buffers,
+/// sequential elements, or constants), resolves and returns the true upstream
+/// driver(s) `(src_cell, src_net, src_range, boundary_pin)` feeding those input pins.
+pub(super) fn resolve_pure_wire_ft_upstream(
+    graph: &StructuralGraph,
+    child_cell: CellId,
+    internal_net: NetSegId,
+    pin_range: BitRange,
+) -> Option<Vec<UpstreamOrigin>> {
+    resolve_pure_wire_ft_inner(graph, child_cell, internal_net, pin_range, 0)
+}
+
+fn find_cell_input_pin(graph: &StructuralGraph, cell: CellId, net: NetSegId) -> Option<PinId> {
+    graph.cell(cell).pins.iter().copied().find(|&pid| {
+        let p = graph.pin(pid);
+        p.internal_net == Some(net) && p.dir == Some(svlang::PortDir::Input)
+    })
+}
+
+fn trace_pure_wire_inputs_in_cell(
+    graph: &StructuralGraph,
+    cell: CellId,
+    start_net: NetSegId,
+    start_range: BitRange,
+) -> Option<Vec<(PinId, BitRange)>> {
+    let mut visited: HashSet<(NetSegId, BitRange)> = HashSet::new();
+    let mut queue: VecDeque<(NetSegId, BitRange, usize)> = VecDeque::new();
+    let mut in_pins: Vec<(PinId, BitRange)> = Vec::new();
+    visited.insert((start_net, start_range));
+    queue.push_back((start_net, start_range, 0));
+
+    while let Some((cur_n, cur_r, depth)) = queue.pop_front() {
+        if depth >= 32 {
+            return None;
+        }
+        let seg = graph.net(cur_n);
+        if seg.cell != cell || seg.is_seq_state {
+            return None;
+        }
+        let ov_drvs: Vec<_> = seg
+            .drivers
+            .iter()
+            .filter(|d| d.dst_range.overlaps(cur_r))
+            .collect();
+        if let Some(in_pid) = find_cell_input_pin(graph, cell, cur_n) {
+            let has_non_parent_drv = ov_drvs
+                .iter()
+                .any(|d| !matches!(d.origin, DriverOrigin::ParentPort(_)));
+            if !has_non_parent_drv {
+                if !in_pins.contains(&(in_pid, cur_r)) {
+                    in_pins.push((in_pid, cur_r));
+                }
+                continue;
+            }
+        }
+        if ov_drvs.is_empty() {
+            return None;
+        }
+        for drv in ov_drvs {
+            if !matches!(drv.op, ExprOpSummary::Identity)
+                || matches!(drv.origin, DriverOrigin::Gate(_) | DriverOrigin::Blackbox)
+                || !drv.extra_deps.is_empty()
+                || drv.inline_clamp.is_some()
+            {
+                return None;
+            }
+            let (Some(sn), Some(sr)) = (drv.src_net, drv.src_range) else {
+                return None;
+            };
+            if graph.net(sn).cell != cell || sn == cur_n {
+                return None;
+            }
+            let ov = cur_r.intersect(drv.dst_range)?;
+            let next_r = if drv.dst_range.width() == sr.width() && sr.width() > 0 {
+                project_range(ov, drv.dst_range, sr)
+            } else {
+                sr
+            };
+            if visited.insert((sn, next_r)) {
+                queue.push_back((sn, next_r, depth + 1));
+            }
+        }
+    }
+    (!in_pins.is_empty()).then_some(in_pins)
+}
+
+fn resolve_pure_wire_ft_inner(
+    graph: &StructuralGraph,
+    child_cell: CellId,
+    internal_net: NetSegId,
+    pin_range: BitRange,
+    depth: usize,
+) -> Option<Vec<UpstreamOrigin>> {
+    if depth >= 16 {
+        return None;
+    }
+    let in_pins = trace_pure_wire_inputs_in_cell(graph, child_cell, internal_net, pin_range)?;
+    let parent_cell = graph.cell(child_cell).parent?;
+    let mut origins: Vec<UpstreamOrigin> = Vec::new();
+    let mut visited_p: HashSet<(NetSegId, BitRange)> = HashSet::new();
+    let mut pq: VecDeque<(NetSegId, BitRange, usize)> = VecDeque::new();
+
+    for (in_pid, in_r) in in_pins {
+        let p = graph.pin(in_pid);
+        for conn in &p.external_conns {
+            let Some(ov) = in_r.intersect(conn.pin_range) else {
+                continue;
+            };
+            if let Some(pnet) = conn.parent_net {
+                let pr = project_range(ov, conn.pin_range, conn.parent_range);
+                if visited_p.insert((pnet, pr)) {
+                    pq.push_back((pnet, pr, 0));
+                }
+            }
+        }
+    }
+
+    while let Some((pn, pr, pdepth)) = pq.pop_front() {
+        if pdepth >= 32 {
+            continue;
+        }
+        let pseg = graph.net(pn);
+        let ov_drvs: Vec<_> = pseg
+            .drivers
+            .iter()
+            .filter(|d| d.dst_range.overlaps(pr))
+            .collect();
+        let mut saw_child_pin = false;
+        let mut saw_local = false;
+        for drv in &ov_drvs {
+            match drv.origin {
+                DriverOrigin::ChildPin(up_pid) => {
+                    saw_child_pin = true;
+                    let up_pin = graph.pin(up_pid);
+                    let up_cell = up_pin.cell;
+                    let Some(up_inet) = up_pin.internal_net else {
+                        continue;
+                    };
+                    let ov = pr.intersect(drv.dst_range).unwrap_or(pr);
+                    let up_r = drv
+                        .src_range
+                        .map(|sr| {
+                            if drv.dst_range.width() == sr.width() && sr.width() > 0 {
+                                project_range(ov, drv.dst_range, sr)
+                            } else {
+                                sr
+                            }
+                        })
+                        .unwrap_or_else(|| BitRange::full(up_pin.width));
+                    if let Some(nested) =
+                        resolve_pure_wire_ft_inner(graph, up_cell, up_inet, up_r, depth + 1)
+                    {
+                        for item in nested {
+                            if !origins.contains(&item) {
+                                origins.push(item);
+                            }
+                        }
+                    } else {
+                        let item = (up_cell, up_inet, up_r, Some(up_pid));
+                        if !origins.contains(&item) {
+                            origins.push(item);
+                        }
+                    }
+                }
+                DriverOrigin::Assign | DriverOrigin::NetAlias
+                    if matches!(drv.op, ExprOpSummary::Identity)
+                        && drv.extra_deps.is_empty()
+                        && drv.inline_clamp.is_none() =>
+                {
+                    if let (Some(sn), Some(sr)) = (drv.src_net, drv.src_range) {
+                        if graph.net(sn).cell == parent_cell && sn != pn {
+                            let ov = pr.intersect(drv.dst_range).unwrap_or(pr);
+                            let next_r = if drv.dst_range.width() == sr.width() && sr.width() > 0 {
+                                project_range(ov, drv.dst_range, sr)
+                            } else {
+                                sr
+                            };
+                            if visited_p.insert((sn, next_r)) {
+                                pq.push_back((sn, next_r, pdepth + 1));
+                            }
+                            continue;
+                        }
+                    }
+                    saw_local = true;
+                }
+                _ => {
+                    saw_local = true;
+                }
+            }
+        }
+        if saw_local || (!saw_child_pin && ov_drvs.is_empty()) {
+            let item = (parent_cell, pn, pr, None);
+            if !origins.contains(&item) {
+                origins.push(item);
+            }
+        }
+    }
+
+    (!origins.is_empty()).then_some(origins)
+}

@@ -23,9 +23,10 @@ use informal_upf::{
 };
 
 use super::pa_instrument::{
-    compile_bool_expr, domain_sig_by_id, resolve_btor_sig, sanitize_sym, synthesize_domain_signals,
-    BtorEmitter, DomainBtorSignals,
+    compile_bool_expr, domain_sig_by_id, is_helper_state, resolve_btor_sig, sanitize_sym,
+    synthesize_domain_signals, BtorEmitter, DomainBtorSignals,
 };
+pub(crate) use super::pa_instrument::{domain_of_signal_path, strip_top_prefix};
 use crate::lp::static_rtl::{assign_cell_domains, collect_strategy_slice_cuts};
 use crate::miter::{parse_full_model, CondDivergence};
 
@@ -118,7 +119,15 @@ pub fn build_pa_model_with_skip(
     let domains =
         synthesize_domain_signals(&mut em, graph, resolved, top, include_activity, reset_steps);
 
+    struct RetNextWrap {
+        width: u32,
+        restore_cond: Option<i64>,
+        sh_id: u32,
+        sec_corrupt: Option<(i64, i64)>,
+    }
     let mut next_overrides: HashMap<u32, i64> = HashMap::new();
+    let mut ret_wraps: HashMap<u32, RetNextWrap> = HashMap::new();
+    let mut nonret_sec_wraps: HashMap<u32, (u32, i64, i64)> = HashMap::new();
     let mut output_overrides: HashMap<String, i64> = HashMap::new();
     let mut cond_divergences: Vec<CondDivergence> = Vec::new();
     let mut cond_state_corruptions: Vec<CondDivergence> = Vec::new();
@@ -224,7 +233,6 @@ pub fn build_pa_model_with_skip(
             let rel = strip_top_prefix(sym, top);
             let rel_upf = rel.replace('.', "/");
             let clean = sanitize_sym(rel);
-            let onext = orig_next.get(&l.id).copied().unwrap_or(l.id as i64);
 
             if let Some(_ret_strat) = match_retention_for_state(resolved, pd_id, sym, &rel_upf) {
                 let sh_id = em.alloc_state(w, &format!("lp.ret.{clean}"));
@@ -267,25 +275,30 @@ pub fn build_pa_model_with_skip(
                 em.emit_next(w, sh_id, sh_next);
 
                 let restore_cond = dom.ret_restore.map(|rs| em.and1(rs, dom.on));
-                let mut prim_next = match restore_cond {
-                    Some(rc) => em.ite(w, rc, sh_id as i64, onext),
-                    None => onext,
-                };
-                match mode {
+                let sec_corrupt = match mode {
                     PaMode::TwoCopy => {
                         cond_state_corruptions.push(CondDivergence {
                             node_id: l.id,
                             corrupt_cond: dom.state_corrupt,
                             label: format!("ret_prim_{clean}"),
                         });
+                        None
                     }
                     PaMode::SingleCopySec => {
                         let xi = em.alloc_input(w, &format!("informal_lp_retp_{clean}"));
-                        prim_next = em.ite(w, dom.state_corrupt, xi as i64, prim_next);
+                        Some((dom.state_corrupt, xi as i64))
                     }
-                    PaMode::IsoClampOnly => {}
-                }
-                next_overrides.insert(l.id, prim_next);
+                    PaMode::IsoClampOnly => None,
+                };
+                ret_wraps.insert(
+                    l.id,
+                    RetNextWrap {
+                        width: w,
+                        restore_cond,
+                        sh_id,
+                        sec_corrupt,
+                    },
+                );
 
                 retained_regs.push(RetainedRegInfo {
                     reg_path: rel.to_string(),
@@ -312,8 +325,7 @@ pub fn build_pa_model_with_skip(
                     }
                     PaMode::SingleCopySec => {
                         let xi = em.alloc_input(w, &format!("informal_lp_nonret_{clean}"));
-                        let cnext = em.ite(w, dom.state_corrupt, xi as i64, onext);
-                        next_overrides.insert(l.id, cnext);
+                        nonret_sec_wraps.insert(l.id, (w, dom.state_corrupt, xi as i64));
                     }
                     PaMode::IsoClampOnly => {}
                 }
@@ -328,7 +340,8 @@ pub fn build_pa_model_with_skip(
     // Map `(dst_domain, src_raw_node_id) -> boundary_node_ref` for non-constant sources.
     let mut dst_node_subst: HashMap<(PowerDomainId, u32), i64> = HashMap::new();
     let mut crossings: Vec<CrossingBoundaryInfo> = Vec::new();
-    let mut seen_cross: HashSet<(PowerDomainId, PowerDomainId, NetSegId, NetSegId)> = HashSet::new();
+    let mut seen_cross: HashSet<(PowerDomainId, PowerDomainId, NetSegId, NetSegId)> =
+        HashSet::new();
 
     for group in &groups {
         let iso_cuts = collect_strategy_slice_cuts(graph, resolved, group, true);
@@ -471,7 +484,9 @@ pub fn build_pa_model_with_skip(
             } else {
                 // Constant-driven crossing: attach boundary directly to `dst_net` and any
                 // same-domain direct identity aliases (e.g., `core_valid = 1'b1; assign valid_o = core_valid;`).
-                for alias_path in collect_dst_identity_aliases(graph, &cell_domain, sub.dst_base_net, dst_pd) {
+                for alias_path in
+                    collect_dst_identity_aliases(graph, &cell_domain, sub.dst_base_net, dst_pd)
+                {
                     output_overrides.insert(alias_path.clone(), boundary_ref);
                     if let Some(rel) = top
                         .and_then(|t| alias_path.strip_prefix(t))
@@ -507,11 +522,7 @@ pub fn build_pa_model_with_skip(
             if !dst_node_subst.keys().any(|&(dpd, _)| dpd == dst_pd) {
                 continue;
             }
-            let cur_next = next_overrides
-                .get(&st_id)
-                .copied()
-                .or_else(|| orig_next.get(&st_id).copied());
-            if let Some(nref) = cur_next {
+            if let Some(&nref) = orig_next.get(&st_id) {
                 let rewritten = rewrite_ref_for_domain(
                     &m,
                     &mut em,
@@ -539,18 +550,37 @@ pub fn build_pa_model_with_skip(
             if !dst_node_subst.keys().any(|&(dpd, _)| dpd == dst_pd) {
                 continue;
             }
-            let rewritten = rewrite_ref_for_domain(
-                &m,
-                &mut em,
-                dst_pd,
-                arg,
-                &dst_node_subst,
-                &mut subst_memo,
-            );
+            let rewritten =
+                rewrite_ref_for_domain(&m, &mut em, dst_pd, arg, &dst_node_subst, &mut subst_memo);
             if rewritten != arg {
                 output_overrides.insert(sym.to_string(), rewritten);
             }
         }
+    }
+
+    // Apply retention restore and single-copy SEC corruption wrappers AFTER domain input rewriting.
+    for (st_id, rw) in ret_wraps {
+        let base_next = next_overrides
+            .get(&st_id)
+            .copied()
+            .or_else(|| orig_next.get(&st_id).copied())
+            .unwrap_or(st_id as i64);
+        let mut wrapped = match rw.restore_cond {
+            Some(rc) => em.ite(rw.width, rc, rw.sh_id as i64, base_next),
+            None => base_next,
+        };
+        if let Some((cond, xi)) = rw.sec_corrupt {
+            wrapped = em.ite(rw.width, cond, xi, wrapped);
+        }
+        next_overrides.insert(st_id, wrapped);
+    }
+    for (st_id, (w, cond, xi)) in nonret_sec_wraps {
+        let base_next = next_overrides
+            .get(&st_id)
+            .copied()
+            .or_else(|| orig_next.get(&st_id).copied())
+            .unwrap_or(st_id as i64);
+        next_overrides.insert(st_id, em.ite(w, cond, xi, base_next));
     }
 
     let btor2 = em.finish(&next_overrides, &output_overrides, false);
@@ -610,14 +640,7 @@ fn rewrite_node_for_domain(
     };
     if matches!(
         l.op,
-        Op::Const
-            | Op::Constd
-            | Op::Consth
-            | Op::Zero
-            | Op::One
-            | Op::Ones
-            | Op::Input
-            | Op::State
+        Op::Const | Op::Constd | Op::Consth | Op::Zero | Op::One | Op::Ones | Op::Input | Op::State
     ) || l.args.is_empty()
     {
         memo.insert((dst_pd, node_id), node_id);
@@ -787,59 +810,4 @@ fn ret_elem_matches(pat: &str, upf_path: &str, full_path: &str) -> bool {
     }
     let leaf = upf_path.rsplit('/').next().unwrap_or(upf_path);
     p_slash == leaf
-}
-
-pub(crate) fn domain_of_signal_path(
-    graph: &StructuralGraph,
-    cell_domain: &[Option<PowerDomainId>],
-    top: Option<&str>,
-    sym: &str,
-) -> Option<PowerDomainId> {
-    let rel = strip_top_prefix(sym, top);
-    let mut best: Option<(usize, PowerDomainId)> = None;
-    for cell in &graph.cells {
-        let Some(pd) = cell_domain[cell.id.0 as usize] else {
-            continue;
-        };
-        if cell.is_top {
-            if best.is_none() {
-                best = Some((0, pd));
-            }
-            continue;
-        }
-        let cdot = cell.upf_path.replace('/', ".");
-        let matches = sym == cell.path
-            || sym.starts_with(&format!("{}.", cell.path))
-            || rel == cdot
-            || rel.starts_with(&format!("{cdot}."));
-        if matches {
-            let depth = cdot.len() + 1;
-            if best.is_none_or(|(d, _)| depth > d) {
-                best = Some((depth, pd));
-            }
-        }
-    }
-    best.map(|(_, pd)| pd)
-}
-
-pub(crate) fn strip_top_prefix<'a>(sym: &'a str, top: Option<&str>) -> &'a str {
-    match top.filter(|t| !t.is_empty()) {
-        Some(t) => sym
-            .strip_prefix(t)
-            .and_then(|r| r.strip_prefix('.'))
-            .unwrap_or(sym),
-        None => sym,
-    }
-}
-
-fn is_helper_state(sym: &str) -> bool {
-    let leaf = sym.rsplit('.').next().unwrap_or(sym);
-    sym.starts_with("informal.")
-        || sym.starts_with("lp.")
-        || leaf.starts_with("informal_")
-        || leaf.starts_with("_sva_")
-        || leaf.starts_with("_past_")
-        || leaf.starts_with("_was_")
-        || leaf.starts_with("_clk_")
-        || leaf.starts_with("miter_")
 }

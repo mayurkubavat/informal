@@ -94,7 +94,7 @@ set_level_shifter ls_red -domain PD_SAME -applies_to outputs -elements {u_same/d
     let viols = run_rtl_upf("ls_all", sv, upf, "top");
     let ids: Vec<&str> = viols.iter().map(|v| v.rule_id.as_str()).collect();
     assert!(ids.contains(&"LS_MISSING"), "{ids:?}");
-    assert!(ids.contains(&"LS_DIRECTION"), "{ids:?}");
+    assert!(ids.contains(&"LS_DIR_MISMATCH"), "{ids:?}");
     assert!(ids.contains(&"LS_LOCATION"), "{ids:?}");
     assert!(ids.contains(&"LS_UNISOLATED_INPUT"), "{ids:?}");
     assert!(ids.contains(&"LS_REDUNDANT"), "{ids:?}");

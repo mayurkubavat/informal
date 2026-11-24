@@ -4,6 +4,7 @@
 pub mod cmds_domain_mode;
 pub mod cmds_rules;
 pub mod finalize;
+mod finalize_defaults;
 mod finalize_pst;
 
 use std::cell::RefCell;

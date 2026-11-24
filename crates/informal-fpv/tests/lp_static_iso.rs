@@ -149,7 +149,7 @@ set_isolation iso_bad_clamp_pol -domain PD_SW -applies_to outputs -elements {u_s
     let (viols, _, _) = run_rtl_upf("iso_rules", sv, upf, "top");
     let ids: Vec<&str> = viols.iter().map(|v| v.rule_id.as_str()).collect();
     assert!(ids.contains(&"ISO_REDUNDANT"), "{ids:?}");
-    assert!(ids.contains(&"ISO_LOCATION"), "{ids:?}");
+    assert!(ids.contains(&"ISO_LOCATION_INVALID"), "{ids:?}");
     assert!(ids.contains(&"ISO_SUPPLY_MISMATCH"), "{ids:?}");
     assert!(ids.contains(&"ISO_CLAMP_UNSPECIFIED"), "{ids:?}");
     assert!(ids.contains(&"ISO_CTRL_POLARITY_MISMATCH"), "{ids:?}");
@@ -414,7 +414,7 @@ set_isolation iso_mr_yes -domain PD_SRC -applies_to outputs -elements {u_src/m_r
 "#;
     let (viols, _, _) = run_rtl_upf("iso_3b_4a", sv, upf, "top");
     assert!(
-        !viols.iter().any(|v| v.rule_id == "ISO_LOCATION"),
+        !viols.iter().any(|v| v.rule_id == "ISO_LOCATION_INVALID"),
         "{viols:#?}"
     );
     let clamp_bad: Vec<_> = viols

@@ -145,7 +145,12 @@ impl<'a> GatePgCtx<'a> {
         }?;
         self.sn_by_name
             .get(net_name)
-            .or_else(|| net_name.rsplit('/').next().and_then(|l| self.sn_by_name.get(l)))
+            .or_else(|| {
+                net_name
+                    .rsplit('/')
+                    .next()
+                    .and_then(|l| self.sn_by_name.get(l))
+            })
             .copied()
     }
 

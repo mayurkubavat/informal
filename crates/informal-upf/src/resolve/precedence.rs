@@ -304,6 +304,8 @@ impl ResolvedPowerIntent {
             {
                 continue;
             }
+            let directed_both =
+                eff == AppliesTo::Both && ls.source_filter.is_some() && ls.sink_filter.is_some();
             let tier = match self.compute_crossing_tier(
                 TierSpec {
                     elements: &ls.elements,
@@ -313,8 +315,16 @@ impl ResolvedPowerIntent {
                 },
                 src_domain,
                 dst_domain,
-                if match_out { src_eps } else { &[] },
-                if match_in { dst_eps } else { &[] },
+                if match_out || directed_both {
+                    src_eps
+                } else {
+                    &[]
+                },
+                if match_in || directed_both {
+                    dst_eps
+                } else {
+                    &[]
+                },
             ) {
                 Some(t) => t,
                 None => continue,

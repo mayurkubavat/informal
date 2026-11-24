@@ -13,11 +13,7 @@ use super::pg_ctx::{push_violation, GatePgCtx, PgResolved, PinPgState};
 use crate::lp::LpViolation;
 
 /// Runs all Stage 4 physical PG checks across all Liberty-instantiated cells.
-pub fn run_stage4_checks(
-    ctx: &mut GatePgCtx<'_>,
-    sat: &mut PstSat,
-    out: &mut Vec<LpViolation>,
-) {
+pub fn run_stage4_checks(ctx: &mut GatePgCtx<'_>, sat: &mut PstSat, out: &mut Vec<LpViolation>) {
     let cell_count = ctx.graph.cells.len();
     for raw_id in 0..cell_count {
         let cid = CellId(raw_id as u32);
@@ -370,9 +366,7 @@ fn check_psw_chain(
                 dom_name.clone(),
                 None,
                 format!("{cell_upf}/{sp_name}"),
-                format!(
-                    "power switch control pin `{sp_name}` on `{cell_upf}` is unconnected"
-                ),
+                format!("power switch control pin `{sp_name}` on `{cell_upf}` is unconnected"),
                 rtl_loc.clone(),
             );
             continue;

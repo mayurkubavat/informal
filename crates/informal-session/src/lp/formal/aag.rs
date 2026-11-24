@@ -98,11 +98,11 @@ pub fn run_aag(
             .as_deref()
             .map(|sig| normalize_sva_signal(sig, &ctrl.scope, top_ref));
 
-        let is_ext_pmu = expr_is_top_primary_inputs(on_expr, &ctrl.scope, top_ref, &top_input_ports)
-            && ctrl
-                .iso_active_expr
-                .as_ref()
-                .is_some_and(|e| expr_is_top_primary_inputs(e, &ctrl.scope, top_ref, &top_input_ports));
+        let is_ext_pmu =
+            expr_is_top_primary_inputs(on_expr, &ctrl.scope, top_ref, &top_input_ports)
+                && ctrl.iso_active_expr.as_ref().is_some_and(|e| {
+                    expr_is_top_primary_inputs(e, &ctrl.scope, top_ref, &top_input_ports)
+                });
 
         if let Some(ref iso) = iso_sva {
             if is_ext_pmu {
@@ -126,9 +126,14 @@ pub fn run_aag(
                 let hold_expr = if let Some(ref ack) = ack_sva {
                     format!("((!({ack})) || (!({on_sva}))) |-> ({iso})")
                 } else {
-                    format!("($rose({on_sva})) |-> ({iso})")
+                    format!("((!({on_sva})) ##1 ({on_sva})) |-> ({iso})")
                 };
-                try_add(s, Kind::Assert, format!("lp_iso_hold_after_pwron_{dom}"), hold_expr);
+                try_add(
+                    s,
+                    Kind::Assert,
+                    format!("lp_iso_hold_after_pwron_{dom}"),
+                    hold_expr,
+                );
             }
         }
 
@@ -277,7 +282,9 @@ pub fn run_aag(
                 let prop_btor = s.workdir.join(format!("prop_{idx}.btor2"));
                 let prop_trace_btor = s.workdir.join(format!("prop_{idx}.trace.btor2"));
                 if let Ok(raw_trace) = std::fs::read_to_string(&prop_trace_btor) {
-                    if let Ok(aug) = inject_lp_domain_trace_signals(&raw_trace, graph, resolved, top_ref) {
+                    if let Ok(aug) =
+                        inject_lp_domain_trace_signals(&raw_trace, graph, resolved, top_ref)
+                    {
                         if std::fs::write(&prop_trace_btor, &aug).is_ok() {
                             if let Ok((vcd_path, _)) =
                                 s.write_trace(&prop_name, &prop_btor, None, depth_opt)
@@ -317,7 +324,14 @@ pub fn run_aag(
     } else {
         0
     };
-    let pa = build_pa_model(&base_btor, graph, resolved, top_ref, PaMode::TwoCopy, reset_steps)?;
+    let pa = build_pa_model(
+        &base_btor,
+        graph,
+        resolved,
+        top_ref,
+        PaMode::TwoCopy,
+        reset_steps,
+    )?;
     prove_retention_preservation(s, &pa)?;
 
     Ok(())

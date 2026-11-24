@@ -135,7 +135,10 @@ pub fn run_prove_corruption(
             .filter(|d| d.is_corruptible)
             .map(|d| d.on);
 
-        let short = format!("lp_corrupt_{}", sanitize_sym(strip_top_prefix(&out_name, top_ref)));
+        let short = format!(
+            "lp_corrupt_{}",
+            sanitize_sym(strip_top_prefix(&out_name, top_ref))
+        );
         let full_name = format!("{LOW_POWER_TASK}::{short}");
         let spec = MiterSpec {
             diverging_inputs: HashSet::new(),
@@ -337,11 +340,11 @@ fn classify_corruption_cex(
     out_name: &str,
 ) -> (&'static str, Option<String>, Option<String>, String) {
     let cone = backward_cone_nodes(pa_model, obs_ref);
-    if let Some(c) = pa.crossings.iter().find(|c| {
-        !c.has_iso
-            && c.divergence_node
-                .is_some_and(|dn| cone.contains(&dn))
-    }) {
+    if let Some(c) = pa
+        .crossings
+        .iter()
+        .find(|c| !c.has_iso && c.divergence_node.is_some_and(|dn| cone.contains(&dn)))
+    {
         return (
             "ISO_CORRUPTION_LEAK",
             Some(c.src_domain_name.clone()),

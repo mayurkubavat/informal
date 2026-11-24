@@ -1,4 +1,4 @@
-//! Stage 2 Level-Shifter rules (`LS_MISSING`, `LS_DIRECTION`, `LS_LOCATION`,
+//! Stage 2 Level-Shifter rules (`LS_MISSING`, `LS_DIR_MISMATCH`, `LS_LOCATION`,
 //! `LS_UNISOLATED_INPUT`, `LS_REDUNDANT`).
 
 use informal_svlang::struct_graph::{split_crossing_group_by_cuts, BitRange, CrossingGroup};
@@ -25,10 +25,16 @@ pub(crate) fn check_crossing(
     if src_pd == dst_pd {
         return;
     }
-    let Some(src_ss) = ctx.resolved.primary_ss(src_pd) else {
+    let Some(src_ss) = ctx
+        .effective_port_supply(group.src_cell, group.src_base_net, false)
+        .or_else(|| ctx.resolved.primary_ss(src_pd))
+    else {
         return;
     };
-    let Some(dst_ss) = ctx.resolved.primary_ss(dst_pd) else {
+    let Some(dst_ss) = ctx
+        .effective_port_supply(group.dst_cell, group.dst_base_net, true)
+        .or_else(|| ctx.resolved.primary_ss(dst_pd))
+    else {
         return;
     };
 
@@ -95,7 +101,7 @@ pub(crate) fn check_crossing(
                 );
             }
 
-            // 2. `LS_DIRECTION`
+            // 2. `LS_DIR_MISMATCH`
             if let Some(rule) = ls.rule {
                 let dir_bad = matches!(
                     (&ls_req, rule),
@@ -108,7 +114,7 @@ pub(crate) fn check_crossing(
                 );
                 if dir_bad {
                     sink.push(
-                        "LS_DIRECTION",
+                        "LS_DIR_MISMATCH",
                         None,
                         Some(src_name.clone()),
                         Some(dst_name.clone()),

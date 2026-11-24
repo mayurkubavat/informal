@@ -110,7 +110,7 @@ pub const RULES: &[LpRuleMeta] = &[
         summary: "Isolation strategy specified where source cannot be off while sink is on",
     },
     LpRuleMeta {
-        id: "ISO_LOCATION",
+        id: "ISO_LOCATION_INVALID",
         stage: LpStage::Rtl,
         default_severity: LpSeverity::Error,
         summary: "Isolation -location domain is unpowered or incompatible with -applies_to",
@@ -171,7 +171,7 @@ pub const RULES: &[LpRuleMeta] = &[
         summary: "Cross-voltage domain crossing lacks a level-shifter strategy",
     },
     LpRuleMeta {
-        id: "LS_DIRECTION",
+        id: "LS_DIR_MISMATCH",
         stage: LpStage::Rtl,
         default_severity: LpSeverity::Error,
         summary: "Level-shifter -rule direction conflicts with PST voltage relation",

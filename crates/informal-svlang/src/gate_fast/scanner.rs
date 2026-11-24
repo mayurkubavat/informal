@@ -70,9 +70,7 @@ fn is_simple_net_ref(s: &str) -> bool {
         return false;
     }
     let mut i = 1;
-    while i < bytes.len()
-        && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'_' | b'$'))
-    {
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'_' | b'$')) {
         i += 1;
     }
     if i == bytes.len() {
@@ -107,8 +105,8 @@ fn try_parse_const(s: &str) -> Option<(bool, bool)> {
     match base {
         'b' => {
             let is_zero = digits.bytes().all(|b| b == b'0');
-            let is_ones = digits.bytes().all(|b| b == b'1')
-                && (digits.len() as u32 >= width || width == 1);
+            let is_ones =
+                digits.bytes().all(|b| b == b'1') && (digits.len() as u32 >= width || width == 1);
             Some((is_zero, is_ones))
         }
         'h' => {

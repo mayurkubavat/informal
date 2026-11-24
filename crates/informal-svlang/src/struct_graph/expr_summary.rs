@@ -360,7 +360,9 @@ impl<'a> Builder<'a> {
 fn invert_op_summary(op: ExprOpSummary) -> ExprOpSummary {
     match op {
         ExprOpSummary::Identity => ExprOpSummary::Invert,
-        ExprOpSummary::Invert => ExprOpSummary::Identity,
+        ExprOpSummary::Invert => ExprOpSummary::UnateGate {
+            is_inverting: false,
+        },
         ExprOpSummary::UnateGate { is_inverting } => ExprOpSummary::UnateGate {
             is_inverting: !is_inverting,
         },

@@ -16,33 +16,29 @@ pub(super) fn evaluate_low_power_gate(
     let stages_ran = !s.lp.stages_run.is_empty();
     let formal_ran = s.lp.stages_run.iter().any(|st| st == "formal");
 
-    let open_errors = s
-        .lp
-        .violations
-        .iter()
-        .filter(|v| {
-            (v.status == LpStatus::Open && v.severity == LpSeverity::Error)
-                || v.status == LpStatus::FormalCex
-        })
-        .count();
-    let formal_cex_violations = s
-        .lp
-        .violations
-        .iter()
-        .filter(|v| v.status == LpStatus::FormalCex)
-        .count();
-    let manual_waived = s
-        .lp
-        .violations
-        .iter()
-        .filter(|v| v.status == LpStatus::Waived)
-        .count();
-    let formally_waived = s
-        .lp
-        .violations
-        .iter()
-        .filter(|v| v.status == LpStatus::FormallyWaived)
-        .count();
+    let open_errors =
+        s.lp.violations
+            .iter()
+            .filter(|v| {
+                (v.status == LpStatus::Open && v.severity == LpSeverity::Error)
+                    || v.status == LpStatus::FormalCex
+            })
+            .count();
+    let formal_cex_violations =
+        s.lp.violations
+            .iter()
+            .filter(|v| v.status == LpStatus::FormalCex)
+            .count();
+    let manual_waived =
+        s.lp.violations
+            .iter()
+            .filter(|v| v.status == LpStatus::Waived)
+            .count();
+    let formally_waived =
+        s.lp.violations
+            .iter()
+            .filter(|v| v.status == LpStatus::FormallyWaived)
+            .count();
 
     let lp_task_failing_asserts: Vec<&str> = s
         .props

@@ -669,7 +669,7 @@ pub(crate) fn check_port_attributes(ctx: &mut Stage2Ctx<'_>, sink: &mut Violatio
     let Some(top_ss) = ctx.resolved.primary_ss(top_pd) else {
         return;
     };
-    if !domain_can_turn_off(ctx, top_ss) {
+    if !domain_can_turn_off(ctx, top_ss) && ctx.resolved.intent.port_attributes.is_empty() {
         return;
     }
     let top_name = ctx.domain_name(top_pd);
@@ -678,6 +678,12 @@ pub(crate) fn check_port_attributes(ctx: &mut Stage2Ctx<'_>, sink: &mut Violatio
     for pid in pin_ids {
         let pin = ctx.graph.pin(pid);
         let Some(dir) = pin.dir else { continue };
+        // Skip physical supply ports/nets declared as RTL pins.
+        if ctx.resolved.port_by_name.contains_key(&pin.name)
+            || ctx.resolved.net_by_name.contains_key(&pin.name)
+        {
+            continue;
+        }
         let pin_esc = sv_escaped_upf_variant(&pin.name);
         let pin_upf_esc = (pin.upf_path != pin.name)
             .then(|| sv_escaped_upf_variant(&pin.upf_path))

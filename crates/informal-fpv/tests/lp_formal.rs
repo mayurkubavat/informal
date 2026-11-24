@@ -117,7 +117,10 @@ fn formal_aag_clean_and_pmu_bug_caught() {
         .expect("lp_iso_before_pwroff");
     assert!(matches!(p_iso.status, Status::Cex { .. }), "{p_iso:#?}");
     let vcd = std::fs::read_to_string(p_iso.trace.as_ref().expect("trace")).unwrap();
-    assert!(vcd.contains("$scope module lp $end"), "expected lp.pd.* swimlanes");
+    assert!(
+        vcd.contains("$scope module lp $end"),
+        "expected lp.pd.* swimlanes"
+    );
 }
 
 #[test]
@@ -205,8 +208,7 @@ fn formal_auto_waiver_masked_vs_circular_and_invalidation() {
     )
     .unwrap();
     assert!(
-        !s_c
-            .lp
+        !s_c.lp
             .violations
             .iter()
             .any(|v| v.status == LpStatus::FormallyWaived),
@@ -227,7 +229,14 @@ fn formal_auto_waiver_masked_vs_circular_and_invalidation() {
 fn formal_lp_sec_clean_and_missing_retention_cex() {
     let dir_ok = new_temp("sec_ok");
     let mut s_ok = make_session(&dir_ok, fixture("f7_f10/f8/pa_soc.sv"), "pa_soc");
-    load_upf(&mut s_ok, &fixture("f7_f10/f8/pa_soc.upf"), None, None, false).unwrap();
+    load_upf(
+        &mut s_ok,
+        &fixture("f7_f10/f8/pa_soc.upf"),
+        None,
+        None,
+        false,
+    )
+    .unwrap();
     setup_sec(
         &mut s_ok,
         SecSetup {

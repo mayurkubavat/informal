@@ -82,7 +82,9 @@ fn compile_expr_raw(
                     return Ok(nref);
                 }
             }
-            Err(format!("LP formal: signal `{s}` not found in lowered Btor2 model"))
+            Err(format!(
+                "LP formal: signal `{s}` not found in lowered Btor2 model"
+            ))
         }
         BoolExpr::Not(inner) => {
             let v = compile_bool_expr(em, inner, scope, top)?;
@@ -137,12 +139,20 @@ fn compile_comparable_pair(
         }
         (BoolExpr::ConstBool(flag), other) => {
             let vb = compile_bool_expr(em, other, scope, top)?;
-            let va = if *flag { em.const_one(1) } else { em.const_zero(1) };
+            let va = if *flag {
+                em.const_one(1)
+            } else {
+                em.const_zero(1)
+            };
             Ok((va, vb))
         }
         (other, BoolExpr::ConstBool(flag)) => {
             let va = compile_bool_expr(em, other, scope, top)?;
-            let vb = if *flag { em.const_one(1) } else { em.const_zero(1) };
+            let vb = if *flag {
+                em.const_one(1)
+            } else {
+                em.const_zero(1)
+            };
             Ok((va, vb))
         }
         _ => {
@@ -292,7 +302,8 @@ pub fn synthesize_domain_signals(
             let any_chg = build_input_activity_detector(em, &ctrl.name, &inputs);
             if let Some(ref coa_e) = ctrl.coa_expr {
                 if let Ok(in_coa) = compile_bool_expr(em, coa_e, &ctrl.scope, top) {
-                    let coa_trig = build_stay_in_state_trigger(em, &ctrl.name, "coa", in_coa, any_chg);
+                    let coa_trig =
+                        build_stay_in_state_trigger(em, &ctrl.name, "coa", in_coa, any_chg);
                     corrupt = em.or1(corrupt, coa_trig);
                     state_corrupt = em.or1(state_corrupt, coa_trig);
                 }
@@ -347,7 +358,11 @@ fn collect_domain_input_nodes(
     let mut nodes = Vec::new();
     let mut seen = HashSet::new();
     let is_clk_or_rst = |name: &str| {
-        let low = name.rsplit(['.', '/']).next().unwrap_or(name).to_ascii_lowercase();
+        let low = name
+            .rsplit(['.', '/'])
+            .next()
+            .unwrap_or(name)
+            .to_ascii_lowercase();
         low == "clk"
             || low == "clock"
             || low.ends_with("_clk")
@@ -442,4 +457,59 @@ pub fn domain_sig_by_id(
 /// Helper re-export for extracting domain power controls.
 pub fn all_domain_controls(resolved: &ResolvedPowerIntent) -> Vec<DomainPowerControls> {
     extract_domain_controls(resolved)
+}
+
+pub(crate) fn domain_of_signal_path(
+    graph: &StructuralGraph,
+    cell_domain: &[Option<PowerDomainId>],
+    top: Option<&str>,
+    sym: &str,
+) -> Option<PowerDomainId> {
+    let rel = strip_top_prefix(sym, top);
+    let mut best: Option<(usize, PowerDomainId)> = None;
+    for cell in &graph.cells {
+        let Some(pd) = cell_domain[cell.id.0 as usize] else {
+            continue;
+        };
+        if cell.is_top {
+            if best.is_none() {
+                best = Some((0, pd));
+            }
+            continue;
+        }
+        let cdot = cell.upf_path.replace('/', ".");
+        let matches = sym == cell.path
+            || sym.starts_with(&format!("{}.", cell.path))
+            || rel == cdot
+            || rel.starts_with(&format!("{cdot}."));
+        if matches {
+            let depth = cdot.len() + 1;
+            if best.is_none_or(|(d, _)| depth > d) {
+                best = Some((depth, pd));
+            }
+        }
+    }
+    best.map(|(_, pd)| pd)
+}
+
+pub(crate) fn strip_top_prefix<'a>(sym: &'a str, top: Option<&str>) -> &'a str {
+    match top.filter(|t| !t.is_empty()) {
+        Some(t) => sym
+            .strip_prefix(t)
+            .and_then(|r| r.strip_prefix('.'))
+            .unwrap_or(sym),
+        None => sym,
+    }
+}
+
+pub(crate) fn is_helper_state(sym: &str) -> bool {
+    let leaf = sym.rsplit('.').next().unwrap_or(sym);
+    sym.starts_with("informal.")
+        || sym.starts_with("lp.")
+        || leaf.starts_with("informal_")
+        || leaf.starts_with("_sva_")
+        || leaf.starts_with("_past_")
+        || leaf.starts_with("_was_")
+        || leaf.starts_with("_clk_")
+        || leaf.starts_with("miter_")
 }

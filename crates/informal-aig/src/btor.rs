@@ -7,7 +7,99 @@ use crate::words::Word;
 use crate::{neg, Aig, Init, Lit, FALSE, TRUE};
 use anyhow::{anyhow, bail, Result};
 use informal_ir::{Line, Model, Op, Sort};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Computes lines that transitively depend on `Sort::Array` / `Op::Read` / `Op::Write`.
+/// Bails if any `bad`, `constraint`, `fair`, or `justice` cone reaches an array, or if
+/// a model has arrays without any property lines; otherwise returns dead array-tainted
+/// line IDs that can be skipped without affecting property semantics.
+fn dead_array_lines(m: &Model) -> Result<HashSet<u32>> {
+    let is_array_line = |l: &Line| -> bool {
+        l.sort
+            .and_then(|s| m.sort(s))
+            .is_some_and(|s| matches!(s, Sort::Array { .. }))
+            || matches!(l.op, Op::Read | Op::Write)
+    };
+    if !m.lines().any(is_array_line) {
+        return Ok(HashSet::new());
+    }
+    let has_props = m
+        .lines()
+        .any(|l| matches!(l.op, Op::Bad | Op::Fair | Op::Justice));
+    if !has_props {
+        bail!("arrays are not supported at bit level yet");
+    }
+
+    let mut state_deps: HashMap<u32, Vec<u32>> = HashMap::new();
+    for l in m.lines() {
+        if matches!(l.op, Op::Init | Op::Next) && l.args.len() >= 2 {
+            state_deps
+                .entry(l.args[0].unsigned_abs() as u32)
+                .or_default()
+                .push(l.args[1].unsigned_abs() as u32);
+        }
+    }
+
+    let mut prop_cone: HashSet<u32> = HashSet::new();
+    let mut stack: Vec<u32> = Vec::new();
+    for l in m.lines() {
+        if matches!(l.op, Op::Bad | Op::Constraint | Op::Fair | Op::Justice)
+            && prop_cone.insert(l.id)
+        {
+            stack.push(l.id);
+        }
+    }
+    while let Some(id) = stack.pop() {
+        let Some(l) = m.line(id) else { continue };
+        if is_array_line(l) {
+            bail!("arrays are not supported at bit level yet");
+        }
+        for &a in &l.args {
+            let aid = a.unsigned_abs() as u32;
+            if prop_cone.insert(aid) {
+                stack.push(aid);
+            }
+        }
+        if l.op == Op::State {
+            if let Some(deps) = state_deps.get(&id) {
+                for &dep in deps {
+                    if prop_cone.insert(dep) {
+                        stack.push(dep);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut tainted: HashSet<u32> = m
+        .lines()
+        .filter(|l| is_array_line(l))
+        .map(|l| l.id)
+        .collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for l in m.lines() {
+            if tainted.contains(&l.id) {
+                continue;
+            }
+            if l.args
+                .iter()
+                .any(|a| tainted.contains(&(a.unsigned_abs() as u32)))
+            {
+                tainted.insert(l.id);
+                changed = true;
+                if matches!(l.op, Op::Init | Op::Next) && !l.args.is_empty() {
+                    let st = l.args[0].unsigned_abs() as u32;
+                    if tainted.insert(st) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    Ok(tainted)
+}
 
 /// Bit-blast a Btor2 model, converting any liveness (`justice` / `fair`)
 /// properties to safety via [`crate::l2s::to_safety`].
@@ -21,15 +113,14 @@ pub fn from_btor2(m: &Model) -> Result<Aig> {
 /// Bit-blast a Btor2 model, keeping [`Aig::justice`] and [`Aig::fairness`]
 /// untouched before liveness-to-safety conversion.
 pub fn from_btor2_raw(m: &Model) -> Result<Aig> {
+    let array_tainted = dead_array_lines(m)?;
     let bb = Blaster { m };
     let mut g = Aig::new();
     let mut f: HashMap<u32, Word> = HashMap::new();
     // Latches first: init and next expressions may refer to any line.
     for l in m.lines() {
-        if let Some(s) = l.sort {
-            if matches!(m.sort(s), Some(Sort::Array { .. })) {
-                bail!("arrays are not supported at bit level yet");
-            }
+        if array_tainted.contains(&l.id) {
+            continue;
         }
         if l.op == Op::State {
             let w = bb.width(l)?;
@@ -43,6 +134,9 @@ pub fn from_btor2_raw(m: &Model) -> Result<Aig> {
         }
     }
     for l in m.lines() {
+        if array_tainted.contains(&l.id) {
+            continue;
+        }
         let w = match l.op {
             Op::State => continue,
             Op::Input => {
@@ -119,10 +213,9 @@ pub fn from_btor2_raw(m: &Model) -> Result<Aig> {
     // A state with no `next` keeps a free value every cycle: model it as a
     // latch fed by a fresh input.
     let missing: Vec<Lit> = {
-        let has: std::collections::HashSet<u32> =
-            m.with_op(Op::Next).map(|l| l.args[0] as u32).collect();
+        let has: HashSet<u32> = m.with_op(Op::Next).map(|l| l.args[0] as u32).collect();
         m.with_op(Op::State)
-            .filter(|l| !has.contains(&l.id))
+            .filter(|l| !array_tainted.contains(&l.id) && !has.contains(&l.id))
             .flat_map(|l| f[&l.id].clone())
             .collect()
     };
@@ -404,5 +497,44 @@ mod tests {
         // A reference past u32 must not wrap onto node 1.
         let big = format!("1 sort bitvec 1\n2 input 1\n3 not 1 {}\n", (1u64 << 32) + 2);
         assert!(informal_ir::parse(&big).is_err());
+    }
+
+    #[test]
+    fn skips_dead_arrays_but_rejects_live_arrays() {
+        let dead_arr = "\
+1 sort bitvec 1
+2 sort bitvec 8
+3 sort array 2 2
+4 input 2 din
+5 state 2 q
+6 next 2 5 4
+7 state 3 ram
+8 write 3 7 4 4
+9 next 3 7 8
+10 read 2 7 4
+11 output 10 mem_rdata
+12 eq 1 5 4
+13 bad 12 p_bv
+";
+        let m_dead = informal_ir::parse(dead_arr).unwrap();
+        let aig = from_btor2(&m_dead).expect("dead array outside bad cone must bit-blast");
+        assert_eq!(aig.bads.len(), 1);
+        assert!(
+            aig.outputs.is_empty(),
+            "array-tainted output must be omitted"
+        );
+
+        let live_arr = "\
+1 sort bitvec 1
+2 sort bitvec 8
+3 sort array 2 2
+4 input 2 din
+5 state 3 ram
+6 read 2 5 4
+7 eq 1 6 4
+8 bad 7 p_arr
+";
+        let m_live = informal_ir::parse(live_arr).unwrap();
+        assert!(from_btor2(&m_live).is_err());
     }
 }

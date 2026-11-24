@@ -51,6 +51,94 @@ impl<'a> Stage2Ctx<'a> {
         self.resolved.primary_ss(pd)
     }
 
+    /// Resolves `set_port_attributes` `-driver_supply` / `-receiver_supply` for a
+    /// top-level port net, overriding `PD_TOP.primary` per IEEE 1801 UPF semantics.
+    pub fn effective_port_supply(
+        &self,
+        cid: CellId,
+        net_id: NetSegId,
+        is_dst: bool,
+    ) -> Option<SupplySetId> {
+        let cell = self.graph.cell(cid);
+        if !cell.is_top {
+            return None;
+        }
+        let seg = self.graph.net(net_id);
+        let dir = match seg.kind {
+            informal_svlang::struct_graph::NetSegKind::Port(d) => d,
+            _ => return None,
+        };
+        let dir_matches = if is_dst {
+            matches!(
+                dir,
+                informal_svlang::PortDir::Output | informal_svlang::PortDir::Inout
+            )
+        } else {
+            matches!(
+                dir,
+                informal_svlang::PortDir::Input | informal_svlang::PortDir::Inout
+            )
+        };
+        if !dir_matches {
+            return None;
+        }
+        let top_pd = self.domain_of_cell(cid);
+        let pin_esc = sv_escaped_upf_variant(&seg.name);
+        let top_prefixed = (!cell.name.is_empty()).then(|| format!("{}/{}", cell.name, seg.name));
+        let mut chosen: Option<SupplySetId> = None;
+        for pa in &self.resolved.intent.port_attributes {
+            if !pa.domains.is_empty()
+                && !pa
+                    .domains
+                    .iter()
+                    .any(|d| self.resolved.resolve_domain(d, &pa.scope) == top_pd)
+            {
+                continue;
+            }
+            if let Some(applies) = pa.applies_to {
+                if (is_dst && applies == AppliesTo::Inputs)
+                    || (!is_dst && applies == AppliesTo::Outputs)
+                {
+                    continue;
+                }
+            }
+            let matches_pats = |pats: &[String]| {
+                self.resolved
+                    .element_matches_in_scope(pats, &pa.scope, &seg.name)
+                    || pin_esc
+                        .as_deref()
+                        .is_some_and(|e| self.resolved.element_matches_in_scope(pats, &pa.scope, e))
+                    || (seg.upf_path != seg.name
+                        && self
+                            .resolved
+                            .element_matches_in_scope(pats, &pa.scope, &seg.upf_path))
+                    || top_prefixed.as_deref().is_some_and(|tp| {
+                        self.resolved.element_matches_in_scope(pats, &pa.scope, tp)
+                    })
+            };
+            if !pa.exclude_elements.is_empty() && matches_pats(&pa.exclude_elements) {
+                continue;
+            }
+            let name_match = (!pa.ports.is_empty() && matches_pats(&pa.ports))
+                || (!pa.elements.is_empty() && matches_pats(&pa.elements))
+                || (pa.ports.is_empty() && pa.elements.is_empty() && !pa.domains.is_empty());
+            if !name_match {
+                continue;
+            }
+            let raw_ss = if is_dst {
+                pa.receiver_supply.as_deref()
+            } else {
+                pa.driver_supply.as_deref()
+            };
+            if let Some(raw) = raw_ss {
+                if let Some(ss) = self.resolved.resolve_supply_set(raw, &pa.scope) {
+                    chosen = Some(ss);
+                }
+            }
+        }
+        chosen
+    }
+
     pub fn match_iso_for_group(
         &self,
         src_pd: Option<PowerDomainId>,

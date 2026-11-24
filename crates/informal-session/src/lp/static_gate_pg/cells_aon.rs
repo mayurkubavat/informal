@@ -168,7 +168,15 @@ pub fn run_stage3_cell_checks(
         };
 
         if lib_c.is_isolation_cell {
-            check_iso_cell(ctx, sat, cid, lib_c, &mut stray_before_iso, &mut emitted_aon, out);
+            check_iso_cell(
+                ctx,
+                sat,
+                cid,
+                lib_c,
+                &mut stray_before_iso,
+                &mut emitted_aon,
+                out,
+            );
         }
         if lib_c.is_level_shifter {
             check_ls_cell(ctx, sat, cid, lib_c, tol_uv, out);
@@ -222,7 +230,10 @@ pub fn run_stage3_cell_checks(
                 let drivers = resolve_driving_sources(ctx.graph, ctx.liberty, pnet, 6);
                 for drv in drivers {
                     let (src_ss, src_pd, src_is_ls, src_is_macro) = match drv {
-                        SignalEndpoint::LeafPin { cell: sc, pin: spid } => {
+                        SignalEndpoint::LeafPin {
+                            cell: sc,
+                            pin: spid,
+                        } => {
                             let smod = ctx.graph.cell(sc).module.clone();
                             let slib = ctx.liberty.cell(&smod);
                             let is_ls = slib.is_some_and(|l| l.is_level_shifter);
@@ -340,7 +351,11 @@ fn check_iso_cell(
     let mut upstream_src_pd: Option<PowerDomainId> = None;
     for pnet in pin_parent_nets(ctx.graph, data_pid) {
         for drv in resolve_driving_sources(ctx.graph, ctx.liberty, pnet, 6) {
-            if let SignalEndpoint::LeafPin { cell: sc, pin: spid } = drv {
+            if let SignalEndpoint::LeafPin {
+                cell: sc,
+                pin: spid,
+            } = drv
+            {
                 let sc_pd = ctx.cell_domains[sc.0 as usize];
                 let smod = ctx.graph.cell(sc).module.clone();
                 let slib = ctx.liberty.cell(&smod);
@@ -400,9 +415,16 @@ fn check_iso_cell(
         {
             let clamp_mismatch = matches!(
                 (iso_strat.clamp_value, cell_clamp),
-                (Some(ClampValue::Zero), Some(IsoClampKind::One | IsoClampKind::Latch))
-                    | (Some(ClampValue::One), Some(IsoClampKind::Zero | IsoClampKind::Latch))
-                    | (Some(ClampValue::Latch), Some(IsoClampKind::Zero | IsoClampKind::One))
+                (
+                    Some(ClampValue::Zero),
+                    Some(IsoClampKind::One | IsoClampKind::Latch)
+                ) | (
+                    Some(ClampValue::One),
+                    Some(IsoClampKind::Zero | IsoClampKind::Latch)
+                ) | (
+                    Some(ClampValue::Latch),
+                    Some(IsoClampKind::Zero | IsoClampKind::One)
+                )
             );
             if clamp_mismatch {
                 push_violation(
@@ -446,12 +468,19 @@ fn find_upstream_switchable_domain(
         let pin_ids = ctx.graph.cell(cid).pins.clone();
         for pid in pin_ids {
             let pname = ctx.graph.pin(pid).name.clone();
-            if clib.pin(&pname).is_none_or(|sp| sp.direction != PinDir::Input) {
+            if clib
+                .pin(&pname)
+                .is_none_or(|sp| sp.direction != PinDir::Input)
+            {
                 continue;
             }
             for pnet in pin_parent_nets(ctx.graph, pid) {
                 for drv in resolve_driving_sources(ctx.graph, ctx.liberty, pnet, 6) {
-                    if let SignalEndpoint::LeafPin { cell: sc, pin: spid } = drv {
+                    if let SignalEndpoint::LeafPin {
+                        cell: sc,
+                        pin: spid,
+                    } = drv
+                    {
                         let smod = ctx.graph.cell(sc).module.clone();
                         let slib = ctx.liberty.cell(&smod);
                         if slib.is_some_and(|l| l.is_isolation_cell) {
@@ -558,7 +587,10 @@ pub(super) fn trace_ctrl_cone_for_non_aon(
                 let sc_pins = ctx.graph.cell(sc).pins.clone();
                 for pid in sc_pins {
                     let pn = ctx.graph.pin(pid).name.clone();
-                    if slib.pin(&pn).is_some_and(|sp| sp.direction == PinDir::Input) {
+                    if slib
+                        .pin(&pn)
+                        .is_some_and(|sp| sp.direction == PinDir::Input)
+                    {
                         for up_net in pin_parent_nets(ctx.graph, pid) {
                             queue.push_back((up_net, d + 1));
                         }

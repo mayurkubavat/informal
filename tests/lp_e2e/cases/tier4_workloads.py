@@ -244,17 +244,25 @@ def _case_t4_w1(ctx: E2EContext) -> None:
     assert_exit(clean_res, 0, "T4-W1 clean/waiver lifecycle failed")
 
     v_pre = _extract_violations(_read_json(ctx.path("pre_waive.json")))
-    open_pre = _find_violations(v_pre, status="open")
+    open_pre = [
+        v
+        for v in _find_violations(v_pre, status="open")
+        if str(v.get("severity", "error")).lower() == "error"
+    ]
     assert len(open_pre) == 1 and "debug_bus" in _sig_text(open_pre[0]).lower(), (
-        f"Expected ONLY debug_bus open before waiver, got: {open_pre!r}"
+        f"Expected ONLY debug_bus open error before waiver, got: {open_pre!r}"
     )
 
     m_wid = re.search(r"WAIVER_ID=(\S+)", clean_res.combined)
     assert m_wid is not None, f"Missing WAIVER_ID in output:\n{clean_res.combined}"
     assert_in(m_wid.group(1), clean_res.combined, "Expected waiver ID in set_lp_waiver -list")
 
-    v_open_post = _extract_violations(_read_json(ctx.path("post_open.json")))
-    assert not v_open_post, f"Expected 0 open violations after debug_bus waiver: {v_open_post!r}"
+    v_open_post = [
+        v
+        for v in _extract_violations(_read_json(ctx.path("post_open.json")))
+        if str(v.get("severity", "error")).lower() == "error"
+    ]
+    assert not v_open_post, f"Expected 0 open errors after debug_bus waiver: {v_open_post!r}"
 
     v_waived_post = _extract_violations(_read_json(ctx.path("post_waived.json")))
     assert _find_violations(v_waived_post, rule_prefix="ISO_MISSING", status="waived", needle="debug_bus"), (

@@ -401,12 +401,7 @@ pub fn read_liberty(s: &mut Session, paths: &[PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return Err("read_liberty: at least one .lib path is required".to_string());
     }
-    let mut db = s
-        .lp
-        .liberty
-        .as_deref()
-        .cloned()
-        .unwrap_or_default();
+    let mut db = s.lp.liberty.as_deref().cloned().unwrap_or_default();
     for p in paths {
         if !p.is_file() {
             return Err(format!("read_liberty: file not found: {}", p.display()));
@@ -471,6 +466,8 @@ pub fn check_lp(s: &mut Session, opts: &CheckLpOpts) -> Result<(), String> {
             });
             if is_gate_netlist {
                 static_gate_pg::run_design_gate_pg(s, opts)
+            } else if opts.stage == LpStage::All && !s.clocks.is_empty() {
+                formal::run_formal_lp(s, opts)
             } else {
                 static_rtl::run_stage2(s, opts)
             }

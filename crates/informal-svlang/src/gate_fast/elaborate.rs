@@ -105,15 +105,8 @@ pub fn elaborate_structural(
     };
 
     let top_mod = mod_map[top_name.as_str()];
-    let (top_cid, top_scope) = elab.instantiate_module(
-        top_mod,
-        None,
-        &top_name,
-        &top_name,
-        &top_name,
-        "",
-        true,
-    );
+    let (top_cid, top_scope) =
+        elab.instantiate_module(top_mod, None, &top_name, &top_name, &top_name, "", true);
     elab.graph.tops.push(top_cid);
 
     design.instances = elab.instances;

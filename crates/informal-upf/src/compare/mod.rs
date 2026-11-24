@@ -1,6 +1,7 @@
 //! Symbolic UPF-to-UPF equivalence checker (`compare_upf`).
 
 pub mod bipartite;
+mod cross_format;
 pub mod domains_pst;
 pub mod strategies;
 
@@ -92,9 +93,26 @@ pub fn compare_upf_with_config(
         &mut diffs,
     );
 
+    let cross_format = golden.intent.upf_version.is_some_and(|v| v.is_cpf())
+        != revised.intent.upf_version.is_some_and(|v| v.is_cpf());
     strategies::compare_isolation_strategies(golden, revised, &mut g_sat, &mut r_sat, &mut diffs);
-    strategies::compare_level_shifters(golden, revised, &mut diffs);
-    strategies::compare_retention_strategies(golden, revised, &mut g_sat, &mut r_sat, &mut diffs);
+    strategies::compare_level_shifters(
+        golden,
+        revised,
+        &matched_domains,
+        &mut g_sat,
+        tol_uv,
+        cross_format,
+        &mut diffs,
+    );
+    strategies::compare_retention_strategies(
+        golden,
+        revised,
+        &mut g_sat,
+        &mut r_sat,
+        cross_format,
+        &mut diffs,
+    );
 
     UpfCompareReport {
         equivalent: diffs.is_empty(),

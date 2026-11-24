@@ -187,7 +187,10 @@ fn gate_fast_100k_cells_clean_and_buggy() {
     read_liberty(&mut s, std::slice::from_ref(&lib_p)).unwrap();
     s.design.files.push(clean_v);
     s.elaborate(Some("top_pg".into())).unwrap();
-    assert!(s.fast_gate.is_some(), "expected fast_gate path for 100k netlist");
+    assert!(
+        s.fast_gate.is_some(),
+        "expected fast_gate path for 100k netlist"
+    );
     load_upf(&mut s, &upf_p, None, None, false).unwrap();
     check_lp(
         &mut s,

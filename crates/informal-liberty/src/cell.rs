@@ -214,8 +214,7 @@ pub struct LibertyCell {
 
 impl LibertyCell {
     pub fn is_retention(&self) -> bool {
-        self.retention_cell.is_some()
-            || self.pins.iter().any(|p| p.retention_pin.is_some())
+        self.retention_cell.is_some() || self.pins.iter().any(|p| p.retention_pin.is_some())
     }
 
     pub fn is_power_switch(&self) -> bool {
@@ -279,14 +278,11 @@ impl LibertyCell {
             return Some(IsoClampKind::Latch);
         }
         let active_high = self.iso_enable_active_high().unwrap_or(true);
-        let en_name = self
-            .iso_enable_pin()
-            .map(|p| p.name.as_str())
-            .or_else(|| {
-                self.isolation_enable_condition
-                    .as_deref()
-                    .map(|c| c.trim().trim_start_matches(['!', '~']).trim())
-            })?;
+        let en_name = self.iso_enable_pin().map(|p| p.name.as_str()).or_else(|| {
+            self.isolation_enable_condition
+                .as_deref()
+                .map(|c| c.trim().trim_start_matches(['!', '~']).trim())
+        })?;
         let data_name = self
             .iso_data_pin()
             .map(|p| p.name.as_str())

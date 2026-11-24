@@ -115,7 +115,9 @@ pub fn elaborate_fast_cached(
         let canon = canonicalize_path(p);
         let bytes = std::fs::read(&canon)
             .map_err(|e| format!("gate_fast: cannot read `{}`: {e}", p.display()))?;
-        let mtime = std::fs::metadata(&canon).ok().and_then(|m| m.modified().ok());
+        let mtime = std::fs::metadata(&canon)
+            .ok()
+            .and_then(|m| m.modified().ok());
         let sha256: [u8; 32] = Sha256::digest(&bytes).into();
         digests.push(FileDigest {
             path: canon,
@@ -179,7 +181,9 @@ pub fn try_elaborate_fast_cached(
             return Ok(None);
         };
         total_bytes += bytes.len() as u64;
-        let mtime = std::fs::metadata(&canon).ok().and_then(|m| m.modified().ok());
+        let mtime = std::fs::metadata(&canon)
+            .ok()
+            .and_then(|m| m.modified().ok());
         let sha256: [u8; 32] = Sha256::digest(&bytes).into();
         digests.push(FileDigest {
             path: canon,

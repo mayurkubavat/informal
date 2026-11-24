@@ -4,7 +4,9 @@ use super::{
 use crate::{cone, diagnose};
 use informal_fpv::lp::{self, CheckLpOpts, LpStage, LpStatus, LpViolation};
 use informal_fpv::{Session, Status};
-use informal_upf::{DiagSeverity, PowerDomainId, ResolvedPowerIntent, UpfVersion, DEFAULT_VOLTAGE_TOL_UV};
+use informal_upf::{
+    DiagSeverity, PowerDomainId, ResolvedPowerIntent, UpfVersion, DEFAULT_VOLTAGE_TOL_UV,
+};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
@@ -54,7 +56,10 @@ impl Api {
                 .map_err(|e| err("rejected", e))?;
 
             let Some(ref resolved) = s.lp.resolved else {
-                return Err(err("internal", "load_upf succeeded without resolved intent"));
+                return Err(err(
+                    "internal",
+                    "load_upf succeeded without resolved intent",
+                ));
             };
             Ok(build_upf_reply(&s, resolved, &path))
         })?
@@ -291,13 +296,17 @@ fn select_violation<'a>(
         .with_tool("check_lp"));
     }
     let found = violations.iter().find(|v| {
-        let rule_ok = rule.is_none_or(|r| v.rule_id.eq_ignore_ascii_case(r) || v.rule_id.contains(r));
+        let rule_ok =
+            rule.is_none_or(|r| v.rule_id.eq_ignore_ascii_case(r) || v.rule_id.contains(r));
         let sig_ok = signal.is_none_or(|sig| v.signal.contains(sig));
         rule_ok && sig_ok
     });
     found.ok_or_else(|| {
-        err("not_found", "no low-power violation matched the given filter")
-            .with_tool("check_lp")
+        err(
+            "not_found",
+            "no low-power violation matched the given filter",
+        )
+        .with_tool("check_lp")
     })
 }
 

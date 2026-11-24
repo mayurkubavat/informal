@@ -30,7 +30,10 @@ pub struct ParsedNet {
 #[derive(Debug, Clone)]
 pub enum ParsedExpr {
     Empty,
-    Const { is_zero: bool, is_all_ones: bool },
+    Const {
+        is_zero: bool,
+        is_all_ones: bool,
+    },
     Ref {
         net: String,
         range: Option<(u32, u32)>,
@@ -125,7 +128,11 @@ pub fn parse_verilog_str(
     Ok(modules)
 }
 
-fn parse_module(sc: &mut Scanner<'_>, file_idx: u32, mod_line: u32) -> Result<ParsedModule, String> {
+fn parse_module(
+    sc: &mut Scanner<'_>,
+    file_idx: u32,
+    mod_line: u32,
+) -> Result<ParsedModule, String> {
     sc.skip_ws_and_comments();
     let name_raw = sc
         .read_ident()
@@ -343,7 +350,10 @@ fn parse_decl_list(
             sc.advance_one();
             continue;
         };
-        if matches!(tok, "wire" | "reg" | "logic" | "signed" | "unsigned" | "tri" | "var") {
+        if matches!(
+            tok,
+            "wire" | "reg" | "logic" | "signed" | "unsigned" | "tri" | "var"
+        ) {
             continue;
         }
         let name = normalize_sv_leaf(tok);

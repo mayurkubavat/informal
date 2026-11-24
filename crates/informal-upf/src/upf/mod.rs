@@ -317,6 +317,26 @@ pub(crate) fn register_upf_commands(
             message: e.message,
             info: e.info,
         })?;
+    // Allow unbraced HDL bit/part-selects (e.g. `iso_en[0]`, `bus[7:0]`) in UPF/CPF
+    // commands while preserving standard Tcl error reporting for unknown commands.
+    interp
+        .eval(
+            r#"
+            proc ::unknown {args} {
+                if {[llength $args] == 1} {
+                    set cmd [lindex $args 0]
+                    if {[regexp {^[0-9]+(:[0-9]+)?$} $cmd]} {
+                        return "\[$cmd\]"
+                    }
+                }
+                return -code error "invalid command name \"[lindex $args 0]\""
+            }
+            "#,
+        )
+        .map_err(|e| UpfError::Tcl {
+            message: e.message,
+            info: e.info,
+        })?;
 
     {
         let st = state.clone();

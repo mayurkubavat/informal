@@ -59,7 +59,10 @@ pub fn parse_str_into(src: &str, file: &str, db: &mut LibertyDb) -> Result<(), L
 fn parse_library(lex: &mut Lexer<'_>, db: &mut LibertyDb) -> Result<(), LibertyError> {
     let _kw = lex.next_tok()?; // `library`
     let args = parse_arg_list(lex)?;
-    let lib_name = args.first().cloned().unwrap_or_else(|| "unnamed".to_string());
+    let lib_name = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unnamed".to_string());
     let open_line = lex.expect_lbrace()?;
     if !db.libraries.contains(&lib_name) {
         db.libraries.push(lib_name.clone());
@@ -215,10 +218,9 @@ fn parse_bus_type(
                     other => {
                         let desc = tok_desc(other);
                         let line = lex.line();
-                        return Err(lex.err(
-                            line,
-                            format!("unexpected token {desc} inside `type` group"),
-                        ));
+                        return Err(
+                            lex.err(line, format!("unexpected token {desc} inside `type` group"))
+                        );
                     }
                 }
             }
@@ -603,10 +605,7 @@ fn parse_simple_attr(lex: &mut Lexer<'_>) -> Result<String, LibertyError> {
             other => {
                 let desc = tok_desc(other);
                 let line = lex.line();
-                return Err(lex.err(
-                    line,
-                    format!("unexpected token {desc} in attribute value"),
-                ));
+                return Err(lex.err(line, format!("unexpected token {desc} in attribute value")));
             }
         }
     }
@@ -648,10 +647,7 @@ fn parse_arg_list(lex: &mut Lexer<'_>) -> Result<Vec<String>, LibertyError> {
             }
             TokKind::LBrace => {
                 let line = lex.line();
-                return Err(lex.err(
-                    line,
-                    "expected `)` to close group header before `{`",
-                ));
+                return Err(lex.err(line, "expected `)` to close group header before `{`"));
             }
             TokKind::Eof => {
                 return Err(lex.err(open_line, "unclosed `(` before end of file"));

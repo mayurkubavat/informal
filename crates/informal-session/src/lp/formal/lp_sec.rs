@@ -35,7 +35,11 @@ pub fn run_lp_lec(s: &mut Session) -> Result<(), String> {
 }
 
 fn run_lp_equiv(s: &mut Session, lec: bool) -> Result<(), String> {
-    let cmd = if lec { "check_lp -lec" } else { "check_lp -sec" };
+    let cmd = if lec {
+        "check_lp -lec"
+    } else {
+        "check_lp -sec"
+    };
     let mut setup = s
         .sec
         .setup
@@ -141,12 +145,9 @@ fn run_lp_equiv(s: &mut Session, lec: bool) -> Result<(), String> {
         let resolved = ensure_resolved_with_finder(s, &finder)?;
         let spec_graph = spec_cd.struct_graph();
         let skip_iso = match s.lp.liberty.as_deref() {
-            Some(lib) => collect_aon_macro_output_nets(
-                imp_cd.struct_graph(),
-                &resolved,
-                lib,
-                &finder,
-            ),
+            Some(lib) => {
+                collect_aon_macro_output_nets(imp_cd.struct_graph(), &resolved, lib, &finder)
+            }
             None => HashSet::new(),
         };
         let pa_spec = build_pa_model_with_skip(
@@ -175,16 +176,7 @@ fn run_lp_equiv(s: &mut Session, lec: bool) -> Result<(), String> {
     };
 
     let checks: Vec<SecCheck> = prove_sec_from_btor(
-        s,
-        &setup,
-        &spec_top,
-        &imp_top,
-        &d_spec,
-        &d_imp,
-        &spec_btor,
-        &imp_btor,
-        None,
-        None,
+        s, &setup, &spec_top, &imp_top, &d_spec, &d_imp, &spec_btor, &imp_btor, None, None,
     )?;
 
     let rule_id = if lec {
