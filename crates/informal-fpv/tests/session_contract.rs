@@ -90,6 +90,13 @@ fn canonical_session() -> Session {
         "Protocol",
     );
     p_proven.vacuity = Some(Vacuity::NonVacuous);
+    p_proven.witness_trace = Some("informal_work/a_aw_stable_witness.vcd".into());
+    p_proven.proof_core = Some(informal_fpv::proof_core::ProofCore {
+        states: vec!["awvalid".into(), "awaddr".into()],
+        inputs: vec!["awready".into()],
+        needed_assumptions: Vec::new(),
+        unused_assumptions: vec!["Protocol::m_b_valid_hold".into()],
+    });
     p_proven.stats = Some(ProofStats {
         engine: Some("informal-kind".into()),
         wall_ms: 46,

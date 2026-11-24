@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { groupOf, KIND_LETTER, STATUS_LABEL, SUMMARY, TASK, taskOf, type StatusFilter, type ViewProp as Property, type ViewStatus } from "../model";
+import { groupOf, isVacuousProof, KIND_LETTER, STATUS_LABEL, SUMMARY, TASK, taskOf, vacuityTooltip, type StatusFilter, type ViewProp as Property, type ViewStatus } from "../model";
 import { Glyph } from "./Glyph";
 import { ChevronIcon } from "./icons";
 
@@ -109,6 +109,11 @@ export function TaskTree({
                 >
                   <span className="leaf-kind mono">{KIND_LETTER[p.kind]}</span>
                   <span className="mono ellipsis">{p.name}</span>
+                  {isVacuousProof(p) && (
+                    <span className="tag tag-vacuous" title={vacuityTooltip(p)} aria-label="vacuous proof">
+                      ⚠ vacuous
+                    </span>
+                  )}
                 </div>
               ))}
             {isOpen && more > 0 && (

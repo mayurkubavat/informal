@@ -99,8 +99,9 @@ export function TraceView({
   );
   const n = cycles.length;
   const depth = prop.status.depth ?? Math.max(0, n - 1);
-  const cover = prop.status.status === "covered";
-  const word = cover ? "covered" : "cex";
+  const isWitness = prop.status.status === "proven" || prop.status.status === "bounded_proven";
+  const cover = prop.status.status === "covered" || isWitness;
+  const word = isWitness ? "witness" : cover ? "covered" : "cex";
 
   const [px, setPx] = useState<number>(ZOOM_DEFAULT);
   const [cursor, setCursor] = useState(0);
@@ -601,7 +602,9 @@ export function TraceView({
       <div className="trace-bar">
         <span className="strip-summary">
           {!tabs && <><strong className="mono">{prop.name}</strong>{" · "}</>}
-          {STATUS_LABEL[prop.status.status]} · depth {prop.status.depth ?? "?"} · {prop.status.engine ?? "—"}
+          {isWitness
+            ? `${STATUS_LABEL[prop.status.status]} (witness) · ${prop.status.engine ?? "—"}`
+            : `${STATUS_LABEL[prop.status.status]} · depth ${prop.status.depth ?? "?"} · ${prop.status.engine ?? "—"}`}
           {vcd ? ` · ${n} cycles` : ""}
         </span>
         {vcd && (

@@ -10,7 +10,8 @@
 // in `workbenchController.test.ts` with zero DOM/React overhead.
 
 import type { Flavor, SessionView } from "../backend";
-import { matches, STATUS_LABEL, statusKey, SUMMARY, TASK, taskOf, type StatusFilter, type ViewProp, type ViewStatus } from "../model";
+import type { LayoutPreset } from "./workbenchStore";
+import { isVacuousProof, matches, STATUS_LABEL, statusKey, SUMMARY, TASK, taskOf, type Center, type StatusFilter, type ViewProp, type ViewStatus } from "../model";
 
 export interface TableFilterState {
   selected: string | null;
@@ -51,8 +52,17 @@ export interface GuidedHint {
   tone: "info" | "warn" | "ok";
   text: string;
   actionLabel?: string;
-  actionKind?: "prove_all" | "open_cex" | "clear_filters";
+  actionKind?: "prove_all" | "open_cex" | "open_vacuous" | "clear_filters";
   actionProp?: string;
+}
+
+export interface NavSnapshot {
+  center: Center;
+  layoutPreset: LayoutPreset;
+  selected: string | null;
+  statusFilter: StatusFilter;
+  taskFilter: string | null;
+  filter: string;
 }
 
 export interface HiddenVerdictNotice {
@@ -463,6 +473,20 @@ export function guidedNextAction(
       actionProp: cex.name,
     };
   }
+  const vacuous = assertsCovers.find((p) => isVacuousProof(p));
+  if (vacuous) {
+    const vacCount = assertsCovers.filter((p) => isVacuousProof(p)).length;
+    return {
+      tone: "warn",
+      text:
+        vacCount === 1
+          ? `Vacuous proof in ${vacuous.name} — antecedent never reached; inspect assumptions or driving logic.`
+          : `${vacCount} proven assertions are vacuous (first: ${vacuous.name}) — antecedent never reached.`,
+      actionLabel: "Inspect vacuous",
+      actionKind: "open_vacuous",
+      actionProp: vacuous.name,
+    };
+  }
   if (settled.length === 0 && unproc.length > 0 && plan.count > 0) {
     const assumes = allProps.filter((p) => p.kind === "assume" && p.enabled).length;
     const scope = plan.task ? ` in task ${plan.task}` : "";
@@ -475,4 +499,86 @@ export function guidedNextAction(
     };
   }
   return null;
+}
+
+const NAV_STACK_CAP = 16;
+
+/**
+ * UX-8 (Cross-Pane Spatial History): Push a snapshot when pivoting away from
+ * the Property Table (or switching workspace preset) without duplicating identical tops.
+ */
+export function pushNavSnapshot(
+  stack: readonly NavSnapshot[],
+  snap: NavSnapshot,
+): NavSnapshot[] {
+  const top = stack[stack.length - 1];
+  if (
+    top &&
+    top.center === snap.center &&
+    top.layoutPreset === snap.layoutPreset &&
+    top.selected === snap.selected &&
+    top.statusFilter === snap.statusFilter &&
+    top.taskFilter === snap.taskFilter &&
+    top.filter === snap.filter
+  ) {
+    return [...stack];
+  }
+  const next = [...stack, snap];
+  return next.length > NAV_STACK_CAP ? next.slice(next.length - NAV_STACK_CAP) : next;
+}
+
+export function popNavSnapshot(
+  stack: readonly NavSnapshot[],
+): { snapshot: NavSnapshot | null; rest: NavSnapshot[] } {
+  if (stack.length === 0) return { snapshot: null, rest: [] };
+  return {
+    snapshot: stack[stack.length - 1],
+    rest: stack.slice(0, -1),
+  };
+}
+
+/**
+ * UX-9 (Zero-Dead-End Toggle): Exact Tcl command to disable/enable a property
+ * in either JasperGold (`<kind> -disable/-enable {<name>}`) or VC Formal (`fvdisable/fvenable {<name>}`).
+ */
+export function propertyToggleCmd(
+  p: Pick<ViewProp, "name" | "kind" | "enabled">,
+  flavor: Flavor,
+): string {
+  if (flavor === "vcf") {
+    return `${p.enabled ? "fvdisable" : "fvenable"} {${p.name}}`;
+  }
+  return `${p.kind} ${p.enabled ? "-disable" : "-enable"} {${p.name}}`;
+}
+
+export function relativeSignalPath(signalPath: string, topModule?: string | null): string {
+  if (topModule && signalPath.startsWith(`${topModule}.`)) {
+    return signalPath.slice(topModule.length + 1);
+  }
+  return signalPath;
+}
+
+export function isSignalCut(
+  signalPath: string,
+  topModule: string | null | undefined,
+  stopats: readonly string[] = [],
+): boolean {
+  const rel = relativeSignalPath(signalPath, topModule);
+  return stopats.includes(rel) || stopats.includes(signalPath);
+}
+
+/**
+ * UX-9 (Signal Cut-Point Tcl): Exact `stopat` (JG) / `snip_driver` (VCF) command
+ * for cutting or restoring a signal's driver in the current task.
+ */
+export function signalStopatCmd(
+  signalPath: string,
+  flavor: Flavor,
+  topModule?: string | null,
+  clear = false,
+): string {
+  const rel = relativeSignalPath(signalPath, topModule);
+  const verb = flavor === "vcf" ? "snip_driver" : "stopat";
+  const arg = tclWord(rel);
+  return clear ? `${verb} -clear ${arg}` : `${verb} ${arg}`;
 }

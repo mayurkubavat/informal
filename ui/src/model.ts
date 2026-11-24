@@ -172,6 +172,52 @@ export function traceOf(p: ViewProp | null): string | null {
   return p.trace ?? null;
 }
 
+// Non-vacuity witness VCD path for a proven assertion (`prove` at Signoff effort or with witnesses enabled).
+export function witnessTraceOf(p: ViewProp | null): string | null {
+  if (!p || p.status.status !== "proven") return null;
+  return p.witness_trace ?? null;
+}
+
+// Either a CEX/cover trace or a proven assertion's witness trace when explicitly opened.
+export function anyTraceOf(p: ViewProp | null): string | null {
+  return traceOf(p) ?? witnessTraceOf(p);
+}
+
+// UX-7: True when a proven assertion never exercises its consequent because its antecedent or environment is unreachable.
+export function isVacuousProof(p: ViewProp | null): boolean {
+  return Boolean(
+    p &&
+      p.kind === "assert" &&
+      p.status.status === "proven" &&
+      p.vacuity &&
+      p.vacuity.startsWith("vacuous"),
+  );
+}
+
+export function vacuityTooltip(p: ViewProp): string {
+  if (p.vacuity === "vacuous-environment") {
+    return "Vacuous proof: task assumptions conflict with reset or dead-end — run check_assumptions -conflict";
+  }
+  return "Vacuous proof: no trace reaches this assertion's antecedent (precondition unreachable) — check assumptions or driving logic";
+}
+
+export function phaseLabel(phase?: ProveProgress["phase"] | null): string {
+  switch (phase) {
+    case "sweep":
+      return "Pass 1 sweep";
+    case "converge":
+      return "Pass 2 converge";
+    case "vacuity":
+      return "Checking vacuity";
+    case "witness":
+      return "Generating witness";
+    case "proof_core":
+      return "Extracting proof core";
+    default:
+      return "";
+  }
+}
+
 // ---- console Tab completion ----
 // The word Tab completes: the text after the last space, `[`, `{` or `;`.
 export function completionWord(cmd: string): { base: string; word: string } {

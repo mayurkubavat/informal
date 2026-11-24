@@ -56,6 +56,8 @@ pub struct ProveProgress {
     pub total: usize,
     pub done: usize,
     pub elapsed_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<&'static str>,
     pub props: Vec<PropProgress>,
 }
 
@@ -89,6 +91,7 @@ struct Slot {
 pub struct Tracker {
     sink: Arc<dyn ProveSink>,
     start: Instant,
+    phase: Mutex<Option<&'static str>>,
     slots: Mutex<Vec<Slot>>,
 }
 
@@ -172,13 +175,28 @@ impl Tracker {
         let t = Tracker {
             sink,
             start: Instant::now(),
+            phase: Mutex::new(None),
             slots: Mutex::new(slots),
         };
         t.emit(ProgressKind::Start);
         t
     }
 
+    /// Set the active prove phase (`"sweep"`, `"converge"`, `"vacuity"`, `"witness"`, `"proof_core"`)
+    /// to be carried on subsequent progress events.
+    pub fn set_phase(&self, phase: Option<&'static str>) {
+        *self.phase.lock().unwrap() = phase;
+    }
+
+    /// Update the active prove phase and immediately emit a progress update
+    /// (used for post-proof vacuity, witness, and proof-core phases).
+    pub fn emit_phase(&self, phase: &'static str) {
+        *self.phase.lock().unwrap() = Some(phase);
+        self.emit(ProgressKind::Update);
+    }
+
     fn emit(&self, kind: ProgressKind) {
+        let phase = *self.phase.lock().unwrap();
         let props: Vec<PropProgress> = {
             let mut slots = self.slots.lock().unwrap();
             for s in slots.iter_mut() {
@@ -193,6 +211,7 @@ impl Tracker {
             total: props.len(),
             done: props.iter().filter(|p| is_final(p)).count(),
             elapsed_ms: self.start.elapsed().as_millis(),
+            phase,
             props,
         });
     }
@@ -275,6 +294,7 @@ impl Tracker {
     /// End the run. A stopped run reports what had not finished as
     /// undetermined (reason "stopped").
     pub fn end(&self, stopped: bool) {
+        *self.phase.lock().unwrap() = None;
         if stopped {
             let left = {
                 let mut slots = self.slots.lock().unwrap();

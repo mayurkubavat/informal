@@ -1,24 +1,31 @@
 import { useEffect, useState } from "react";
 import type { DesignScope, ScopeSignal } from "../backend";
 import { findScope, signalKind } from "../model";
+import { isSignalCut } from "../store/workbenchController";
 import { ChevronIcon } from "./icons";
 
 // The Design tab, laid out like a simulator's design browser: the instance
 // tree on top (twisty to expand, click to select a scope), the selected
 // scope's ports and signals below it (name, width, kind) with a filter, and
 // the design files at the end. Double-click (or Enter on) a signal to add it
-// to the open trace.
+// to the open trace; right-click (or Shift+F10) opens signal actions (stopat).
 export function DesignTree({
   scopes,
   files,
   fallback,
   onAddSignal,
+  onSignalContext,
+  stopats = [],
+  topModule = null,
 }: {
   scopes: DesignScope[];
   files: string[];
   /** True when the tree is the top file's port scan (no slang hierarchy). */
   fallback?: boolean;
   onAddSignal?: (path: string) => void;
+  onSignalContext?: (path: string, x: number, y: number) => void;
+  stopats?: readonly string[];
+  topModule?: string | null;
 }) {
   const rootPath = scopes[0]?.path ?? null;
   const [sel, setSel] = useState<string | null>(rootPath);
@@ -99,23 +106,49 @@ export function DesignTree({
         </div>
         <input className="filter design-filter" placeholder="Filter signals" aria-label="Filter design signals" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Escape" && q && (e.preventDefault(), setQ(""))} />
         <div className="design-siglist" role="listbox" aria-label={`Signals in ${scope.path}`}>
-          {signals.map((s) => (
-            <div
-              key={s.name}
-              role="option"
-              aria-selected={sig === s.name}
-              tabIndex={0}
-              className={`tree-row sig-row ${sig === s.name ? "sel" : ""}`}
-              title={`${scope.path}.${s.name} · ${s.width || "?"} bit${s.width === 1 ? "" : "s"} · ${s.kind}${s.dir ? ` ${s.dir}` : ""}${onAddSignal ? " (double-click to add to the open trace)" : ""}`}
-              onClick={() => setSig(s.name)}
-              onDoubleClick={() => add(s)}
-              onKeyDown={(e) => e.key === "Enter" && add(s)}
-            >
-              <span className="mono sig-name">{s.name}</span>
-              <span className="mono sig-width">{s.width || "?"}</span>
-              <span className="sig-kind">{signalKind(s)}</span>
-            </div>
-          ))}
+          {signals.map((s) => {
+            const fullPath = `${scope.path}.${s.name}`;
+            const cut = isSignalCut(fullPath, topModule, stopats);
+            return (
+              <div
+                key={s.name}
+                role="option"
+                aria-selected={sig === s.name}
+                tabIndex={0}
+                className={`tree-row sig-row ${sig === s.name ? "sel" : ""}`}
+                title={`${fullPath} · ${s.width || "?"} bit${s.width === 1 ? "" : "s"} · ${s.kind}${s.dir ? ` ${s.dir}` : ""}${onAddSignal ? " (double-click to add to trace; right-click for stopat)" : ""}`}
+                onClick={() => setSig(s.name)}
+                onDoubleClick={() => add(s)}
+                onContextMenu={(e) => {
+                  if (!onSignalContext) return;
+                  e.preventDefault();
+                  setSig(s.name);
+                  onSignalContext(fullPath, e.clientX, e.clientY);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    add(s);
+                  } else if ((e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) && onSignalContext) {
+                    e.preventDefault();
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setSig(s.name);
+                    onSignalContext(fullPath, r.left + 32, r.bottom);
+                  }
+                }}
+              >
+                <span className="mono sig-name">
+                  {s.name}
+                  {cut && (
+                    <span className="tag tag-cut" title="Driver cut (stopat): unconstrained in current task">
+                      cut
+                    </span>
+                  )}
+                </span>
+                <span className="mono sig-width">{s.width || "?"}</span>
+                <span className="sig-kind">{signalKind(s)}</span>
+              </div>
+            );
+          })}
           {!signals.length && <p className="empty small">{scope.signals.length ? "No signal matches." : "No signals in this scope."}</p>}
         </div>
         {files.length > 0 && (

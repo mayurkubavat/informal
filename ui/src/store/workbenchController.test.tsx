@@ -6,18 +6,24 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import type { SessionView } from "../backend";
 import contractJson from "../../tests/fixtures/session-contract.json";
-import { bound, cell, STATUS_LABEL, statusKey, statusText, taskOf, type StatusFilter, type ViewProp } from "../model";
+import { anyTraceOf, bound, cell, isVacuousProof, phaseLabel, STATUS_LABEL, statusKey, statusText, taskOf, witnessTraceOf, type StatusFilter, type ViewProp } from "../model";
 import { PropTable } from "../components/PropTable";
 import { TaskTree } from "../components/TaskTree";
 import {
   activeFilterChips,
   findNewlyHiddenProved,
   guidedNextAction,
+  isSignalCut,
+  popNavSnapshot,
+  propertyToggleCmd,
+  pushNavSnapshot,
   resolveProveAll,
   selectAndReveal,
+  signalStopatCmd,
   summarySegments,
   taskEnvSummary,
   visibleProps,
+  type NavSnapshot,
   type TableFilterState,
 } from "./workbenchController";
 
@@ -54,12 +60,15 @@ describe("Layer 1 — Rust -> TypeScript Session Schema Contract", () => {
     expect(cell(bp, "engine")).toBe("informal-bmc");
     expect(cell(bp, "time")).toBe("0.12s");
 
-    // Verify proven renders ∞ bound, engine, time, and green glyph class
+    // Verify proven renders ∞ bound, engine, time, green glyph class, and real Rust ProofCore schema
     const pr = props.find((p) => p.name === "Protocol::a_aw_stable")!;
     expect(statusText(pr)).toBe("Proven");
     expect(bound(pr)).toBe("∞");
     expect(cell(pr, "engine")).toBe("informal-kind");
     expect(cell(pr, "time")).toBe("0.05s");
+    expect(pr.proof_core?.states).toEqual(["awvalid", "awaddr"]);
+    expect(pr.proof_core?.inputs).toEqual(["awready"]);
+    expect(pr.proof_core?.unused_assumptions).toEqual(["Protocol::m_b_valid_hold"]);
 
     // Render full Rust fixture into PropTable & TaskTree without throwing
     const { container } = render(
@@ -230,5 +239,87 @@ describe("Layer 2 — Workbench UX Invariants (UX-1..UX-6)", () => {
       expect(statusKey(props[0])).toBe("proven");
       expect(taskOf(props[0])).toBe("Protocol");
     }
+  });
+
+  it("UX-7: surfaces vacuous proof badges in PropTable & TaskTree, witness trace helpers, and open_vacuous guidance", () => {
+    const nonVac = props.find((p) => p.name === "Protocol::a_aw_stable")!;
+    const vac = props.find((p) => p.name === "Protocol::a_under_ai_check")!;
+    expect(isVacuousProof(nonVac)).toBe(false);
+    expect(isVacuousProof(vac)).toBe(true);
+
+    const { container } = render(
+      <PropTable props={[nonVac, vac]} total={2} selected={vac.name} onSelect={() => {}} onOpen={() => {}} />,
+    );
+    const vacBadges = container.querySelectorAll(".tag-vacuous");
+    expect(vacBadges).toHaveLength(1);
+    expect(vacBadges[0].textContent).toContain("vacuous");
+
+    const { container: tree } = render(
+      <TaskTree
+        total={2}
+        counts={{ proven: 2 }}
+        assumes={0}
+        filter={null}
+        onFilter={() => {}}
+        props={[nonVac, vac]}
+        tasks={["Protocol"]}
+        current="Protocol"
+      />,
+    );
+    expect(tree.querySelectorAll(".tag-vacuous")).toHaveLength(1);
+
+    // When no CEX exists, guidedNextAction warns about vacuous proof
+    const vacOnly = [nonVac, vac];
+    const hint = guidedNextAction(vacOnly, resolveProveAll(vacOnly, "Protocol", null, "jg"), false, false);
+    expect(hint?.actionKind).toBe("open_vacuous");
+    expect(hint?.actionProp).toBe("Protocol::a_under_ai_check");
+
+    // Witness trace helper only resolves on proven assertions, leaving CEX/cover traceOf distinct
+    const withWit: ViewProp = { ...nonVac, witness_trace: "informal_work/wit.vcd" };
+    expect(witnessTraceOf(withWit)).toBe("informal_work/wit.vcd");
+    expect(anyTraceOf(withWit)).toBe("informal_work/wit.vcd");
+    expect(phaseLabel("sweep")).toBe("Pass 1 sweep");
+    expect(phaseLabel("converge")).toBe("Pass 2 converge");
+    expect(phaseLabel("vacuity")).toBe("Checking vacuity");
+    expect(phaseLabel("witness")).toBe("Generating witness");
+    expect(phaseLabel("proof_core")).toBe("Extracting proof core");
+  });
+
+  it("UX-8 & UX-9: deduplicates bounded navigation history stack and generates exact JG/VCF toggle & stopat Tcl", () => {
+    let stack: NavSnapshot[] = [];
+    const s1: NavSnapshot = {
+      center: "table",
+      layoutPreset: "triage",
+      selected: "a_max",
+      statusFilter: "proven",
+      taskFilter: "Protocol",
+      filter: "aw_",
+    };
+    stack = pushNavSnapshot(stack, s1);
+    stack = pushNavSnapshot(stack, { ...s1 }); // duplicate consecutive snapshot ignored
+    expect(stack).toHaveLength(1);
+
+    for (let i = 0; i < 20; i++) {
+      stack = pushNavSnapshot(stack, { ...s1, filter: `q_${i}` });
+    }
+    expect(stack.length).toBeLessThanOrEqual(16);
+    const popped = popNavSnapshot(stack);
+    expect(popped.snapshot?.filter).toBe("q_19");
+    expect(popped.rest).toHaveLength(stack.length - 1);
+
+    // JG vs VCF property toggle Tcl
+    expect(propertyToggleCmd({ name: "a_max", kind: "assert", enabled: true }, "jg")).toBe("assert -disable {a_max}");
+    expect(propertyToggleCmd({ name: "a_max", kind: "assert", enabled: false }, "jg")).toBe("assert -enable {a_max}");
+    expect(propertyToggleCmd({ name: "m_en", kind: "assume", enabled: true }, "jg")).toBe("assume -disable {m_en}");
+    expect(propertyToggleCmd({ name: "c_done", kind: "cover", enabled: true }, "jg")).toBe("cover -disable {c_done}");
+    expect(propertyToggleCmd({ name: "a_max", kind: "assert", enabled: true }, "vcf")).toBe("fvdisable {a_max}");
+    expect(propertyToggleCmd({ name: "a_max", kind: "assert", enabled: false }, "vcf")).toBe("fvenable {a_max}");
+
+    // Signal stopat / snip_driver Tcl & cut detection
+    expect(signalStopatCmd("counter.q", "jg", "counter", false)).toBe("stopat q");
+    expect(signalStopatCmd("counter.q", "jg", "counter", true)).toBe("stopat -clear q");
+    expect(signalStopatCmd("fifo.u_wp.p", "vcf", "fifo", false)).toBe("snip_driver u_wp.p");
+    expect(isSignalCut("counter.q", "counter", ["q"])).toBe(true);
+    expect(isSignalCut("counter.en", "counter", ["q"])).toBe(false);
   });
 });

@@ -142,6 +142,9 @@ impl Session {
             }
         };
         if !two_pass {
+            if let Some(t) = tracker {
+                t.set_phase(None);
+            }
             for (k, &i) in targets.iter().enumerate() {
                 let slot = base + k;
                 if self.stop.load(Ordering::SeqCst) {
@@ -176,6 +179,9 @@ impl Session {
 
         // Two-pass orchestration:
         // Pass 1 sweeps all targets at Effort::Low with a short per-property cap.
+        if let Some(t) = tracker {
+            t.set_phase(Some("sweep"));
+        }
         let sweep_cap = (self.time_limit / 10)
             .max(Duration::from_millis(250).min(self.time_limit / 2))
             .min(Duration::from_secs(2));
@@ -267,6 +273,11 @@ impl Session {
         }
 
         // Pass 2 converges remaining undetermined targets at full `self.effort`.
+        if !pending.is_empty() {
+            if let Some(t) = tracker {
+                t.set_phase(Some("converge"));
+            }
+        }
         for (p_idx, &(k, i, ref out, spent)) in pending.iter().enumerate() {
             let slot = base + k;
             if self.stop.load(Ordering::SeqCst) {

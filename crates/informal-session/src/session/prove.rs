@@ -260,6 +260,14 @@ impl Session {
             self.props[i].witness_trace = None;
         }
         if let (Ok((btor, _)), false, true) = (&lowered, conflict, self.preconditions) {
+            if targets[..reached].iter().any(|&i| {
+                matches!(self.props[i].status, Status::Proven { .. })
+                    && self.props[i].kind == Kind::Assert
+            }) {
+                if let Some(t) = tracker {
+                    t.emit_phase("vacuity");
+                }
+            }
             for &i in &targets[..reached] {
                 if self.stop.load(Ordering::SeqCst)
                     || batch_deadline.is_some_and(|dl| Instant::now() >= dl)
@@ -286,6 +294,18 @@ impl Session {
         }
         let run_witnesses = self.witnesses || self.effort == Effort::Max;
         if let (Ok((btor, _)), false, true) = (&lowered, conflict, run_witnesses) {
+            if targets[..reached].iter().any(|&i| {
+                matches!(self.props[i].status, Status::Proven { .. })
+                    && !matches!(
+                        self.props[i].vacuity,
+                        Some(Vacuity::Vacuous | Vacuity::VacuousEnvironment)
+                    )
+                    && self.props[i].kind == Kind::Assert
+            }) {
+                if let Some(t) = tracker {
+                    t.emit_phase("witness");
+                }
+            }
             for &i in &targets[..reached] {
                 if self.stop.load(Ordering::SeqCst)
                     || batch_deadline.is_some_and(|dl| Instant::now() >= dl)
@@ -304,6 +324,16 @@ impl Session {
         }
         let run_proof_core = self.with_proof_core || self.effort == Effort::Max;
         if run_proof_core && !conflict {
+            if targets[..reached].iter().any(|&i| {
+                matches!(
+                    self.props[i].status,
+                    Status::Proven { .. } | Status::Unreachable { .. }
+                )
+            }) {
+                if let Some(t) = tracker {
+                    t.emit_phase("proof_core");
+                }
+            }
             for &i in &targets[..reached] {
                 if self.stop.load(Ordering::SeqCst)
                     || batch_deadline.is_some_and(|dl| Instant::now() >= dl)

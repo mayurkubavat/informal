@@ -61,10 +61,10 @@ export interface Property {
   witness_trace?: string | null;
   bound?: number | null;
   proof_core?: {
+    states: string[];
+    inputs: string[];
     needed_assumptions: string[];
     unused_assumptions: string[];
-    state_signals: string[];
-    total_state_signals: number;
   } | null;
 }
 
@@ -472,11 +472,13 @@ export interface PropProgress {
   // Present once the property finished (the portfolio's per-engine record).
   engines?: EngineRun[];
 }
+export type ProvePhase = "sweep" | "converge" | "vacuity" | "witness" | "proof_core";
 export interface ProveProgress {
   kind: ProgressKind;
   total: number;
   done: number;
   elapsed_ms: number;
+  phase?: ProvePhase;
   props: PropProgress[];
 }
 // One line of engine output for the console (Tauri event "console-line").
@@ -637,6 +639,9 @@ export const backend = {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<string>("read_text", { path });
     }
+    if (httpBridge) {
+      return bridgeRpc<string>("read_text", { path });
+    }
     const t = mockText(path);
     if (t === null) throw new Error(`${path}: no such file`);
     return t;
@@ -679,6 +684,9 @@ export const backend = {
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<string>("read_trace", { path });
+    }
+    if (httpBridge) {
+      return bridgeRpc<string>("read_trace", { path });
     }
     const t = mockTrace(path);
     if (t === null) throw new Error(`${path}: no such trace`);

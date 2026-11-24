@@ -92,4 +92,52 @@ test.describe("Layer 5 — Real Rust Backend E2E", () => {
     await expect(maxRow).toContainText("∞");
     await expect(maxRow).toContainText(/informal-|ric3|abc/);
   });
+
+  test("Real Signoff effort: vacuous assertion shows amber badge, non-vacuous assertion opens real witness VCD + proof core, and check_assumptions -live runs", async ({
+    page,
+  }) => {
+    await page.goto(`/?bridge=${encodeURIComponent(bridge.url)}`);
+
+    const pathInput = page.getByRole("textbox", { name: "Script path" });
+    await pathInput.fill("examples/01-quickstart/counter/run.jg.tcl");
+    await pathInput.press("Enter");
+    await expect(page.locator(".strip-summary")).toContainText("4 proven", { timeout: 30_000 });
+
+    // Add a vacuous assertion (`1'b0 |-> q == 4'd0`) and a fairness assumption via real Tcl eval
+    const prompt = page.getByLabel("Tcl command");
+    await prompt.fill("assert -name a_vac_real {1'b0 |-> q == 4'd0}");
+    await prompt.press("Enter");
+    await expect(page.locator("table.grid tbody tr", { hasText: "a_vac_real" })).toBeVisible();
+
+    // Switch to Signoff (`max`) effort -> real solver generates witness VCD + proof core!
+    await page.getByRole("combobox", { name: "Proof effort" }).selectOption("max");
+    await expect(page.locator(".console-log")).toContainText("set_prove_effort max");
+    await page.getByRole("button", { name: "Prove all" }).click();
+    await expect(page.locator(".strip-summary")).toContainText("5 proven", { timeout: 30_000 });
+
+    // Verify real vacuity badge on `a_vac_real`
+    const vacRow = page.locator(".table-wrap table.grid tbody tr", { hasText: "a_vac_real" });
+    await expect(vacRow.locator(".tag-vacuous")).toContainText("vacuous");
+    await vacRow.locator("td").first().click();
+    await expect(page.getByRole("tab", { name: "Details: a_vac_real" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".details .vacuity-warn")).toContainText("vacuous");
+
+    // Verify real Proof core + real Witness VCD waveform on `a_step` (an implication assertion with a witness cover)
+    const stepRow = page.locator(".table-wrap table.grid tbody tr", { hasText: "a_step" });
+    await stepRow.click();
+    await expect(page.locator(".details .vacuity-ok")).toHaveText("non vacuous");
+    await expect(page.locator(".details .proof-core-summary")).toContainText(/state/);
+    await expect(page.locator(".details .proof-core-summary")).toContainText(/input/);
+    const openWit = page.locator(".details").getByRole("button", { name: "Open witness" });
+    await expect(openWit).toBeVisible();
+    await openWit.click();
+    await expect(page.locator(".trace-bar .strip-summary")).toContainText("Proven (witness)");
+    await expect(page.locator(".trace-bar .strip-summary")).toContainText(/cycles/);
+
+    // Return to Table via ContextBar and run real `check_assumptions -live` from `.env-pill`
+    await page.getByRole("region", { name: "Active property context" }).getByRole("button", { name: "Table" }).click();
+    await page.locator(".env-pill").click({ button: "right" });
+    await page.getByRole("menu", { name: "Environment checks" }).getByRole("menuitem", { name: /Check liveness fairness/ }).click();
+    await expect(page.locator(".console-log")).toContainText("check_assumptions -live");
+  });
 });

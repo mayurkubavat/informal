@@ -162,8 +162,8 @@ test.describe("row context menu", () => {
     ]);
     await expect(row(page, "a_never9")).toHaveAttribute("aria-selected", "true");
     await expect(item(page, "Visualize trace")).toHaveAttribute("aria-disabled", "true");
-    await expect(item(page, /Disable/)).toHaveAttribute("aria-disabled", "true");
-    await expect(item(page, /Disable/)).toHaveAttribute("title", /no disable command/);
+    await expect(item(page, /Disable/)).not.toHaveAttribute("aria-disabled", "true");
+    await expect(item(page, /Disable/)).toContainText("assert -disable {a_never9}");
     await page.keyboard.press("Escape");
     await expect(menu(page)).toHaveCount(0);
   });
@@ -199,6 +199,19 @@ test.describe("row context menu", () => {
     await row(page, "a_step").click({ button: "right" });
     await item(page, "Copy expression").click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("en && !done |=> q == $past(q) + 4'd1");
+  });
+
+  test("JasperGold disables and re-enables via <kind> -disable/-enable", async ({ page }) => {
+    await row(page, "a_max").click({ button: "right" });
+    await expect(item(page, /Disable/)).toContainText("assert -disable {a_max}");
+    await item(page, /Disable/).click();
+    await expect(row(page, "a_max")).toContainText("Disabled");
+    await expect(row(page, "a_max")).toHaveClass(/off/);
+    await expect(page.locator(".console-log")).toContainText("informal[jg]> assert -disable {a_max}");
+    await row(page, "a_max").click({ button: "right" });
+    await item(page, /Enable/).click();
+    await expect(row(page, "a_max")).toContainText("Unprocessed");
+    await expect(page.locator(".console-log")).toContainText("informal[jg]> assert -enable {a_max}");
   });
 
   test("VC Formal disables and re-enables via fvdisable/fvenable", async ({ page }) => {
@@ -379,6 +392,7 @@ test.describe("engine log", () => {
 
   test("lines arriving while another tab is open are kept; autoscroll can be turned off", async ({ page }) => {
     await page.goto("/?tick=20");
+    await expect(logTab(page)).toBeVisible();
     await page.keyboard.press("Control+4");
     await page.getByRole("checkbox", { name: "Autoscroll" }).uncheck();
     await page.keyboard.press("Control+1");

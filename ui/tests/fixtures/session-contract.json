@@ -43,6 +43,20 @@
       "engines": [],
       "vacuity": "non-vacuous",
       "task": "Protocol",
+      "witness_trace": "informal_work/a_aw_stable_witness.vcd",
+      "proof_core": {
+        "states": [
+          "awvalid",
+          "awaddr"
+        ],
+        "inputs": [
+          "awready"
+        ],
+        "needed_assumptions": [],
+        "unused_assumptions": [
+          "Protocol::m_b_valid_hold"
+        ]
+      },
       "stats": {
         "engine": "informal-kind",
         "wall_ms": 46,

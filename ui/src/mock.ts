@@ -313,8 +313,8 @@ function engineLine(prop: string, engine: string, text: string, err = false) {
 // Tab completion: a static list of each flavor's commands, then the
 // session's property names (crates/informal-fpv compat::complete in the app).
 export const MOCK_COMMANDS: Record<string, string[]> = {
-  jg: ["analyze", "assert", "assume", "clear", "clock", "cover", "elaborate", "get_property_list", "get_status", "include", "prove", "report", "reset", "set_max_trace_length", "set_prove_effort", "set_prove_orchestration", "set_prove_per_property_time_limit", "set_prove_time_limit", "set_prove_total_time_limit"],
-  vcf: ["check_fv", "create_clock", "create_reset", "fvassert", "fvassume", "fvcover", "fvdisable", "fvenable", "get_props", "read_file", "report_fv", "set_fml_appmode", "set_fml_var"],
+  jg: ["analyze", "assert", "assume", "clear", "clock", "cover", "elaborate", "get_property_list", "get_status", "include", "prove", "report", "reset", "set_max_trace_length", "set_prove_effort", "set_prove_orchestration", "set_prove_per_property_time_limit", "set_prove_time_limit", "set_prove_total_time_limit", "stopat"],
+  vcf: ["check_fv", "create_clock", "create_reset", "fvassert", "fvassume", "fvcover", "fvdisable", "fvenable", "get_props", "read_file", "report_fv", "set_fml_appmode", "set_fml_var", "snip_driver"],
 };
 export function mockComplete(prefix: string): string[] {
   if (!prefix) return [];
@@ -381,6 +381,25 @@ function step(run: Run) {
       prop.trace = MOCK_TRACES[p.name] ?? null;
       prop.engines = (MOCK_ENGINES[p.name] ?? []).map((e) => ({ ...e }));
       prop.stats = MOCK_STATS[p.name] ?? null;
+      if (prop.kind === "assert" && final.status === "proven") {
+        const vac = /^\s*\(?1'b0\)?\s*\|[-=]>/.test(prop.expr);
+        prop.vacuity = vac ? "vacuous" : "non-vacuous";
+        if (mockSession.effort === "max" && !vac) {
+          prop.witness_trace = MOCK_TRACES.c_done;
+          const assumes = mockSession.props
+            .filter((a) => a.kind === "assume" && a.enabled && (a.task ?? "<embedded>") === (prop.task ?? "<embedded>"))
+            .map((a) => a.name);
+          prop.proof_core = {
+            states: ["q"],
+            inputs: ["en"],
+            needed_assumptions: assumes.slice(0, 1),
+            unused_assumptions: assumes.slice(1),
+          };
+        } else {
+          prop.witness_trace = null;
+          prop.proof_core = null;
+        }
+      }
       reset(p, { ...final, engines: prop.engines.map((e) => ({ ...e })) });
       engineLine(p.name, final.engine ?? "ric3", final.status === "proven" || final.status === "unreachable" ? "unsat" : "sat", false);
       mockEvents.emit("console-line", { kind: "out", text: lineFor(p.name, final) });
@@ -416,7 +435,7 @@ function startProve(props: Property[], onEnd?: () => void): Promise<Reply> {
       timer: null,
       resolve,
     };
-    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null, engines: [], stats: null });
+    for (const p of props) Object.assign(p, { status: { status: "unprocessed" }, trace: null, witness_trace: null, vacuity: null, proof_core: null, engines: [], stats: null });
     active = run;
     if (!props.length) return finish(run, "done");
     fill(run);
@@ -445,8 +464,20 @@ export function resetMock() {
   if (active?.timer) clearTimeout(active.timer);
   active = null;
   mockFlavor = "jg";
+  mockSession.effort = "standard";
+  mockSession.orchestration = "auto";
+  mockSession.time_limit = { secs: 60, nanos: 0 };
+  mockSession.total_time_limit = null;
+  mockSession.max_trace_length = null;
+  mockSession.tasks = undefined;
+  mockSession.current_task = undefined;
+  mockSession.environment = null;
+  mockSession.cov = undefined;
+  mockSession.xprop = undefined;
+  mockSession.spv = undefined;
+  mockSession.sec = undefined;
   mockSession.props.length = BASE_PROPS;
-  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null, engines: [] });
+  for (const p of mockSession.props) Object.assign(p, { enabled: true, status: { status: "unprocessed" }, trace: null, witness_trace: null, vacuity: null, proof_core: null, engines: [] });
   Object.assign(mockOptions, { tick: 300, freeze: null, holdStop: false, surfer: false, llmOffline: false });
   mockSurferOpened.length = 0;
   mockLlm.selected = "fake";
@@ -1041,6 +1072,149 @@ export async function mock(cmd: string, args: Record<string, unknown>): Promise<
     if (!hit.length) return { ok: false, result: `no property matches \`${want.join(" ")}\``, session: mockSession };
     for (const p of hit) p.enabled = toggle[1] === "fvenable";
     return { ok: true, result: "", session: mockSession };
+  }
+  // JasperGold `<kind> -disable/-enable <pattern>`
+  const jgToggle = script.match(/^\s*(assert|assume|cover)\s+-(disable|enable)\s+(?:\{([^}]*)\}|(\S+))\s*$/);
+  if (cmd === "shell_eval" && jgToggle && mockFlavor === "jg") {
+    const [, kind, action, braced, bare] = jgToggle;
+    const raw = (braced ?? bare ?? "").trim();
+    const pats = raw.split(/\s+/).filter(Boolean);
+    const matchesGlob = (pat: string, s: string) => {
+      const re = new RegExp(`^${pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
+      return re.test(s) || re.test(s.split("::").pop() ?? s);
+    };
+    const hit = mockSession.props.filter((p) => p.kind === kind && pats.some((pat) => matchesGlob(pat, p.name)));
+    if (!hit.length) return { ok: false, result: `no ${kind} matches \`${raw}\``, session: mockSession };
+    for (const p of hit) p.enabled = action === "enable";
+    return { ok: true, result: "", session: mockSession };
+  }
+  // JasperGold `assert/assume/cover -name <name> {<expr>}`
+  const jgAdd = script.match(/^\s*(assert|assume|cover)\s+-name\s+(\S+)\s+\{([^}]+)\}\s*$/);
+  if (cmd === "shell_eval" && jgAdd && mockFlavor === "jg") {
+    const [, kind, name, expr] = jgAdd;
+    const curTask = mockSession.current_task ?? "<embedded>";
+    const fullName = curTask === "<embedded>" ? name : `${curTask}::${name}`;
+    if (mockSession.props.some((p) => p.name === fullName)) {
+      return { ok: false, result: `property \`${fullName}\` already exists`, session: mockSession };
+    }
+    mockSession.props.push({
+      name: fullName,
+      ...(curTask !== "<embedded>" ? { task: curTask } : {}),
+      kind: kind as Property["kind"],
+      expr: expr.trim(),
+      enabled: true,
+      status: { status: "unprocessed" },
+    });
+    if (kind !== "assume" && !(fullName in mockResults)) {
+      mockResults[fullName] = { status: "proven", engine: "informal-kind", ms: 19 };
+    }
+    return { ok: true, result: fullName, session: mockSession };
+  }
+  // `stopat` (JG) / `snip_driver` (VCF)
+  const stopatMatch = script.match(/^\s*(stopat|snip_driver)(?:\s+(-clear|-list))?(?:\s+(?:\{([^}]*)\}|(\S+)))?\s*$/);
+  if (
+    cmd === "shell_eval" &&
+    stopatMatch &&
+    ((stopatMatch[1] === "stopat" && mockFlavor === "jg") || (stopatMatch[1] === "snip_driver" && mockFlavor === "vcf"))
+  ) {
+    const [, verb, flag, braced, bare] = stopatMatch;
+    if (!mockSession.tasks) mockSession.tasks = [{ name: "<embedded>", stopats: [] }];
+    const curTask = mockSession.current_task ?? "<embedded>";
+    let taskObj = mockSession.tasks.find((t) => t.name === curTask);
+    if (!taskObj) {
+      taskObj = { name: curTask, stopats: [] };
+      mockSession.tasks.push(taskObj);
+    }
+    if (flag === "-list") return { ok: true, result: taskObj.stopats.join(" "), session: mockSession };
+    const top = mockSession.design.top ?? "";
+    const sigs = (braced ?? bare ?? "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((s) => (top && s.startsWith(`${top}.`) ? s.slice(top.length + 1) : s));
+    if (flag === "-clear") {
+      taskObj.stopats = sigs.length ? taskObj.stopats.filter((x) => !sigs.includes(x)) : [];
+      return { ok: true, result: "", session: mockSession };
+    }
+    if (!sigs.length) return { ok: false, result: `${verb}: signal name(s) required`, session: mockSession };
+    for (const s of sigs) if (!taskObj.stopats.includes(s)) taskObj.stopats.push(s);
+    return { ok: true, result: "", session: mockSession };
+  }
+  // `check_assumptions [-live] [-conflict] [-dead_end]`
+  if (cmd === "shell_eval" && /^\s*check_assumptions\b/.test(script)) {
+    const isLive = /-live\b/.test(script);
+    const isConflict = /-conflict\b/.test(script);
+    const isDeadEnd = /-dead_end\b/.test(script);
+    const curTask = mockSession.current_task ?? "<embedded>";
+    const assumes = mockSession.props.filter((p) => p.kind === "assume" && p.enabled && (p.task ?? "<embedded>") === curTask);
+    if (isLive) {
+      if (isDeadEnd || /-depth\b/.test(script)) {
+        return { ok: false, result: "check_assumptions: -live checks infinite fair traces and takes no -depth/-dead_end", session: mockSession };
+      }
+      if (isConflict) return { ok: true, result: "", session: mockSession };
+      const hasFair = assumes.some((a) => /s_eventually|eventually\b/.test(a.expr));
+      return { ok: true, result: hasFair ? "consistent" : "none", session: mockSession };
+    }
+    if (isDeadEnd) return { ok: true, result: "alive", session: mockSession };
+    mockSession.environment = {
+      task: curTask,
+      asked: 20,
+      allowed: 20,
+      assumptions: assumes.map((a) => a.name),
+      conflict_set: [],
+    };
+    return { ok: true, result: isConflict ? "" : "20", session: mockSession };
+  }
+  if (cmd === "shell_eval" && /^\s*check_sec\b/.test(script)) {
+    if (/-setup\b/.test(script) || !mockSession.sec?.setup) {
+      mockSession.sec = {
+        setup: { spec_top: "spec_counter", imp_top: "imp_counter", lec: false, latency: 0 },
+        checks: [
+          { name: "sec_q", kind: "output", spec_sig: "q", imp_sig: "q", width: 4, latency: 0, status: /-prove\b/.test(script) ? "proven" : "unprocessed" },
+          { name: "sec_done", kind: "output", spec_sig: "done", imp_sig: "done", width: 1, latency: 0, status: /-prove\b/.test(script) ? "proven" : "unprocessed" },
+        ],
+      };
+    } else if (/-prove\b/.test(script) && mockSession.sec?.checks) {
+      mockSession.sec = {
+        ...mockSession.sec,
+        checks: mockSession.sec.checks.map((c) => ({ ...c, status: "proven", engine: "informal-ic3-mt" })),
+      };
+    }
+    return { ok: true, result: "check_sec: 2 output equivalence checks", session: mockSession };
+  }
+  if (cmd === "shell_eval" && /^\s*check_protocol\b/.test(script)) {
+    const proto = script.match(/-protocol\s+(\S+)/)?.[1] ?? "apb";
+    if (!mockSession.tasks) mockSession.tasks = [{ name: "<embedded>", stopats: [] }];
+    if (!mockSession.tasks.some((t) => t.name === "Protocol")) {
+      mockSession.tasks.push({ name: "Protocol", stopats: [] });
+    }
+    const baseName = `Protocol::${proto}_valid_hold`;
+    if (!mockSession.props.some((p) => p.name === baseName)) {
+      mockSession.props.push(
+        { name: baseName, task: "Protocol", kind: "assert", expr: "valid && !ready |=> valid", enabled: true, status: { status: "unprocessed" } },
+        { name: `Protocol::c_${proto}_txn`, task: "Protocol", kind: "cover", expr: "valid && ready", enabled: true, status: { status: "unprocessed" } },
+      );
+    }
+    return { ok: true, result: `${baseName} Protocol::c_${proto}_txn`, session: mockSession };
+  }
+  if (cmd === "shell_eval" && /^\s*check_(csr|conn)\b/.test(script)) {
+    const isCsr = /^\s*check_csr\b/.test(script);
+    const taskName = isCsr ? "CSR" : "Connectivity";
+    if (!mockSession.tasks) mockSession.tasks = [{ name: "<embedded>", stopats: [] }];
+    if (!mockSession.tasks.some((t) => t.name === taskName)) {
+      mockSession.tasks.push({ name: taskName, stopats: [] });
+    }
+    const propName = isCsr ? "CSR::ctrl_reset" : "Connectivity::irq_route";
+    if (!mockSession.props.some((p) => p.name === propName)) {
+      mockSession.props.push({
+        name: propName,
+        task: taskName,
+        kind: "assert",
+        expr: isCsr ? "!rst_n |=> ctrl == 8'h0" : "src_irq == dst_irq",
+        enabled: true,
+        status: /-prove\b/.test(script) ? { status: "proven", engine: "informal-kind", ms: 12 } : { status: "unprocessed" },
+      });
+    }
+    return { ok: true, result: propName, session: mockSession };
   }
   if (cmd === "shell_eval" && /^\s*check_cov\b/.test(script)) {
     mockSession.cov = {

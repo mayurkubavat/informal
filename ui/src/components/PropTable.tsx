@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { cell, KIND_LETTER, OPTIONAL_COLS, sortValue, type ColKey, type SortKey, type ViewProp as Property } from "../model";
+import { cell, isVacuousProof, KIND_LETTER, OPTIONAL_COLS, sortValue, vacuityTooltip, type ColKey, type SortKey, type ViewProp as Property } from "../model";
 import { Status } from "./Glyph";
 
 type Col = { key: SortKey; label: string; cls?: string; title?: string; opt?: ColKey };
@@ -164,6 +164,15 @@ export function PropTable({
       </td>
       <td>
         <Status p={p} />
+        {isVacuousProof(p) && (
+          <span
+            className="tag tag-vacuous"
+            title={vacuityTooltip(p)}
+            aria-label="vacuous proof"
+          >
+            ⚠ vacuous
+          </span>
+        )}
         {!!p.under_ai?.length && (
           <span className="tag" title={`Found with AI-added changes in the model: ${p.under_ai.join(", ")}`} aria-label={`under AI-added ${p.under_ai.join(", ")}`}>
             under AI

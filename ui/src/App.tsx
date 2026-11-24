@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, type AiStatus, type DesignInfo as DesignInfoData, type EffortLevel, EngineLine, Flavor, type FormalLintFindingView, type FormalQuickFixView, type GuiRequest, type GuiState, type OrchestrationMode, ProveProgress, Reply, type SchematicGraphView, SessionView, type WhyCexReport } from "./backend";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
-  bound, clock, designScopes, memText, OPTIONAL_COLS, SURFER_MISSING, isProveCmd, parsePorts, STATUS_LABEL, sourceFile, sourceLine, taskOf, time, traceOf, withProgress,
+  anyTraceOf, bound, clock, designScopes, isVacuousProof, memText, OPTIONAL_COLS, phaseLabel, SURFER_MISSING, isProveCmd, parsePorts, STATUS_LABEL, sourceFile, sourceLine, taskOf, time, traceOf, vacuityTooltip, witnessTraceOf, withProgress,
   type BottomTab, type Center, type ColKey, type LeftTab, type LogEvent, type LogLine, type StatusFilter, type ViewStatus,
 } from "./model";
 import { useWorkbenchStore, type LayoutPreset, type WalkthroughStep } from "./store/workbenchStore";
@@ -17,12 +17,18 @@ import {
   activeFilterChips,
   findNewlyHiddenProved,
   guidedNextAction,
+  isSignalCut,
+  popNavSnapshot,
+  propertyToggleCmd,
+  pushNavSnapshot,
   resolveProveAll,
   selectAndReveal,
+  signalStopatCmd,
   summarySegments,
   taskEnvSummary,
   visibleProps,
   type HiddenVerdictNotice,
+  type NavSnapshot,
 } from "./store/workbenchController";
 import { resolveSvgPalette } from "./svgTheme";
 import { useTheme } from "./useTheme";
@@ -46,6 +52,8 @@ import { DesignInfo } from "./components/DesignInfo";
 import { KIND_LABEL, Proposals } from "./components/Proposals";
 import { FormalApps, type AppMode } from "./components/FormalApps";
 import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
+import { ContextBar } from "./components/ContextBar";
+import { ShortcutSheet } from "./components/ShortcutSheet";
 import { WalkthroughBar } from "./components/WalkthroughBar";
 import { WelcomePane } from "./components/WelcomePane";
 import { WorkbenchDock } from "./components/WorkbenchDock";
@@ -227,6 +235,12 @@ export default function App() {
   const [focusReq, setFocusReq] = useState<{ id: string; n: number } | null>(null);
   const [ctx, setCtx] = useState<{ name: string; x: number; y: number } | null>(null);
   const closeCtx = useCallback(() => setCtx(null), []);
+  const [sigCtx, setSigCtx] = useState<{ path: string; x: number; y: number } | null>(null);
+  const closeSigCtx = useCallback(() => setSigCtx(null), []);
+  const [envMenu, setEnvMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeEnvMenu = useCallback(() => setEnvMenu(null), []);
+  const [shortcutOpen, setShortcutOpen] = useState(false);
+  const [navStack, setNavStack] = useState<NavSnapshot[]>([]);
   // The column chooser (header right-click, the strip's Columns button).
   const [colMenu, setColMenu] = useState<{ x: number; y: number } | null>(null);
   const closeColMenu = useCallback(() => setColMenu(null), []);
@@ -609,11 +623,54 @@ export default function App() {
   // The front end's scope tree; without one, the top file's ports.
   const hierarchy = session?.design.hierarchy;
   const scopes = useMemo(() => designScopes(hierarchy, session?.design.top ?? null, ports), [hierarchy, session?.design.top, ports]);
+  const recordNavBeforePivot = useCallback(() => {
+    setNavStack((st) =>
+      pushNavSnapshot(st, {
+        center,
+        layoutPreset,
+        selected,
+        statusFilter,
+        taskFilter,
+        filter,
+      }),
+    );
+  }, [center, layoutPreset, selected, statusFilter, taskFilter, filter]);
+
+  const goBack = useCallback(() => {
+    setNavStack((st) => {
+      const { snapshot, rest } = popNavSnapshot(st);
+      if (snapshot) {
+        setLayoutPreset(snapshot.layoutPreset);
+        setCenter(snapshot.center);
+        setSelected(snapshot.selected);
+        setStatusFilter(snapshot.statusFilter);
+        setTaskFilter(snapshot.taskFilter);
+        setFilter(snapshot.filter);
+      } else {
+        setLayoutPreset("triage");
+        setCenter("table");
+      }
+      return rest;
+    });
+  }, [setLayoutPreset, setCenter]);
+
+  const openSourceFor = useCallback(
+    (name?: string) => {
+      recordNavBeforePivot();
+      if (name) setSelected(name);
+      setLayoutPreset("triage");
+      setCenter("source");
+    },
+    [recordNavBeforePivot, setLayoutPreset, setCenter],
+  );
+
   const currentTrace = traceOf(current);
+  const currentWitness = witnessTraceOf(current);
   const hasTrace = !!currentTrace;
   const traceProp = traceName ? allProps.find((p) => p.name === traceName) ?? null : null;
-  const tracePath = traceOf(traceProp);
+  const tracePath = anyTraceOf(traceProp);
   const openTrace = (name: string) => {
+    recordNavBeforePivot();
     setSelected(name);
     setTraceName(name);
     setCenter("trace");
@@ -718,14 +775,16 @@ export default function App() {
 
   const openSchematic = useCallback(
     (propName?: string, depth?: number) => {
+      recordNavBeforePivot();
       const target = propName ?? activeSchemProp;
       if (target) {
         setSelected(target);
         setSchematicTarget(target, depth);
       }
+      setLayoutPreset("triage");
       setCenter("schematic");
     },
-    [activeSchemProp, setSchematicTarget, setCenter],
+    [activeSchemProp, recordNavBeforePivot, setLayoutPreset, setSchematicTarget, setCenter],
   );
 
   // MCP App (`ui://informal/workbench.html`) live tool result updates
@@ -1288,14 +1347,15 @@ export default function App() {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
         ev.preventDefault();
+        ev.stopPropagation();
         setBudgetOpen(false);
       }
     };
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [budgetOpen, curPerPropText, curTotalText, curMaxBound]);
 
@@ -1375,8 +1435,8 @@ export default function App() {
       .writeText(text)
       .then(() => setEvents((e) => [...e, { at: new Date(), cmd: "copy", ok: true, ms: 0, summary: `Copied ${what}` }]))
       .catch((err) => setLog((l) => [...l, { kind: "err", text: `copy failed: ${err}` }]));
-  // Only the VC Formal command map has fvdisable/fvenable today.
-  const toggleCmd = (p: { name: string; enabled: boolean }) => (flavor === "vcf" ? `${p.enabled ? "fvdisable" : "fvenable"} {${p.name}}` : null);
+  const toggleCmd = (p: { name: string; kind: "assert" | "assume" | "cover"; enabled: boolean }) =>
+    propertyToggleCmd(p, flavor);
 
   // Focus after the render that shows the target (the filter only exists in
   // table view; the console is hidden on other tabs).
@@ -1394,17 +1454,38 @@ export default function App() {
     setBottomTab("console");
     setFocusReq((r) => ({ id: "console-input", n: (r?.n ?? 0) + 1 }));
   };
-  const toggleSource = () => topFile && setCenter((c) => (c === "source" ? "table" : "source"));
+  const toggleSource = () => {
+    if (!topFile) return;
+    if (center === "source" && layoutPreset === "triage") {
+      setCenter("table");
+    } else {
+      openSourceFor();
+    }
+  };
   const DOCK: BottomTab[] = ["console", "details", "messages", "log", "profiler"];
 
   // Workbench shortcuts (Help > Keyboard shortcuts lists them). Read through a
   // ref so the listener is installed once but always sees current state.
   const onShortcut = useRef<(e: KeyboardEvent) => void>(() => {});
   onShortcut.current = (e: KeyboardEvent) => {
+    if (e.defaultPrevented) return;
     const mod = e.ctrlKey || e.metaKey;
+    const target = e.target as HTMLElement | null;
+    const inEditable = Boolean(
+      target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable ||
+          target.closest?.(".cm-editor")),
+    );
     if (e.key === "F5" && !mod) proveAll();
     else if (e.key === "F6" && !mod) proveSelected();
     else if (e.key === "F3" && !mod) toggleSource();
+    else if (!mod && e.altKey && !e.shiftKey && e.key === "ArrowLeft" && !inEditable) goBack();
+    else if (!mod && !e.altKey && e.key === "?" && !inEditable && !commandPaletteOpen) {
+      setShortcutOpen((o) => !o);
+    }
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
       setCommandPaletteOpen(!commandPaletteOpen);
     }
@@ -1416,6 +1497,7 @@ export default function App() {
     }
     else if (mod && !e.shiftKey && !e.altKey && e.key === "5") openProfiler();
     else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3", "4"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
+    else if (e.key === "Escape" && shortcutOpen) setShortcutOpen(false);
     // Esc closes an open menu first (the context menu stops its Esc, the
     // menu bar marks it handled) and a field may use it (the filter clears
     // itself); only then does it stop a running prove.
@@ -1446,16 +1528,25 @@ export default function App() {
           title: traceOf(ctxProp) ? undefined : "Only a CEX or cover result has a trace",
           onClick: () => openTrace(ctxProp.name),
         },
+        ...(witnessTraceOf(ctxProp) && !traceOf(ctxProp)
+          ? [
+              {
+                label: "Open witness trace",
+                hint: witnessTraceOf(ctxProp) ?? undefined,
+                onClick: () => openTrace(ctxProp.name),
+              },
+            ]
+          : []),
         {
           label: "Open trace in Surfer",
-          disabled: !surfer || !traceOf(ctxProp),
-          title: surferTip(traceOf(ctxProp)),
+          disabled: !surfer || !anyTraceOf(ctxProp),
+          title: surferTip(anyTraceOf(ctxProp)),
           onClick: () => {
-            const t = traceOf(ctxProp);
+            const t = anyTraceOf(ctxProp);
             if (t) openInSurfer(t);
           },
         },
-        { label: "Show source", disabled: !topFile, onClick: () => { setSelected(ctxProp.name); setCenter("source"); } },
+        { label: "Show source", disabled: !topFile, onClick: () => openSourceFor(ctxProp.name) },
         { sep: true },
         { label: "Copy name", onClick: () => copy(ctxProp.name, ctxProp.name) },
         { label: "Copy expression", onClick: () => copy(ctxProp.expr, `expression of ${ctxProp.name}`) },
@@ -1464,10 +1555,9 @@ export default function App() {
           const cmd = toggleCmd(ctxProp);
           return {
             label: ctxProp.enabled ? "Disable" : "Enable",
-            hint: cmd ?? undefined,
-            disabled: !cmd || !idle,
-            title: cmd ? undefined : "The JasperGold flavor of the informal shell has no disable command yet; switch to VC Formal (fvdisable)",
-            onClick: () => cmd && run(() => backend.evalTcl(cmd), cmd),
+            hint: cmd,
+            disabled: !idle,
+            onClick: () => run(() => backend.evalTcl(cmd), cmd),
           };
         })(),
       ]
@@ -1609,11 +1699,21 @@ export default function App() {
         { label: "Command palette…", keys: "Ctrl+K", onClick: () => setCommandPaletteOpen(true) },
         { label: "Proof profiler", keys: "Ctrl+5", checked: profiler, onClick: () => (profiler ? closeProfiler() : openProfiler()) },
         { label: "Formal apps", checked: appsOpen, onClick: () => (appsOpen ? closeApps() : openApps()) },
+        { sep: true },
+        {
+          label: "Check liveness fairness (-live)",
+          disabled: !idle || !session?.elaborated,
+          onClick: () => {
+            const c = "check_assumptions -live";
+            void run(() => backend.evalTcl(c), c);
+          },
+        },
       ],
     },
     {
       label: "Help",
       items: [
+        { label: "Keyboard & workflow guide…", keys: "?", onClick: () => setShortcutOpen(true) },
         {
           label: "Keyboard shortcuts",
           onClick: () => {
@@ -1660,6 +1760,18 @@ export default function App() {
       { id: "effort-standard", group: "Prove", label: "Proof Effort: Standard", disabled: !idle, run: () => applyEffort("standard") },
       { id: "effort-high", group: "Prove", label: "Proof Effort: Deep (high)", disabled: !idle, run: () => applyEffort("high") },
       { id: "effort-max", group: "Prove", label: "Proof Effort: Signoff (max)", disabled: !idle, run: () => applyEffort("max") },
+      {
+        id: "env-live",
+        group: "Environment",
+        label: "Check liveness fairness",
+        detail: "check_assumptions -live",
+        disabled: !idle || !session?.elaborated,
+        run: () => {
+          const c = "check_assumptions -live";
+          void run(() => backend.evalTcl(c), c);
+        },
+      },
+      { id: "help-guide", group: "Help", label: "Keyboard & formal workflow guide", shortcut: "?", run: () => setShortcutOpen(true) },
       ...allProps.slice(0, 80).map((p) => ({
         id: `prop-${p.name}`,
         group: "Property",
@@ -1710,7 +1822,7 @@ export default function App() {
       whyCex={traceName ? (whyCexMap[traceName] ?? null) : null}
       whyCexOpen={whyCexOpen}
       whyCexLoading={whyCexLoading}
-      onToggleWhyCex={toggleWhyCex}
+      onToggleWhyCex={traceOf(traceProp) ? toggleWhyCex : undefined}
       annotations={traceAnnotations}
       controlledSliceOnly={sliceOnlyControlled}
       onSliceOnlyChange={setSliceOnlyControlled}
@@ -1820,6 +1932,15 @@ export default function App() {
             aria-label="Command palette"
           >
             ⌘K
+          </button>
+          <button
+            type="button"
+            className="btn small help-trigger"
+            onClick={() => setShortcutOpen(true)}
+            title="Keyboard & formal workflow guide (?)"
+            aria-label="Keyboard and workflow guide"
+          >
+            ?
           </button>
         </MenuBar>
       )}
@@ -2077,6 +2198,7 @@ export default function App() {
               <span className="progress-fill" style={{ width: `${progress.total ? (100 * progress.done) / progress.total : 0}%` }} />
             </span>
             <span className="progress-text mono">
+              {progress.phase ? `${phaseLabel(progress.phase)} · ` : ""}
               {progress.done} of {progress.total} · {clock(progress.elapsed_ms)}
               {(() => {
                 const r = progress.props.find((q) => q.status === "running");
@@ -2160,7 +2282,15 @@ export default function App() {
                   }}
                 />
               ) : (
-                <DesignTree scopes={scopes} files={session?.design.files ?? []} fallback={!hierarchy?.length} onAddSignal={addSignal} />
+                <DesignTree
+                  scopes={scopes}
+                  files={session?.design.files ?? []}
+                  fallback={!hierarchy?.length}
+                  onAddSignal={addSignal}
+                  onSignalContext={(path, x, y) => setSigCtx({ path, x, y })}
+                  stopats={session?.tasks?.find((t) => t.name === (session?.current_task ?? "<embedded>"))?.stopats ?? []}
+                  topModule={session?.design.top ?? null}
+                />
               )}
             </div>
           </aside>
@@ -2168,6 +2298,41 @@ export default function App() {
 
         {/* ---- centre ---- */}
         <main className="center">
+          {(() => {
+            const contextProp = (showTrace ? traceProp : null) ?? current ?? traceProp;
+            const showContextBar = !showWelcome && Boolean(contextProp) && (layoutPreset !== "triage" || center !== "table");
+            if (!showContextBar || !contextProp) return null;
+            return (
+              <ContextBar
+                prop={contextProp}
+                center={center}
+                layoutPreset={layoutPreset}
+                canBack={navStack.length > 0}
+                traceCursor={traceName === contextProp.name && (showTrace || layoutPreset === "cex-debug") ? (traceView?.cursor ?? null) : null}
+                hasSource={Boolean(topFile)}
+                onBack={goBack}
+                onTable={() => {
+                  setLayoutPreset("triage");
+                  setCenter("table");
+                }}
+                onWaveform={() => {
+                  if (anyTraceOf(contextProp)) {
+                    setLayoutPreset("triage");
+                    openTrace(contextProp.name);
+                  }
+                }}
+                onSource={() => openSourceFor(contextProp.name)}
+                onSchematic={() => openSchematic(contextProp.name)}
+                onCexDebug={() => {
+                  recordNavBeforePivot();
+                  setSelected(contextProp.name);
+                  setTraceName(contextProp.name);
+                  setSchematicTarget(contextProp.name);
+                  setLayoutPreset("cex-debug");
+                }}
+              />
+            );
+          })()}
           {showWelcome ? (
             <WelcomePane
               ai={ai}
@@ -2257,10 +2422,14 @@ export default function App() {
                       <button
                         type="button"
                         className={`env-pill env-${envSummary.state}`}
-                        title={envSummary.detail}
+                        title={`${envSummary.detail} (right-click for -conflict / -dead_end / -live checks)`}
                         onClick={() => {
                           setStatusFilter((cur) => (cur === "assume" ? null : "assume"));
                           setHiddenNotice(null);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setEnvMenu({ x: e.clientX, y: e.clientY });
                         }}
                       >
                         {envSummary.state === "conflict"
@@ -2365,6 +2534,18 @@ export default function App() {
                         if (traceOf(allProps.find((p) => p.name === guidedHint.actionProp) ?? null)) {
                           openTrace(guidedHint.actionProp!);
                         }
+                      }}
+                    >
+                      {guidedHint.actionLabel}
+                    </button>
+                  )}
+                  {guidedHint.actionKind === "open_vacuous" && guidedHint.actionProp && (
+                    <button
+                      type="button"
+                      className="btn small"
+                      onClick={() => {
+                        selectAndRevealProp(guidedHint.actionProp!);
+                        select(guidedHint.actionProp!);
                       }}
                     >
                       {guidedHint.actionLabel}
@@ -2527,9 +2708,53 @@ export default function App() {
                     {current.kind === "assert" && current.status.status === "proven" && (
                       <>
                         <dt>Vacuity</dt>
-                        <dd>{(current.vacuity ?? "not checked").replace(/-/g, " ")}</dd>
+                        <dd
+                          className={isVacuousProof(current) ? "vacuity-warn" : current.vacuity === "non-vacuous" ? "vacuity-ok" : undefined}
+                          title={isVacuousProof(current) ? vacuityTooltip(current) : undefined}
+                        >
+                          {isVacuousProof(current)
+                            ? `⚠ ${(current.vacuity ?? "").replace(/-/g, " ")}`
+                            : (current.vacuity ?? "not checked").replace(/-/g, " ")}
+                        </dd>
                       </>
                     )}
+                    {currentWitness && (
+                      <>
+                        <dt>Witness</dt>
+                        <dd>
+                          <button className="link mono" onClick={() => openTrace(current.name)} title="Open non-vacuity witness waveform">
+                            Witness: {currentWitness}
+                          </button>
+                        </dd>
+                      </>
+                    )}
+                    {current.proof_core && (() => {
+                      const needed = current.proof_core.needed_assumptions ?? [];
+                      const states = current.proof_core.states ?? [];
+                      const inputs = current.proof_core.inputs ?? [];
+                      return (
+                        <>
+                          <dt title="Minimal assumption, state & input cone supporting this proof">Proof core</dt>
+                          <dd
+                            className="proof-core-summary mono"
+                            title={`Needed assumptions: ${needed.join(", ") || "none"} · States: ${states.join(", ") || "none"} · Inputs: ${inputs.join(", ") || "none"}`}
+                          >
+                            <span>
+                              {needed.length} assume{needed.length === 1 ? "" : "s"}
+                              {needed.length > 0 ? ` (${needed.join(", ")})` : ""}
+                            </span>
+                            <span>·</span>
+                            <span>
+                              {states.length} state{states.length === 1 ? "" : "s"}
+                            </span>
+                            <span>·</span>
+                            <span>
+                              {inputs.length} input{inputs.length === 1 ? "" : "s"}
+                            </span>
+                          </dd>
+                        </>
+                      );
+                    })()}
                     {current.ai && (
                       <>
                         <dt>Origin</dt>
@@ -2579,6 +2804,15 @@ export default function App() {
                     >
                       Visualize trace
                     </button>
+                    {currentWitness && !hasTrace && (
+                      <button
+                        className="btn"
+                        title={`Open witness trace (${currentWitness})`}
+                        onClick={() => openTrace(current.name)}
+                      >
+                        Open witness
+                      </button>
+                    )}
                     {current.kind !== "assume" && (
                       <button className="btn" onClick={() => openSchematic(current.name)} title="Open COI & causal schematic">
                         Schematic
@@ -2642,7 +2876,11 @@ export default function App() {
         {running ? (
           <span className="run">
             <Glyph k="running" />
-            {stopping ? "Stopping…" : progress ? `Proving · ${progress.done}/${progress.total}` : "Proving…"}
+            {stopping
+              ? "Stopping…"
+              : progress
+                ? `Proving · ${progress.done}/${progress.total}${progress.phase ? ` · ${phaseLabel(progress.phase)}` : ""}`
+                : "Proving…"}
           </span>
         ) : (
           <span>{busy ? "Working…" : "Idle"}</span>
@@ -2654,6 +2892,88 @@ export default function App() {
         commands={paletteCommands}
         onClose={() => setCommandPaletteOpen(false)}
       />
+      <ShortcutSheet open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
+
+      {envMenu && (
+        <ContextMenu
+          x={envMenu.x}
+          y={envMenu.y}
+          label="Environment checks"
+          onClose={closeEnvMenu}
+          items={[
+            {
+              label: "Filter table to assumptions",
+              checked: statusFilter === "assume",
+              onClick: () => {
+                setStatusFilter((cur) => (cur === "assume" ? null : "assume"));
+                setHiddenNotice(null);
+              },
+            },
+            { sep: true },
+            {
+              label: "Check finite consistency",
+              hint: "check_assumptions -conflict",
+              disabled: !idle || !session?.elaborated,
+              onClick: () => {
+                const c = "check_assumptions -conflict";
+                void run(() => backend.evalTcl(c), c);
+              },
+            },
+            {
+              label: "Check dead-end states",
+              hint: "check_assumptions -dead_end",
+              disabled: !idle || !session?.elaborated,
+              onClick: () => {
+                const c = "check_assumptions -dead_end";
+                void run(() => backend.evalTcl(c), c);
+              },
+            },
+            {
+              label: "Check liveness fairness",
+              hint: "check_assumptions -live",
+              disabled: !idle || !session?.elaborated,
+              onClick: () => {
+                const c = "check_assumptions -live";
+                void run(() => backend.evalTcl(c), c);
+              },
+            },
+          ]}
+        />
+      )}
+      {sigCtx && (
+        <ContextMenu
+          x={sigCtx.x}
+          y={sigCtx.y}
+          label={`Signal actions for ${sigCtx.path}`}
+          onClose={closeSigCtx}
+          items={(() => {
+            const curTask = session?.current_task ?? "<embedded>";
+            const stopats = session?.tasks?.find((t) => t.name === curTask)?.stopats ?? [];
+            const alreadyCut = isSignalCut(sigCtx.path, session?.design.top, stopats);
+            const cutCmd = signalStopatCmd(sigCtx.path, flavor, session?.design.top, alreadyCut);
+            return [
+              {
+                label: "Add to open trace",
+                disabled: !traceName,
+                title: traceName ? undefined : "Open a trace first",
+                onClick: () => addSignal(sigCtx.path),
+              },
+              {
+                label: alreadyCut ? "Restore driver" : "Cut driver (stopat)",
+                hint: cutCmd,
+                checked: alreadyCut,
+                disabled: !idle,
+                onClick: () => void run(() => backend.evalTcl(cutCmd), cutCmd),
+              },
+              { sep: true },
+              {
+                label: "Copy signal path",
+                onClick: () => copy(sigCtx.path, sigCtx.path),
+              },
+            ];
+          })()}
+        />
+      )}
 
       {llmMenu && (
         <ContextMenu
