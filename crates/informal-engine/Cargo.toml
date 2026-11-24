@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+informal-ir.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

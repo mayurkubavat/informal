@@ -132,7 +132,7 @@ pub fn compute_proof_core(s: &Session, prop_idx: usize) -> Result<ProofCore, Str
     let mut needed_roots: Vec<u32> = Vec::new();
 
     if !candidates.is_empty() {
-        let engines = informal_bmc::select_for_btor(
+        let engines = informal_engine::selector::select_for_btor(
             &s.active_engines(),
             &isolated,
             !s.engine_filter.is_empty(),

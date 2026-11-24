@@ -379,7 +379,7 @@ impl Session {
                 .count()
         };
         let bads = has("bad") + has("justice");
-        let filtered = informal_bmc::select_for_btor_with_effort(
+        let filtered = informal_engine::selector::select_for_btor_with_effort(
             engines,
             &text,
             !self.engine_filter.is_empty(),

@@ -94,7 +94,11 @@ mod tests {
         let path = dir.join("model.btor2");
         let (engine_btor, _) = informal_svlang::split_trace(btor);
         std::fs::write(&path, engine_btor).unwrap();
-        let engines = informal_bmc::select_for_btor(&informal_bmc::engines(), engine_btor, false);
+        let engines = informal_engine::selector::select_for_btor(
+            &informal_bmc::engines(),
+            engine_btor,
+            false,
+        );
         let req = CheckRequest::new(path, ModelFormat::Btor2, Duration::from_secs(10));
         let run = informal_engine::portfolio::run_until(&engines, &req, None, None);
         let verdict = informal_engine::portfolio::verdict(&run);

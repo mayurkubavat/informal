@@ -21,8 +21,8 @@ pub mod unroll;
 use informal_aig::preprocess::{InputMap, LatchMap};
 use informal_aig::Aig;
 use informal_engine::{
-    Capabilities, Certificate, CheckRequest, Effort, Engine, EngineResult, ModelFormat, Progress,
-    RunContext, Verdict,
+    Capabilities, Certificate, CheckRequest, Effort, Engine, EngineDomain, EngineKind,
+    EngineResult, ModelFormat, Progress, RunContext, Verdict,
 };
 use informal_sat::{Answer, Sat};
 use std::sync::Arc;
@@ -898,6 +898,16 @@ impl Engine for Bmc {
         Capabilities {
             formats: FORMATS.to_vec(),
             finds_bugs: true,
+            liveness: true,
+            domain: EngineDomain::BitLevel,
+            kind: EngineKind::Bmc,
+            min_effort: if self.step <= 1 {
+                Effort::Low
+            } else {
+                Effort::Standard
+            },
+            certifies: true,
+            deep_step: self.step >= 32,
             ..Default::default()
         }
     }
@@ -1100,6 +1110,11 @@ impl Engine for KInduction {
             formats: FORMATS.to_vec(),
             proves: true,
             finds_bugs: true,
+            liveness: true,
+            domain: EngineDomain::BitLevel,
+            kind: EngineKind::KInduction,
+            min_effort: Effort::Low,
+            certifies: true,
             ..Default::default()
         }
     }
@@ -1202,6 +1217,15 @@ impl Engine for Ic3Engine {
             formats: FORMATS.to_vec(),
             proves: true,
             finds_bugs: true,
+            liveness: true,
+            domain: EngineDomain::BitLevel,
+            kind: EngineKind::Ic3,
+            min_effort: if self.mini {
+                Effort::Low
+            } else {
+                Effort::Standard
+            },
+            certifies: true,
             ..Default::default()
         }
     }
@@ -1421,6 +1445,11 @@ impl Engine for KindIc3 {
             formats: FORMATS.to_vec(),
             proves: true,
             finds_bugs: true,
+            liveness: true,
+            domain: EngineDomain::BitLevel,
+            kind: EngineKind::Hybrid,
+            min_effort: Effort::Standard,
+            certifies: true,
             ..Default::default()
         }
     }
@@ -1554,6 +1583,12 @@ impl Engine for Ic3Mt {
             formats: FORMATS.to_vec(),
             proves: true,
             finds_bugs: true,
+            liveness: true,
+            domain: EngineDomain::BitLevel,
+            kind: EngineKind::Ic3,
+            min_effort: Effort::Standard,
+            certifies: true,
+            multi_worker: true,
             ..Default::default()
         }
     }
@@ -1734,128 +1769,31 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
     ]
 }
 
-/// Structural feature-driven portfolio selector over `engines` for a Btor2 model:
-/// - Liveness targets (`justice` > 0): keeps `informal-klive` and liveness-capable engines.
-/// - Array models (`array_states` > 0): drops pure bit-blasted AIG engines so word-level /
-///   SMT engines get all threads without wasted bit-blasting failures.
-/// - Purely combinational models (`states` == 0): keeps 1-step BMC (`informal-bmc`),
-///   `informal-kind`, and external SMT engines, avoiding multi-worker IC3 thread spin-up.
+/// Structural feature-driven portfolio selector over `engines` for a Btor2 model.
+///
+/// Delegates to [`informal_engine::selector::select_for_btor`].
 pub fn select_for_btor(
     engines: &[Arc<dyn Engine>],
     btor_text: &str,
     explicit_filter: bool,
 ) -> Vec<Arc<dyn Engine>> {
-    select_for_btor_with_effort(engines, btor_text, explicit_filter, Effort::Standard)
+    informal_engine::selector::select_for_btor(engines, btor_text, explicit_filter)
 }
 
+/// Structural feature-driven portfolio selector over `engines` for a Btor2 model
+/// at `effort`. Delegates to [`informal_engine::selector::select_for_btor_with_effort`].
 pub fn select_for_btor_with_effort(
     engines: &[Arc<dyn Engine>],
     btor_text: &str,
     explicit_filter: bool,
     effort: Effort,
 ) -> Vec<Arc<dyn Engine>> {
-    let Ok(m) = informal_ir::parse(btor_text) else {
-        return engines.to_vec();
-    };
-    let f = informal_ir::Features::of(&m);
-    if f.justice > 0 {
-        if effort == Effort::Low && !explicit_filter {
-            let light_live: Vec<_> = engines
-                .iter()
-                .filter(|e| matches!(e.name(), "informal-klive" | "informal-bmc" | "informal-ic3"))
-                .cloned()
-                .collect();
-            if !light_live.is_empty() {
-                return light_live;
-            }
-        }
-        let out: Vec<_> = engines
-            .iter()
-            .filter(|e| {
-                (e.name().starts_with("informal-")
-                    && !e.name().contains("wbmc")
-                    && !e.name().contains("wkind"))
-                    || e.capabilities().liveness
-            })
-            .cloned()
-            .collect();
-        return if out.is_empty() {
-            engines.to_vec()
-        } else {
-            out
-        };
-    }
-
-    let base: Vec<_> = engines
-        .iter()
-        .filter(|e| e.name() != "informal-klive")
-        .cloned()
-        .collect();
-    if explicit_filter {
-        return base;
-    }
-    if f.array_states > 0 || f.has_arrays {
-        let arr: Vec<_> = base
-            .iter()
-            .filter(|e| {
-                !e.name().starts_with("informal-")
-                    || e.name().contains("wbmc")
-                    || e.name().contains("wkind")
-            })
-            .cloned()
-            .collect();
-        if !arr.is_empty() {
-            return arr;
-        }
-    }
-    if effort == Effort::Low {
-        let light: Vec<_> = base
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e.name(),
-                    "informal-bmc" | "informal-kind" | "informal-ic3" | "informal-wbmc"
-                )
-            })
-            .cloned()
-            .collect();
-        if !light.is_empty() {
-            return light;
-        }
-    }
-    if f.states == 0 {
-        let comb: Vec<_> = base
-            .iter()
-            .filter(|e| {
-                matches!(e.name(), "informal-bmc" | "informal-kind")
-                    || !e.name().starts_with("informal-")
-            })
-            .cloned()
-            .collect();
-        if !comb.is_empty() {
-            return comb;
-        }
-    }
-    let has_ic3_mt = base.iter().any(|e| e.name() == "informal-ic3-mt");
-    let arith_heavy = f.arith_ops >= 8 && f.max_width >= 16;
-    let tiny_state = f.state_bits <= 16;
-    let seq: Vec<_> = base
-        .iter()
-        .filter(|e| match e.name() {
-            // `informal-ic3-mt` already runs `Config::default()` as worker #1,
-            // so shedding standalone `informal-ic3` saves 1 solver thread.
-            "informal-ic3" if has_ic3_mt => false,
-            "informal-ic3-mini" if arith_heavy && has_ic3_mt => false,
-            "informal-bmc-s65" if tiny_state || arith_heavy => false,
-            _ => true,
-        })
-        .cloned()
-        .collect();
-    if seq.is_empty() {
-        base
-    } else {
-        seq
-    }
+    informal_engine::selector::select_for_btor_with_effort(
+        engines,
+        btor_text,
+        explicit_filter,
+        effort,
+    )
 }
 
 #[cfg(test)]

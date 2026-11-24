@@ -199,7 +199,7 @@ pub fn prove(
         0
     };
     let timeout = timeout_override.unwrap_or(s.time_limit);
-    let engines = informal_bmc::select_for_btor(
+    let engines = informal_engine::selector::select_for_btor(
         &s.active_engines(),
         informal_svlang::split_trace(&full_btor).0,
         false,

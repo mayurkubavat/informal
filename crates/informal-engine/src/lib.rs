@@ -12,6 +12,7 @@
 pub mod certificate;
 pub mod memory;
 pub mod portfolio;
+pub mod selector;
 pub mod witness;
 
 /// For a test that needs a tool this build or machine may lack (CaDiCaL,
@@ -157,7 +158,36 @@ pub struct EngineResult {
     pub certificate: Option<Certificate>,
 }
 
-/// What an engine can do. The scheduler uses this to route models.
+/// Representation domain an engine reasons over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineDomain {
+    /// Bit-level circuit / AIG / SAT / BDD reasoning.
+    #[default]
+    BitLevel,
+    /// Word-level bit-vector and array SMT reasoning.
+    WordLevel,
+}
+
+/// Algorithmic family for declarative portfolio routing and engine modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineKind {
+    Bmc,
+    KInduction,
+    Ic3,
+    Hybrid,
+    Liveness,
+    Bdd,
+    Interpolation,
+    Car,
+    Swarm,
+    #[default]
+    Other,
+}
+
+/// What an engine can do. The scheduler uses this to route models declaratively
+/// without hardcoding engine names.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Capabilities {
     pub formats: Vec<ModelFormat>,
@@ -168,6 +198,27 @@ pub struct Capabilities {
     pub lemma_export: bool,
     /// Phase 2: engine can import lemmas found by other engines.
     pub lemma_import: bool,
+    /// Bit-level (AIG/SAT/BDD) vs word-level (SMT/arrays).
+    pub domain: EngineDomain,
+    /// Algorithmic family (BMC, k-induction, IC3, Liveness, BDD, ...).
+    pub kind: EngineKind,
+    /// Supports unblasted Btor2 arrays (`Sort::Array`).
+    pub arrays: bool,
+    /// Minimum effort level at which this engine participates in auto-routing.
+    /// Defaults to `Effort::Standard`, so heavy/external engines are skipped
+    /// during quick `Effort::Low` sweeps unless explicitly requested.
+    pub min_effort: Effort,
+    /// Optional upper bound on sequential state bits (e.g. `Some(200)` for BDDs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_state_bits: Option<u64>,
+    /// Engine independently checks and attaches a machine-verifiable certificate
+    /// or replayed witness to definitive verdicts.
+    pub certifies: bool,
+    /// Deep multi-frame unrolling step (shed on tiny or arithmetic-heavy cones).
+    pub deep_step: bool,
+    /// Multi-worker parallel engine that subsumes a single-worker peer of the
+    /// same domain and kind at `Standard+` effort.
+    pub multi_worker: bool,
 }
 
 /// A progress report, streamed to the scheduler and the UI dashboard.

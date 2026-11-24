@@ -460,7 +460,7 @@ fn measure_task_unr(
     let safety_engines: Vec<_> = s
         .active_engines()
         .into_iter()
-        .filter(|e| e.name() != "informal-klive")
+        .filter(|e| e.capabilities().kind != informal_engine::EngineKind::Liveness)
         .collect();
     std::fs::create_dir_all(&s.workdir).map_err(|e| format!("check_cov: {e}"))?;
 
@@ -499,7 +499,7 @@ fn measure_task_unr(
                 effort: s.effort,
                 max_depth: s.max_trace_length,
             };
-            let selected = informal_bmc::select_for_btor(
+            let selected = informal_engine::selector::select_for_btor(
                 &safety_engines,
                 &isolated,
                 !s.engine_filter.is_empty(),

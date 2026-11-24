@@ -181,7 +181,7 @@ pub fn prove_spv(
             None
         };
 
-        let engines = informal_bmc::select_for_btor(
+        let engines = informal_engine::selector::select_for_btor(
             &s.active_engines(),
             informal_svlang::split_trace(&full_btor).0,
             false,

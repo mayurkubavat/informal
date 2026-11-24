@@ -463,7 +463,8 @@ pub(crate) fn register_and_prove_miter_prop(
     std::fs::write(&trace_btor_path, full_miter_btor)
         .map_err(|e| format!("LP formal write trace.btor2: {e}"))?;
 
-    let chosen = informal_bmc::select_for_btor(active_engines, engine_btor, explicit_filter);
+    let chosen =
+        informal_engine::selector::select_for_btor(active_engines, engine_btor, explicit_filter);
     let req = CheckRequest {
         model: btor_path.clone(),
         format: ModelFormat::Btor2,

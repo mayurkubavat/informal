@@ -32,6 +32,12 @@ unsafe = '(?m)^SAT$'
 | --- | --- |
 | `program` / `args` | Executable on `PATH` and argument vector (`{model}` is replaced with the model file path) |
 | `formats` | Accepted formats: `"aiger"`, `"btor2"` |
+| `domain` | Reasoning domain for routing: `"bit-level"` (default) or `"word-level"` |
+| `kind` | Algorithmic family: `"bmc"`, `"k-induction"`, `"ic3"`, `"hybrid"`, `"liveness"`, `"bdd"`, `"interpolation"`, `"car"`, `"swarm"`, or `"other"` (default) |
+| `arrays` | Set `true` when the engine supports unblasted Btor2 arrays (`Sort::Array`) |
+| `min_effort` | Minimum effort level for auto-routing: `"low"`, `"standard"` (default), `"high"`, or `"max"` |
+| `max_state_bits` | Optional sequential state-bit ceiling for auto-routing (e.g., `200` for exact BDDs) |
+| `certifies` | Set `true` when the engine independently certifies or replays every definitive verdict |
 | `proves` / `finds_bugs` | Whether the engine runs on safety proofs and/or bug-finding/cover queries |
 | `cex_witness` / `witness_on_stdout` | Parse counterexample witness from engine stdout so no secondary BMC replay is needed |
 | `mem_limit_mb` | Per-engine RSS/cgroup cap in MB |

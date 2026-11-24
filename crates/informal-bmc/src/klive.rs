@@ -24,8 +24,8 @@ use crate::unroll::Unroll;
 use crate::{certify, ic3, report_certificate, result, solver, unknown, Checked, FORMATS};
 use informal_aig::{lit_val, neg, var, Aig, Init, Lit, FALSE, TRUE};
 use informal_engine::{
-    Capabilities, Certificate, CheckRequest, Effort, Engine, EngineResult, Progress, RunContext,
-    Verdict,
+    Capabilities, Certificate, CheckRequest, Effort, Engine, EngineDomain, EngineKind,
+    EngineResult, Progress, RunContext, Verdict,
 };
 use informal_sat::Answer;
 use std::collections::HashMap;
@@ -672,6 +672,10 @@ impl Engine for KLive {
             proves: true,
             finds_bugs: true,
             liveness: true,
+            domain: EngineDomain::BitLevel,
+            kind: EngineKind::Liveness,
+            min_effort: Effort::Low,
+            certifies: true,
             ..Default::default()
         }
     }

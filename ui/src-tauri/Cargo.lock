@@ -1629,6 +1629,7 @@ name = "informal-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "informal-ir",
  "serde",
 ]
 

@@ -18,6 +18,8 @@ args = ["check", "--ui", "false", "--cex", "{model}", "ic3"]
 # informal turns it into the trace, so no BMC re-run is needed.
 cex_witness = true
 formats = ["aiger", "btor2"]
+domain = "bit-level"
+kind = "ic3"
 proves = true
 finds_bugs = true
 [engine.patterns]
@@ -32,6 +34,8 @@ args = ["check", "--ui", "false", "--cex", "{model}", "bmc"]
 # informal turns it into the trace, so no BMC re-run is needed.
 cex_witness = true
 formats = ["aiger", "btor2"]
+domain = "bit-level"
+kind = "bmc"
 finds_bugs = true
 [engine.patterns]
 unsafe = '(?m)^SAT$'
@@ -52,6 +56,8 @@ cex_witness = true
 # 26 GB machine makes the kernel kill unrelated processes. Capped as a group.
 mem_limit_mb = 14000
 formats = ["aiger", "btor2"]
+domain = "bit-level"
+kind = "hybrid"
 proves = true
 finds_bugs = true
 [engine.patterns]
@@ -63,6 +69,9 @@ name = "pono-ind"
 program = "pono"
 args = ["-e", "ind", "-k", "1000", "{model}"]
 formats = ["btor2"]
+domain = "word-level"
+kind = "k-induction"
+arrays = true
 proves = true
 finds_bugs = true
 witness_on_stdout = true
@@ -75,6 +84,9 @@ name = "pono-ic3ia"
 program = "pono"
 args = ["-e", "ic3ia", "{model}"]
 formats = ["btor2"]
+domain = "word-level"
+kind = "ic3"
+arrays = true
 proves = true
 finds_bugs = true
 witness_on_stdout = true
@@ -98,6 +110,8 @@ args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; pdr; write_c
 # model, informal says so in the engine log and falls back to a BMC re-run.
 cex_witness = true
 formats = ["aiger"]
+domain = "bit-level"
+kind = "ic3"
 proves = true
 finds_bugs = true
 [engine.patterns]
@@ -112,6 +126,8 @@ name = "abc-pdr-pp"
 program = "abc"
 args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; pdr"]
 formats = ["aiger"]
+domain = "bit-level"
+kind = "ic3"
 proves = true
 finds_bugs = true
 preprocess = true
@@ -126,6 +142,8 @@ program = "abc"
 args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; bmc3 -T 3600; write_cex -a -t /dev/stdout"]
 cex_witness = true
 formats = ["aiger"]
+domain = "bit-level"
+kind = "bmc"
 finds_bugs = true
 [engine.patterns]
 unsafe = 'was asserted in frame \d+'
@@ -136,6 +154,9 @@ name = "btormc"
 program = "btormc"
 args = ["-kmax", "1000", "{model}"]
 formats = ["btor2"]
+domain = "word-level"
+kind = "bmc"
+arrays = true
 finds_bugs = true
 witness_on_stdout = true
 [engine.patterns]

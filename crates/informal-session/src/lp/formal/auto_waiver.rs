@@ -167,8 +167,11 @@ pub fn run_prove_waivers(
             std::fs::write(&tmp_path, engine_btor)
                 .map_err(|e| format!("check_lp -prove_waivers: {e}"))?;
 
-            let chosen =
-                informal_bmc::select_for_btor(&active_engines, engine_btor, explicit_filter);
+            let chosen = informal_engine::selector::select_for_btor(
+                &active_engines,
+                engine_btor,
+                explicit_filter,
+            );
             let req = CheckRequest {
                 model: tmp_path.clone(),
                 format: ModelFormat::Btor2,

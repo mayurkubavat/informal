@@ -226,10 +226,10 @@ endmodule
 17 eq 2 5 3
 18 bad 17
 ";
-    let sel = informal_bmc::select_for_btor(&eng, arith_btor, false);
+    let sel = informal_engine::selector::select_for_btor(&eng, arith_btor, false);
     assert!(sel.iter().any(|e| e.name() == "informal-ic3-mt"));
     assert!(!sel.iter().any(|e| e.name() == "informal-ic3"));
-    assert!(!sel.iter().any(|e| e.name() == "informal-bmc-s65"));
+    assert!(!sel.iter().any(|e| e.name() == "informal-bmc-65"));
 }
 
 #[test]

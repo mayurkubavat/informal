@@ -4,7 +4,8 @@
 //! IC3SA and counterexample-guided prophecy come in stage 4.
 
 use informal_engine::{
-    Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, RunContext, Verdict,
+    Capabilities, CheckRequest, Effort, Engine, EngineDomain, EngineKind, EngineResult,
+    ModelFormat, RunContext, Verdict,
 };
 use informal_ir::Model;
 use std::sync::Arc;
@@ -197,6 +198,10 @@ impl Engine for WordBmc {
         Capabilities {
             formats: vec![ModelFormat::Btor2],
             finds_bugs: true,
+            domain: EngineDomain::WordLevel,
+            kind: EngineKind::Bmc,
+            arrays: true,
+            min_effort: Effort::Low,
             ..Default::default()
         }
     }
@@ -438,6 +443,10 @@ impl Engine for WordKind {
             formats: vec![ModelFormat::Btor2],
             proves: true,
             finds_bugs: true,
+            domain: EngineDomain::WordLevel,
+            kind: EngineKind::KInduction,
+            arrays: true,
+            min_effort: Effort::Standard,
             ..Default::default()
         }
     }

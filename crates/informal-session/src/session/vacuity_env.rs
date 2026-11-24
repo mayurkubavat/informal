@@ -38,7 +38,7 @@ impl Session {
             effort: self.effort,
             max_depth: self.max_trace_length,
         };
-        let safety = informal_bmc::select_for_btor_with_effort(
+        let safety = informal_engine::selector::select_for_btor_with_effort(
             engines,
             &isolated,
             !self.engine_filter.is_empty(),
@@ -106,7 +106,7 @@ impl Session {
             effort: self.effort,
             max_depth: self.max_trace_length,
         };
-        let safety = informal_bmc::select_for_btor_with_effort(
+        let safety = informal_engine::selector::select_for_btor_with_effort(
             engines,
             &isolated,
             !self.engine_filter.is_empty(),
@@ -418,7 +418,7 @@ impl Session {
         };
         // A justice target: the liveness engines (informal-klive and those
         // that read justice lines).
-        let live = informal_bmc::select_for_btor_with_effort(
+        let live = informal_engine::selector::select_for_btor_with_effort(
             &self.active_engines(),
             &text,
             !self.engine_filter.is_empty(),

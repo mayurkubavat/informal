@@ -13,7 +13,8 @@ pub mod isolated;
 
 use anyhow::{bail, Context};
 use informal_engine::{
-    Capabilities, CheckRequest, Engine, EngineResult, ModelFormat, Progress, RunContext, Verdict,
+    Capabilities, CheckRequest, Effort, Engine, EngineDomain, EngineKind, EngineResult,
+    ModelFormat, Progress, RunContext, Verdict,
 };
 
 /// Output lines per stream forwarded live to a progress listener per run.
@@ -42,6 +43,24 @@ pub struct EngineSpec {
     pub finds_bugs: bool,
     #[serde(default)]
     pub liveness: bool,
+    /// Bit-level vs word-level reasoning domain (default: `bit-level`).
+    #[serde(default)]
+    pub domain: EngineDomain,
+    /// Algorithmic family for declarative portfolio routing (default: `other`).
+    #[serde(default)]
+    pub kind: EngineKind,
+    /// Supports unblasted Btor2 arrays (`Sort::Array`).
+    #[serde(default)]
+    pub arrays: bool,
+    /// Minimum effort level at which this engine joins auto-routing (default: `standard`).
+    #[serde(default)]
+    pub min_effort: Effort,
+    /// Optional sequential state-bit ceiling for auto-routing.
+    #[serde(default)]
+    pub max_state_bits: Option<u64>,
+    /// True if the external engine attaches a verified certificate/witness.
+    #[serde(default)]
+    pub certifies: bool,
     #[serde(default)]
     pub exit_codes: ExitCodes,
     #[serde(default)]
@@ -330,6 +349,14 @@ impl Engine for ExternalEngine {
             liveness: self.spec.liveness || self.spec.preprocess,
             lemma_export: false,
             lemma_import: false,
+            domain: self.spec.domain,
+            kind: self.spec.kind,
+            arrays: self.spec.arrays,
+            min_effort: self.spec.min_effort,
+            max_state_bits: self.spec.max_state_bits,
+            certifies: self.spec.certifies,
+            deep_step: false,
+            multi_worker: false,
         }
     }
 
@@ -662,6 +689,25 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/engines.toml");
         let engines = load(&path).unwrap();
         assert!(engines.len() >= 4);
+        let by = |name: &str| {
+            engines
+                .iter()
+                .find(|e| e.name() == name)
+                .unwrap_or_else(|| panic!("missing {name}"))
+                .capabilities()
+        };
+        let pono = by("pono-ic3ia");
+        assert_eq!(pono.domain, EngineDomain::WordLevel);
+        assert_eq!(pono.kind, EngineKind::Ic3);
+        assert!(pono.arrays);
+        let ric3 = by("ric3-ic3");
+        assert_eq!(ric3.domain, EngineDomain::BitLevel);
+        assert_eq!(ric3.kind, EngineKind::Ic3);
+        assert!(!ric3.arrays);
+        let bmc = by("btormc");
+        assert_eq!(bmc.domain, EngineDomain::WordLevel);
+        assert_eq!(bmc.kind, EngineKind::Bmc);
+        assert!(bmc.arrays);
     }
 
     fn models() -> std::path::PathBuf {
