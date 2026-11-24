@@ -94,6 +94,35 @@ witness_on_stdout = true
 safe = '(?m)^unsat$'
 unsafe = '(?m)^sat$'
 
+[[engine]]
+name = "pono-ic3sa"
+program = "pono"
+args = ["-e", "ic3sa", "{model}"]
+formats = ["btor2"]
+domain = "word-level"
+kind = "ic3"
+arrays = true
+proves = true
+finds_bugs = true
+witness_on_stdout = true
+[engine.patterns]
+safe = '(?m)^unsat$'
+unsafe = '(?m)^sat$'
+
+[[engine]]
+name = "avr"
+program = "avr"
+args = ["--btor2", "{model}"]
+formats = ["btor2"]
+domain = "word-level"
+kind = "ic3"
+arrays = true
+proves = true
+finds_bugs = true
+[engine.patterns]
+safe = '(?m)^h\s*$'
+unsafe = '(?m)^v\s*$'
+
 # ABC (build from github.com/berkeley-abc/abc; `yosys-abc` takes the same
 # commands). The prefix is needed for HWMCC AIGER 1.9 files: `fold` turns
 # invariant constraints into the property (without it ABC checks constraint

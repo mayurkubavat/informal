@@ -32,6 +32,8 @@ enum Category {
     Safety,
     Combinational,
     Array,
+    /// Unbounded array invariant requiring word-level IC3 + prophecy (e.g. `informal-ic3sa`).
+    ArrayUnbounded,
     Liveness,
 }
 
@@ -154,6 +156,53 @@ fn canonical_matrix(dir: &Path) -> Vec<ModelCase> {
 12 read 2 5 8
 13 bad 12
 ";
+    let array_write_guard_safe = "\
+1 sort bitvec 64
+2 sort bitvec 8
+3 sort array 1 2
+4 sort bitvec 1
+5 zero 2
+6 one 2
+7 constd 1 16
+8 state 3 mem
+9 init 3 8 5
+10 input 1 waddr
+11 input 1 raddr
+12 ult 4 10 7
+13 write 3 8 10 6
+14 ite 3 12 13 8
+15 next 3 8 14
+16 ugte 4 11 7
+17 read 2 8 11
+18 neq 4 17 5
+19 and 4 16 18
+20 bad 19
+";
+    let array_shadow_safe = "\
+1 sort bitvec 64
+2 sort bitvec 8
+3 sort array 1 2
+4 sort bitvec 1
+5 zero 2
+6 ones 2
+7 state 3 m1
+8 state 3 m2
+9 init 3 7 5
+10 init 3 8 6
+11 input 1 wa
+12 input 1 ra
+13 input 2 d
+14 xor 2 13 6
+15 write 3 7 11 13
+16 write 3 8 11 14
+17 next 3 7 15
+18 next 3 8 16
+19 read 2 7 12
+20 read 2 8 12
+21 xor 2 20 6
+22 neq 4 19 21
+23 bad 22
+";
     let liveness_safe = "\
 1 sort bitvec 2
 2 sort bitvec 1
@@ -273,6 +322,18 @@ fn canonical_matrix(dir: &Path) -> Vec<ModelCase> {
             array_unsafe,
             Expected::Unsafe(Some(1)),
             Category::Array,
+        ),
+        inline_btor(
+            "array_write_guard_safe.btor2",
+            array_write_guard_safe,
+            Expected::Safe,
+            Category::ArrayUnbounded,
+        ),
+        inline_btor(
+            "array_shadow_safe.btor2",
+            array_shadow_safe,
+            Expected::Safe,
+            Category::ArrayUnbounded,
         ),
         inline_btor(
             "liveness_safe.btor2",
@@ -453,16 +514,22 @@ fn every_in_house_engine_conforms_and_certifies_canonical_matrix() {
             if case.category != Category::Liveness && caps.kind == EngineKind::Liveness {
                 continue;
             }
-            if case.category == Category::Array && !caps.arrays {
+            if matches!(case.category, Category::Array | Category::ArrayUnbounded) && !caps.arrays {
                 continue;
             }
+            // Unbounded array-invariant models require word-level IC3 + prophecy;
+            // still exercise `WordKind` briefly to confirm zero false Unsafe.
+            let require_prove =
+                case.category != Category::ArrayUnbounded || caps.kind == EngineKind::Ic3;
 
             let mut req =
                 CheckRequest::new(case.path.clone(), case.format, Duration::from_secs(15));
             req.effort = Effort::Standard;
-            // Cap BMC-only engines on Safe models so they return quickly.
-            if !caps.proves && case.expected == Expected::Safe {
+            if (!caps.proves || !require_prove) && case.expected == Expected::Safe {
                 req.max_depth = Some(6);
+            }
+            if !require_prove && caps.kind == EngineKind::KInduction {
+                req.timeout = Duration::from_millis(250);
             }
             let ctx = RunContext::new(req.timeout);
             let res = engine
@@ -492,7 +559,7 @@ fn every_in_house_engine_conforms_and_certifies_canonical_matrix() {
 
             // Completeness: every eligible engine must solve these canonical models.
             match case.expected {
-                Expected::Safe if caps.proves => {
+                Expected::Safe if caps.proves && require_prove => {
                     assert_eq!(
                         res.verdict,
                         Verdict::Safe,

@@ -700,6 +700,14 @@ mod tests {
         assert_eq!(pono.domain, EngineDomain::WordLevel);
         assert_eq!(pono.kind, EngineKind::Ic3);
         assert!(pono.arrays);
+        let pono_sa = by("pono-ic3sa");
+        assert_eq!(pono_sa.domain, EngineDomain::WordLevel);
+        assert_eq!(pono_sa.kind, EngineKind::Ic3);
+        assert!(pono_sa.arrays);
+        let avr = by("avr");
+        assert_eq!(avr.domain, EngineDomain::WordLevel);
+        assert_eq!(avr.kind, EngineKind::Ic3);
+        assert!(avr.arrays);
         let ric3 = by("ric3-ic3");
         assert_eq!(ric3.domain, EngineDomain::BitLevel);
         assert_eq!(ric3.kind, EngineKind::Ic3);

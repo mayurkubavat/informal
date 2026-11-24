@@ -32,6 +32,7 @@ struct Ctx {
     std::vector<Term> terms;
     Stop stop;
     std::string error;
+    std::string last_value;
 
     int add(const Term& t) {
         terms.push_back(t);
@@ -78,15 +79,24 @@ int guarded(Ctx* c, F f) {
 
 extern "C" {
 
-void* informal_bw_new(int64_t timeout_ms, const std::atomic<bool>* cancel) {
+void* informal_bw_new_opts(
+    int64_t timeout_ms,
+    const std::atomic<bool>* cancel,
+    int produce_models,
+    int produce_unsat_assumptions) {
     auto* c = new Ctx();
     Options opts;
-    opts.set(Option::PRODUCE_MODELS, false);
+    opts.set(Option::PRODUCE_MODELS, produce_models != 0);
+    opts.set(Option::PRODUCE_UNSAT_ASSUMPTIONS, produce_unsat_assumptions != 0);
     c->bz = std::make_unique<Bitwuzla>(c->tm, opts);
     c->stop.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     c->stop.cancel = cancel;
     c->bz->configure_terminator(&c->stop);
     return c;
+}
+
+void* informal_bw_new(int64_t timeout_ms, const std::atomic<bool>* cancel) {
+    return informal_bw_new_opts(timeout_ms, cancel, 0, 0);
 }
 
 void informal_bw_free(void* p) {
@@ -226,6 +236,7 @@ int informal_bw_check(void* p, int n, const int* assume) {
     auto* c = static_cast<Ctx*>(p);
     return guarded(c, [&] {
         std::vector<Term> a;
+        a.reserve(n > 0 ? (size_t)n : 0);
         for (int i = 0; i < n; i++)
             a.push_back(c->to_bool(c->term(assume[i])));
         auto r = c->bz->check_sat(a);
@@ -233,6 +244,51 @@ int informal_bw_check(void* p, int n, const int* assume) {
         if (r == Result::UNSAT) return 20;
         return 0;
     });
+}
+
+int informal_bw_push(void* p, uint32_t levels) {
+    auto* c = static_cast<Ctx*>(p);
+    return guarded(c, [&] {
+        c->bz->push(levels);
+        return 0;
+    });
+}
+
+int informal_bw_pop(void* p, uint32_t levels) {
+    auto* c = static_cast<Ctx*>(p);
+    return guarded(c, [&] {
+        c->bz->pop(levels);
+        return 0;
+    });
+}
+
+// 1 if `t` (as a bv1==1 assumption) is in the last UNSAT assumptions, 0 if not, -1 on error.
+int informal_bw_is_unsat_assumption(void* p, int t) {
+    auto* c = static_cast<Ctx*>(p);
+    return guarded(c, [&] {
+        return c->bz->is_unsat_assumption(c->to_bool(c->term(t))) ? 1 : 0;
+    });
+}
+
+// MSB-first binary string of `get_value(t)` for a BV (or "1"/"0" for Bool) term;
+// pointer stays valid until the next call on `p`. Returns nullptr on error.
+const char* informal_bw_get_value_bits(void* p, int t) {
+    auto* c = static_cast<Ctx*>(p);
+    try {
+        Term val = c->bz->get_value(c->term(t));
+        if (val.sort().is_bool()) {
+            c->last_value = val.value<bool>() ? "1" : "0";
+        } else {
+            c->last_value = val.value<std::string>(2);
+        }
+        return c->last_value.c_str();
+    } catch (const std::exception& e) {
+        c->error = e.what();
+        return nullptr;
+    } catch (...) {
+        c->error = "unknown C++ exception";
+        return nullptr;
+    }
 }
 
 } // extern "C"
