@@ -17,9 +17,24 @@ final-status-level = "slow"
 engines = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate) | binary(session) | binary(mcp)'
+filter = """\
+binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | \
+binary(source) | binary(engine_log) | binary(split) | binary(isolate) | \
+binary(session) | binary(mcp) | binary(certificate) | binary(compile_cache) | \
+binary(conn_cov_cache) | binary(csr_protocol) | binary(effort_orchestration) | \
+binary(lp_formal) | binary(lp_gate_pg) | binary(sec_complexity_wkind) | \
+binary(stats) | binary(sva_why_cex) | binary(tasks) | binary(ui_tcl_contract) | \
+binary(vacuity) | binary(xprop_spv_cores)"""
 test-group = 'engines'
 
 # scripts/check.sh --fast: everything except the engine tests above.
 [profile.fast]
-default-filter = 'not (binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | binary(source) | binary(engine_log) | binary(split) | binary(isolate) | binary(session) | binary(mcp))'
+default-filter = """\
+not (\
+binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | \
+binary(source) | binary(engine_log) | binary(split) | binary(isolate) | \
+binary(session) | binary(mcp) | binary(certificate) | binary(compile_cache) | \
+binary(conn_cov_cache) | binary(csr_protocol) | binary(effort_orchestration) | \
+binary(lp_formal) | binary(lp_gate_pg) | binary(sec_complexity_wkind) | \
+binary(stats) | binary(sva_why_cex) | binary(tasks) | binary(ui_tcl_contract) | \
+binary(vacuity) | binary(xprop_spv_cores))"""
