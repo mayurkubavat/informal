@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-liveness", "crates/informal-bdd", "crates/informal-imc", "crates/informal-car", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm", "crates/informal-mcp", "crates/informal-upf", "crates/informal-liberty", "crates/informal-trace", "crates/informal-session", "crates/informal-app-conn", "crates/informal-app-csr", "crates/informal-app-protocol", "crates/informal-debug", "crates/informal-compat"]
+members = ["crates/informal-ir", "crates/informal-engine", "crates/informal-engines-ext", "crates/informal-bench", "crates/informal-tcl", "crates/informal-fpv", "crates/informal-sat", "crates/informal-aig", "crates/informal-bmc", "crates/informal-liveness", "crates/informal-bdd", "crates/informal-imc", "crates/informal-car", "crates/informal-ic3", "crates/informal-svlang", "crates/informal-bitwuzla", "crates/informal-cli", "crates/informal-llm", "crates/informal-mcp", "crates/informal-upf", "crates/informal-liberty", "crates/informal-trace", "crates/informal-session", "crates/informal-app-conn", "crates/informal-app-csr", "crates/informal-app-protocol", "crates/informal-debug", "crates/informal-compat"]
 
 [workspace.package]
 version = "0.1.0"
@@ -31,6 +31,7 @@ informal-liveness = { path = "crates/informal-liveness" }
 informal-bdd = { path = "crates/informal-bdd" }
 informal-imc = { path = "crates/informal-imc" }
 informal-car = { path = "crates/informal-car" }
+informal-ic3 = { path = "crates/informal-ic3" }
 informal-svlang = { path = "crates/informal-svlang" }
 svlang = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }
 svlang-lint = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }

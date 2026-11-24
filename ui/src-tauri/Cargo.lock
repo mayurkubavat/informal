@@ -1541,6 +1541,7 @@ dependencies = [
  "informal-car",
  "informal-engines-ext",
  "informal-fpv",
+ "informal-ic3",
  "informal-imc",
  "informal-liveness",
  "informal-llm",
@@ -1694,6 +1695,17 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "informal-ic3"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-sat",
 ]
 
 [[package]]
