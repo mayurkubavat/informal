@@ -12,11 +12,12 @@ fn root() -> PathBuf {
 /// A shell on `design` (under tests/fpv/vacuity), elaborated, with clock
 /// and reset; `None` without the in-house engines.
 fn shell(design: &str, top: &str) -> Option<Shell> {
-    let engines = informal_bmc::engines();
+    let mut engines = informal_bmc::engines();
     if engines.is_empty() {
         informal_engine::tool_missing("needs the in-house engines (CaDiCaL)");
         return None;
     }
+    engines.extend(informal_liveness::engines());
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let id = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let work = std::env::temp_dir().join(format!(

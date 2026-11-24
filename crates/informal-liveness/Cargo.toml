@@ -1,0 +1,14 @@
+[package]
+name = "informal-liveness"
+description = "Native liveness verification engines: k-liveness (klive) and SCC-guided IC3 (rlive)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+informal-aig.workspace = true
+informal-bmc.workspace = true
+informal-engine.workspace = true
+informal-sat.workspace = true

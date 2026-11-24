@@ -682,6 +682,7 @@ dependencies = [
  "informal-engines-ext",
  "informal-fpv",
  "informal-ir",
+ "informal-liveness",
  "informal-mcp",
  "informal-sat",
  "informal-svlang",
@@ -755,6 +756,7 @@ dependencies = [
  "informal-debug",
  "informal-engine",
  "informal-engines-ext",
+ "informal-liveness",
  "informal-session",
  "informal-svlang",
  "informal-tcl",
@@ -779,6 +781,17 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "informal-liveness"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-sat",
 ]
 
 [[package]]

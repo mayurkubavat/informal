@@ -293,6 +293,7 @@ mod tests {
         let api = std::sync::Arc::new(informal_mcp::Api::spawn(
             informal_bmc::engines()
                 .into_iter()
+                .chain(informal_liveness::engines())
                 .chain(informal_bitwuzla::engines())
                 .collect(),
             work.clone(),

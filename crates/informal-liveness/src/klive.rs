@@ -20,15 +20,17 @@
 //!    verifying every `Safe` invariant via `certify::check` and every `Unsafe`
 //!    lasso via `l2s::check_lasso` + `certify::replay_unsafe`.
 
-use crate::unroll::Unroll;
-use crate::{certify, ic3, report_certificate, result, solver, unknown, Checked, FORMATS};
-use informal_aig::{lit_val, neg, var, Aig, Init, Lit, FALSE, TRUE};
+use crate::lasso::{prove_raw_safety_bads, try_extract_counterexample};
+use informal_aig::{neg, var, Aig, Init, Lit, FALSE, TRUE};
+use informal_bmc::unroll::Unroll;
+use informal_bmc::{
+    certify, ic3, invariant, report_certificate, result, solver, unknown, Checked, FORMATS,
+};
 use informal_engine::{
-    Capabilities, Certificate, CheckRequest, Effort, Engine, EngineDomain, EngineKind,
-    EngineResult, Progress, RunContext, Verdict,
+    Capabilities, CheckRequest, Effort, Engine, EngineDomain, EngineKind, EngineResult, Progress,
+    RunContext, Verdict,
 };
 use informal_sat::Answer;
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub struct KLive;
@@ -95,484 +97,6 @@ fn build_klive_aig(raw_g: &Aig, k: u32) -> Aig {
     g
 }
 
-fn format_named_witness(g: &Aig, tr: &certify::Trace, d: usize) -> String {
-    let bit = |b: bool| if b { '1' } else { '0' };
-    let mut s = format!("informalw 1\ndepth {d}\ninit");
-    for (idx, l) in g.latches.iter().enumerate() {
-        if matches!(l.init, Init::Zero | Init::One) {
-            continue;
-        }
-        if let Some(name) = g.names.get(&var(l.lit)) {
-            let b = tr.init.get(idx).copied().unwrap_or(false);
-            s += &format!(" {name}={}", bit(b));
-        }
-    }
-    for f in 0..=d {
-        s += &format!("\n@{f}");
-        let row = tr.inputs.get(f).map(Vec::as_slice).unwrap_or(&[]);
-        for (idx, &inp) in g.inputs.iter().enumerate() {
-            if let Some(name) = g.names.get(&var(inp)) {
-                let b = row.get(idx).copied().unwrap_or(false);
-                s += &format!(" {name}={}", bit(b));
-            }
-        }
-    }
-    s.push('\n');
-    s
-}
-
-/// Inspect a counterexample trace `(klive_init, inputs[0..=d])` on `klive_g`:
-/// returns `Some((verdict, cert, witness_str))` if it either violates a raw
-/// safety `bad` on `raw_g` or contains a valid liveness lasso on `raw_g`.
-fn try_extract_counterexample(
-    req: &CheckRequest,
-    raw_g: &Aig,
-    klive_init: &[bool],
-    inputs: &[Vec<bool>],
-) -> Option<(Verdict, Option<Certificate>, Option<String>)> {
-    let raw_latches = raw_g.latches.len();
-    let raw_init: Vec<bool> = klive_init[..raw_latches].to_vec();
-    let mut state = raw_init.clone();
-    let mut states_by_step: HashMap<Vec<bool>, Vec<usize>> = HashMap::new();
-    let mut safety_hit_depth: Option<usize> = None;
-
-    for (t, step_in) in inputs.iter().enumerate() {
-        states_by_step.entry(state.clone()).or_default().push(t);
-        let vals = informal_aig::l2s::eval(raw_g, &state, step_in);
-        if raw_g.constraints.iter().any(|&c| !lit_val(&vals, c)) {
-            return None;
-        }
-        if safety_hit_depth.is_none() && raw_g.bads.iter().any(|&b| lit_val(&vals, b)) {
-            safety_hit_depth = Some(t);
-            break;
-        }
-        state = raw_g
-            .latches
-            .iter()
-            .map(|l| lit_val(&vals, l.next))
-            .collect();
-    }
-
-    let orig = informal_aig::load(&req.model).ok()?;
-
-    if let Some(d) = safety_hit_depth {
-        let mut orig_init = raw_init;
-        orig_init.resize(orig.latches.len(), false);
-        let orig_inputs: Vec<Vec<bool>> = inputs[..=d]
-            .iter()
-            .map(|row| {
-                let mut r = row.clone();
-                r.resize(orig.inputs.len(), false);
-                r
-            })
-            .collect();
-        let tr = certify::Trace {
-            init: orig_init,
-            inputs: orig_inputs,
-        };
-        if std::env::var_os("INFORMAL_NO_CERT").is_none()
-            && certify::replay_unsafe(&orig, d, &tr).is_err()
-        {
-            return None;
-        }
-        let w = format_named_witness(&orig, &tr, d);
-        let cert = Certificate::Trace {
-            init: informal_engine::certificate::bits(tr.init),
-            inputs: tr
-                .inputs
-                .into_iter()
-                .map(informal_engine::certificate::bits)
-                .collect(),
-        };
-        return Some((
-            Verdict::Unsafe {
-                depth: Some(d as u32),
-            },
-            Some(cert),
-            Some(w),
-        ));
-    }
-
-    states_by_step.entry(state).or_default().push(inputs.len());
-
-    for steps in states_by_step.values() {
-        if steps.len() < 2 {
-            continue;
-        }
-        for (idx_a, &start) in steps.iter().enumerate() {
-            for &end in &steps[idx_a + 1..] {
-                if end > inputs.len() || start >= end {
-                    continue;
-                }
-                for prop_idx in 0..raw_g.justice.len() {
-                    if informal_aig::l2s::check_lasso(
-                        raw_g,
-                        prop_idx,
-                        &raw_init,
-                        &inputs[..end],
-                        start,
-                    )
-                    .is_ok()
-                    {
-                        let mut orig_init = raw_init.clone();
-                        orig_init.resize(orig.latches.len(), false);
-                        let mut orig_inputs: Vec<Vec<bool>> = Vec::with_capacity(end + 1);
-                        for (step, row) in inputs[..end].iter().enumerate() {
-                            let mut r = row.clone();
-                            if orig.inputs.len() > raw_g.inputs.len() {
-                                r.push(step == start);
-                                r.resize(orig.inputs.len(), false);
-                            }
-                            orig_inputs.push(r);
-                        }
-                        let mut close_in = inputs[start].clone();
-                        if orig.inputs.len() > raw_g.inputs.len() {
-                            close_in.push(false);
-                            close_in.resize(orig.inputs.len(), false);
-                        }
-                        orig_inputs.push(close_in);
-
-                        let tr = certify::Trace {
-                            init: orig_init,
-                            inputs: orig_inputs,
-                        };
-                        if std::env::var_os("INFORMAL_NO_CERT").is_none()
-                            && certify::replay_unsafe(&orig, end, &tr).is_err()
-                        {
-                            continue;
-                        }
-                        let w = format_named_witness(&orig, &tr, end);
-                        let cert = Certificate::Trace {
-                            init: informal_engine::certificate::bits(tr.init),
-                            inputs: tr
-                                .inputs
-                                .into_iter()
-                                .map(informal_engine::certificate::bits)
-                                .collect(),
-                        };
-                        return Some((
-                            Verdict::Unsafe {
-                                depth: Some(end as u32),
-                            },
-                            Some(cert),
-                            Some(w),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Prove that `raw_g.bads` (if any, e.g. `s_until` safety side) are unreachable,
-/// returning `Some(Ok(()))` when certified safe, `Some(Err(res))` on counterexample,
-/// or `None` if undecided within `budget`.
-fn prove_raw_safety_bads(
-    req: &CheckRequest,
-    raw_g: &Aig,
-    ctx: &RunContext,
-    t0: Instant,
-) -> Option<Result<(), EngineResult>> {
-    if raw_g.bads.is_empty() {
-        return Some(Ok(()));
-    }
-    let mut g = raw_g.clone();
-    g.justice.clear();
-    g.fairness.clear();
-    let (simp, _, map, _) = informal_aig::preprocess::simplify_maps(&g);
-    if simp.bads.iter().all(|&b| b == FALSE) {
-        let ok = std::env::var_os("INFORMAL_NO_CERT").is_some()
-            || certify::lift(&g, &map, &simp, &[])
-                .and_then(|inv| certify::check(&g, &inv, &|| solver(ctx)))
-                .is_ok();
-        return ok.then_some(Ok(()));
-    }
-    let mut sctx = ctx.clone();
-    let left = ctx.deadline.saturating_duration_since(Instant::now());
-    sctx.deadline = Instant::now() + (left / 4).max(Duration::from_millis(200));
-    let c_make = sctx.clone();
-    let cfg = ic3::Config {
-        houdini_every: 4,
-        ..ic3::Config::default()
-    };
-    let mut ic3 = ic3::Ic3::with_config(&simp, Box::new(move || solver(&c_make)), cfg)?;
-    match ic3.check(&sctx) {
-        Verdict::Safe => {
-            if std::env::var_os("INFORMAL_NO_CERT").is_none() {
-                let lemmas = ic3.invariant()?;
-                let inv = certify::lift(&g, &map, &simp, &lemmas).ok()?;
-                certify::check(&g, &inv, &|| solver(ctx)).ok()?;
-            }
-            Some(Ok(()))
-        }
-        Verdict::Unsafe { depth: Some(d) } if d <= 64 => {
-            let tr =
-                certify::find_unsafe(&g, d as usize, &|| solver(&sctx), &|| sctx.should_stop())
-                    .ok()?;
-            let (verdict, cert, witness) =
-                try_extract_counterexample(req, raw_g, &tr.init, &tr.inputs)?;
-            Some(Err(EngineResult {
-                engine: "informal-klive".into(),
-                verdict,
-                wall_ms: t0.elapsed().as_millis(),
-                witness,
-                certificate: cert,
-            }))
-        }
-        _ => None,
-    }
-}
-
-/// Plain independent Tseitin check (without `cnf::template` or preprocessing)
-/// that no `(depth + 1)`-step constrained trajectory of `raw_g` (from any
-/// state) satisfies `h` at every step `0..=depth`.
-fn verify_no_streak(raw_g: &Aig, h: Lit, depth: usize, ctx: &RunContext) -> Result<(), String> {
-    use informal_aig::{is_neg, Node};
-    let mut sat = solver(ctx);
-    sat.reserve(1);
-    let tru: informal_sat::Lit = 1;
-    sat.add_clause(&[tru]);
-    let mut next_v: informal_sat::Lit = 2;
-    let mut prev_frame: Vec<informal_sat::Lit> = Vec::new();
-    let map_lit = |frame: &[informal_sat::Lit], l: Lit| -> informal_sat::Lit {
-        let v = frame[var(l) as usize];
-        if is_neg(l) {
-            -v
-        } else {
-            v
-        }
-    };
-    for f in 0..=depth {
-        if ctx.should_stop() {
-            return Err("streak certificate check stopped".into());
-        }
-        sat.reserve(raw_g.nodes.len() as i32);
-        let mut cur = vec![0; raw_g.nodes.len()];
-        let mut li = 0usize;
-        for (vi, node) in raw_g.nodes.iter().enumerate() {
-            cur[vi] = match *node {
-                Node::Const => -tru,
-                Node::Input => {
-                    let v = next_v;
-                    next_v += 1;
-                    v
-                }
-                Node::Latch => {
-                    let latch = &raw_g.latches[li];
-                    li += 1;
-                    if f == 0 {
-                        let v = next_v;
-                        next_v += 1;
-                        v
-                    } else {
-                        map_lit(&prev_frame, latch.next)
-                    }
-                }
-                Node::And(a, b) => {
-                    let v = next_v;
-                    next_v += 1;
-                    let (sa, sb) = (map_lit(&cur, a), map_lit(&cur, b));
-                    sat.add_clause(&[-v, sa]);
-                    sat.add_clause(&[-v, sb]);
-                    sat.add_clause(&[v, -sa, -sb]);
-                    v
-                }
-            };
-        }
-        for &c in &raw_g.constraints {
-            sat.add_clause(&[map_lit(&cur, c)]);
-        }
-        sat.add_clause(&[map_lit(&cur, h)]);
-        prev_frame = cur;
-    }
-    match sat.solve(&[]) {
-        Answer::Unsat => Ok(()),
-        Answer::Unknown => Err("streak certificate check stopped".into()),
-        Answer::Sat => Err("streak certificate failed: trajectory exists".into()),
-    }
-}
-
-/// Try to prove a single-condition justice obligation `h` by:
-/// 1. Certifying via IC3 + `certify::check` that `h` never re-enters `1` after
-///    dropping `1 -> 0` (`dropped && h` unreachable), reducing `GF h` to `FG h`.
-/// 2. Showing via incremental unrolling from `free_init = true` (independently
-///    re-checked by [`verify_no_streak`]) that `h` cannot hold for `K + 1`
-///    consecutive constrained steps from any state.
-fn try_prove_contiguous_streak(raw_g: &Aig, h: Lit, ctx: &RunContext) -> bool {
-    let mut g_re = raw_g.clone();
-    g_re.bads.clear();
-    g_re.justice.clear();
-    g_re.fairness.clear();
-    let ever_h = g_re.latch(Init::Zero);
-    let dropped = g_re.latch(Init::Zero);
-    let next_ever = or(&mut g_re, ever_h, h);
-    let fell = g_re.and(ever_h, neg(h));
-    let next_dropped = or(&mut g_re, dropped, fell);
-    g_re.set_next(ever_h, next_ever);
-    g_re.set_next(dropped, next_dropped);
-    let reenter = g_re.and(dropped, h);
-    g_re.bads.push(reenter);
-
-    let (simp, _, map, _) = informal_aig::preprocess::simplify_maps(&g_re);
-    let mut raw_inv: Vec<certify::Clause> = Vec::new();
-    if simp.bads.iter().all(|&b| b == FALSE) {
-        if std::env::var_os("INFORMAL_NO_CERT").is_none() {
-            let Ok(inv) = certify::lift(&g_re, &map, &simp, &[]) else {
-                return false;
-            };
-            if certify::check(&g_re, &inv, &|| solver(ctx)).is_err() {
-                return false;
-            }
-        }
-    } else {
-        let mut rctx = ctx.clone();
-        let left = ctx.deadline.saturating_duration_since(Instant::now());
-        rctx.deadline = Instant::now() + (left / 6).min(Duration::from_millis(600));
-
-        // Seed IC3 with 1- and 2-literal inductive invariants (Houdini) over
-        // the monitor latches at the tail of `simp.latches` (`picked`, `watch`,
-        // `ever_h`, `dropped`), avoiding backward unrolling of wide RTL timers.
-        let mut seed_cubes: Vec<ic3::Cube> = Vec::new();
-        let cand_latches: Vec<(Lit, bool)> = simp
-            .latches
-            .iter()
-            .rev()
-            .filter_map(|l| match l.init {
-                Init::Zero => Some((l.lit, false)),
-                Init::One => Some((l.lit, true)),
-                _ => None,
-            })
-            .take(16)
-            .collect();
-        let mut cands: Vec<ic3::Cube> = Vec::new();
-        for &(lit, init_one) in &cand_latches {
-            // Cube literal that is TRUE when the latch differs from its init:
-            cands.push(vec![if init_one { neg(lit) } else { lit }]);
-        }
-        for i in 0..cand_latches.len() {
-            for j in (i + 1)..cand_latches.len() {
-                let (li, ii) = cand_latches[i];
-                let (lj, ij) = cand_latches[j];
-                for &a in &[li, neg(li)] {
-                    let a_at_init = if a == li { ii } else { !ii };
-                    for &b in &[lj, neg(lj)] {
-                        let b_at_init = if b == lj { ij } else { !ij };
-                        if !(a_at_init && b_at_init) {
-                            let mut cube = if a < b { vec![a, b] } else { vec![b, a] };
-                            cube.dedup();
-                            cands.push(cube);
-                        }
-                    }
-                }
-            }
-        }
-        if !cands.is_empty() {
-            if let Some(core) = crate::invariant::houdini(&simp, cands, || solver(&rctx), &rctx) {
-                seed_cubes = core;
-            }
-        }
-
-        let c_make = rctx.clone();
-        let cfg = ic3::Config {
-            houdini_every: 4,
-            ..ic3::Config::default()
-        };
-        let Some(mut ic3) = ic3::Ic3::with_config(&simp, Box::new(move || solver(&c_make)), cfg)
-        else {
-            return false;
-        };
-        if !seed_cubes.is_empty() {
-            ic3.assume_invariant(seed_cubes);
-        }
-        if ic3.check(&rctx) != Verdict::Safe {
-            return false;
-        }
-        let Some(lemmas) = ic3.invariant() else {
-            return false;
-        };
-        let Ok(inv) = certify::lift(&g_re, &map, &simp, &lemmas) else {
-            return false;
-        };
-        if std::env::var_os("INFORMAL_NO_CERT").is_none()
-            && certify::check(&g_re, &inv, &|| solver(ctx)).is_err()
-        {
-            return false;
-        }
-        // Keep inductive clauses that mention only `raw_g` latches? No: an
-        // inductive invariant of `g_re` may mutually depend on `ever_h` /
-        // `dropped`, so only keep clauses if we certify them on `raw_g` itself.
-        let raw_vars: std::collections::HashSet<u32> =
-            raw_g.latches.iter().map(|l| var(l.lit)).collect();
-        let cand: Vec<certify::Clause> = inv
-            .into_iter()
-            .filter(|c| c.iter().all(|&l| raw_vars.contains(&var(l))))
-            .collect();
-        if !cand.is_empty() {
-            let mut rg_only = raw_g.clone();
-            rg_only.bads.clear();
-            rg_only.justice.clear();
-            rg_only.fairness.clear();
-            if certify::check(&rg_only, &cand, &|| solver(ctx)).is_ok() {
-                raw_inv = cand;
-            }
-        }
-    }
-
-    // Put `h` in `streak_g.constraints` so `cnf::template(&streak_g)` keeps
-    // `h`'s full cone of influence live and `add_frame()` asserts `h` at each step!
-    let mut streak_g = raw_g.clone();
-    streak_g.bads.clear();
-    streak_g.justice.clear();
-    streak_g.fairness.clear();
-    streak_g.constraints.push(h);
-
-    let mut sctx = ctx.clone();
-    let left = ctx.deadline.saturating_duration_since(Instant::now());
-    sctx.deadline = Instant::now() + (left / 2).max(Duration::from_millis(500));
-    let mut u = Unroll::new(&streak_g, solver(&sctx), true);
-    let mut next_check: usize = 0;
-    let max_streak: usize = 16_384;
-    for f in 0..=max_streak {
-        if sctx.should_stop() {
-            return false;
-        }
-        u.add_frame();
-        if f == 0 {
-            for cl in &raw_inv {
-                let sat_cl: Vec<informal_sat::Lit> = cl.iter().map(|&l| u.lit(0, l)).collect();
-                u.sat.add_clause(&sat_cl);
-            }
-        }
-        if f == next_check || f == max_streak {
-            ctx.report(Progress {
-                engine: "informal-klive".into(),
-                bound: Some(f as u32),
-                note: format!("streak bound {f}"),
-                output: None,
-            });
-            match u.sat.solve(&[]) {
-                Answer::Unsat => {
-                    if std::env::var_os("INFORMAL_NO_CERT").is_none()
-                        && verify_no_streak_with_inv(raw_g, &raw_inv, h, f, ctx).is_err()
-                    {
-                        return false;
-                    }
-                    return true;
-                }
-                Answer::Unknown => return false,
-                Answer::Sat => {}
-            }
-            next_check = if next_check < 15 {
-                next_check * 2 + 3
-            } else {
-                (next_check * 2 + 1).min(max_streak)
-            };
-        }
-    }
-    false
-}
-
 fn verify_no_streak_with_inv(
     raw_g: &Aig,
     raw_inv: &[certify::Clause],
@@ -580,16 +104,14 @@ fn verify_no_streak_with_inv(
     depth: usize,
     ctx: &RunContext,
 ) -> Result<(), String> {
-    if raw_inv.is_empty() {
-        return verify_no_streak(raw_g, h, depth, ctx);
-    }
     use informal_aig::{is_neg, Node};
-    // Re-verify `raw_inv` on `raw_g` before trusting it at frame 0.
-    let mut rg_only = raw_g.clone();
-    rg_only.bads.clear();
-    rg_only.justice.clear();
-    rg_only.fairness.clear();
-    certify::check(&rg_only, raw_inv, &|| solver(ctx))?;
+    if !raw_inv.is_empty() {
+        let mut rg_only = raw_g.clone();
+        rg_only.bads.clear();
+        rg_only.justice.clear();
+        rg_only.fairness.clear();
+        certify::check(&rg_only, raw_inv, &|| solver(ctx))?;
+    }
 
     let mut sat = solver(ctx);
     sat.reserve(1);
@@ -661,6 +183,171 @@ fn verify_no_streak_with_inv(
     }
 }
 
+fn try_prove_contiguous_streak(raw_g: &Aig, h: Lit, ctx: &RunContext) -> bool {
+    let mut g_re = raw_g.clone();
+    g_re.bads.clear();
+    g_re.justice.clear();
+    g_re.fairness.clear();
+    let ever_h = g_re.latch(Init::Zero);
+    let dropped = g_re.latch(Init::Zero);
+    let next_ever = or(&mut g_re, ever_h, h);
+    let fell = g_re.and(ever_h, neg(h));
+    let next_dropped = or(&mut g_re, dropped, fell);
+    g_re.set_next(ever_h, next_ever);
+    g_re.set_next(dropped, next_dropped);
+    let reenter = g_re.and(dropped, h);
+    g_re.bads.push(reenter);
+
+    let (simp, _, map, _) = informal_aig::preprocess::simplify_maps(&g_re);
+    let mut raw_inv: Vec<certify::Clause> = Vec::new();
+    if simp.bads.iter().all(|&b| b == FALSE) {
+        if std::env::var_os("INFORMAL_NO_CERT").is_none() {
+            let Ok(inv) = certify::lift(&g_re, &map, &simp, &[]) else {
+                return false;
+            };
+            if certify::check(&g_re, &inv, &|| solver(ctx)).is_err() {
+                return false;
+            }
+        }
+    } else {
+        let mut rctx = ctx.clone();
+        let left = ctx.deadline.saturating_duration_since(Instant::now());
+        rctx.deadline = Instant::now() + (left / 6).min(Duration::from_millis(600));
+
+        let mut seed_cubes: Vec<ic3::Cube> = Vec::new();
+        let cand_latches: Vec<(Lit, bool)> = simp
+            .latches
+            .iter()
+            .rev()
+            .filter_map(|l| match l.init {
+                Init::Zero => Some((l.lit, false)),
+                Init::One => Some((l.lit, true)),
+                _ => None,
+            })
+            .take(16)
+            .collect();
+        let mut cands: Vec<ic3::Cube> = Vec::new();
+        for &(lit, init_one) in &cand_latches {
+            cands.push(vec![if init_one { neg(lit) } else { lit }]);
+        }
+        for i in 0..cand_latches.len() {
+            for j in (i + 1)..cand_latches.len() {
+                let (li, ii) = cand_latches[i];
+                let (lj, ij) = cand_latches[j];
+                for &a in &[li, neg(li)] {
+                    let a_at_init = if a == li { ii } else { !ii };
+                    for &b in &[lj, neg(lj)] {
+                        let b_at_init = if b == lj { ij } else { !ij };
+                        if !(a_at_init && b_at_init) {
+                            let mut cube = if a < b { vec![a, b] } else { vec![b, a] };
+                            cube.dedup();
+                            cands.push(cube);
+                        }
+                    }
+                }
+            }
+        }
+        if !cands.is_empty() {
+            if let Some(core) = invariant::houdini(&simp, cands, || solver(&rctx), &rctx) {
+                seed_cubes = core;
+            }
+        }
+
+        let c_make = rctx.clone();
+        let cfg = ic3::Config {
+            houdini_every: 4,
+            ..ic3::Config::default()
+        };
+        let Some(mut ic3) = ic3::Ic3::with_config(&simp, Box::new(move || solver(&c_make)), cfg)
+        else {
+            return false;
+        };
+        if !seed_cubes.is_empty() {
+            ic3.assume_invariant(seed_cubes);
+        }
+        if ic3.check(&rctx) != Verdict::Safe {
+            return false;
+        }
+        let Some(lemmas) = ic3.invariant() else {
+            return false;
+        };
+        let Ok(inv) = certify::lift(&g_re, &map, &simp, &lemmas) else {
+            return false;
+        };
+        if std::env::var_os("INFORMAL_NO_CERT").is_none()
+            && certify::check(&g_re, &inv, &|| solver(ctx)).is_err()
+        {
+            return false;
+        }
+        let raw_vars: std::collections::HashSet<u32> =
+            raw_g.latches.iter().map(|l| var(l.lit)).collect();
+        let cand: Vec<certify::Clause> = inv
+            .into_iter()
+            .filter(|c| c.iter().all(|&l| raw_vars.contains(&var(l))))
+            .collect();
+        if !cand.is_empty() {
+            let mut rg_only = raw_g.clone();
+            rg_only.bads.clear();
+            rg_only.justice.clear();
+            rg_only.fairness.clear();
+            if certify::check(&rg_only, &cand, &|| solver(ctx)).is_ok() {
+                raw_inv = cand;
+            }
+        }
+    }
+
+    let mut streak_g = raw_g.clone();
+    streak_g.bads.clear();
+    streak_g.justice.clear();
+    streak_g.fairness.clear();
+    streak_g.constraints.push(h);
+
+    let mut sctx = ctx.clone();
+    let left = ctx.deadline.saturating_duration_since(Instant::now());
+    sctx.deadline = Instant::now() + (left / 2).max(Duration::from_millis(500));
+    let mut u = Unroll::new(&streak_g, solver(&sctx), true);
+    let mut next_check: usize = 0;
+    let max_streak: usize = 16_384;
+    for f in 0..=max_streak {
+        if sctx.should_stop() {
+            return false;
+        }
+        u.add_frame();
+        if f == 0 {
+            for cl in &raw_inv {
+                let sat_cl: Vec<informal_sat::Lit> = cl.iter().map(|&l| u.lit(0, l)).collect();
+                u.sat.add_clause(&sat_cl);
+            }
+        }
+        if f == next_check || f == max_streak {
+            ctx.report(Progress {
+                engine: "informal-klive".into(),
+                bound: Some(f as u32),
+                note: format!("streak bound {f}"),
+                output: None,
+            });
+            match u.sat.solve(&[]) {
+                Answer::Unsat => {
+                    if std::env::var_os("INFORMAL_NO_CERT").is_none()
+                        && verify_no_streak_with_inv(raw_g, &raw_inv, h, f, ctx).is_err()
+                    {
+                        return false;
+                    }
+                    return true;
+                }
+                Answer::Unknown => return false,
+                Answer::Sat => {}
+            }
+            next_check = if next_check < 15 {
+                next_check * 2 + 3
+            } else {
+                (next_check * 2 + 1).min(max_streak)
+            };
+        }
+    }
+    false
+}
+
 impl Engine for KLive {
     fn name(&self) -> &str {
         "informal-klive"
@@ -705,16 +392,15 @@ impl Engine for KLive {
             ));
         }
 
-        // Fast shallow check at `k = 0` first (catches immediate safety bugs and
-        // short lassos in < 2 ms before attempting safety/streak proofs).
+        // Fast shallow check at `k = 0` first.
         {
             let g0 = build_klive_aig(&raw_g, 0);
             let mut bctx = ctx.clone();
             let left = ctx.deadline.saturating_duration_since(Instant::now());
             bctx.deadline = Instant::now() + (left / 10).min(Duration::from_millis(100));
             let mut u = Unroll::new(&g0, solver(&bctx), false);
-            let mut bads = Vec::new();
-            for f in 0..=16 {
+            let mut bads = Vec::with_capacity(9);
+            for f in 0..=8 {
                 if bctx.should_stop() {
                     break;
                 }
@@ -722,10 +408,15 @@ impl Engine for KLive {
                 bads.push(u.bad(f));
             }
             if !bads.is_empty() {
-                let assume = u.new_var();
-                let mut c = vec![-assume];
-                c.extend(&bads);
-                u.sat.add_clause(&c);
+                let assume = if let [b] = bads[..] {
+                    b
+                } else {
+                    let a = u.new_var();
+                    let mut c = vec![-a];
+                    c.extend(&bads);
+                    u.sat.add_clause(&c);
+                    a
+                };
                 if u.sat.solve(&[assume]) == Answer::Sat {
                     if let Some(d) = (0..bads.len()).find(|&f| u.sat.value(bads[f])) {
                         let init_vals: Vec<bool> = g0
@@ -757,10 +448,9 @@ impl Engine for KLive {
             }
         }
 
-        // Prong 1: Certified One-Shot Contiguous Streak (`FG h`) when fairness is
-        // empty and every justice property is a single literal.
+        // Prong 1: Certified One-Shot Contiguous Streak (`FG h`).
         if raw_g.fairness.is_empty() && raw_g.justice.iter().all(|j| j.len() == 1) {
-            match prove_raw_safety_bads(req, &raw_g, ctx, t0) {
+            match prove_raw_safety_bads(req, &raw_g, ctx, t0, self.name()) {
                 Some(Err(cex)) => return Ok(cex),
                 Some(Ok(())) => {
                     let all_streaks_safe = raw_g
@@ -972,7 +662,6 @@ mod tests {
         if informal_sat::Cadical::signature().is_none() {
             return;
         }
-        // 1. Repo `liveness.btor2`: Unsafe with verified trace + witness.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/models");
         let liv = std::fs::read_to_string(root.join("liveness.btor2")).unwrap();
         let r_bad = run_btor2("repo-liv", &liv);
@@ -980,8 +669,6 @@ mod tests {
         assert!(r_bad.certificate.is_some());
         assert!(r_bad.witness.is_some());
 
-        // 2. 10-bit free-running counter (`0..1023`): `justice` asks for `cnt < 400`
-        //    forever (single-shot watch that stays 1 only while `cnt < 400`).
         let safe_btor = "\
 1 sort bitvec 10
 2 sort bitvec 1
@@ -1012,14 +699,10 @@ mod tests {
         let r_safe = run_btor2("pwm-safe", safe_btor);
         assert_eq!(r_safe.verdict, Verdict::Safe);
 
-        // 3. Combined safety (`bad`) + liveness (`justice`): safety fails at step 1!
         let both_btor = format!("{safe_btor}26 eq 2 5 4\n27 bad 26 b_step1\n");
         let r_both = run_btor2("both-unsafe", &both_btor);
         assert_eq!(r_both.verdict, Verdict::Unsafe { depth: Some(1) });
 
-        // 4. Recurring non-contiguous Buchi + fairness (`fair` requires `!en`
-        //    infinitely often, while `justice` requires `en && st` infinitely often,
-        //    but `st` clears whenever `!en` holds -> `Safe` via Prong 2 `k`-Liveness!).
         let recurring_safe = "\
 1 sort bitvec 1
 2 zero 1

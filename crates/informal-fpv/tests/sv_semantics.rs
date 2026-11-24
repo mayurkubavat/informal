@@ -104,10 +104,9 @@ fn work_dir(top: &str) -> PathBuf {
 /// The case's lowering.lock lines, or a description of how it went wrong.
 fn run(c: &Case) -> Result<Vec<String>, String> {
     let work = work_dir(&c.top);
-    let sh = Shell::new(
-        Session::new(informal_bmc::engines(), work.clone()),
-        Flavor::Jg,
-    );
+    let mut engines = informal_bmc::engines();
+    engines.extend(informal_liveness::engines());
+    let sh = Shell::new(Session::new(engines, work.clone()), Flavor::Jg);
     let mut script = vec![
         format!("analyze -sv {{{}}}", c.path.display()),
         format!("elaborate -top {}", c.top),

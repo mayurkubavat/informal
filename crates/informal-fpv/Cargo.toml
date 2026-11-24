@@ -28,3 +28,4 @@ libc = "0.2"
 [dev-dependencies]
 informal-engines-ext.workspace = true
 informal-bitwuzla.workspace = true
+informal-liveness.workspace = true

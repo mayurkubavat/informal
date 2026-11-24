@@ -35,6 +35,8 @@ enum Category {
     /// Unbounded array invariant requiring word-level IC3 + prophecy (e.g. `informal-ic3sa`).
     ArrayUnbounded,
     Liveness,
+    /// Multi-phase recurring liveness requiring SCC/monotonic-bit proving (`informal-rlive`).
+    LivenessRecurring,
 }
 
 struct ModelCase {
@@ -219,6 +221,22 @@ fn canonical_matrix(dir: &Path) -> Vec<ModelCase> {
 13 eq 2 4 12
 14 justice 1 13 never_three
 ";
+    let liveness_multiphase_safe = "\
+1 sort bitvec 16
+2 sort bitvec 1
+3 zero 1
+4 one 1
+5 constd 1 60000
+6 state 1 cnt
+7 init 1 6 3
+8 ult 2 6 5
+9 add 1 6 4
+10 ite 1 8 9 6
+11 next 1 6 10
+12 slice 2 6 0 0
+13 and 2 8 12
+14 justice 1 13 j_oscillate_30k
+";
 
     let inline_btor = |name: &'static str, text: &str, expected: Expected, category: Category| {
         let path = write_inline(dir, name, text);
@@ -341,6 +359,12 @@ fn canonical_matrix(dir: &Path) -> Vec<ModelCase> {
             Expected::Safe,
             Category::Liveness,
         ),
+        inline_btor(
+            "liveness_multiphase_safe.btor2",
+            liveness_multiphase_safe,
+            Expected::Safe,
+            Category::LivenessRecurring,
+        ),
     ]
 }
 
@@ -350,6 +374,7 @@ fn in_house_fleet() -> Option<Vec<Arc<dyn Engine>>> {
         informal_engine::tool_missing("needs CaDiCaL");
         return None;
     }
+    all.extend(informal_liveness::engines());
     all.extend(informal_bitwuzla::engines());
     Some(all)
 }
@@ -508,19 +533,26 @@ fn every_in_house_engine_conforms_and_certifies_canonical_matrix() {
             if !caps.formats.contains(&case.format) {
                 continue;
             }
-            if case.category == Category::Liveness && !caps.liveness {
+            let is_liveness = matches!(
+                case.category,
+                Category::Liveness | Category::LivenessRecurring
+            );
+            if is_liveness && !caps.liveness {
                 continue;
             }
-            if case.category != Category::Liveness && caps.kind == EngineKind::Liveness {
+            if !is_liveness && caps.kind == EngineKind::Liveness {
                 continue;
             }
             if matches!(case.category, Category::Array | Category::ArrayUnbounded) && !caps.arrays {
                 continue;
             }
             // Unbounded array-invariant models require word-level IC3 + prophecy;
-            // still exercise `WordKind` briefly to confirm zero false Unsafe.
-            let require_prove =
-                case.category != Category::ArrayUnbounded || caps.kind == EngineKind::Ic3;
+            // recurring multi-phase liveness requires `informal-rlive`.
+            let require_prove = match case.category {
+                Category::ArrayUnbounded => caps.kind == EngineKind::Ic3,
+                Category::LivenessRecurring => engine.name() == "informal-rlive",
+                _ => true,
+            };
 
             let mut req =
                 CheckRequest::new(case.path.clone(), case.format, Duration::from_secs(15));
@@ -528,7 +560,7 @@ fn every_in_house_engine_conforms_and_certifies_canonical_matrix() {
             if (!caps.proves || !require_prove) && case.expected == Expected::Safe {
                 req.max_depth = Some(6);
             }
-            if !require_prove && caps.kind == EngineKind::KInduction {
+            if !require_prove {
                 req.timeout = Duration::from_millis(250);
             }
             let ctx = RunContext::new(req.timeout);

@@ -2,9 +2,9 @@
 //!
 //! Shared bit-level preparation ([`prep`]) and independent verdict
 //! certification ([`verify`]) are exported so each engine — BMC ([`bmc`]),
-//! k-induction ([`kind`]), IC3/PDR ([`ic3_engine`]), k-liveness ([`klive`]),
-//! and future bit-level engines — lives in its own modular crate/file behind
-//! [`informal_engine::Engine`].
+//! k-induction ([`kind`]), IC3/PDR ([`ic3_engine`]), liveness
+//! (`informal-liveness`), and future bit-level engines — lives in its own
+//! modular crate/file behind [`informal_engine::Engine`].
 
 pub mod bmc;
 pub mod certificate;
@@ -15,7 +15,6 @@ pub mod ic3;
 pub mod ic3_engine;
 pub mod invariant;
 pub mod kind;
-pub mod klive;
 pub mod mine;
 pub mod prep;
 pub mod scorr;
@@ -64,7 +63,6 @@ pub fn engines() -> Vec<Arc<dyn Engine>> {
         Arc::new(Ic3Engine { mini: false }),
         Arc::new(KindIc3 { ic3_share: 0.5 }),
         Arc::new(Ic3Mt::default()),
-        Arc::new(klive::KLive),
     ]
 }
 

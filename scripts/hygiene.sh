@@ -26,7 +26,6 @@ is_exempt_rs() {
     case "$1" in
         crates/informal-bmc/src/ic3.rs|\
         crates/informal-bmc/src/certify.rs|\
-        crates/informal-bmc/src/klive.rs|\
         crates/informal-bmc/src/certificate.rs|\
         crates/informal-sat/src/mini.rs|\
         crates/informal-cli/src/main.rs|\
