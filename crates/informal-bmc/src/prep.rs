@@ -273,6 +273,30 @@ fn build_prepared(req: &CheckRequest, ctx: &RunContext, fold: bool) -> Result<Pr
     } = prepare(req, fold)?;
     let mut merged = Vec::new();
     let tier = scorr_tier(req.effort);
+    let run_passes = (tier >= 2 || std::env::var_os("INFORMAL_AIG_PASSES").is_some())
+        && !ctx.should_stop()
+        && g.num_ands() <= 100_000;
+    let (g, map, imap) = if run_passes {
+        let cfg = informal_aig::passes::PassConfig {
+            rewrite: true,
+            fraig: true,
+            temp_decomp: true,
+            phase_abs: false,
+            max_fraig_checks: 1_000,
+        };
+        let (opt, lm, im, _rep) = informal_aig::passes::run_pipeline(&g, &cfg);
+        if let Some(f) = folded.as_mut() {
+            f.ok = f.ok.and_then(|l| {
+                let i = g.latches.iter().position(|x| x.lit == l)?;
+                lm[i]
+            });
+        }
+        let next_map = pre::compose(&map, &g, &lm);
+        let next_imap = pre::compose_inputs(&imap, &g, &im);
+        (opt, next_map, next_imap)
+    } else {
+        (g, map, imap)
+    };
     let (g, map, imap) = if tier == 0 || ctx.should_stop() {
         (g, map, imap)
     } else {

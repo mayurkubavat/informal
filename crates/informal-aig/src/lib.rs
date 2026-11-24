@@ -13,6 +13,7 @@
 pub mod aiger;
 pub mod btor;
 pub mod l2s;
+pub mod passes;
 pub mod preprocess;
 pub mod reduce;
 pub mod split;
