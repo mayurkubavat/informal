@@ -146,6 +146,17 @@ impl LemmaHub {
         std::env::var("INFORMAL_LEMMA_HUB").map_or(true, |v| v != "0")
     }
 
+    /// True only when `INFORMAL_LEMMA_HUB_FRAMES=1` opts into bounded
+    /// frame-lemma exchange across engines.
+    ///
+    /// Standing invariants (`Standing` / `FoldedStanding`) are always shared
+    /// when [`Self::is_enabled`] is true; bounded frame sharing defaults to off
+    /// because re-checking unsolicited cross-engine frame cubes can slow IC3
+    /// convergence on large (>1k-latch) models.
+    pub fn frames_enabled() -> bool {
+        std::env::var("INFORMAL_LEMMA_HUB_FRAMES").is_ok_and(|v| !v.is_empty() && v != "0")
+    }
+
     /// Allocate a unique per-engine-run publisher identifier so an engine skips
     /// only its own entries while sibling properties/workers still receive them.
     pub fn next_publisher_id(&self) -> u64 {

@@ -853,13 +853,13 @@ impl<'g> Ic3<'g> {
         }
     }
 
-    /// Zero-trust import of standing and bounded frame lemmas from `LemmaHub`.
-    /// Lock-free no-op when neither hub cursor has moved.
+    /// Zero-trust import of standing and (when opted in) bounded frame lemmas
+    /// from `LemmaHub`. Lock-free no-op when neither hub cursor has moved.
     fn import_from_hub(&mut self, ctx: &RunContext) {
-        let has_work = self
-            .hub
-            .as_ref()
-            .is_some_and(|h| h.has_new_standing() || (self.top() >= 1 && h.has_new_frames()));
+        let has_work = self.hub.as_ref().is_some_and(|h| {
+            h.has_new_standing()
+                || (h.import_frames_enabled() && self.top() >= 1 && h.has_new_frames())
+        });
         if !has_work || ctx.should_stop() {
             return;
         }
@@ -882,7 +882,11 @@ impl<'g> Ic3<'g> {
                 self.assume_invariant(new_inv);
             }
         }
-        if self.top() >= 1 && hub.has_new_frames() && !ctx.should_stop() {
+        if hub.import_frames_enabled()
+            && self.top() >= 1
+            && hub.has_new_frames()
+            && !ctx.should_stop()
+        {
             let cands = hub.poll_frame_candidates();
             for (c, l) in cands {
                 if ctx.should_stop() {

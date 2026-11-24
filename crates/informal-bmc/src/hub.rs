@@ -130,6 +130,7 @@ pub struct HubBridge {
     frame_cursor: usize,
     seen_standing: HashSet<ic3::Cube>,
     publish_frames: bool,
+    import_frames: bool,
 }
 
 impl HubBridge {
@@ -137,6 +138,7 @@ impl HubBridge {
     pub fn new(p: &Prepared, ctx: &RunContext, source: impl Into<String>) -> Option<Self> {
         let hub = ctx.lemma_hub.as_ref()?.clone();
         let publisher_id = hub.next_publisher_id();
+        let frames_on = LemmaHub::frames_enabled();
         Some(Self {
             hub,
             design_hash: p.design_hash,
@@ -148,7 +150,8 @@ impl HubBridge {
             standing_cursor: 0,
             frame_cursor: 0,
             seen_standing: HashSet::new(),
-            publish_frames: true,
+            publish_frames: frames_on,
+            import_frames: frames_on,
         })
     }
 
@@ -157,6 +160,19 @@ impl HubBridge {
     pub fn with_frame_publish(mut self, enabled: bool) -> Self {
         self.publish_frames = enabled;
         self
+    }
+
+    /// Enable or disable live bounded-frame importing (standing invariants are
+    /// always imported).
+    pub fn with_frame_import(mut self, enabled: bool) -> Self {
+        self.import_frames = enabled;
+        self
+    }
+
+    /// True when this bridge imports bounded frame candidates from the hub.
+    #[inline]
+    pub fn import_frames_enabled(&self) -> bool {
+        self.import_frames
     }
 
     /// Current standing-lemma cursor position.
@@ -517,5 +533,77 @@ mod tests {
         assert_eq!(st.published_standing, 3);
         assert_eq!(st.accepted, 2);
         assert_eq!(st.rejected, 1);
+    }
+
+    #[test]
+    fn ic3_frame_import_opt_in_rejects_false_frame_clauses() {
+        if informal_sat::Cadical::signature().is_none() {
+            return;
+        }
+        // Input-enabled 4-bit counter hitting 5 at depth 5.
+        let btor = "\
+1 sort bitvec 4
+2 sort bitvec 1
+3 zero 1
+4 one 1
+5 state 1 cnt
+6 init 1 5 3
+7 input 2 en
+8 add 1 5 4
+9 ite 1 7 8 5
+10 next 1 5 9
+11 constd 1 5
+12 eq 2 5 11
+13 bad 12
+";
+        let dir = std::env::temp_dir().join(format!("informal-hub-frames-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cnt5.btor2");
+        std::fs::write(&path, btor).unwrap();
+        let req = CheckRequest::new(path, ModelFormat::Btor2, Duration::from_secs(10));
+        let hub = Arc::new(LemmaHub::new());
+        let ctx = RunContext::new(req.timeout).with_lemma_hub(hub.clone());
+        let p = prepare_ctx_fold(&req, &ctx, false).unwrap();
+
+        // Inject two FALSE frame clauses at level 8: blocking Init (0) and step-1 state (1).
+        let adv = hub.next_publisher_id();
+        hub.publish_batch(vec![
+            SharedLemma {
+                design_hash: p.design_hash,
+                property_hash: p.property_hash,
+                scope: LemmaScope::Frame {
+                    level: 8,
+                    folded: None,
+                },
+                clause: vec![(0, false), (1, false), (2, false), (3, false)],
+                source: "adv".into(),
+                publisher_id: adv,
+            },
+            SharedLemma {
+                design_hash: p.design_hash,
+                property_hash: p.property_hash,
+                scope: LemmaScope::Frame {
+                    level: 8,
+                    folded: None,
+                },
+                clause: vec![(0, true), (1, false), (2, false), (3, false)],
+                source: "adv".into(),
+                publisher_id: adv,
+            },
+        ]);
+
+        // Attach bridge with frame import explicitly enabled and verify both false frames are rejected.
+        let bridge = HubBridge::new(&p, &ctx, "ic3-test")
+            .unwrap()
+            .with_frame_import(true);
+        let c = ctx.clone();
+        let mut runner = ic3::Ic3::new(&p, Box::new(move || solver(&c))).unwrap();
+        runner.attach_hub(bridge);
+        assert_eq!(
+            runner.check(&ctx),
+            informal_engine::Verdict::Unsafe { depth: Some(5) }
+        );
+        assert_eq!(hub.stats().accepted, 0);
+        assert_eq!(hub.stats().rejected, 2);
     }
 }

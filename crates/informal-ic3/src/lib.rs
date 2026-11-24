@@ -39,7 +39,7 @@ impl Engine for Ic3InnEngine {
             lemma_import: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Ic3,
-            min_effort: Effort::Standard,
+            min_effort: Effort::High,
             certifies: true,
             ..Default::default()
         }

@@ -589,3 +589,77 @@ fn clock_folded_standing_invariants_share_across_folded_engines() {
     ));
     assert!(hub.stats().accepted > 0, "{:?}", hub.stats());
 }
+
+#[test]
+fn aiger_selector_keeps_standard_lean_and_unlocks_secondary_engines_at_high() {
+    if informal_sat::Cadical::signature().is_none() {
+        informal_engine::tool_missing("needs CaDiCaL");
+        return;
+    }
+    let mut fleet: Vec<Arc<dyn Engine>> = Vec::new();
+    fleet.extend(informal_bmc::engines());
+    fleet.extend(informal_car::engines());
+    fleet.extend(informal_ic3::engines());
+    fleet.extend(informal_imc::engines());
+    fleet.extend(informal_bdd::engines());
+    fleet.extend(informal_swarm::engines());
+    fleet.extend(informal_liveness::engines());
+
+    // Large AIGER safety header (500 latches > BDD cap 200).
+    let big_aig = b"aig 2000 100 500 0 1400 1\n";
+    let std_names: Vec<String> =
+        informal_engine::selector::select_for_aiger_bytes(&fleet, big_aig, false, Effort::Standard)
+            .into_iter()
+            .map(|e| e.name().to_string())
+            .collect();
+    let has = |list: &[String], name: &str| list.iter().any(|n| n == name);
+
+    // Standard keeps the lean 7-engine diverse core without redundant/overlapping threads.
+    for core in [
+        "informal-bmc",
+        "informal-bmc-10",
+        "informal-kind",
+        "informal-ic3-mt",
+        "informal-gla",
+        "informal-car",
+        "informal-swarm",
+    ] {
+        assert!(has(&std_names, core), "missing {core} from {std_names:?}");
+    }
+    for secondary in [
+        "informal-bmc-65",
+        "informal-kind-ic3",
+        "informal-ic3-cadical",
+        "informal-bcar",
+        "informal-ic3-inn",
+        "informal-imc",
+        "informal-bdd",
+        "informal-ic3",
+    ] {
+        assert!(
+            !has(&std_names, secondary),
+            "unexpected {secondary} in Standard large-AIGER fleet: {std_names:?}"
+        );
+    }
+
+    // High unlocks the secondary engines while still respecting BDD's max_state_bits cap.
+    let high_names: Vec<String> =
+        informal_engine::selector::select_for_aiger_bytes(&fleet, big_aig, false, Effort::High)
+            .into_iter()
+            .map(|e| e.name().to_string())
+            .collect();
+    for secondary in [
+        "informal-bmc-65",
+        "informal-kind-ic3",
+        "informal-ic3-cadical",
+        "informal-bcar",
+        "informal-ic3-inn",
+        "informal-imc",
+    ] {
+        assert!(
+            has(&high_names, secondary),
+            "High effort must include {secondary}: {high_names:?}"
+        );
+    }
+    assert!(!has(&high_names, "informal-bdd"));
+}

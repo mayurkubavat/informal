@@ -43,7 +43,6 @@ struct ModelCase {
     name: &'static str,
     format: ModelFormat,
     path: PathBuf,
-    btor_text: Option<String>,
     expected: Expected,
     category: Category,
 }
@@ -81,13 +80,10 @@ fn canonical_matrix(dir: &Path) -> Vec<ModelCase> {
     let repo_case =
         |file: &'static str, format: ModelFormat, expected: Expected, category: Category| {
             let path = repo.join(file);
-            let btor_text = (format == ModelFormat::Btor2)
-                .then(|| std::fs::read_to_string(&path).expect("read repo model"));
             ModelCase {
                 name: file,
                 format,
                 path,
-                btor_text,
                 expected,
                 category,
             }
@@ -244,7 +240,6 @@ fn canonical_matrix(dir: &Path) -> Vec<ModelCase> {
             name,
             format: ModelFormat::Btor2,
             path,
-            btor_text: Some(text.to_string()),
             expected,
             category,
         }
@@ -766,19 +761,8 @@ fn portfolio_differential_zero_conflicts_across_canonical_matrix() {
     let cases = canonical_matrix(&dir.0);
 
     for case in &cases {
-        let selected = match &case.btor_text {
-            Some(text) => {
-                selector::select_for_btor_with_effort(&fleet, text, false, Effort::Standard)
-            }
-            None => fleet
-                .iter()
-                .filter(|e| {
-                    let c = e.capabilities();
-                    c.formats.contains(&case.format) && c.kind != EngineKind::Liveness
-                })
-                .cloned()
-                .collect(),
-        };
+        let selected =
+            selector::select_for_model(&fleet, &case.path, case.format, false, Effort::Standard);
         assert!(
             !selected.is_empty(),
             "selector returned empty fleet for {}",

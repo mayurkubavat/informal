@@ -36,7 +36,7 @@ impl Engine for ImcEngine {
             lemma_import: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Interpolation,
-            min_effort: Effort::Standard,
+            min_effort: Effort::High,
             certifies: true,
             ..Default::default()
         }

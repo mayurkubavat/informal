@@ -59,11 +59,7 @@ impl Engine for Ic3Engine {
             lemma_import: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Ic3,
-            min_effort: if self.mini {
-                Effort::Low
-            } else {
-                Effort::Standard
-            },
+            min_effort: if self.mini { Effort::Low } else { Effort::High },
             certifies: true,
             ..Default::default()
         }
@@ -297,8 +293,7 @@ impl Default for Ic3Mt {
         let diverse = ic3mt_diverse();
         Ic3Mt {
             workers: vec![
-                // H2 (docs/ic3-research.md) in one worker: Houdini every
-                // 4 frames costs too much in all four at short timeouts.
+                // Worker 0: clean reference Mini IC3 with periodic Houdini (H2).
                 (
                     true,
                     Config {
@@ -307,21 +302,19 @@ impl Default for Ic3Mt {
                         } else {
                             d.houdini_every
                         },
-                        cti_mine: true,
                         ..d
                     },
                 ),
                 (false, d),
                 if diverse {
-                    // H14: the default settings again, on another seed
-                    // and with derived predicates (H13).
+                    // H14: diverse seed with derived predicates (H13), DynAMic,
+                    // CTI mining, and H3 coupled push.
                     (
                         true,
                         Config {
                             houdini_every: 4,
                             derive: true,
                             dynamic_order: true,
-                            stall_push: true,
                             cti_mine: true,
                             coupled_push: true,
                             ..d
@@ -351,7 +344,6 @@ impl Default for Ic3Mt {
                         parent_lemma: true,
                         parent_ctp: true,
                         exctg: true,
-                        stall_push: true,
                         coupled_push: true,
                         ..d
                     },
@@ -499,7 +491,9 @@ impl Engine for Ic3Mt {
                         if let Some(mut hub) = HubBridge::new(g, inner, self.name()) {
                             hub = hub
                                 .with_standing_cursor(seed_cursor)
-                                .with_frame_publish(id == 0);
+                                .with_frame_publish(
+                                    id == 0 && informal_engine::LemmaHub::frames_enabled(),
+                                );
                             if let Some(pid) = seed_pub_id {
                                 hub = hub.with_publisher_id(pid);
                             }

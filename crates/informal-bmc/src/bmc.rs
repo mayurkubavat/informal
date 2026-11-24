@@ -39,6 +39,8 @@ impl Engine for Bmc {
             kind: EngineKind::Bmc,
             min_effort: if self.step <= 1 {
                 Effort::Low
+            } else if self.step >= 32 {
+                Effort::High
             } else {
                 Effort::Standard
             },

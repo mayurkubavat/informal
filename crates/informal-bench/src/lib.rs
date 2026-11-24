@@ -7,6 +7,7 @@
 //! pandas; a SQLite store can replace it without changing the record.
 
 use anyhow::Context;
+use informal_engine::selector::aiger_features;
 use informal_engine::{portfolio, CheckRequest, Engine, EngineResult, ModelFormat, Verdict};
 use informal_ir::Features;
 use serde::Serialize;
@@ -154,34 +155,6 @@ pub fn describe(path: &Path) -> anyhow::Result<(String, Option<Features>)> {
     Ok((sha, features))
 }
 
-/// Features of an AIGER file from its header line (`aag`/`aig M I L O A
-/// [B C J F]`): every state is one bit, and outputs count as bad when the
-/// file has no bad section (AIGER 1.0).
-fn aiger_features(bytes: &[u8]) -> Option<Features> {
-    let end = bytes.iter().position(|&b| b == b'\n')?;
-    let head = std::str::from_utf8(&bytes[..end]).ok()?;
-    let mut it = head.split_whitespace();
-    if !matches!(it.next()?, "aag" | "aig") {
-        return None;
-    }
-    let n: Vec<usize> = it.map(|x| x.parse().ok()).collect::<Option<_>>()?;
-    let at = |i: usize| n.get(i).copied().unwrap_or(0);
-    let (inputs, latches, outputs, ands) = (at(1), at(2), at(3), at(4));
-    let bad = if at(5) > 0 { at(5) } else { outputs };
-    Some(Features {
-        nodes: inputs + latches + ands,
-        inputs,
-        states: latches,
-        state_bits: latches as u64,
-        bad,
-        constraints: at(6),
-        justice: at(7),
-        fair: at(8),
-        max_width: 1,
-        ..Default::default()
-    })
-}
-
 /// Run the benchmark and append one record per engine run to `db`.
 /// `on_record` sees each record as it lands (for progress output).
 /// `jobs` models are checked at once (1 = one after another); records are
@@ -192,6 +165,24 @@ pub fn run(
     timeout: Duration,
     mode: Mode,
     jobs: usize,
+    db: &mut (dyn Write + Send),
+    on_record: impl FnMut(&RunRecord) + Send,
+) -> anyhow::Result<Vec<RunRecord>> {
+    run_selected(models, engines, timeout, mode, jobs, false, db, on_record)
+}
+
+/// [`run`], with explicit-filter control for [`Mode::Portfolio`]. When
+/// `explicit_filter` is `false`, portfolio mode applies
+/// [`informal_engine::selector::select_for_features`] so large models do not
+/// oversubscribe CPU cores with overlapping engines.
+#[allow(clippy::too_many_arguments)]
+pub fn run_selected(
+    models: &[PathBuf],
+    engines: &[Arc<dyn Engine>],
+    timeout: Duration,
+    mode: Mode,
+    jobs: usize,
+    explicit_filter: bool,
     db: &mut (dyn Write + Send),
     on_record: impl FnMut(&RunRecord) + Send,
 ) -> anyhow::Result<Vec<RunRecord>> {
@@ -206,7 +197,7 @@ pub fn run(
                         let Some(path) = models.get(i) else {
                             return Ok(());
                         };
-                        let records = run_model(path, engines, timeout, mode)?;
+                        let records = run_model(path, engines, timeout, mode, explicit_filter)?;
                         let mut guard = sink.lock().unwrap_or_else(|p| p.into_inner());
                         let (db, on_record, all) = &mut *guard;
                         for rec in records {
@@ -233,6 +224,7 @@ fn run_model(
     engines: &[Arc<dyn Engine>],
     timeout: Duration,
     mode: Mode,
+    explicit_filter: bool,
 ) -> anyhow::Result<Vec<RunRecord>> {
     let Some(format) = ModelFormat::of_path(path) else {
         return Ok(Vec::new());
@@ -274,7 +266,21 @@ fn run_model(
         Mode::Portfolio => {
             let mut rec = base("portfolio", "portfolio".into());
             let in_flight = InFlight::new(&rec);
-            let o = portfolio::run(engines, &req, None);
+            let fmt_ok: Vec<_> = engines
+                .iter()
+                .filter(|e| e.capabilities().formats.contains(&format))
+                .cloned()
+                .collect();
+            let selected = match &features {
+                Some(f) => informal_engine::selector::select_for_features(
+                    &fmt_ok,
+                    f,
+                    explicit_filter,
+                    req.effort,
+                ),
+                None => fmt_ok,
+            };
+            let o = portfolio::run(&selected, &req, None);
             drop(in_flight);
             let v = portfolio::verdict(&o);
             rec.wall_ms = o.wall_ms;

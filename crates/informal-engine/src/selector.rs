@@ -1,4 +1,4 @@
-//! Declarative, capability-driven portfolio routing over Btor2 model features.
+//! Declarative, capability-driven portfolio routing over Btor2 and AIGER model features.
 //!
 //! Engines declare their domain, algorithmic kind, array/liveness support,
 //! effort floor, state-bit ceiling, and multi-worker / deep-step properties via
@@ -6,8 +6,10 @@
 //! and [`informal_ir::Features`] — never hardcoded engine names — so new engines
 //! participate automatically when registered.
 
-use crate::{Effort, Engine, EngineDomain, EngineKind};
+use crate::{Effort, Engine, EngineDomain, EngineKind, ModelFormat};
 use informal_ir::Features;
+use std::io::Read;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Select the eligible subset of `engines` for `btor_text` at [`Effort::Standard`].
@@ -31,6 +33,90 @@ pub fn select_for_btor_with_effort(
     };
     let f = Features::of(&m);
     select_for_features(engines, &f, explicit_filter, effort)
+}
+
+/// Extract structural [`Features`] from the header line of an AIGER file
+/// (`aag`/`aig M I L O A [B C J F]`). Every latch is 1 state bit; outputs count
+/// as bad states when no AIGER 1.9 bad section is present.
+pub fn aiger_features(bytes: &[u8]) -> Option<Features> {
+    let end = bytes
+        .iter()
+        .position(|&b| b == b'\n')
+        .unwrap_or(bytes.len());
+    let head = std::str::from_utf8(&bytes[..end])
+        .ok()?
+        .trim_end_matches('\r');
+    let mut it = head.split_whitespace();
+    if !matches!(it.next()?, "aag" | "aig") {
+        return None;
+    }
+    let n: Vec<usize> = it.map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    let at = |i: usize| n.get(i).copied().unwrap_or(0);
+    let (inputs, latches, outputs, ands) = (at(1), at(2), at(3), at(4));
+    let bad = if at(5) > 0 { at(5) } else { outputs };
+    Some(Features {
+        nodes: inputs + latches + ands,
+        inputs,
+        states: latches,
+        state_bits: latches as u64,
+        bad,
+        constraints: at(6),
+        justice: at(7),
+        fair: at(8),
+        max_width: 1,
+        ..Default::default()
+    })
+}
+
+/// Select the eligible subset of `engines` for AIGER `bytes` (header prefix is
+/// sufficient) at `effort`.
+pub fn select_for_aiger_bytes(
+    engines: &[Arc<dyn Engine>],
+    bytes: &[u8],
+    explicit_filter: bool,
+    effort: Effort,
+) -> Vec<Arc<dyn Engine>> {
+    let Some(f) = aiger_features(bytes) else {
+        return engines.to_vec();
+    };
+    select_for_features(engines, &f, explicit_filter, effort)
+}
+
+/// Format-aware structural routing for any Btor2 or AIGER model file on disk.
+///
+/// Filters to engines supporting `format`, extracts features (reading only the
+/// header line for AIGER models), and applies [`select_for_features`].
+pub fn select_for_model(
+    engines: &[Arc<dyn Engine>],
+    path: &Path,
+    format: ModelFormat,
+    explicit_filter: bool,
+    effort: Effort,
+) -> Vec<Arc<dyn Engine>> {
+    let fmt_ok: Vec<_> = engines
+        .iter()
+        .filter(|e| e.capabilities().formats.contains(&format))
+        .cloned()
+        .collect();
+    if fmt_ok.is_empty() {
+        return Vec::new();
+    }
+    match format {
+        ModelFormat::Btor2 => match std::fs::read_to_string(path) {
+            Ok(text) => select_for_btor_with_effort(&fmt_ok, &text, explicit_filter, effort),
+            Err(_) => fmt_ok,
+        },
+        ModelFormat::Aiger => {
+            let mut buf = [0u8; 512];
+            let Ok(mut f) = std::fs::File::open(path) else {
+                return fmt_ok;
+            };
+            let Ok(n) = f.read(&mut buf) else {
+                return fmt_ok;
+            };
+            select_for_aiger_bytes(&fmt_ok, &buf[..n], explicit_filter, effort)
+        }
+    }
 }
 
 /// Filter `pool` by `pred`, falling back to `pool` unchanged when no engine
@@ -455,5 +541,52 @@ mod tests {
         assert!(has(&exp, "bdd"));
         assert!(has(&exp, "heavy-signoff"));
         assert!(!has(&exp, "klive"));
+    }
+
+    #[test]
+    fn aiger_header_routes_safety_size_and_liveness() {
+        let f_all = fleet();
+        let has = |list: &[String], name: &str| list.iter().any(|n| n == name);
+
+        // Large AIGER 1.9 safety model (500 latches > BDD cap 200).
+        let big_aig = b"aig 1200 100 500 0 600 1 2\n";
+        let feat = aiger_features(big_aig).unwrap();
+        assert_eq!(feat.states, 500);
+        assert_eq!(feat.state_bits, 500);
+        assert_eq!(feat.bad, 1);
+        assert_eq!(feat.constraints, 2);
+        assert_eq!(feat.justice, 0);
+        let sel_big = names(&select_for_aiger_bytes(
+            &f_all,
+            big_aig,
+            false,
+            Effort::Standard,
+        ));
+        assert!(!has(&sel_big, "bdd"));
+        assert!(!has(&sel_big, "klive"));
+        assert!(has(&sel_big, "ic3-mt"));
+        assert!(!has(&sel_big, "ic3-single"));
+
+        // Small AIGER 1.0 safety model (40 latches <= 200): keeps BDD.
+        let small_aig = b"aag 90 10 40 1 40\n";
+        let sel_small = names(&select_for_aiger_bytes(
+            &f_all,
+            small_aig,
+            false,
+            Effort::Standard,
+        ));
+        assert!(has(&sel_small, "bdd"));
+        assert!(has(&sel_small, "ic3-mt"));
+
+        // AIGER 1.9 liveness model (justice = 1): routes to liveness-capable engines.
+        let live_aig = b"aig 50 5 12 0 33 0 0 1 1\n";
+        let sel_live = names(&select_for_aiger_bytes(
+            &f_all,
+            live_aig,
+            false,
+            Effort::Standard,
+        ));
+        assert!(has(&sel_live, "klive"));
+        assert!(!has(&sel_live, "bdd"));
     }
 }

@@ -162,7 +162,7 @@ impl Engine for KindIc3 {
             lemma_import: true,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Hybrid,
-            min_effort: Effort::Standard,
+            min_effort: Effort::High,
             certifies: true,
             ..Default::default()
         }

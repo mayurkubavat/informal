@@ -47,7 +47,11 @@ impl Engine for CarEngine {
             lemma_import: !self.backward,
             domain: EngineDomain::BitLevel,
             kind: EngineKind::Car,
-            min_effort: Effort::Standard,
+            min_effort: if self.backward {
+                Effort::High
+            } else {
+                Effort::Standard
+            },
             certifies: true,
             ..Default::default()
         }

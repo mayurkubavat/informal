@@ -405,8 +405,15 @@ fn main() -> anyhow::Result<()> {
             }
             let engines = load_engines(&engines, &only, isolate)?;
             let req = CheckRequest::new(model, format, Duration::from_secs(timeout));
+            let selected = informal_engine::selector::select_for_model(
+                &engines,
+                &req.model,
+                req.format,
+                !only.is_empty(),
+                req.effort,
+            );
             informal_engine::memory::on_memout(|| println!("UNKNOWN (memout)"));
-            let o = portfolio::run(&engines, &req, None);
+            let o = portfolio::run(&selected, &req, None);
             for r in &o.runs {
                 match r {
                     Ok(r) => eprintln!(
@@ -715,12 +722,13 @@ fn main() -> anyhow::Result<()> {
                 engines.len(),
                 db.display()
             );
-            let recs = informal_bench::run(
+            let recs = informal_bench::run_selected(
                 &models,
                 &engines,
                 Duration::from_secs(timeout),
                 mode,
                 jobs,
+                !only.is_empty(),
                 &mut file,
                 |r| {
                     eprintln!(
