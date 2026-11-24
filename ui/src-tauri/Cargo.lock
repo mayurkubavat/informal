@@ -1538,6 +1538,7 @@ dependencies = [
  "informal-bdd",
  "informal-bitwuzla",
  "informal-bmc",
+ "informal-car",
  "informal-engines-ext",
  "informal-fpv",
  "informal-imc",
@@ -1610,6 +1611,17 @@ dependencies = [
  "informal-sat",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "informal-car"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-sat",
 ]
 
 [[package]]

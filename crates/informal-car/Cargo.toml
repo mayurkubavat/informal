@@ -1,0 +1,13 @@
+[package]
+name = "informal-car"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Complementary Approximate Reachability (Forward & Backward CAR) engines for InFormal"
+
+[dependencies]
+anyhow.workspace = true
+informal-aig.workspace = true
+informal-bmc.workspace = true
+informal-engine.workspace = true
+informal-sat.workspace = true
