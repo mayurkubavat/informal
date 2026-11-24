@@ -713,6 +713,7 @@ dependencies = [
  "informal-mcp",
  "informal-sat",
  "informal-svlang",
+ "informal-swarm",
  "informal-tcl",
  "libc",
  "serde_json",
@@ -908,6 +909,17 @@ dependencies = [
  "svlang",
  "svlang-lint",
  "svlang-model",
+]
+
+[[package]]
+name = "informal-swarm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-sat",
 ]
 
 [[package]]

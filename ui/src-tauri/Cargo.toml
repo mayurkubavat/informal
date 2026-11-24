@@ -26,6 +26,7 @@ informal-bdd = { path = "../../crates/informal-bdd" }
 informal-imc = { path = "../../crates/informal-imc" }
 informal-car = { path = "../../crates/informal-car" }
 informal-ic3 = { path = "../../crates/informal-ic3" }
+informal-swarm = { path = "../../crates/informal-swarm" }
 informal-bitwuzla = { path = "../../crates/informal-bitwuzla" }
 informal-llm = { path = "../../crates/informal-llm" }
 informal-mcp = { path = "../../crates/informal-mcp" }

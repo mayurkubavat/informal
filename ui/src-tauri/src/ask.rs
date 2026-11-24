@@ -298,6 +298,7 @@ mod tests {
                 .chain(informal_imc::engines())
                 .chain(informal_car::engines())
                 .chain(informal_ic3::engines())
+                .chain(informal_swarm::engines())
                 .chain(informal_bitwuzla::engines())
                 .collect(),
             work.clone(),

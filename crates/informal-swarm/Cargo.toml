@@ -1,0 +1,13 @@
+[package]
+name = "informal-swarm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bit-parallel simulation-guided swarm bug hunter with short-horizon SAT bridging for InFormal"
+
+[dependencies]
+anyhow.workspace = true
+informal-aig.workspace = true
+informal-bmc.workspace = true
+informal-engine.workspace = true
+informal-sat.workspace = true
