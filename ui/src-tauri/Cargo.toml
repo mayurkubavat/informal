@@ -23,6 +23,7 @@ informal-engines-ext = { path = "../../crates/informal-engines-ext" }
 informal-bmc = { path = "../../crates/informal-bmc" }
 informal-liveness = { path = "../../crates/informal-liveness" }
 informal-bdd = { path = "../../crates/informal-bdd" }
+informal-imc = { path = "../../crates/informal-imc" }
 informal-bitwuzla = { path = "../../crates/informal-bitwuzla" }
 informal-llm = { path = "../../crates/informal-llm" }
 informal-mcp = { path = "../../crates/informal-mcp" }

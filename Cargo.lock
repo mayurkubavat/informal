@@ -693,6 +693,7 @@ dependencies = [
  "informal-engine",
  "informal-engines-ext",
  "informal-fpv",
+ "informal-imc",
  "informal-ir",
  "informal-liveness",
  "informal-mcp",
@@ -780,6 +781,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "informal-imc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "informal-aig",
+ "informal-bmc",
+ "informal-engine",
+ "informal-sat",
+]
+
+[[package]]
 name = "informal-ir"
 version = "0.1.0"
 dependencies = [
@@ -838,6 +850,9 @@ dependencies = [
 [[package]]
 name = "informal-sat"
 version = "0.1.0"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "informal-session"

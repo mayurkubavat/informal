@@ -179,6 +179,34 @@ unsafe = 'was asserted in frame \d+'
 depth = 'was asserted in frame (\d+)'
 
 [[engine]]
+name = "abc-int"
+program = "abc"
+args = ["-c", "read_aiger {model}; logic; undc; strash; zero; fold; int; write_cex -a -t /dev/stdout"]
+cex_witness = true
+formats = ["aiger"]
+domain = "bit-level"
+kind = "interpolation"
+proves = true
+finds_bugs = true
+[engine.patterns]
+safe = 'Property proved\.'
+unsafe = 'was asserted in frame \d+'
+depth = 'was asserted in frame (\d+)'
+
+[[engine]]
+name = "avy"
+program = "avy"
+args = ["--cex", "{model}"]
+formats = ["aiger"]
+domain = "bit-level"
+kind = "interpolation"
+proves = true
+finds_bugs = true
+[engine.patterns]
+safe = '(?m)^0$'
+unsafe = '(?m)^1$'
+
+[[engine]]
 name = "btormc"
 program = "btormc"
 args = ["-kmax", "1000", "{model}"]

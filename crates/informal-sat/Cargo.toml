@@ -8,3 +8,6 @@ publish.workspace = true
 links = "cadical"
 
 [dependencies]
+
+[build-dependencies]
+cc = "1"

@@ -7,11 +7,57 @@
 //! the same patched CaDiCaL, so the binary has one copy.
 //! Without any of them the crate still builds, and `Cadical::new` returns an error.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+fn find_cadical_headers(tools: &Path) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(d) = std::env::var_os("INFORMAL_CADICAL_DIR") {
+        candidates.push(PathBuf::from(d).join("src"));
+    }
+    for base in [
+        tools.join("bitwuzla/subprojects"),
+        tools.join("bitwuzla/build/subprojects"),
+    ] {
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            let mut found: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("cadical"))
+                })
+                .collect();
+            found.sort();
+            for p in found {
+                candidates.push(p.join("src"));
+                candidates.push(p.join("include/cadical"));
+            }
+        }
+    }
+    candidates.push(tools.join("cadical/src"));
+    candidates
+        .into_iter()
+        .find(|d| d.join("cadical.hpp").is_file() && d.join("tracer.hpp").is_file())
+}
+
+fn compile_interp_shim(tools: &Path) {
+    println!("cargo:rerun-if-changed=cpp/interp_shim.cpp");
+    if let Some(hdr) = find_cadical_headers(tools) {
+        cc::Build::new()
+            .cpp(true)
+            .std("c++17")
+            .include(&hdr)
+            .file("cpp/interp_shim.cpp")
+            .warnings(false)
+            .compile("informal_cadical_interp");
+        println!("cargo:rustc-cfg=informal_cadical_interp");
+    }
+}
 
 fn main() {
     println!("cargo:rerun-if-env-changed=INFORMAL_CADICAL_DIR");
     println!("cargo:rustc-check-cfg=cfg(informal_cadical)");
+    println!("cargo:rustc-check-cfg=cfg(informal_cadical_interp)");
     println!("cargo:rerun-if-env-changed=INFORMAL_TOOLS_DIR");
     let tools = std::env::var_os("INFORMAL_TOOLS_DIR")
         .map(PathBuf::from)
@@ -39,6 +85,7 @@ fn main() {
         .find(|d| d.join("libbitwuzla.a").is_file());
     if std::env::var_os("INFORMAL_CADICAL_DIR").is_none() {
         if let Some(dir) = bwlib {
+            compile_interp_shim(&tools);
             println!(
                 "cargo:rerun-if-changed={}",
                 dir.join("libbitwuzla.a").display()
@@ -94,6 +141,7 @@ fn main() {
         let lib = dir.join("libcadical.a");
         println!("cargo:rerun-if-changed={}", lib.display());
         if lib.is_file() {
+            compile_interp_shim(&tools);
             println!("cargo:rustc-link-search=native={}", dir.display());
             println!("cargo:rustc-link-lib=static=cadical");
             let cxx = if cfg!(target_os = "macos") {

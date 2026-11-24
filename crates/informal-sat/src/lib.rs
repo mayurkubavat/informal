@@ -6,7 +6,9 @@
 //! used by tests and as a fallback when CaDiCaL is not linked.
 //! Literals are DIMACS-style: variable `v > 0` is `v`, its negation `-v`.
 
+pub mod interp;
 pub mod mini;
+pub use interp::{InterpAig, Interpolator};
 pub use mini::Mini;
 
 pub type Lit = i32;

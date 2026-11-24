@@ -903,6 +903,7 @@ fn main() {
             .chain(informal_bmc::engines())
             .chain(informal_liveness::engines())
             .chain(informal_bdd::engines())
+            .chain(informal_imc::engines())
             .chain(informal_bitwuzla::engines())
             .collect();
         let mut session = Session::new(engines, PathBuf::from(WORKDIR));
