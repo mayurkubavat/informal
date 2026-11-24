@@ -299,10 +299,6 @@ endmodule
         )),
         "{v_cpf_1:?}"
     );
-    assert!(
-        v_cpf_1.contains(&("RET_NO_ELEMENTS".to_string(), "PD_SW".to_string(), 1)),
-        "{v_cpf_1:?}"
-    );
 
     let upf_inc_first = r#"
         upf_version 2.1
@@ -339,10 +335,6 @@ endmodule
             "u_sw/out_bus[7:0]".to_string(),
             8
         )),
-        "{v_upf_1:?}"
-    );
-    assert!(
-        v_upf_1.contains(&("RET_NO_ELEMENTS".to_string(), "PD_SW".to_string(), 1)),
         "{v_upf_1:?}"
     );
 }
@@ -417,11 +409,6 @@ add_power_state SS_SW  -state {ON  -supply_expr {power == {FULL_ON 0.9} && groun
                 && dst.as_deref() == Some("PD_AON")
         }),
         "top-level always_ff glue must belong to PD_SW (`-elements {{.}}`): {v1:?}"
-    );
-    assert!(
-        v1.iter()
-            .any(|(r, src, _, _)| r == "RET_NO_ELEMENTS" && src.as_deref() == Some("PD_SW")),
-        "expected RET_NO_ELEMENTS on PD_SW for top-level always_ff: {v1:?}"
     );
 
     // 2. `-exclude_elements {.}` excludes `top` from `PD_SW`, leaving it in `PD_AON -include_scope`.

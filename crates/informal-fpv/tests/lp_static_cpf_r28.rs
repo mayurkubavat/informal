@@ -199,18 +199,11 @@ fn bug1_pm_x_illegal_no_bridge_and_bridge_plus_pm_x_upd_not_illegal() {
     assert_eq!(v_keys(&v_bug), v_keys(&v_ctrl));
     assert_eq!(
         v_keys(&v_bug),
-        vec![
-            (
-                "ISO_MISSING".to_string(),
-                "Error".to_string(),
-                "u_b/q".to_string()
-            ),
-            (
-                "RET_NO_ELEMENTS".to_string(),
-                "Warning".to_string(),
-                "u_b/PD_B".to_string()
-            ),
-        ]
+        vec![(
+            "ISO_MISSING".to_string(),
+            "Error".to_string(),
+            "u_b/q".to_string()
+        )]
     );
 
     // BRIDGE_PLUS_PM_X_UPD_NOT_ILLEGAL
@@ -242,18 +235,11 @@ fn bug1_pm_x_illegal_no_bridge_and_bridge_plus_pm_x_upd_not_illegal() {
     );
     assert_eq!(
         v_keys(&v_br),
-        vec![
-            (
-                "ISO_MISSING".to_string(),
-                "Error".to_string(),
-                "u_b/q".to_string()
-            ),
-            (
-                "RET_NO_ELEMENTS".to_string(),
-                "Warning".to_string(),
-                "u_b/PD_B".to_string()
-            ),
-        ]
+        vec![(
+            "ISO_MISSING".to_string(),
+            "Error".to_string(),
+            "u_b/q".to_string()
+        )]
     );
 }
 
@@ -415,18 +401,11 @@ fn bug3_susp1b_susp1_and_partial_update_match_direct_illegal_seq_and_nested() {
     assert_eq!(v_keys(&v_seq_1b), v_keys(&v_ctrl_1b));
     assert_eq!(
         v_keys(&v_seq_1b),
-        vec![
-            (
-                "ISO_MISSING".to_string(),
-                "Error".to_string(),
-                "u_wrap/u_sub/q".to_string()
-            ),
-            (
-                "RET_NO_ELEMENTS".to_string(),
-                "Warning".to_string(),
-                "PD_SUB".to_string()
-            ),
-        ]
+        vec![(
+            "ISO_MISSING".to_string(),
+            "Error".to_string(),
+            "u_wrap/u_sub/q".to_string()
+        )]
     );
 
     // SUSP1_UPD_PM_ILL_AFTER_UPF_UPD == SUSP1_CTRL_DIRECT_ILL_PLUS_UPF_UPD

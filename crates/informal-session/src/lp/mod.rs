@@ -1,6 +1,7 @@
 //! Static Power-Intent & Structural Verification (Stages 1–2) and Low-Power Verification state for `Session`.
 
 pub mod finder_bridge;
+pub mod formal;
 pub mod report;
 pub mod rules;
 pub mod static_rtl;
@@ -410,10 +411,18 @@ pub fn read_liberty(s: &mut Session, paths: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs static power-intent and structural checks for `opts.stage` (`upf`, `rtl`/`design`, `all`, etc.).
+/// Runs static power-intent/structural and formal Low-Power checks for `opts`.
 pub fn check_lp(s: &mut Session, opts: &CheckLpOpts) -> Result<(), String> {
     if s.lp.upf_files.is_empty() && s.lp.intent.is_none() {
         return Err("check_lp: no UPF/CPF loaded; run `load_upf` first".to_string());
+    }
+    if opts.sec
+        || opts.lec
+        || opts.prove_corruption
+        || opts.prove_waivers
+        || opts.stage == LpStage::Formal
+    {
+        return formal::run_formal_lp(s, opts);
     }
     match opts.stage {
         LpStage::Upf => {
@@ -449,14 +458,7 @@ pub fn check_lp(s: &mut Session, opts: &CheckLpOpts) -> Result<(), String> {
             "check_lp: `-stage {}` requires Liberty/PG Stage 3–4 support (scheduled in WS5)",
             opts.stage.word()
         )),
-        LpStage::Formal => {
-            // Formal LPV engines arrive in WS4; run Stage 1+2 static checks cleanly first.
-            static_rtl::run_stage2(s, opts)?;
-            if !s.lp.stages_run.iter().any(|st| st == "formal") {
-                s.lp.stages_run.push("formal".to_string());
-            }
-            Ok(())
-        }
+        LpStage::Formal => formal::run_formal_lp(s, opts),
     }
 }
 

@@ -847,8 +847,43 @@ pub fn prove_sec(
     s.sec.imp_compiled = Some(Arc::clone(&imp_cd));
     let d_imp = informal_svlang::design_from_compiled(&imp_cd, &base_imp);
 
-    let m_spec = parse_full_model(&l_spec.btor2)?;
-    let m_imp = parse_full_model(&l_imp.btor2)?;
+    let checks = prove_sec_from_btor(
+        s,
+        &setup,
+        &spec_top,
+        &imp_top,
+        &d_spec,
+        &d_imp,
+        &l_spec.btor2,
+        &l_imp.btor2,
+        filter_name,
+        timeout_override,
+    )?;
+    s.sec.checks = checks;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prove_sec_from_btor(
+    s: &mut Session,
+    setup: &SecSetup,
+    spec_top: &str,
+    imp_top: &str,
+    d_spec: &informal_svlang::Design,
+    d_imp: &informal_svlang::Design,
+    spec_btor: &str,
+    imp_btor: &str,
+    filter_name: Option<&str>,
+    timeout_override: Option<Duration>,
+) -> Result<Vec<SecCheck>, String> {
+    let effective_reset = if setup.lec {
+        None
+    } else {
+        setup.reset.clone().or_else(|| s.reset.clone())
+    };
+
+    let m_spec = parse_full_model(spec_btor)?;
+    let m_imp = parse_full_model(imp_btor)?;
 
     // 1. Pair primary inputs (`input_map` first, then matching relative names).
     let mut input_pairs: Vec<(u32, u32, String)> = Vec::new();
@@ -856,9 +891,9 @@ pub fn prove_sec(
     let mut paired_imp_in: HashSet<u32> = HashSet::new();
 
     for (s_name, i_name) in &setup.input_map {
-        let (sid, sw, srel) = find_input_line(&m_spec, &spec_top, s_name)
+        let (sid, sw, srel) = find_input_line(&m_spec, spec_top, s_name)
             .ok_or_else(|| format!("check_sec -map -input: `{s_name}` not found in spec"))?;
-        let (iid, iw, _) = find_input_line(&m_imp, &imp_top, i_name)
+        let (iid, iw, _) = find_input_line(&m_imp, imp_top, i_name)
             .ok_or_else(|| format!("check_sec -map -input: `{i_name}` not found in imp"))?;
         if sw != iw {
             return Err(format!(
@@ -876,11 +911,11 @@ pub fn prove_sec(
         let Some(sym_s) = l_s.symbol.as_deref() else {
             continue;
         };
-        let rel_s = strip_top(sym_s, Some(&spec_top));
+        let rel_s = strip_top(sym_s, Some(spec_top));
         if is_internal_helper(rel_s) {
             continue;
         }
-        if let Some((iid, iw, _)) = find_input_line(&m_imp, &imp_top, rel_s) {
+        if let Some((iid, iw, _)) = find_input_line(&m_imp, imp_top, rel_s) {
             if !paired_imp_in.contains(&iid) {
                 let sw = l_s.sort.and_then(|st| m_spec.width(st)).unwrap_or(0);
                 if sw != iw {
@@ -901,9 +936,9 @@ pub fn prove_sec(
     let mut paired_imp_st: HashSet<u32> = HashSet::new();
 
     for (s_name, i_name) in &setup.state_map {
-        let (sid, sw, srel) = find_state_line(&m_spec, &spec_top, s_name)
+        let (sid, sw, srel) = find_state_line(&m_spec, spec_top, s_name)
             .ok_or_else(|| format!("check_sec -map -state: `{s_name}` not found in spec"))?;
-        let (iid, iw, _) = find_state_line(&m_imp, &imp_top, i_name)
+        let (iid, iw, _) = find_state_line(&m_imp, imp_top, i_name)
             .ok_or_else(|| format!("check_sec -map -state: `{i_name}` not found in imp"))?;
         if sw != iw {
             return Err(format!(
@@ -921,11 +956,11 @@ pub fn prove_sec(
         let Some(sym_s) = l_s.symbol.as_deref() else {
             continue;
         };
-        let rel_s = strip_top(sym_s, Some(&spec_top));
+        let rel_s = strip_top(sym_s, Some(spec_top));
         if is_internal_helper(rel_s) {
             continue;
         }
-        if let Some((iid, iw, _)) = find_state_line(&m_imp, &imp_top, rel_s) {
+        if let Some((iid, iw, _)) = find_state_line(&m_imp, imp_top, rel_s) {
             if !paired_imp_st.contains(&iid) {
                 let sw = l_s.sort.and_then(|st| m_spec.width(st));
                 if sw == iw {
@@ -966,7 +1001,7 @@ pub fn prove_sec(
                     imp_sig: m_imp
                         .line(iid)
                         .and_then(|l| l.symbol.as_deref())
-                        .map(|s| strip_top(s, Some(&imp_top)).to_string())
+                        .map(|s| strip_top(s, Some(imp_top)).to_string())
                         .unwrap_or_else(|| rel.clone()),
                     spec_ref: ns,
                     imp_ref: ni,
@@ -980,17 +1015,17 @@ pub fn prove_sec(
     // Output pairs (`output_map` when explicit, otherwise all matched top-level outputs + explicit).
     let mut out_pairs: Vec<(String, String)> = setup.output_map.clone();
     let mapped_spec_outs: HashSet<String> = out_pairs.iter().map(|(a, _)| a.clone()).collect();
-    let spec_outs = top_ports(&d_spec, &spec_top, true);
-    let imp_outs: HashSet<String> = top_ports(&d_imp, &imp_top, true).into_iter().collect();
+    let spec_outs = top_ports(d_spec, spec_top, true);
+    let imp_outs: HashSet<String> = top_ports(d_imp, imp_top, true).into_iter().collect();
     for so in spec_outs {
         if !mapped_spec_outs.contains(&so) && imp_outs.contains(&so) {
             out_pairs.push((so.clone(), so));
         }
     }
     for (s_out, i_out) in out_pairs {
-        let rs = resolve_signal(&m_spec, Some(&spec_top), &s_out)
+        let rs = resolve_signal(&m_spec, Some(spec_top), &s_out)
             .map_err(|e| format!("check_sec (spec output `{s_out}`): {e}"))?;
-        let ri = resolve_signal(&m_imp, Some(&imp_top), &i_out)
+        let ri = resolve_signal(&m_imp, Some(imp_top), &i_out)
             .map_err(|e| format!("check_sec (imp output `{i_out}`): {e}"))?;
         if rs.width != ri.width {
             return Err(format!(
@@ -998,8 +1033,8 @@ pub fn prove_sec(
                 rs.width, ri.width
             ));
         }
-        let s_rel = strip_top(&rs.name, Some(&spec_top)).to_string();
-        let i_rel = strip_top(&ri.name, Some(&imp_top)).to_string();
+        let s_rel = strip_top(&rs.name, Some(spec_top)).to_string();
+        let i_rel = strip_top(&ri.name, Some(imp_top)).to_string();
         let lat = if setup.lec {
             0
         } else {
@@ -1045,9 +1080,9 @@ pub fn prove_sec(
     for tgt in &targets {
         let full_miter = build_dual_miter_btor2(
             &m_spec,
-            &spec_top,
+            spec_top,
             &m_imp,
-            &imp_top,
+            imp_top,
             &input_pairs,
             &state_pairs,
             setup.lec,
@@ -1115,8 +1150,7 @@ pub fn prove_sec(
         });
     }
 
-    s.sec.checks = checks;
-    Ok(())
+    Ok(checks)
 }
 
 pub fn format_report(state: &SecState) -> String {

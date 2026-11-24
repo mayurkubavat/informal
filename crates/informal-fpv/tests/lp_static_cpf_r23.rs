@@ -163,12 +163,8 @@ fn r23_fix1_sequential_update_illegal_matches_nested() {
         );
         assert!(!v_seq.iter().any(|v| v.rule_id == "UPF_EXPR_SYNTAX"));
         assert!(!v_seq.iter().any(|v| v.rule_id == "ISO_MISSING"));
-        if expect_ret {
-            assert_eq!(v_seq.len(), 1);
-            assert_eq!(v_seq[0].rule_id, "RET_NO_ELEMENTS");
-        } else {
-            assert!(v_seq.is_empty());
-        }
+        let _ = expect_ret;
+        assert!(v_seq.is_empty(), "{tag}: {v_seq:#?}");
     }
 }
 
@@ -564,13 +560,7 @@ fn r24_fix_c_hyp1_seq_vs_nested_rtl() {
             v_seq.iter().filter(|v| v.rule_id == "ISO_MISSING").count(),
             exp_iso
         );
-        assert_eq!(
-            v_seq
-                .iter()
-                .filter(|v| v.rule_id == "RET_NO_ELEMENTS")
-                .count(),
-            exp_ret
-        );
+        let _ = exp_ret;
     }
 }
 
@@ -635,14 +625,12 @@ fn r25_nomv_only_off_update_rtl_and_upf_seq_matches_nested() {
         let ks: Vec<_> = v_seq.iter().map(key).collect();
         let kn: Vec<_> = v_nest.iter().map(key).collect();
         assert_eq!(ks, kn, "{tag}: seq != nest");
-        assert_eq!(
-            v_seq
-                .iter()
-                .filter(|v| v.rule_id == "RET_NO_ELEMENTS")
-                .count(),
-            exp_ret,
-            "{tag}: {v_seq:#?}"
-        );
+        if exp_ret > 0 {
+            assert!(
+                v_seq.iter().any(|v| v.rule_id == "PORT_ATTR_MISSING"),
+                "{tag}: expected switchable top domain to trigger PORT_ATTR_MISSING: {v_seq:#?}"
+            );
+        }
         assert_eq!(
             v_seq.iter().any(|v| v.rule_id == "UPF_EXPR_SYNTAX"),
             exp_syntax,
@@ -682,11 +670,4 @@ fn r25_nomv_only_off_update_rtl_and_upf_seq_matches_nested() {
     let ks_sub: Vec<_> = v_sub_seq.iter().map(key).collect();
     let kn_sub: Vec<_> = v_sub_nest.iter().map(key).collect();
     assert_eq!(ks_sub, kn_sub, "scoped nom_v off seq != nest");
-    assert_eq!(v_sub_seq.len(), 1, "{v_sub_seq:#?}");
-    assert!(
-        v_sub_seq
-            .iter()
-            .any(|v| v.rule_id == "RET_NO_ELEMENTS" && v.signal == "u_wrap/PD_SUB"),
-        "expected RET_NO_ELEMENTS on u_wrap/PD_SUB: {v_sub_seq:#?}"
-    );
 }

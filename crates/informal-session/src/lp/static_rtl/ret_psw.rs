@@ -39,45 +39,11 @@ pub(crate) fn check_retention(ctx: &mut Stage2Ctx<'_>, sink: &mut ViolationSink)
             continue;
         };
         let flops = &dom_flops[pd.id.0 as usize];
-        let mut retained_count = 0usize;
-        let mut suppressed_count = 0usize;
-
         for &fl in flops {
             let m = ctx.resolved.match_retention(pd.id, &fl.upf_path);
-            match m {
-                StrategyMatch::Matched(ret) => {
-                    retained_count += 1;
-                    matched_ret_strats.insert(ret.id.0 as usize);
-                    check_retained_flop(ctx, pd.id, &pd.name, prim_ss, fl, ret, sink);
-                }
-                StrategyMatch::Suppressed(_) => {
-                    suppressed_count += 1;
-                }
-                StrategyMatch::None => {}
-            }
-        }
-
-        // Check `RET_NO_ELEMENTS` if switchable domain has unretained flops and no `-no_retention` suppression.
-        if !flops.is_empty() && retained_count == 0 && suppressed_count == 0 {
-            let is_switchable = domain_can_turn_off(ctx, prim_ss);
-            if is_switchable {
-                sink.push(
-                    "RET_NO_ELEMENTS",
-                    None,
-                    Some(pd.name.clone()),
-                    None,
-                    pd.name.clone(),
-                    1,
-                    flops.len(),
-                    format!(
-                        "switchable domain `{}` contains {} sequential element(s) with no active retention strategy",
-                        pd.name,
-                        flops.len()
-                    ),
-                    pd.loc.clone(),
-                    ctx.graph.format_loc(flops[0].loc),
-                    None,
-                );
+            if let StrategyMatch::Matched(ret) = m {
+                matched_ret_strats.insert(ret.id.0 as usize);
+                check_retained_flop(ctx, pd.id, &pd.name, prim_ss, fl, ret, sink);
             }
         }
     }
@@ -810,14 +776,24 @@ pub(crate) fn check_port_attributes(ctx: &mut Stage2Ctx<'_>, sink: &mut Violatio
     }
 }
 
+#[allow(dead_code)]
 fn domain_can_turn_off(ctx: &Stage2Ctx<'_>, ss: informal_upf::SupplySetId) -> bool {
     ctx.resolved
         .ss_states
         .get(ss.0 as usize)
         .is_some_and(|states| {
-            states
-                .iter()
-                .any(|st| st.simstate.is_some_and(|s| !s.is_normal()))
+            states.iter().any(|st| {
+                !st.illegal
+                    && (st.rail_states.iter().any(|r| r.is_off)
+                        || st.simstate.is_some_and(|s| {
+                            matches!(
+                                s,
+                                informal_upf::SimState::Corrupt
+                                    | informal_upf::SimState::Off
+                                    | informal_upf::SimState::NotNormal
+                            )
+                        }))
+            })
         })
 }
 

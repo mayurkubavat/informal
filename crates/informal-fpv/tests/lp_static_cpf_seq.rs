@@ -216,10 +216,6 @@ end_design
         va.iter().any(|v| v.rule_id == "ISO_MISSING"),
         "Repro A: expected ISO_MISSING: {va:#?}"
     );
-    assert!(
-        va.iter().any(|v| v.rule_id == "RET_NO_ELEMENTS"),
-        "Repro A: expected RET_NO_ELEMENTS: {va:#?}"
-    );
 
     // Repro B: `top_b.cpf` w/ `end_design` + `sub_b.cpf` updating `/PSW_WRAP` + `create_power_mode` + `end_design`.
     let top_b = r#"
@@ -792,14 +788,6 @@ fn r22_adv_fb2_sequential_cpf_upf_add_power_state_rtl() {
     assert_eq!(
         v_upd.iter().filter(|v| v.rule_id == "ISO_MISSING").count(),
         2,
-        "{v_upd:#?}"
-    );
-    assert_eq!(
-        v_upd
-            .iter()
-            .filter(|v| v.rule_id == "RET_NO_ELEMENTS")
-            .count(),
-        1,
         "{v_upd:#?}"
     );
 

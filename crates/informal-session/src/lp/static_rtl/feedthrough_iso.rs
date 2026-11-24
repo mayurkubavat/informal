@@ -524,6 +524,12 @@ fn check_case_b_routes(
     let mut all_routes_uncovered = true;
 
     for route in &group.feedthrough_routes {
+        // An always-on repeater buffer is only required when the traversed domain's
+        // supply rail can actually power OFF (not when a FULL_ON rail enters an
+        // activity-gated CORRUPT_ON_ACTIVITY / CORRUPT_STATE_ON_ACTIVITY state).
+        if !supply_set_can_power_off(ctx, dst_ss) {
+            continue;
+        }
         let mut route_w = ctx.sat.can_be_off_while_on(dst_ss, src_ss);
         let mut down_name = ctx.domain_name(dst_pd);
         if route_w.is_none() {
@@ -653,4 +659,24 @@ fn distinct_bit_width(ranges: impl Iterator<Item = BitRange>) -> u32 {
         }
     }
     total + cur.width()
+}
+
+fn supply_set_can_power_off(ctx: &Stage2Ctx<'_>, ss: SupplySetId) -> bool {
+    ctx.resolved
+        .ss_states
+        .get(ss.0 as usize)
+        .is_some_and(|states| {
+            states.iter().any(|st| {
+                !st.illegal
+                    && (st.rail_states.iter().any(|r| r.is_off)
+                        || st.simstate.is_some_and(|s| {
+                            matches!(
+                                s,
+                                informal_upf::SimState::Corrupt
+                                    | informal_upf::SimState::Off
+                                    | informal_upf::SimState::NotNormal
+                            )
+                        }))
+            })
+        })
 }

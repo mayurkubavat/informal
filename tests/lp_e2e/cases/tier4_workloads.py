@@ -383,7 +383,11 @@ def _case_t4_w2(ctx: E2EContext) -> None:
     assert has_lp_domain_signals(vcd_part, "PD_CORE"), "Expected lp.pd.PD_CORE.* signals in partial-retention VCD"
     assert signals_diverge(vcd_part), "Expected m0/m1 divergence on partial-retention VCD"
     divs = find_divergences(vcd_part)
-    dout_divs = [(t, a, b) for lbl, t, a, b in divs if "dout" in lbl.lower()]
+    dout_divs = [
+        (t, a, b)
+        for lbl, t, a, b in divs
+        if lbl.rsplit(".", 1)[-1].lower() in {"dout", "lp_corrupt_dout"}
+    ]
     assert dout_divs, f"Expected dout m0/m1 divergence post-wakeup, got: {divs!r}"
 
     # Verify isolation kept dout identical while iso_en == 1

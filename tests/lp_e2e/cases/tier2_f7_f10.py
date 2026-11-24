@@ -116,12 +116,23 @@ def _resolve_workdir_file(shell_workdir: Path, raw_path: str) -> Path:
 
 
 def _find_vcd_for_prop(shell_workdir: Path, prop_name: str) -> Path:
-    direct = shell_workdir / f"{prop_name}.vcd"
-    if direct.is_file():
-        return direct
-    matches = sorted(shell_workdir.rglob(f"*{prop_name}*.vcd"))
-    if matches:
-        return matches[0]
+    candidates = [
+        prop_name,
+        prop_name.replace("::", "__"),
+        prop_name.split("::")[-1],
+    ]
+    for cand in candidates:
+        direct = shell_workdir / f"{cand}.vcd"
+        if direct.is_file():
+            return direct
+    for cand in candidates:
+        matches = sorted(
+            p
+            for p in shell_workdir.rglob(f"*{cand}*.vcd")
+            if not p.stem.endswith("_precondition")
+        )
+        if matches:
+            return matches[0]
     all_vcds = sorted(shell_workdir.rglob("*.vcd"))
     if len(all_vcds) == 1:
         return all_vcds[0]
@@ -254,14 +265,14 @@ puts "===CSV_END==="
         raise AssertionError(f"Expected non-empty why_cex events: {why!r}")
 
     vcd = parse_vcd_file(_find_vcd_for_prop(shell_workdir, prop_name))
-    ack_sigs = vcd.find_signals("*pwr_ack*")
-    iso_sigs = vcd.find_signals("*iso_en*")
+    ack_sigs = [s for s in vcd.find_signals("*pwr_ack") if s.width == 1] or vcd.find_signals("*pwr_ack*")
+    iso_sigs = [s for s in vcd.find_signals("*iso_en") if s.width == 1] or vcd.find_signals("*iso_en*")
     if not ack_sigs or not iso_sigs:
         raise AssertionError(f"Expected pwr_ack and iso_en in VCD signals={vcd.signal_paths()!r}")
     witnessed = any(
         t > 0
-        and vcd.value_at(iso_sigs[0], t) == "0"
-        and vcd.value_at(ack_sigs[0], t) == "0"
+        and any(vcd.value_at(i_s, t) == "0" for i_s in iso_sigs)
+        and any(vcd.value_at(a_s, t) == "0" for a_s in ack_sigs)
         for t in vcd.times
     )
     if not witnessed:

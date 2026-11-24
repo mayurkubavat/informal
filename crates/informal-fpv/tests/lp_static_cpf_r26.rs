@@ -491,11 +491,19 @@ fn adv1_cross_scope_update_pm_illegal_and_isolation_control_seq_matches_nested()
         "u_a/PM_X should be illegal so PD_A cannot turn off: {:?}",
         s.lp.violations
     );
+    let resolved = s.lp.resolved.as_ref().expect("resolved");
+    let pd_b = resolved
+        .intent
+        .domains
+        .iter()
+        .find(|d| d.name == "u_b/PD_B")
+        .expect("u_b/PD_B");
+    let ss_b = resolved.primary_ss(pd_b.id).expect("ss_b");
     assert!(
-        s.lp.violations
+        resolved.ss_states[ss_b.0 as usize]
             .iter()
-            .any(|v| v.rule_id == "RET_NO_ELEMENTS" && v.signal == "u_b/PD_B"),
-        "u_b/PM_X must remain intact so u_b/PD_B still has OFF state: {:?}",
-        s.lp.violations
+            .any(|st| !st.illegal && st.rail_states.iter().any(|r| r.is_off)),
+        "u_b/PM_X must remain intact so u_b/PD_B still has legal OFF state: {:?}",
+        resolved.ss_states[ss_b.0 as usize]
     );
 }

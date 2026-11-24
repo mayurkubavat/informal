@@ -10,7 +10,7 @@ use informal_upf::{
     DEFAULT_VOLTAGE_TOL_UV,
 };
 
-use super::{expand_env, note, Args};
+use super::{expand_env, Args};
 use crate::lp::finder_bridge::DesignFinder;
 use crate::lp::report::{self, ReportFilter};
 use crate::lp::{CheckLpOpts, LpStage, LpStatus};
@@ -147,6 +147,13 @@ fn check_lp_impl(s: &mut Session, a: &[String], default_stage: LpStage) -> Resul
         None => DEFAULT_VOLTAGE_TOL_UV,
     };
     if s.dry_run {
+        if (stage == LpStage::Formal
+            || a.flag("-prove_corruption")
+            || a.flag("-prove_waivers"))
+            && !s.tasks.iter().any(|t| t.name == "LowPower")
+        {
+            let _ = s.create_task("LowPower");
+        }
         return Ok(().into());
     }
     if a.flag("-clear") {
@@ -161,18 +168,6 @@ fn check_lp_impl(s: &mut Session, a: &[String], default_stage: LpStage) -> Resul
         sec: a.flag("-sec"),
         lec: a.flag("-lec"),
     };
-    if opts.prove_corruption
-        || opts.prove_waivers
-        || opts.sec
-        || opts.lec
-        || a.flag("-aag")
-        || a.flag("-prove")
-    {
-        note(&format!(
-            "{}: formal/LEC options (-prove_corruption/-prove_waivers/-sec/-lec/-aag/-prove) run Stage 1–2 static analysis in WS3 (formal engines arrive in WS4–WS5)",
-            a.cmd
-        ));
-    }
     crate::lp::check_lp(s, &opts)?;
 
     let text = if a.flag("-json") {

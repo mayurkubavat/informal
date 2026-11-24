@@ -78,8 +78,25 @@ pub(crate) fn check_crossing(
             // `-no_isolation` explicitly suppresses `ISO_MISSING`.
         }
         StrategyMatch::Matched(iso) => {
-            // 2. `ISO_REDUNDANT`
-            if corrupt_witness.is_none() && !iso.force_isolation {
+            // 2. `ISO_REDUNDANT` (do not flag when source has activity-triggered corruption states).
+            let src_has_act_corrupt = ctx
+                .resolved
+                .ss_states
+                .get(src_ss.0 as usize)
+                .is_some_and(|states| {
+                    states.iter().any(|st| {
+                        !st.illegal
+                            && st.simstate.is_some_and(|s| {
+                                matches!(
+                                    s,
+                                    informal_upf::SimState::CorruptOnActivity
+                                        | informal_upf::SimState::CorruptStateOnActivity
+                                        | informal_upf::SimState::CorruptStateOnChange
+                                )
+                            })
+                    })
+                });
+            if corrupt_witness.is_none() && !iso.force_isolation && !src_has_act_corrupt {
                 sink.push(
                     "ISO_REDUNDANT",
                     None,

@@ -237,6 +237,153 @@ pub const RULES: &[LpRuleMeta] = &[
         default_severity: LpSeverity::Warning,
         summary: "Top-level port in a switchable domain lacks driver_supply/receiver_supply attribute",
     },
+    // Stage 3: Post-Synthesis Gate Netlist + Liberty
+    LpRuleMeta {
+        id: "ISO_CELL_MISSING",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Cross-domain crossing lacks an instantiated Liberty isolation cell",
+    },
+    LpRuleMeta {
+        id: "ISO_CELL_MISMATCH",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Instantiated isolation cell clamp/enable polarity/location disagrees with UPF strategy",
+    },
+    LpRuleMeta {
+        id: "ISO_LOGIC_BEFORE_CELL",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Non-AON logic gate in sink domain precedes the isolation cell on a crossing",
+    },
+    LpRuleMeta {
+        id: "LS_CELL_MISSING",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Cross-voltage crossing lacks an instantiated Liberty level-shifter cell",
+    },
+    LpRuleMeta {
+        id: "LS_DIR_CELL_MISMATCH",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Level-shifter cell direction (HL/LH) mismatches PST voltage relation",
+    },
+    LpRuleMeta {
+        id: "LS_VRANGE_CELL_MISMATCH",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Level-shifter cell input/output voltage range does not cover PST voltages",
+    },
+    LpRuleMeta {
+        id: "LS_ORDER_VIOLATION",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Level shifter precedes isolation cell without combined ELS support",
+    },
+    LpRuleMeta {
+        id: "AON_NON_AON_BUFFER",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Regular non-always-on buffer or gate on isolation/retention control or AON feedthrough inside switchable domain",
+    },
+    LpRuleMeta {
+        id: "RET_CELL_UNMAPPED",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Sequential cell matching set_retention_elements is not mapped to a Liberty retention cell",
+    },
+    LpRuleMeta {
+        id: "RET_PIN_UNCONNECTED",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Retention cell save/restore pin is unconnected or tied improperly",
+    },
+    LpRuleMeta {
+        id: "MACRO_PIN_SUPPLY_CROSSING",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Multi-rail macro pin related_power_pin domain crosses external driver/load without isolation or level shifter",
+    },
+    // Stage 4: Physical Power/Ground (PG) Netlist
+    LpRuleMeta {
+        id: "PG_PIN_UNCONNECTED",
+        stage: LpStage::Pg,
+        default_severity: LpSeverity::Error,
+        summary: "Liberty pg_pin on an instantiated cell is unconnected in the PG netlist",
+    },
+    LpRuleMeta {
+        id: "PG_SUPPLY_MISMATCH",
+        stage: LpStage::Pg,
+        default_severity: LpSeverity::Error,
+        summary: "Cell primary power/ground PG pin is connected to a supply net other than its UPF domain primary supply",
+    },
+    LpRuleMeta {
+        id: "PG_BACKUP_MISMATCH",
+        stage: LpStage::Pg,
+        default_severity: LpSeverity::Error,
+        summary: "Cell backup/always-on power pin is connected to a switchable or wrong supply net",
+    },
+    LpRuleMeta {
+        id: "PG_SHORT",
+        stage: LpStage::Pg,
+        default_severity: LpSeverity::Error,
+        summary: "Two incompatible supply nets or rails are physically shorted together",
+    },
+    LpRuleMeta {
+        id: "PG_BIAS_MISMATCH",
+        stage: LpStage::Pg,
+        default_severity: LpSeverity::Error,
+        summary: "Cell well/bias pin (nwell/pwell) connection mismatches UPF supply set",
+    },
+    LpRuleMeta {
+        id: "PG_SWITCH_CHAIN_BROKEN",
+        stage: LpStage::Pg,
+        default_severity: LpSeverity::Error,
+        summary: "Power switch cell supply chain or switch_function connection is broken",
+    },
+    // Stage 5: Formal Low-Power Verification
+    LpRuleMeta {
+        id: "ISO_CORRUPTION_LEAK",
+        stage: LpStage::Formal,
+        default_severity: LpSeverity::Error,
+        summary: "2-copy formal corruption proof found power-off or activity corruption reaching an active output",
+    },
+    LpRuleMeta {
+        id: "RET_POST_WAKEUP_X",
+        stage: LpStage::Formal,
+        default_severity: LpSeverity::Error,
+        summary: "Unretained sequential register corrupted during power-off leaks to an active output after wakeup",
+    },
+    LpRuleMeta {
+        id: "LP_PMU_SEQ_FAIL",
+        stage: LpStage::Formal,
+        default_severity: LpSeverity::Error,
+        summary: "PMU power-control sequence violated isolation or retention ordering assertion",
+    },
+    LpRuleMeta {
+        id: "LP_PST_ILLEGAL_REACHED",
+        stage: LpStage::Formal,
+        default_severity: LpSeverity::Error,
+        summary: "PMU hardware reached an illegal power state table combination",
+    },
+    LpRuleMeta {
+        id: "LP_RET_VALUE_CORRUPTED",
+        stage: LpStage::Formal,
+        default_severity: LpSeverity::Error,
+        summary: "Retained register value was not preserved across sleep/restore cycle",
+    },
+    LpRuleMeta {
+        id: "LP_SEC_MISMATCH",
+        stage: LpStage::Formal,
+        default_severity: LpSeverity::Error,
+        summary: "Power-aware sequential equivalence check found output divergence against golden RTL",
+    },
+    LpRuleMeta {
+        id: "LP_LEC_MISMATCH",
+        stage: LpStage::Netlist,
+        default_severity: LpSeverity::Error,
+        summary: "Power-aware RTL+UPF vs Netlist+UPF equivalence check found clamp or logic mismatch",
+    },
 ];
 
 pub fn lookup_rule(id: &str) -> Option<&'static LpRuleMeta> {

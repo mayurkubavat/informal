@@ -354,7 +354,7 @@ pub fn run_stage2(s: &mut Session, opts: &CheckLpOpts) -> Result<(), String> {
     Ok(())
 }
 
-fn assign_cell_domains(
+pub(crate) fn assign_cell_domains(
     graph: &StructuralGraph,
     resolved: &ResolvedPowerIntent,
 ) -> Vec<Option<PowerDomainId>> {
@@ -453,7 +453,7 @@ pub(super) fn pin_full_path(
     }
 }
 
-fn collect_strategy_slice_cuts(
+pub(crate) fn collect_strategy_slice_cuts(
     graph: &StructuralGraph,
     resolved: &ResolvedPowerIntent,
     group: &CrossingGroup,
