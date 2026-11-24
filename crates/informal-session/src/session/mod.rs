@@ -54,6 +54,7 @@ impl Session {
             engines,
             elab: None,
             compiled: None,
+            fast_gate: None,
             hierarchy: Vec::new(),
             frontend: String::new(),
             stop: Arc::default(),
@@ -104,6 +105,15 @@ impl Session {
         self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
+    }
+
+    /// Returns the active hierarchical pin-net [`informal_svlang::StructuralGraph`]
+    /// from either full `svlang` elaboration or the Liberty-backed gate/PG fast path.
+    pub fn struct_graph(&self) -> Option<&informal_svlang::StructuralGraph> {
+        if let Some(ref fg) = self.fast_gate {
+            return Some(fg.struct_graph());
+        }
+        self.compiled.as_ref().map(|c| c.struct_graph())
     }
 
     /// Write property `i`'s trace as `<workdir>/<name>.vcd` from the

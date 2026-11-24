@@ -83,6 +83,7 @@ fn apply_compile_words(
     }
     s.elaborated = false;
     s.compiled = None;
+    s.fast_gate = None;
     s.lp.invalidate_design();
     Ok(())
 }
@@ -117,6 +118,7 @@ pub(super) fn set_lowering(s: &mut Session, a: &[String]) -> Result<Value, Strin
     // elaborate or prove.
     s.elaborated = false;
     s.compiled = None;
+    s.fast_gate = None;
     s.lp.invalidate_design();
     Ok(().into())
 }
@@ -151,6 +153,7 @@ pub(super) fn jg_analyze(s: &mut Session, a: &[String]) -> Result<Value, String>
                 }
             }
             s.compiled = None;
+            s.fast_gate = None;
             s.lp.invalidate_design();
             i += 1;
         } else if w == "-lib" || w == "-L" {
@@ -164,6 +167,7 @@ pub(super) fn jg_analyze(s: &mut Session, a: &[String]) -> Result<Value, String>
             s.design.analyze_bbox.clear();
             s.design.bbox.clear();
             s.compiled = None;
+            s.fast_gate = None;
             s.lp.invalidate_design();
         } else {
             words.push(a[i].clone());
@@ -408,6 +412,7 @@ pub(super) fn set_blackbox(s: &mut Session, a: &[String]) -> Result<Value, Strin
     s.design.bbox.extend(list("-designs"));
     s.design.bbox_instances.extend(list("-cells"));
     s.compiled = None;
+    s.fast_gate = None;
     s.lp.invalidate_design();
     if s.elaborated {
         note("set_blackbox: takes effect at the next elaborate / read_file");

@@ -4,15 +4,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use informal_svlang::struct_graph::{normalize_query_path, normalize_sv_leaf};
+use informal_svlang::struct_graph::{normalize_query_path, normalize_sv_leaf, StructuralGraph};
 use informal_svlang::{CompiledDesign, PortDir};
 use informal_upf::{glob, ObjectFinder, ObjectType, SignalWidthProvider, SupplyDirection};
 
-/// Pre-indexed `Send + Sync + 'static` bridge from elaborated RTL to `informal-upf`.
+use crate::session::Session;
+
+/// Pre-indexed `Send + Sync + 'static` bridge from elaborated RTL or fast-path
+/// gate/PG netlists to `informal-upf`.
 #[derive(Debug, Clone, Default)]
 pub struct DesignFinder {
     pub has_rtl: bool,
     pub top: String,
+    pub fast_graph: Option<Arc<StructuralGraph>>,
     pub scopes: BTreeSet<String>,
     pub insts: Vec<String>,
     pub mods: Vec<String>,
@@ -27,6 +31,30 @@ pub struct DesignFinder {
 impl DesignFinder {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Builds a finder from the live [`Session`], using zero-copy O(1) graph
+    /// queries when a Liberty-backed fast-path gate/PG netlist is loaded.
+    pub fn from_session(s: &Session) -> Self {
+        if let Some(ref fg) = s.fast_gate {
+            return Self::from_fast_graph(fg.struct_graph_arc(), s.design.top.as_deref());
+        }
+        Self::from_compiled(s.compiled.as_ref(), s.design.top.as_deref())
+    }
+
+    /// Zero-copy finder directly backed by an `Arc<StructuralGraph>` (O(1) for
+    /// exact UPF queries on 100k+ cell gate/PG netlists).
+    pub fn from_fast_graph(graph: Arc<StructuralGraph>, top: Option<&str>) -> Self {
+        let resolved_top = top
+            .map(normalize_sv_leaf)
+            .or_else(|| graph.top_names.first().cloned())
+            .unwrap_or_default();
+        Self {
+            has_rtl: true,
+            top: resolved_top,
+            fast_graph: Some(graph),
+            ..Self::default()
+        }
     }
 
     pub fn from_compiled(compiled: Option<&Arc<CompiledDesign>>, top: Option<&str>) -> Self {
@@ -191,6 +219,139 @@ impl DesignFinder {
             }
         }
     }
+    fn find_objects_fast(
+        &self,
+        g: &StructuralGraph,
+        scope_path: &str,
+        patterns: &[String],
+        obj_type: Option<ObjectType>,
+        transitive: bool,
+        direction: Option<SupplyDirection>,
+    ) -> Vec<String> {
+        let scope_norm = self.normalize_scope_arg(scope_path);
+        let mut out = BTreeSet::new();
+
+        // Fast O(1) exact path lookup when patterns contain no glob wildcards.
+        let has_glob = patterns
+            .iter()
+            .any(|p| p.contains('*') || p.contains('?') || p.contains('['));
+        if !has_glob {
+            for raw_p in patterns {
+                let norm_p = normalize_query_path(raw_p);
+                let full = if scope_norm.is_empty() {
+                    norm_p.clone()
+                } else if norm_p.is_empty() {
+                    scope_norm.clone()
+                } else {
+                    format!("{scope_norm}/{norm_p}")
+                };
+                if matches!(obj_type, None | Some(ObjectType::Inst | ObjectType::Cell)) {
+                    if let Some(cid) = g.lookup_cell_by_upf(&full) {
+                        let up = &g.cell(cid).upf_path;
+                        if !up.is_empty() {
+                            out.insert(up.clone());
+                        }
+                    }
+                }
+                if matches!(obj_type, None | Some(ObjectType::Port | ObjectType::Pin)) {
+                    if let Some(pid) = g.lookup_pin_by_upf(&full) {
+                        let p = g.pin(pid);
+                        let pdir = p.dir.and_then(port_dir_to_supply);
+                        if direction.is_none() || pdir == direction {
+                            out.insert(p.upf_path.clone());
+                        }
+                    }
+                }
+                if matches!(obj_type, None | Some(ObjectType::Net | ObjectType::Reg)) {
+                    if let Some(nid) = g.lookup_net_by_upf(&full) {
+                        out.insert(g.net(nid).upf_path.clone());
+                    }
+                }
+                if matches!(obj_type, None | Some(ObjectType::Reg)) {
+                    if let Some(cid) = g.lookup_cell_by_upf(&full) {
+                        let c = g.cell(cid);
+                        if !c.flops.is_empty() || !c.latches.is_empty() {
+                            out.insert(c.upf_path.clone());
+                        }
+                    }
+                }
+            }
+            if !out.is_empty() || matches!(obj_type, Some(ObjectType::Inst | ObjectType::Cell)) {
+                return out.into_iter().collect();
+            }
+        }
+
+        let norm_pats: Vec<String> = patterns.iter().map(|p| normalize_query_path(p)).collect();
+        let matches_item = |item: &str| -> bool {
+            let rel = if scope_norm.is_empty() {
+                item
+            } else if let Some(rest) = item.strip_prefix(&format!("{scope_norm}/")) {
+                rest
+            } else {
+                return false;
+            };
+            if !transitive && rel.contains('/') {
+                return false;
+            }
+            let leaf = rel.rsplit('/').next().unwrap_or(rel);
+            patterns.iter().zip(&norm_pats).any(|(raw_p, norm_p)| {
+                glob(raw_p, item)
+                    || glob(raw_p, rel)
+                    || glob(raw_p, leaf)
+                    || glob(norm_p, item)
+                    || glob(norm_p, rel)
+                    || glob(norm_p, leaf)
+            })
+        };
+
+        if matches!(obj_type, None | Some(ObjectType::Inst | ObjectType::Cell)) {
+            for c in &g.cells {
+                if !c.upf_path.is_empty() && matches_item(&c.upf_path) {
+                    out.insert(c.upf_path.clone());
+                }
+            }
+        }
+        if matches!(obj_type, Some(ObjectType::Mod)) {
+            for c in &g.cells {
+                if !c.module.is_empty() && matches_item(&c.module) {
+                    out.insert(c.module.clone());
+                }
+            }
+        }
+        if matches!(obj_type, None | Some(ObjectType::Port | ObjectType::Pin)) {
+            for p in &g.pins {
+                if p.upf_path.is_empty() {
+                    continue;
+                }
+                let pdir = p.dir.and_then(port_dir_to_supply);
+                if (direction.is_none() || pdir == direction) && matches_item(&p.upf_path) {
+                    out.insert(p.upf_path.clone());
+                }
+            }
+        }
+        if matches!(obj_type, None | Some(ObjectType::Net)) {
+            for n in &g.nets {
+                if !n.upf_path.is_empty() && matches_item(&n.upf_path) {
+                    out.insert(n.upf_path.clone());
+                }
+            }
+        }
+        if matches!(obj_type, None | Some(ObjectType::Reg)) {
+            for c in &g.cells {
+                for fl in &c.flops {
+                    if !fl.upf_path.is_empty() && matches_item(&fl.upf_path) {
+                        out.insert(fl.upf_path.clone());
+                    }
+                }
+                for la in &c.latches {
+                    if !la.upf_path.is_empty() && matches_item(&la.upf_path) {
+                        out.insert(la.upf_path.clone());
+                    }
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
 }
 
 fn port_dir_to_supply(dir: PortDir) -> Option<SupplyDirection> {
@@ -212,6 +373,9 @@ impl ObjectFinder for DesignFinder {
             return false;
         }
         let norm = self.normalize_scope_arg(scope_path);
+        if let Some(ref g) = self.fast_graph {
+            return norm.is_empty() || g.lookup_cell_by_upf(&norm).is_some();
+        }
         self.scopes.contains(&norm)
     }
 
@@ -235,6 +399,9 @@ impl ObjectFinder for DesignFinder {
     ) -> Vec<String> {
         if !self.has_rtl {
             return Vec::new();
+        }
+        if let Some(ref g) = self.fast_graph {
+            return self.find_objects_fast(g, scope_path, patterns, obj_type, transitive, direction);
         }
         let mut out = BTreeSet::new();
         match obj_type {
@@ -302,6 +469,28 @@ impl ObjectFinder for DesignFinder {
         if !self.has_rtl {
             return false;
         }
+        if let Some(ref g) = self.fast_graph {
+            let entry = g
+                .lookup_net_by_upf(base_path)
+                .map(|nid| {
+                    let n = g.net(nid);
+                    (n.width.max(1), n.packed_bounds)
+                })
+                .or_else(|| {
+                    g.lookup_pin_by_upf(base_path).map(|pid| {
+                        let p = g.pin(pid);
+                        (p.width.max(1), p.packed_bounds)
+                    })
+                });
+            let Some((width, packed_bounds)) = entry else {
+                return false;
+            };
+            let (lo_b, hi_b) = match packed_bounds {
+                Some((l, r)) => (l.min(r), l.max(r)),
+                None => (0, (width.saturating_sub(1)) as i128),
+            };
+            return msb.min(lsb) >= lo_b && msb.max(lsb) <= hi_b;
+        }
         let lookup = |k: &str| self.signal_bounds.get(k).copied();
         let entry = lookup(base_path).or_else(|| {
             let norm = normalize_query_path(base_path);
@@ -328,6 +517,15 @@ impl ObjectFinder for DesignFinder {
 
 impl SignalWidthProvider for DesignFinder {
     fn width_of(&self, sig: &str) -> Option<u32> {
+        if let Some(ref g) = self.fast_graph {
+            if let Some(nid) = g.lookup_net_by_upf(sig) {
+                return Some(g.net(nid).width.max(1));
+            }
+            if let Some(pid) = g.lookup_pin_by_upf(sig) {
+                return Some(g.pin(pid).width.max(1));
+            }
+            return None;
+        }
         if let Some(&w) = self.signal_widths.get(sig) {
             return Some(w);
         }

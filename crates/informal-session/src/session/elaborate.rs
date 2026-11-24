@@ -92,6 +92,34 @@ impl Session {
         if self.design.files.is_empty() {
             bail!("no design files: run analyze / read_file first");
         }
+        let prev_fast = self.fast_gate.take();
+        if let Some(ref lib) = self.lp.liberty {
+            if let Some(fast) = informal_svlang::try_elaborate_fast_cached(
+                prev_fast.as_ref(),
+                &self.design.files,
+                self.design.top.as_deref(),
+                lib,
+            )
+            .map_err(|e| anyhow::anyhow!("Gate/PG elaboration error:\n{e}"))?
+            {
+                self.design.top = Some(fast.top.clone());
+                self.hierarchy = fast.design.instances.clone();
+                self.design.hierarchy = fast.design.hierarchy.clone();
+                self.elab = Some(fast.design.clone());
+                std::fs::create_dir_all(&self.workdir)?;
+                let tree = self.workdir.join("design.hierarchy.json");
+                if self.design.hierarchy.is_empty() {
+                    let _ = std::fs::remove_file(&tree);
+                } else {
+                    std::fs::write(&tree, serde_json::to_string_pretty(&self.design.hierarchy)?)?;
+                }
+                self.compiled = None;
+                self.fast_gate = Some(fast);
+                self.elaborated = true;
+                self.lp.invalidate_design();
+                return Ok(());
+            }
+        }
         let prev = self.compiled.take();
         let req = informal_svlang::Request {
             files: self.design.files.clone(),

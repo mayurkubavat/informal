@@ -10,6 +10,7 @@
 pub mod assist;
 pub mod cache;
 mod compile_lower;
+pub mod gate_fast;
 pub mod ral;
 pub mod struct_graph;
 mod types;
@@ -17,6 +18,9 @@ mod types;
 pub use cache::{
     cache_stats, compile_cached, design_from_compiled, lower_from_compiled, CacheStats,
     CompileFingerprint, CompiledDesign, FileDigest, LowerKey,
+};
+pub use gate_fast::{
+    elaborate_fast_cached, should_use_fast_path, try_elaborate_fast_cached, FastGateDesign,
 };
 pub(crate) use compile_lower::{
     design_stats, driver, hint, immediate_checks, model, rtl_properties, show,

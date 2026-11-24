@@ -773,6 +773,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "informal-liberty"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "informal-llm"
 version = "0.1.0"
 dependencies = [
@@ -813,6 +821,7 @@ dependencies = [
  "informal-bmc",
  "informal-engine",
  "informal-ir",
+ "informal-liberty",
  "informal-svlang",
  "informal-trace",
  "informal-upf",
@@ -826,6 +835,7 @@ name = "informal-svlang"
 version = "0.1.0"
 dependencies = [
  "informal-ir",
+ "informal-liberty",
  "serde",
  "sha2",
  "svlang",

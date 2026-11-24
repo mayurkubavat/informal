@@ -9,12 +9,18 @@
 //!   isolation clamping) and proves 1-cycle combinational equivalence against
 //!   synthesized gate-level `imp` (with physical stdcell ISO/LS cells).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use informal_liberty::{LibertyDb, PinDir};
+use informal_svlang::struct_graph::{CellId, StructuralGraph};
+use informal_upf::{PstSat, ResolvedPowerIntent};
+
 use super::aag::push_formal_violation;
-use super::iso_ret_models::{build_pa_model, PaMode};
+use super::iso_ret_models::{build_pa_model, build_pa_model_with_skip, PaMode};
 use crate::lp::ensure_resolved_with_finder;
 use crate::lp::finder_bridge::DesignFinder;
+use crate::lp::static_gate_pg::pg_ctx::{pin_parent_nets, GatePgCtx};
 use crate::sec::{prove_sec_from_btor, SecCheck, SecStatus};
 use crate::session::Session;
 
@@ -134,13 +140,23 @@ fn run_lp_equiv(s: &mut Session, lec: bool) -> Result<(), String> {
         let finder = DesignFinder::from_compiled(Some(&spec_cd), Some(&spec_top));
         let resolved = ensure_resolved_with_finder(s, &finder)?;
         let spec_graph = spec_cd.struct_graph();
-        let pa_spec = build_pa_model(
+        let skip_iso = match s.lp.liberty.as_deref() {
+            Some(lib) => collect_aon_macro_output_nets(
+                imp_cd.struct_graph(),
+                &resolved,
+                lib,
+                &finder,
+            ),
+            None => HashSet::new(),
+        };
+        let pa_spec = build_pa_model_with_skip(
             &l_spec.btor2,
             spec_graph,
             &resolved,
             Some(&spec_top),
             PaMode::IsoClampOnly,
             0,
+            &skip_iso,
         )?;
         (pa_spec.btor2, l_imp.btor2)
     } else {
@@ -199,4 +215,49 @@ fn run_lp_equiv(s: &mut Session, lec: bool) -> Result<(), String> {
         s.lp.stages_run.push("formal".to_string());
     }
     Ok(())
+}
+
+/// Identifies output nets driven by Liberty macro pins whose `related_power_pin`
+/// connects to an always-on (non-switchable) supply rail in `imp_graph`.
+fn collect_aon_macro_output_nets(
+    imp_graph: &StructuralGraph,
+    resolved: &ResolvedPowerIntent,
+    liberty: &LibertyDb,
+    finder: &DesignFinder,
+) -> HashSet<String> {
+    let mut skip = HashSet::new();
+    let mut sat =
+        PstSat::build_with_width_provider(resolved, informal_upf::DEFAULT_VOLTAGE_TOL_UV, finder);
+    let mut ctx = GatePgCtx::new(imp_graph, resolved, liberty, &mut sat);
+    let n_cells = imp_graph.cells.len();
+    for raw_id in 0..n_cells {
+        let cid = CellId(raw_id as u32);
+        let module = imp_graph.cell(cid).module.clone();
+        let Some(lib_c) = liberty.cell(&module) else {
+            continue;
+        };
+        if !lib_c.is_macro_cell {
+            continue;
+        }
+        let pins = imp_graph.cell(cid).pins.clone();
+        for pid in pins {
+            let pname = imp_graph.pin(pid).name.clone();
+            let Some(sp) = lib_c.pin(&pname) else {
+                continue;
+            };
+            if sp.direction != PinDir::Output {
+                continue;
+            }
+            if let Some(pin_ss) = ctx.effective_pin_ss(cid, &pname) {
+                if !ctx.is_ss_switchable(pin_ss) {
+                    for pnet in pin_parent_nets(imp_graph, pid) {
+                        let net = imp_graph.net(pnet);
+                        skip.insert(net.upf_path.clone());
+                        skip.insert(net.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    skip
 }

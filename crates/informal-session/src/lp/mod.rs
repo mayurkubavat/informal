@@ -4,6 +4,7 @@ pub mod finder_bridge;
 pub mod formal;
 pub mod report;
 pub mod rules;
+pub mod static_gate_pg;
 pub mod static_rtl;
 pub mod static_upf;
 
@@ -227,6 +228,8 @@ pub struct LpState {
     pub upf_files: Vec<LpLoadSpec>,
     pub liberty_files: Vec<PathBuf>,
     #[serde(skip)]
+    pub liberty: Option<Arc<informal_liberty::LibertyDb>>,
+    #[serde(skip)]
     pub intent: Option<PowerIntent>,
     #[serde(skip)]
     pub resolved: Option<ResolvedPowerIntent>,
@@ -245,6 +248,7 @@ impl Default for LpState {
         Self {
             upf_files: Vec::new(),
             liberty_files: Vec::new(),
+            liberty: None,
             intent: None,
             resolved: None,
             pst_consistent: None,
@@ -354,10 +358,7 @@ pub fn load_upf(
     if !path.is_file() {
         return Err(format!("load_upf: file not found: {}", path.display()));
     }
-    let finder = Arc::new(DesignFinder::from_compiled(
-        s.compiled.as_ref(),
-        s.design.top.as_deref(),
-    ));
+    let finder = Arc::new(DesignFinder::from_session(s));
     let spec = LpLoadSpec {
         path: path.to_path_buf(),
         scope: scope.map(String::from),
@@ -395,19 +396,29 @@ pub fn load_upf(
     Ok(())
 }
 
-/// Records `.lib` file path(s) in `s.lp.liberty_files` (parsed in WS5 Stage 3).
+/// Parses `.lib` file(s) via `informal-liberty` and merges them into `s.lp.liberty`.
 pub fn read_liberty(s: &mut Session, paths: &[PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return Err("read_liberty: at least one .lib path is required".to_string());
     }
+    let mut db = s
+        .lp
+        .liberty
+        .as_deref()
+        .cloned()
+        .unwrap_or_default();
     for p in paths {
         if !p.is_file() {
             return Err(format!("read_liberty: file not found: {}", p.display()));
         }
+        db.merge_file(p).map_err(|e| e.to_string())?;
+    }
+    for p in paths {
         if !s.lp.liberty_files.contains(p) {
             s.lp.liberty_files.push(p.clone());
         }
     }
+    s.lp.liberty = Some(Arc::new(db));
     Ok(())
 }
 
@@ -427,7 +438,7 @@ pub fn check_lp(s: &mut Session, opts: &CheckLpOpts) -> Result<(), String> {
     match opts.stage {
         LpStage::Upf => {
             let t0 = Instant::now();
-            let finder = DesignFinder::from_compiled(s.compiled.as_ref(), s.design.top.as_deref());
+            let finder = DesignFinder::from_session(s);
             let resolved = ensure_resolved_with_finder(s, &finder)?;
             let t_sat = Instant::now();
             let mut sat = PstSat::build_with_width_provider(&resolved, opts.tol_uv, &finder);
@@ -453,11 +464,19 @@ pub fn check_lp(s: &mut Session, opts: &CheckLpOpts) -> Result<(), String> {
             s.lp.reapply_waivers();
             Ok(())
         }
-        LpStage::Rtl | LpStage::All => static_rtl::run_stage2(s, opts),
-        LpStage::Netlist | LpStage::Pg => Err(format!(
-            "check_lp: `-stage {}` requires Liberty/PG Stage 3–4 support (scheduled in WS5)",
-            opts.stage.word()
-        )),
+        LpStage::Rtl | LpStage::All => {
+            let is_gate_netlist = s.lp.liberty.as_deref().is_some_and(|lib| {
+                s.struct_graph()
+                    .is_some_and(|g| static_gate_pg::has_liberty_instances(g, lib))
+            });
+            if is_gate_netlist {
+                static_gate_pg::run_design_gate_pg(s, opts)
+            } else {
+                static_rtl::run_stage2(s, opts)
+            }
+        }
+        LpStage::Netlist => static_gate_pg::run_stage3_netlist(s, opts),
+        LpStage::Pg => static_gate_pg::run_stage4_pg(s, opts),
         LpStage::Formal => formal::run_formal_lp(s, opts),
     }
 }

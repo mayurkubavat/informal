@@ -387,6 +387,9 @@ pub struct Session {
     /// Cached two-tier compilation, elaboration, and lowered netlists.
     #[serde(skip)]
     pub compiled: Option<Arc<informal_svlang::CompiledDesign>>,
+    /// Cached Liberty-backed structural fast-path elaboration for gate/PG netlists.
+    #[serde(skip)]
+    pub fast_gate: Option<Arc<informal_svlang::FastGateDesign>>,
     /// Instance tree from slang, for the UI.
     pub hierarchy: Vec<informal_svlang::Instance>,
     /// Front end that built the last prove's models (`svlang` or `slang`).

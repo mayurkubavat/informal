@@ -88,6 +88,28 @@ pub fn build_pa_model(
     mode: PaMode,
     reset_steps: u32,
 ) -> Result<PaModel, String> {
+    build_pa_model_with_skip(
+        base_btor,
+        graph,
+        resolved,
+        top,
+        mode,
+        reset_steps,
+        &HashSet::new(),
+    )
+}
+
+/// Same as [`build_pa_model`], skipping UPF isolation clamping on any crossing
+/// whose source or destination net matches `skip_iso_nets`.
+pub fn build_pa_model_with_skip(
+    base_btor: &str,
+    graph: &StructuralGraph,
+    resolved: &ResolvedPowerIntent,
+    top: Option<&str>,
+    mode: PaMode,
+    reset_steps: u32,
+    skip_iso_nets: &HashSet<String>,
+) -> Result<PaModel, String> {
     let m = parse_full_model(base_btor)?;
     let cell_domain = assign_cell_domains(graph, resolved);
     let mut em = BtorEmitter::new(&m);
@@ -335,6 +357,13 @@ pub fn build_pa_model(
 
             let src_net = graph.net(sub.src_base_net);
             let dst_net = graph.net(sub.dst_base_net);
+            if skip_iso_nets.contains(&src_net.upf_path)
+                || skip_iso_nets.contains(&dst_net.upf_path)
+                || skip_iso_nets.contains(&src_net.name)
+                || skip_iso_nets.contains(&dst_net.name)
+            {
+                continue;
+            }
             let Some((raw_src_ref, w)) = resolve_btor_sig(&m, top, &src_net.full_path)
                 .or_else(|| resolve_btor_sig(&m, top, &dst_net.full_path))
             else {

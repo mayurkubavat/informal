@@ -16,5 +16,6 @@ informal-aig.workspace = true
 informal-bmc.workspace = true
 informal-svlang.workspace = true
 informal-upf.workspace = true
+informal-liberty.workspace = true
 informal-trace.workspace = true
 libc = "0.2"
