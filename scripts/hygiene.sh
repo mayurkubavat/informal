@@ -24,7 +24,6 @@ fi
 # informal-mcp/src, FormalApps).
 is_exempt_rs() {
     case "$1" in
-        crates/informal-bmc/src/lib.rs|\
         crates/informal-bmc/src/ic3.rs|\
         crates/informal-bmc/src/certify.rs|\
         crates/informal-bmc/src/klive.rs|\
