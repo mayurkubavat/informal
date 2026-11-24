@@ -416,14 +416,25 @@ set_isolation_control iso_core -domain PD_CORE \\
 
     // Run without isolation -> `check_lp` flags missing isolation violation on switchable PD_CORE -> PD_TOP crossing
     await runTcl(page, `analyze -sv12 {${svPath}}; elaborate -top soc_lp; clock clk; reset -expression {!rst_n}; load_upf {${upfBad}}; check_lp`);
-    await expect(page.locator(".console-log")).toContainText(/ISO|violation|FAIL/i);
+    await expect(page.locator(".console-log")).toContainText("ISO_MISSING");
 
-    // Reload with complete UPF isolation strategy -> violation clears!
+    // Open Formal Apps -> Low Power tab -> verify live `ISO_MISSING` violation renders for PD_CORE -> PD_TOP
+    const apps = await openAppsDock(page);
+    await apps.locator(".apps-tab", { hasText: "Low Power (1)" }).click();
+    await expect(apps).toContainText("ISO_MISSING");
+    await expect(apps).toContainText("PD_CORE");
+
+    // Reload with complete UPF isolation strategy -> violation clears cleanly to 0!
+    await page.getByRole("tab", { name: "Console" }).click();
     await runTcl(
       page,
       `clear -all; analyze -sv12 {${svPath}}; elaborate -top soc_lp; clock clk; reset -expression {!rst_n}; load_upf {${upfGood}}; check_lp -json`,
     );
-    await expect(page.locator(".console-log")).toContainText("PD_CORE");
+    await expect(page.locator(".console-log")).toContainText('"schema": "informal.lp/1"');
+    await expect(page.locator(".console-log")).toContainText('"total": 0');
+    await expect(page.locator(".console-log")).toContainText('"violations": []');
+    await page.getByRole("tab", { name: "Formal Apps" }).click();
+    await expect(apps.locator(".apps-tab", { hasText: "Low Power (0)" })).toBeVisible();
   });
 
   test("10. VC Formal (`vcf`) Flavor Real-Backend Flow: `read_file`, `fvassert`, `check_fv`, `fvdisable`, `snip_driver`, and real Tab completion", async ({
