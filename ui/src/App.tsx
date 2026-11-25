@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend, type AiStatus, type DesignInfo as DesignInfoData, type EffortLevel, EngineLine, Flavor, type FormalLintFindingView, type FormalQuickFixView, type GuiRequest, type GuiState, type OrchestrationMode, ProveProgress, Reply, type SchematicGraphView, SessionView, type WhyCexReport } from "./backend";
+import { mcpTraceToVcdText, type McpTracePayload } from "./mcpTrace";
 import { llmLabel, llmTip, prefill, tclWord, type InputMode, type LlmProviderEntry, type LlmStatus } from "./ask";
 import {
   anyTraceOf, bound, clock, designScopes, isVacuousProof, memText, OPTIONAL_COLS, phaseLabel, SURFER_MISSING, isProveCmd, parsePorts, STATUS_LABEL, sourceFile, sourceLine, taskOf, time, traceOf, vacuityTooltip, witnessTraceOf, withProgress,
@@ -745,7 +746,7 @@ export default function App() {
           });
           return;
         }
-        const text = await backend.readTrace(tracePath);
+        const text = await backend.readTrace(tracePath, traceName ?? undefined);
         if (!live) return;
         setTrace({ path: tracePath, text, binary: null, streamedVcd: null, format: "vcd", error: null });
       } catch (e) {
@@ -757,7 +758,7 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [tracePath]);
+  }, [tracePath, traceName]);
 
   const requestTraceWindow = useCallback((first: number, last: number) => {
     const cur = traceStoreRef.current;
@@ -799,8 +800,8 @@ export default function App() {
       download(trace.text);
       return;
     }
-    backend.readTrace(tracePath).then(download).catch(() => {});
-  }, [tracePath, trace?.text, traceProp?.name]);
+    backend.readTrace(tracePath, traceName ?? undefined).then(download).catch(() => {});
+  }, [tracePath, traceName, trace?.text, traceProp?.name]);
   const showTrace = center === "trace" && !!traceProp;
 
   // Live formal-ready lint (`svlang lint` SV-FPV-001..005) when source view opens on an RTL file
@@ -893,10 +894,40 @@ export default function App() {
     return backend.onMcpToolResult((sc) => {
       const schema = String(sc.schema ?? "");
       if (schema === "informal.workbench/1" && sc.session) {
-        setSession(sc.session as SessionView);
-        if (typeof sc.focus_property === "string") setSelected(sc.focus_property);
+        const nextSess = sc.session as SessionView;
+        setSession(nextSess);
+        const focusProp = typeof sc.focus_property === "string" ? sc.focus_property : null;
+        if (focusProp) setSelected(focusProp);
         if (typeof sc.view === "string" && ["table", "source", "trace", "schematic"].includes(sc.view)) {
+          if (sc.view === "trace") {
+            const target =
+              focusProp ??
+              nextSess.props?.find((p) => p.trace || p.witness_trace)?.name ??
+              null;
+            if (target) {
+              setSelected(target);
+              setTraceName(target);
+            }
+          } else if (sc.view === "schematic" && focusProp) {
+            setSchematicTarget(focusProp);
+          }
           setCenter(sc.view as Center);
+        }
+      } else if (schema === "informal.trace/1" && Array.isArray(sc.signals)) {
+        const payload = sc as unknown as McpTracePayload;
+        const propName = payload.property?.name ?? null;
+        if (propName) {
+          setSelected(propName);
+          setTraceName(propName);
+          setTrace({
+            path: propName,
+            text: mcpTraceToVcdText(payload),
+            binary: null,
+            streamedVcd: null,
+            format: "vcd",
+            error: null,
+          });
+          setCenter("trace");
         }
       } else if (schema === "informal.why_cex/1" && typeof sc.property === "string") {
         setWhyCexMap((m) => ({ ...m, [sc.property as string]: sc as unknown as WhyCexReport }));
@@ -929,7 +960,7 @@ export default function App() {
         void backend.snapshot().then((r) => r.session && setSession(r.session));
       }
     });
-  }, [setCenter]);
+  }, [setCenter, setSchematicTarget]);
 
   // Dynamic standalone window title
   useEffect(() => {
@@ -1139,9 +1170,10 @@ export default function App() {
   // Waiting for a trace to load (open_trace / present_cex), and signals still to add.
   const guiTrace = useRef<{ id: number; path: string; what: string; capture?: boolean } | null>(null);
   const guiAdd = useRef<{ id: number; left: string[]; missing: string[]; what: string } | null>(null);
+  const traceLoaded = Boolean(trace && (trace.text !== null || trace.binary !== null || trace.streamedVcd));
   useEffect(() => {
     const w = guiTrace.current;
-    if (!w || trace?.path !== w.path || (trace.text === null && !trace.error)) return;
+    if (!w || trace?.path !== w.path || (!traceLoaded && !trace.error)) return;
     guiTrace.current = null;
     if (w.capture && !trace.error) {
       setTimeout(() => {
@@ -1152,7 +1184,7 @@ export default function App() {
       return;
     }
     guiDone(w.id, w.what, trace.error ?? undefined);
-  }, [trace, guiDone, setLastCapture]);
+  }, [trace, traceLoaded, guiDone, setLastCapture]);
   const guiAct = useRef<(r: GuiRequest) => void>(() => {});
   guiAct.current = ({ id, action: a }) => {
     markAgentDriven();
@@ -1170,13 +1202,13 @@ export default function App() {
       if (!path) return guiDone(id, what, `${a.name} has no trace: its status is ${p.status.status}`);
       openTrace(a.name);
       if (a.frame != null) setCursorReq((r) => ({ cycle: a.frame as number, n: (r?.n ?? 0) + 1 }));
-      if (trace?.path === path && trace.text !== null) return guiDone(id, what);
+      if (trace?.path === path && traceLoaded) return guiDone(id, what);
       guiTrace.current = { id, path, what };
       return;
     }
     if (a.action === "add_signals") {
       const what = `add ${a.signals.join(", ")} to the trace`;
-      if (!traceName || !trace?.text) return guiDone(id, what, "no trace is open: open one first (gui_open_trace)");
+      if (!traceName || !traceLoaded) return guiDone(id, what, "no trace is open: open one first (gui_open_trace)");
       if (guiAdd.current) return guiDone(id, what, "signals are still being added: try again");
       const [first, ...left] = a.signals;
       guiAdd.current = { id, left, missing: [], what };
@@ -1338,7 +1370,7 @@ export default function App() {
       if (targetFrame != null) {
         setCursorReq((r) => ({ cycle: targetFrame, n: (r?.n ?? 0) + 1 }));
       }
-      if (trace?.path === path && trace.text !== null) {
+      if (trace?.path === path && traceLoaded) {
         if (a.capture) {
           setTimeout(() => {
             const svg = traceSvgCaptureRef.current?.() ?? null;
@@ -1433,6 +1465,14 @@ export default function App() {
   const [totDraft, setTotDraft] = useState("");
   const [boundDraft, setBoundDraft] = useState("");
   const budgetWrapRef = useRef<HTMLDivElement>(null);
+  const restoreBudgetFocusRef = useRef(false);
+
+  useEffect(() => {
+    if (!budgetOpen && idle && restoreBudgetFocusRef.current) {
+      restoreBudgetFocusRef.current = false;
+      budgetWrapRef.current?.querySelector<HTMLButtonElement>(".budget-btn")?.focus();
+    }
+  }, [budgetOpen, idle]);
 
   useEffect(() => {
     if (!budgetOpen) return;
@@ -1448,7 +1488,9 @@ export default function App() {
       if (ev.key === "Escape") {
         ev.preventDefault();
         ev.stopPropagation();
+        restoreBudgetFocusRef.current = true;
         setBudgetOpen(false);
+        budgetWrapRef.current?.querySelector<HTMLButtonElement>(".budget-btn")?.focus();
       }
     };
     window.addEventListener("mousedown", onDown);

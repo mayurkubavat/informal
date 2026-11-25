@@ -130,7 +130,6 @@ impl Worker {
                         }
                         Job::Run(f) => {
                             f(&shell);
-                            shell.session.borrow().publish_snapshot();
                             running_flag.store(false, Ordering::SeqCst);
                         }
                     }
@@ -235,8 +234,12 @@ impl Worker {
         f: impl FnOnce(&Shell) -> R + Send + 'static,
     ) -> Option<R> {
         let (tx, rx) = mpsc::channel();
+        let running = self.running.clone();
         let job = Job::Run(Box::new(move |shell| {
-            let _ = tx.send(f(shell));
+            let out = f(shell);
+            shell.session.borrow().publish_snapshot();
+            running.store(false, Ordering::SeqCst);
+            let _ = tx.send(out);
         }));
         self.tx.send(job).ok()?;
         rx.recv().ok()

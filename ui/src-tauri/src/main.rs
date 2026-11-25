@@ -329,15 +329,24 @@ async fn shell_stop(w: State<'_, Worker>) -> Result<Reply, String> {
     })
 }
 
-/// The session's work directory, relative to the repo root the app runs
-/// from: generated models and trace VCDs land here.
+/// The session's active work directory (`LAST_SESSION["workdir"]` when known,
+/// else the default relative `informal_work`): generated models and trace VCDs/FSTs land here.
 const WORKDIR: &str = "informal_work";
+
+fn active_workdir() -> PathBuf {
+    LAST_SESSION
+        .lock()
+        .ok()
+        .and_then(|g| g.get("workdir").and_then(|w| w.as_str()).map(PathBuf::from))
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from(WORKDIR))
+}
 
 /// A trace VCD for the trace tab (`Property.trace`). Only `.vcd` files
 /// inside the work directory are served, whatever the path says.
 #[tauri::command]
 fn read_trace(path: String) -> Result<String, String> {
-    trace_in(Path::new(WORKDIR), Path::new(&path))
+    trace_in(&active_workdir(), Path::new(&path))
 }
 
 /// Binary `IFTR` v1 waveform stream over raw Tauri v2 IPC (`Uint8Array` on JS side),
@@ -345,7 +354,7 @@ fn read_trace(path: String) -> Result<String, String> {
 /// allocation and JSON serialization for large traces.
 #[tauri::command]
 fn read_trace_bin(path: String) -> Result<tauri::ipc::Response, String> {
-    let p = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let p = vcd_in(&active_workdir(), Path::new(&path))?;
     let bytes = informal_mcp::vcd::encode_iftr_from_path(&p)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -354,7 +363,7 @@ fn read_trace_bin(path: String) -> Result<tauri::ipc::Response, String> {
 /// header/hierarchy without loading value-change blocks (D10).
 #[tauri::command]
 fn read_trace_meta(path: String) -> Result<informal_mcp::vcd::TraceMeta, String> {
-    let p = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let p = vcd_in(&active_workdir(), Path::new(&path))?;
     informal_mcp::vcd::read_meta(&p)
 }
 
@@ -367,7 +376,7 @@ fn read_trace_window(
     last_frame: usize,
     signals: Option<Vec<String>>,
 ) -> Result<tauri::ipc::Response, String> {
-    let p = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let p = vcd_in(&active_workdir(), Path::new(&path))?;
     let bytes = informal_mcp::vcd::encode_window_iftr_from_path(
         &p,
         first_frame,
@@ -427,7 +436,7 @@ fn tool_available(name: String) -> bool {
 /// Only `.vcd` files inside the work directory are opened.
 #[tauri::command]
 fn open_in_surfer(path: String) -> Result<(), String> {
-    let vcd = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let vcd = vcd_in(&active_workdir(), Path::new(&path))?;
     let target = informal_mcp::vcd::fst_for(&vcd).unwrap_or(vcd);
     let surfer = find_on_path("surfer", std::env::var_os("PATH").as_deref())
         .ok_or("surfer is not on PATH (install it from surfer-project.org)")?;

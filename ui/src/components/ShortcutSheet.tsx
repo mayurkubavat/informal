@@ -60,11 +60,22 @@ export function ShortcutSheet({
 }) {
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (open) {
       prevFocus.current = document.activeElement as HTMLElement | null;
-      setTimeout(() => closeBtnRef.current?.focus(), 0);
+      closeBtnRef.current?.focus();
+      const onGlobalKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          onCloseRef.current();
+        }
+      };
+      window.addEventListener("keydown", onGlobalKey, true);
+      return () => window.removeEventListener("keydown", onGlobalKey, true);
     } else if (prevFocus.current) {
       prevFocus.current.focus();
       prevFocus.current = null;

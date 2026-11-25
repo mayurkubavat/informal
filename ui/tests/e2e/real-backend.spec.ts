@@ -3,6 +3,8 @@
 // compiled Rust `informal` binary (`svlang` + CaDiCaL + `informal-fpv` engines)
 // — zero `mock.ts`, catching any Rust <-> UI protocol or solver-flow drift!
 
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { findInformalBinary, startRealBackendBridge } from "./real-backend-server.mjs";
 
@@ -11,7 +13,7 @@ const HAS_REAL_BIN = Boolean(findInformalBinary());
 test.describe("Layer 5 — Real Rust Backend E2E", () => {
   test.skip(!HAS_REAL_BIN, "requires compiled target/{release,debug}/informal binary");
 
-  let bridge: { url: string; stop: () => Promise<void> };
+  let bridge: { url: string; workdir: string; stop: () => Promise<void> };
 
   test.beforeEach(async () => {
     bridge = await startRealBackendBridge();
@@ -139,5 +141,58 @@ test.describe("Layer 5 — Real Rust Backend E2E", () => {
     await page.locator(".env-pill").click({ button: "right" });
     await page.getByRole("menu", { name: "Environment checks" }).getByRole("menuitem", { name: /Check liveness fairness/ }).click();
     await expect(page.locator(".console-log")).toContainText("check_assumptions -live");
+  });
+
+  test("Real FST binary trace streaming: real solver writes sibling .fst on disk, loads binary IFTR over bridge, displays Export VCD (FST), and paints canvas waveforms", async ({
+    page,
+  }) => {
+    await page.goto(`/?bridge=${encodeURIComponent(bridge.url)}`);
+
+    const pathInput = page.getByRole("textbox", { name: "Script path" });
+    await pathInput.fill("examples/01-quickstart/counter/run.jg.tcl");
+    await pathInput.press("Enter");
+    await expect(page.locator(".strip-summary")).toContainText("1 cex", { timeout: 30_000 });
+
+    // Verify real Rust backend wrote a non-empty GTKWave `.fst` sibling in workdir
+    const fstFiles = fs
+      .readdirSync(bridge.workdir)
+      .filter((f) => f.endsWith(".fst") && fs.statSync(path.join(bridge.workdir, f)).size > 0);
+    expect(fstFiles.length).toBeGreaterThan(0);
+
+    // Double-click `a_never9` CEX -> loads via `read_trace_meta` (`format: "fst"`) + `read_trace_bin` (IFTR v1)
+    await page.locator(".table-wrap table.grid tbody tr", { hasText: "a_never9" }).dblclick();
+    await expect(page.getByRole("button", { name: "Export VCD (FST)" })).toBeVisible();
+
+    const canvas = page.locator("canvas.trace-canvas");
+    await expect(canvas).toBeVisible();
+    const ink = await canvas.evaluate((el) => {
+      const cvs = el as HTMLCanvasElement;
+      const ctx = cvs.getContext("2d");
+      if (!ctx || cvs.width === 0 || cvs.height === 0) return 0;
+      const { data, width, height } = ctx.getImageData(0, 0, cvs.width, cvs.height);
+      const refIdx = ((height - 2) * width + (width - 2)) * 4;
+      const br = data[refIdx];
+      const bg = data[refIdx + 1];
+      const bb = data[refIdx + 2];
+      let diff = 0;
+      let total = 0;
+      for (let y = 0; y < height; y += 4) {
+        for (let x = 0; x < width; x += 4) {
+          const i = (y * width + x) * 4;
+          if (Math.abs(data[i] - br) + Math.abs(data[i + 1] - bg) + Math.abs(data[i + 2] - bb) > 12) diff++;
+          total++;
+        }
+      }
+      return total > 0 ? diff / total : 0;
+    });
+    expect(ink).toBeGreaterThan(0.01);
+
+    // Click-to-scrub on real FST-backed trace updates cursor cycle cleanly
+    const pxText = (await page.locator(".trace-bar .zoom-text").textContent()) || "64px";
+    const pxPerCycle = Number.parseFloat(pxText);
+    const lanes = page.locator("svg.trace-lanes");
+    const box = (await lanes.boundingBox())!;
+    await page.mouse.click(box.x + 2.5 * pxPerCycle, box.y + 44);
+    await expect(page.locator(".trace-cursor")).toContainText("cycle 2");
   });
 });

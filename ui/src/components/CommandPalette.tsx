@@ -26,13 +26,24 @@ export function CommandPalette({
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (open) {
       prevFocus.current = document.activeElement as HTMLElement | null;
       setQuery("");
       setActiveIdx(0);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      inputRef.current?.focus();
+      const onGlobalKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          onCloseRef.current();
+        }
+      };
+      window.addEventListener("keydown", onGlobalKey, true);
+      return () => window.removeEventListener("keydown", onGlobalKey, true);
     } else if (prevFocus.current) {
       prevFocus.current.focus();
       prevFocus.current = null;

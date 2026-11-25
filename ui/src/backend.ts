@@ -5,6 +5,7 @@
 import { mock, mockApplyFormalFix, mockDesignInfo, mockAiDecide, mockAiGuiDone, mockAiStatus, mockAsk, mockAskCancel, mockComplete, mockEvents, mockFormalLint, mockLlmProviders, mockLlmSelect, mockLlmStatus, mockOpenInSurfer, mockOptions, mockSchematic, mockSignalNav, mockText, mockTrace, mockTraceBin, mockUiState, mockWhyCex } from "./mock";
 import type { AskDelta, AskDone, LlmProviderEntry, LlmStatus } from "./ask";
 import { isMcpAppSurface, mcpBridge } from "./mcpApp";
+import { mcpTraceToVcdText, type McpTracePayload } from "./mcpTrace";
 import type { TraceAnnotation } from "./traceBin";
 import type { FocusChip, GuiCaptureSnapshot, LayoutPreset, WalkthroughStep } from "./store/workbenchStore";
 
@@ -628,7 +629,26 @@ export const backend = {
   },
   // The flavor the shell started in (a startup script picks it).
   flavor: () => invokeOr<Flavor>("current_flavor", {}, () => "jg"),
-  evalTcl: (script: string) => call("shell_eval", { script }),
+  evalTcl: async (script: string): Promise<Reply> => {
+    if (isMcpAppSurface) {
+      try {
+        const res = await mcpBridge.callTool<{ ok?: boolean; result?: string; error?: string }>("tcl_eval", {
+          command: script,
+          rationale: "Workbench command",
+        });
+        const wb = await mcpBridge.callTool<{ session?: SessionView }>("open_workbench", {}).catch(() => null);
+        const ok = res.ok !== false && !res.error;
+        return {
+          ok,
+          result: ok ? String(res.result ?? "") : String(res.error ?? res.result ?? ""),
+          session: wb?.session ?? null,
+        };
+      } catch {
+        // fallback in standalone preview without connected host
+      }
+    }
+    return call("shell_eval", { script });
+  },
   // The Design Info panel: the design's counts and the current task's
   // model size. Builds the model, so it is asked for, not polled.
   designInfo: async (): Promise<DesignInfo> => {
@@ -641,7 +661,18 @@ export const backend = {
   setFlavor: (flavor: Flavor) => call("shell_flavor", { flavor }),
   // Ask a running prove to stop. The prove's own call then resolves with the
   // session; a "stopped" progress event marks the moment it took effect.
-  stop: () => call("shell_stop"),
+  stop: async (): Promise<Reply> => {
+    if (isMcpAppSurface) {
+      try {
+        await mcpBridge.callTool("prove_stop", {});
+        const wb = await mcpBridge.callTool<{ session?: SessionView }>("open_workbench", {}).catch(() => null);
+        return { ok: true, result: "", session: wb?.session ?? null };
+      } catch {
+        // fallback in standalone preview
+      }
+    }
+    return call("shell_stop");
+  },
   onProgress: (cb: (p: ProveProgress) => void) => subscribe("prove-progress", cb),
   onConsole: (cb: (l: ConsoleLine) => void) => subscribe("console-line", cb),
   onEngineLog: (cb: (l: EngineLine) => void) => subscribe("engine-log", cb),
@@ -694,6 +725,18 @@ export const backend = {
   // A design file or script for the source view. The app only reads files
   // under its working directory (the repo) or in the design's file list.
   readText: async (path: string): Promise<string> => {
+    if (isMcpAppSurface) {
+      try {
+        const res = await mcpBridge.callTool<{ lines?: string[] }>("design_source", {
+          file: path,
+          first_line: 1,
+          last_line: 400,
+        });
+        if (Array.isArray(res.lines)) return res.lines.join("\n");
+      } catch {
+        // fallback in preview without connected host
+      }
+    }
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<string>("read_text", { path });
@@ -738,8 +781,32 @@ export const backend = {
     return JSON.parse(r.result) as WhyCexReport;
   },
   // The VCD text of a property's trace. The app only reads files inside the
-  // session's workdir; the mock serves tests/fixtures/a_never9.vcd.
-  readTrace: async (path: string): Promise<string> => {
+  // session's workdir; the MCP App loads via `trace_get`; the mock serves tests/fixtures/a_never9.vcd.
+  readTrace: async (path: string, propName?: string): Promise<string> => {
+    if (isMcpAppSurface) {
+      const targetName =
+        propName ||
+        path
+          .split(/[\\/]/)
+          .pop()
+          ?.replace(/\.(vcd|fst)$/i, "")
+          .replace(/__/g, "::") ||
+        path;
+      try {
+        const payload = await mcpBridge.callTool<McpTracePayload>("trace_get", {
+          name: targetName,
+          first: 0,
+          last: 255,
+        });
+        if (payload && Array.isArray(payload.signals)) {
+          return mcpTraceToVcdText(payload);
+        }
+      } catch (e) {
+        const fallback = mockTrace(path);
+        if (fallback !== null) return fallback;
+        throw e instanceof Error ? e : new Error(String(e));
+      }
+    }
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<string>("read_trace", { path });
@@ -753,10 +820,19 @@ export const backend = {
   },
   // Binary `IFTR` v1 waveform stream over raw Tauri v2 IPC (`Uint8Array`).
   readTraceBin: async (path: string): Promise<Uint8Array> => {
+    if (isMcpAppSurface) {
+      // MCP App uses structured `trace_get` via `readTrace` so Export VCD & swimlanes work in one call.
+      throw new Error("mcp-app uses structured trace_get");
+    }
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       const ab = await invoke<ArrayBuffer | Uint8Array>("read_trace_bin", { path });
       return ab instanceof Uint8Array ? ab : new Uint8Array(ab);
+    }
+    if (httpBridge) {
+      const b64 = await bridgeRpc<string | null>("read_trace_bin", { path });
+      if (b64) return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      throw new Error(`${path}: binary trace unavailable`);
     }
     const bin = mockTraceBin(path);
     if (bin === null) throw new Error(`${path}: no such trace`);
@@ -767,6 +843,9 @@ export const backend = {
     if (inTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<import("./traceStream").TraceMeta>("read_trace_meta", { path });
+    }
+    if (httpBridge) {
+      return bridgeRpc<import("./traceStream").TraceMeta | null>("read_trace_meta", { path });
     }
     return null;
   },
@@ -786,6 +865,16 @@ export const backend = {
         signals: signals ?? null,
       });
       return ab instanceof Uint8Array ? ab : new Uint8Array(ab);
+    }
+    if (httpBridge) {
+      const b64 = await bridgeRpc<string | null>("read_trace_window", {
+        path,
+        firstFrame,
+        lastFrame,
+        signals: signals ?? null,
+      });
+      if (b64) return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      throw new Error(`${path}: trace window unavailable`);
     }
     const bin = mockTraceBin(path);
     if (bin === null) throw new Error(`${path}: no such trace`);

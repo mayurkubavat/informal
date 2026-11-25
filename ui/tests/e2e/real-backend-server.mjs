@@ -15,15 +15,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 export function findInformalBinary() {
+  if (process.env.INFORMAL_BIN && fs.existsSync(process.env.INFORMAL_BIN)) {
+    return process.env.INFORMAL_BIN;
+  }
   const candidates = [
-    process.env.INFORMAL_BIN,
     path.join(REPO_ROOT, "target/release/informal"),
     path.join(REPO_ROOT, "target/debug/informal"),
-  ].filter(Boolean);
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return null;
+  ].filter((c) => fs.existsSync(c));
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return candidates[0];
 }
 
 class McpClient {
@@ -187,6 +188,173 @@ endmodule
   return sv;
 }
 
+function parseVcdMeta(vcd) {
+  const scope = [];
+  const signals = [];
+  let frames = null;
+  let steps = false;
+  let maxTime = 0;
+  for (const raw of vcd.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!l) continue;
+    const w = l.split(/\s+/);
+    if (w[0] === "$comment") {
+      const body = w.slice(1, -1).join(" ");
+      if (body.startsWith("informal trace of ")) {
+        const count = body.split(": ").pop() || "";
+        const n = Number.parseInt(count.split(" ")[0], 10);
+        if (Number.isFinite(n)) frames = n;
+        steps = count.endsWith("model steps");
+      }
+    } else if (w[0] === "$scope" && w[2]) {
+      scope.push(w[2]);
+    } else if (w[0] === "$upscope") {
+      scope.pop();
+    } else if (w[0] === "$var" && w.length >= 6) {
+      const width = Number.parseInt(w[2], 10) || 1;
+      const leaf = w[4];
+      signals.push({
+        name: leaf,
+        path: [...scope, leaf].join("."),
+        width,
+        clock: signals.length === 0,
+      });
+    } else if (l.startsWith("#")) {
+      const t = Number.parseInt(l.slice(1), 10);
+      if (Number.isFinite(t) && t > maxTime) maxTime = t;
+    }
+  }
+  return { frames: frames ?? Math.max(1, Math.floor(maxTime / 10)), steps, signals };
+}
+
+function encodeVcdToIftrBuffer(vcd, firstFrame, lastFrame, sigFilter) {
+  const scope = [];
+  const sigs = [];
+  const byId = new Map();
+  let framesComment = null;
+  let steps = false;
+  let inDefs = true;
+  let frame = null;
+  let maxFrame = 0;
+
+  for (const raw of vcd.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (inDefs) {
+      const w = l.split(/\s+/);
+      if (w[0] === "$comment") {
+        const body = w.slice(1, -1).join(" ");
+        if (body.startsWith("informal trace of ")) {
+          const count = body.split(": ").pop() || "";
+          const n = Number.parseInt(count.split(" ")[0], 10);
+          if (Number.isFinite(n)) framesComment = n;
+          steps = count.endsWith("model steps");
+        }
+      } else if (w[0] === "$scope" && w[2]) {
+        scope.push(w[2]);
+      } else if (w[0] === "$upscope") {
+        scope.pop();
+      } else if (w[0] === "$var" && w.length >= 6) {
+        const width = Number.parseInt(w[2], 10) || 1;
+        byId.set(w[3], sigs.length);
+        sigs.push({
+          path: [...scope, w[4]].join("."),
+          width,
+          clock: sigs.length === 0,
+          runs: [],
+        });
+      } else if (w[0] === "$enddefinitions") {
+        inDefs = false;
+      }
+      continue;
+    }
+    if (l.startsWith("#")) {
+      const t = Number.parseInt(l.slice(1), 10);
+      frame = t % 10 === 0 ? Math.floor(t / 10) : null;
+      continue;
+    }
+    if (frame === null) continue;
+    let bits;
+    let id;
+    if (l.startsWith("b")) {
+      const sp = l.indexOf(" ");
+      if (sp < 0) continue;
+      bits = l.slice(1, sp);
+      id = l.slice(sp + 1).trim();
+    } else if ("01xz".includes(l[0])) {
+      bits = l[0];
+      id = l.slice(1);
+    } else {
+      continue;
+    }
+    const idx = byId.get(id);
+    if (idx === undefined) continue;
+    const s = sigs[idx];
+    const padded = bits.padStart(s.width, "0");
+    const last = s.runs[s.runs.length - 1];
+    if (last && last[0] === frame) last[1] = padded;
+    else if (!last || last[1] !== padded) s.runs.push([frame, padded]);
+    if (frame > maxFrame) maxFrame = frame;
+  }
+
+  const totalFrames = Math.max(1, framesComment ?? maxFrame + 1);
+  const clampedFirst = Math.max(0, Math.min(totalFrames - 1, firstFrame));
+  const clampedLast = Math.max(clampedFirst, Math.min(totalFrames - 1, lastFrame));
+  const selected = sigs.filter((s) => !sigFilter || s.clock || sigFilter.includes(s.path));
+
+  const chunks = [];
+  const pushU8 = (v) => chunks.push(Buffer.from([v & 0xff]));
+  const pushU16 = (v) => {
+    const b = Buffer.alloc(2);
+    b.writeUInt16LE(v, 0);
+    chunks.push(b);
+  };
+  const pushU32 = (v) => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(v >>> 0, 0);
+    chunks.push(b);
+  };
+
+  chunks.push(Buffer.from("IFTR", "ascii"));
+  pushU8(1);
+  pushU8(steps ? 1 : 0);
+  pushU32(totalFrames);
+  pushU32(selected.length);
+
+  for (const s of selected) {
+    const nb = Buffer.from(s.path, "utf8");
+    pushU16(nb.length);
+    chunks.push(nb);
+    pushU16(s.width);
+    pushU8(s.clock ? 1 : 0);
+
+    // Clip runs to [clampedFirst..=clampedLast] carrying initial state at clampedFirst.
+    const clipped = [];
+    let cur = "x".repeat(s.width);
+    for (const [rf, val] of s.runs) {
+      if (rf <= clampedFirst) {
+        cur = val;
+      } else if (rf <= clampedLast) {
+        if (clipped.length === 0) clipped.push([clampedFirst, cur]);
+        if (clipped[clipped.length - 1][1] !== val) clipped.push([rf, val]);
+        cur = val;
+      } else {
+        break;
+      }
+    }
+    if (clipped.length === 0) clipped.push([clampedFirst, cur]);
+
+    pushU32(clipped.length);
+    for (const [rf, val] of clipped) {
+      pushU32(rf);
+      const vb = Buffer.from(val, "ascii");
+      pushU16(vb.length);
+      chunks.push(vb);
+    }
+  }
+  return Buffer.concat(chunks);
+}
+
 export async function startRealBackendBridge(opts = {}) {
   const bin = findInformalBinary();
   if (!bin) throw new Error("No compiled informal binary found in target/{release,debug}/informal");
@@ -240,12 +408,41 @@ export async function startRealBackendBridge(opts = {}) {
       return { ok: Boolean(r.ok), result: r.ok ? String(r.result ?? "") : String(r.error ?? ""), session: await mcp.session() };
     }
     if (cmd === "shell_stop") {
-      return { ok: true, result: "", session: await mcp.session() };
+      await mcp.callTool("prove_stop", {});
+      const wb = await mcp.callTool("open_workbench", {});
+      return { ok: true, result: "", session: wb.session || null };
     }
     if (cmd === "read_text" || cmd === "read_trace") {
       const p = String(args.path || "");
       const abs = path.isAbsolute(p) ? p : path.resolve(REPO_ROOT, p);
       return fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : "";
+    }
+    if (cmd === "read_trace_meta") {
+      const p = String(args.path || "");
+      const abs = path.isAbsolute(p) ? p : path.resolve(REPO_ROOT, p);
+      if (!fs.existsSync(abs)) return null;
+      const fstAbs = abs.replace(/\.vcd$/i, ".fst");
+      const hasFst = fs.existsSync(fstAbs) && fs.statSync(fstAbs).size > 0;
+      const vcd = fs.readFileSync(abs, "utf8");
+      const { frames, steps, signals } = parseVcdMeta(vcd);
+      return {
+        frames,
+        steps,
+        format: hasFst ? "fst" : "vcd",
+        block_count: Math.max(1, Math.ceil(frames / 256)),
+        signals,
+      };
+    }
+    if (cmd === "read_trace_bin" || cmd === "read_trace_window") {
+      const p = String(args.path || "");
+      const abs = path.isAbsolute(p) ? p : path.resolve(REPO_ROOT, p);
+      if (!fs.existsSync(abs)) return null;
+      const vcd = fs.readFileSync(abs, "utf8");
+      const firstFrame = cmd === "read_trace_window" ? Number(args.firstFrame ?? 0) : 0;
+      const lastFrame = cmd === "read_trace_window" ? Number(args.lastFrame ?? 1e9) : 1e9;
+      const sigFilter = cmd === "read_trace_window" && Array.isArray(args.signals) ? args.signals : null;
+      const buf = encodeVcdToIftrBuffer(vcd, firstFrame, lastFrame, sigFilter);
+      return buf.toString("base64");
     }
     if (cmd === "workbench_tool") {
       return mcp.callTool(String(args.tool), args.args || {});
@@ -291,7 +488,16 @@ export async function startRealBackendBridge(opts = {}) {
       req.on("end", async () => {
         try {
           const { cmd, args } = JSON.parse(body || "{}");
-          const out = await serial(() => handleRpc(cmd, args));
+          // Bypass serialization for non-blocking stop, live snapshot, and file trace reads
+          // so real mid-prove UI interaction matches Tauri's concurrent backend.
+          const concurrent =
+            cmd === "shell_stop" ||
+            cmd === "read_text" ||
+            cmd === "read_trace" ||
+            cmd === "read_trace_meta" ||
+            cmd === "read_trace_bin" ||
+            cmd === "read_trace_window";
+          const out = concurrent ? await handleRpc(cmd, args) : await serial(() => handleRpc(cmd, args));
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(out));
         } catch (err) {

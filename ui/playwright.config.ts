@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chromium, defineConfig, devices } from "@playwright/test";
+import { chromium, defineConfig, devices, webkit } from "@playwright/test";
 
 // Runs against the browser mock (`npm run dev`, src/backend.ts), not the
 // Tauri app, so no Rust build is needed. Screenshots live under
@@ -14,6 +14,13 @@ const bundledPath = (() => {
   }
 })();
 const chromeChannel = bundledPath && existsSync(bundledPath) ? undefined : "chrome";
+const hasWebkit = (() => {
+  try {
+    return existsSync(webkit.executablePath());
+  } catch {
+    return false;
+  }
+})();
 
 // The suites start their own dev server on their own port and never reuse
 // one that is already up: a server on the app's port 1420 may belong to
@@ -49,6 +56,16 @@ export default defineConfig({
       testMatch: /visual\/.*\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], channel: chromeChannel, viewport: size, deviceScaleFactor: 1 },
     },
+    ...(hasWebkit
+      ? [
+          {
+            // Native WebKit + 2x Retina parity (matches macOS WKWebView / Linux WebKitGTK).
+            name: "webkit-hidpi",
+            testMatch: /e2e\/(canvas-and-gestures|mcp-app-iframe|ui-fuzz-and-resilience|user-journeys)\.spec\.ts/,
+            use: { ...devices["Desktop Safari"], viewport: size, deviceScaleFactor: 2 },
+          },
+        ]
+      : []),
   ],
   webServer: {
     command: `npx vite --port ${port} --strictPort`,

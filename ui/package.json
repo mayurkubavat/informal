@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test --project e2e",
+    "test:webkit": "playwright test --project webkit-hidpi",
     "test:visual": "playwright test --project visual",
     "test:update": "playwright test --update-snapshots"
   },
