@@ -271,16 +271,27 @@ fn run_model(
                 .filter(|e| e.capabilities().formats.contains(&format))
                 .cloned()
                 .collect();
-            let selected = match &features {
-                Some(f) => informal_engine::selector::select_for_features(
+            let plan = match &features {
+                Some(f) => informal_engine::selector::plan_for_features(
                     &fmt_ok,
                     f,
                     explicit_filter,
                     req.effort,
+                    req.timeout,
                 ),
-                None => fmt_ok,
+                None => informal_engine::selector::PortfolioPlan {
+                    schedule: fmt_ok
+                        .into_iter()
+                        .map(informal_engine::ScheduledEngine::immediate)
+                        .collect(),
+                    config: if explicit_filter {
+                        informal_engine::ScheduleConfig::unlimited()
+                    } else {
+                        informal_engine::ScheduleConfig::default_for_host()
+                    },
+                },
             };
-            let o = portfolio::run(&selected, &req, None);
+            let o = portfolio::run_scheduled(&plan.schedule, &req, None, None, None, plan.config);
             drop(in_flight);
             let v = portfolio::verdict(&o);
             rec.wall_ms = o.wall_ms;

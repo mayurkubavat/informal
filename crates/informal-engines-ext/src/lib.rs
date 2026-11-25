@@ -357,6 +357,7 @@ impl Engine for ExternalEngine {
             certifies: self.spec.certifies,
             deep_step: false,
             multi_worker: false,
+            worker_slots: 0,
         }
     }
 

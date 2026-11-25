@@ -121,12 +121,7 @@ fn mix_sig(h: &mut (u64, u64), x: u64) {
 }
 
 /// A member's rolling 128-bit signature over `sigs` masked by `live`.
-fn signature_hash(
-    m: &Member,
-    row: &[usize],
-    sigs: &[Vec<u64>],
-    live: &[u64],
-) -> (u64, u64) {
+fn signature_hash(m: &Member, row: &[usize], sigs: &[Vec<u64>], live: &[u64]) -> (u64, u64) {
     let mut h = (0u64, 0u64);
     let idx = row.get(var(m.lit) as usize).copied().unwrap_or(usize::MAX);
     if idx == usize::MAX {
@@ -387,7 +382,11 @@ fn random_refine(
             if idx == usize::MAX {
                 0
             } else {
-                (if m.phase { !next_state[idx] } else { next_state[idx] }) & live
+                (if m.phase {
+                    !next_state[idx]
+                } else {
+                    next_state[idx]
+                }) & live
             }
         });
         if (classes.len(), count(&classes)) == before {

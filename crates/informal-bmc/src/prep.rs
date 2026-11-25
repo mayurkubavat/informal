@@ -445,11 +445,7 @@ pub fn prepare_ctx_fold(
     })
 }
 
-fn build_prepared(
-    ctx: &RunContext,
-    base: &BaseLoaded,
-    fold: bool,
-) -> Result<Prepared, String> {
+fn build_prepared(ctx: &RunContext, base: &BaseLoaded, fold: bool) -> Result<Prepared, String> {
     if ctx.should_stop() {
         return Err(ctx.stop_reason().to_string());
     }

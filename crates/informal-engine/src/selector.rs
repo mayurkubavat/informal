@@ -6,11 +6,16 @@
 //! and [`informal_ir::Features`] — never hardcoded engine names — so new engines
 //! participate automatically when registered.
 
+pub use crate::learned::PortfolioPlan;
+use crate::learned::{self, base_priority, wave1_delay};
+use crate::portfolio::{self, ScheduleConfig, ScheduledEngine};
 use crate::{Effort, Engine, EngineDomain, EngineKind, ModelFormat};
 use informal_ir::Features;
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Select the eligible subset of `engines` for `btor_text` at [`Effort::Standard`].
 pub fn select_for_btor(
@@ -242,6 +247,178 @@ pub fn select_for_features(
         }
         true
     })
+}
+
+/// Build a complete staged-wave [`PortfolioPlan`] from structural [`Features`].
+///
+/// - Under `explicit_filter`, returns [`select_for_features`] verbatim in Wave 0
+///   with [`ScheduleConfig::unlimited`].
+/// - Under `Effort::Low` or liveness/array/combinational cones, preserves hard
+///   capability routing in Wave 0 ordered by fallback priority.
+/// - For sequential safety models at `Standard+`, delegates to the Phase 3
+///   learned Ridge ranker (`INFORMAL_SELECTOR=rules` falls back to static rules).
+pub fn plan_for_features(
+    engines: &[Arc<dyn Engine>],
+    f: &Features,
+    explicit_filter: bool,
+    effort: Effort,
+    timeout: Duration,
+) -> PortfolioPlan {
+    if explicit_filter {
+        let chosen = select_for_features(engines, f, true, effort);
+        return PortfolioPlan {
+            schedule: chosen.into_iter().map(ScheduledEngine::immediate).collect(),
+            config: ScheduleConfig::unlimited(),
+        };
+    }
+    let host_cfg = ScheduleConfig::default_for_host();
+    if effort == Effort::Low || f.justice > 0 || f.array_states > 0 || f.has_arrays || f.states == 0
+    {
+        let mut wave0 = select_for_features(engines, f, false, effort);
+        wave0.sort_by_key(|e| base_priority(e, f));
+        return PortfolioPlan {
+            schedule: wave0.into_iter().map(ScheduledEngine::immediate).collect(),
+            config: host_cfg,
+        };
+    }
+
+    let cap = learned::size_aware_slot_cap(host_cfg.max_slots, f, effort);
+    if learned::enabled() {
+        return learned::plan_sequential_safety(engines, f, effort, timeout, cap);
+    }
+
+    let config = ScheduleConfig { max_slots: cap };
+    let mut wave0 = select_for_features(engines, f, false, effort);
+    if !portfolio::staged_enabled() {
+        return PortfolioPlan {
+            schedule: wave0.into_iter().map(ScheduledEngine::immediate).collect(),
+            config,
+        };
+    }
+    wave0.sort_by_key(|e| base_priority(e, f));
+    let mut seen: HashSet<String> = wave0.iter().map(|e| e.name().to_string()).collect();
+    let mut schedule: Vec<ScheduledEngine> =
+        wave0.into_iter().map(ScheduledEngine::immediate).collect();
+    if effort == Effort::Standard {
+        let mut reserves: Vec<Arc<dyn Engine>> =
+            select_for_features(engines, f, false, Effort::High)
+                .into_iter()
+                .filter(|e| !seen.contains(e.name()))
+                .collect();
+        reserves.sort_by_key(|e| base_priority(e, f));
+        let delay = wave1_delay(timeout);
+        for e in reserves {
+            if seen.insert(e.name().to_string()) {
+                schedule.push(ScheduledEngine::delayed(e, delay));
+            }
+        }
+    }
+    PortfolioPlan { schedule, config }
+}
+
+/// Build a staged-wave portfolio schedule from structural [`Features`].
+pub fn schedule_for_features(
+    engines: &[Arc<dyn Engine>],
+    f: &Features,
+    explicit_filter: bool,
+    effort: Effort,
+    timeout: Duration,
+) -> Vec<ScheduledEngine> {
+    plan_for_features(engines, f, explicit_filter, effort, timeout).schedule
+}
+
+/// Complete staged-wave [`PortfolioPlan`] for a Btor2 model text.
+pub fn plan_for_btor_with_effort(
+    engines: &[Arc<dyn Engine>],
+    btor_text: &str,
+    explicit_filter: bool,
+    effort: Effort,
+    timeout: Duration,
+) -> PortfolioPlan {
+    let Ok(m) = informal_ir::parse(btor_text) else {
+        return PortfolioPlan {
+            schedule: engines
+                .iter()
+                .cloned()
+                .map(ScheduledEngine::immediate)
+                .collect(),
+            config: if explicit_filter {
+                ScheduleConfig::unlimited()
+            } else {
+                ScheduleConfig::default_for_host()
+            },
+        };
+    };
+    let f = Features::of(&m);
+    plan_for_features(engines, &f, explicit_filter, effort, timeout)
+}
+
+/// Complete staged-wave [`PortfolioPlan`] for AIGER header `bytes`.
+pub fn plan_for_aiger_bytes(
+    engines: &[Arc<dyn Engine>],
+    bytes: &[u8],
+    explicit_filter: bool,
+    effort: Effort,
+    timeout: Duration,
+) -> PortfolioPlan {
+    let Some(f) = aiger_features(bytes) else {
+        return PortfolioPlan {
+            schedule: engines
+                .iter()
+                .cloned()
+                .map(ScheduledEngine::immediate)
+                .collect(),
+            config: if explicit_filter {
+                ScheduleConfig::unlimited()
+            } else {
+                ScheduleConfig::default_for_host()
+            },
+        };
+    };
+    plan_for_features(engines, &f, explicit_filter, effort, timeout)
+}
+
+/// Format-aware staged-wave [`PortfolioPlan`] for any Btor2 or AIGER model file.
+pub fn plan_for_model(
+    engines: &[Arc<dyn Engine>],
+    path: &Path,
+    format: ModelFormat,
+    explicit_filter: bool,
+    effort: Effort,
+    timeout: Duration,
+) -> PortfolioPlan {
+    let fmt_ok: Vec<_> = engines
+        .iter()
+        .filter(|e| e.capabilities().formats.contains(&format))
+        .cloned()
+        .collect();
+    let fallback = |pool: Vec<Arc<dyn Engine>>| PortfolioPlan {
+        schedule: pool.into_iter().map(ScheduledEngine::immediate).collect(),
+        config: if explicit_filter {
+            ScheduleConfig::unlimited()
+        } else {
+            ScheduleConfig::default_for_host()
+        },
+    };
+    if fmt_ok.is_empty() {
+        return fallback(Vec::new());
+    }
+    match format {
+        ModelFormat::Btor2 => match std::fs::read_to_string(path) {
+            Ok(text) => plan_for_btor_with_effort(&fmt_ok, &text, explicit_filter, effort, timeout),
+            Err(_) => fallback(fmt_ok),
+        },
+        ModelFormat::Aiger => {
+            let mut buf = [0u8; 512];
+            let Ok(mut f) = std::fs::File::open(path) else {
+                return fallback(fmt_ok);
+            };
+            let Ok(n) = f.read(&mut buf) else {
+                return fallback(fmt_ok);
+            };
+            plan_for_aiger_bytes(&fmt_ok, &buf[..n], explicit_filter, effort, timeout)
+        }
+    }
 }
 
 #[cfg(test)]

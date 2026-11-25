@@ -10,6 +10,7 @@
 //! for proofs, aigsim for counterexamples) can confirm from files.
 
 pub mod certificate;
+pub mod learned;
 pub mod lemma_hub;
 pub mod memory;
 pub mod portfolio;
@@ -30,6 +31,7 @@ pub fn tool_missing(what: &str) {
 
 pub use certificate::Certificate;
 pub use lemma_hub::{CanonicalClause, HubStats, LemmaHub, LemmaScope, SharedLemma};
+pub use portfolio::{ScheduleConfig, ScheduledEngine};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -221,6 +223,27 @@ pub struct Capabilities {
     /// Multi-worker parallel engine that subsumes a single-worker peer of the
     /// same domain and kind at `Standard+` effort.
     pub multi_worker: bool,
+    /// Concurrent CPU worker slots consumed by this engine (`0` = default: `4`
+    /// when `multi_worker` is true, else `1`).
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub worker_slots: u8,
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+impl Capabilities {
+    /// Effective concurrent thread slots consumed by this engine.
+    pub fn slots(&self) -> usize {
+        if self.worker_slots > 0 {
+            usize::from(self.worker_slots)
+        } else if self.multi_worker {
+            4
+        } else {
+            1
+        }
+    }
 }
 
 /// A progress report, streamed to the scheduler and the UI dashboard.

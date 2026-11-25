@@ -380,13 +380,13 @@ impl Session {
                 .count()
         };
         let bads = has("bad") + has("justice");
-        let filtered = informal_engine::selector::select_for_btor_with_effort(
+        let plan = informal_engine::selector::plan_for_btor_with_effort(
             engines,
             &text,
             !self.engine_filter.is_empty(),
             effort,
+            timeout,
         );
-        let engines = &filtered[..];
         if bads == 0 {
             // The front end folded the check to a constant true.
             let status = match kind {
@@ -497,7 +497,9 @@ impl Session {
         let stop = Some(self.stop.as_ref());
         let before = crate::stats::Usage::now();
         let o = match tracker {
-            None => portfolio::run_with_hub(engines, &req, None, stop, lemma_hub),
+            None => {
+                portfolio::run_scheduled(&plan.schedule, &req, None, stop, lemma_hub, plan.config)
+            }
             Some((t, slot)) => std::thread::scope(|sc| {
                 let (tx, rx) = mpsc::channel::<Progress>();
                 // Ends when the portfolio returns and drops the last sender.
@@ -509,7 +511,14 @@ impl Session {
                         }
                     }
                 });
-                portfolio::run_with_hub(engines, &req, Some(tx), stop, lemma_hub)
+                portfolio::run_scheduled(
+                    &plan.schedule,
+                    &req,
+                    Some(tx),
+                    stop,
+                    lemma_hub,
+                    plan.config,
+                )
             }),
         };
         let usage = before.zip(crate::stats::Usage::now());

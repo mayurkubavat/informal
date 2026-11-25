@@ -375,6 +375,7 @@ impl Engine for Ic3Mt {
             min_effort: Effort::Standard,
             certifies: true,
             multi_worker: true,
+            worker_slots: 4,
             ..Default::default()
         }
     }

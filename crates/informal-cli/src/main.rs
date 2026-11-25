@@ -405,15 +405,16 @@ fn main() -> anyhow::Result<()> {
             }
             let engines = load_engines(&engines, &only, isolate)?;
             let req = CheckRequest::new(model, format, Duration::from_secs(timeout));
-            let selected = informal_engine::selector::select_for_model(
+            let plan = informal_engine::selector::plan_for_model(
                 &engines,
                 &req.model,
                 req.format,
                 !only.is_empty(),
                 req.effort,
+                req.timeout,
             );
             informal_engine::memory::on_memout(|| println!("UNKNOWN (memout)"));
-            let o = portfolio::run(&selected, &req, None);
+            let o = portfolio::run_scheduled(&plan.schedule, &req, None, None, None, plan.config);
             for r in &o.runs {
                 match r {
                     Ok(r) => eprintln!(

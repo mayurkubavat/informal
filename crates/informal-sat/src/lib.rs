@@ -658,7 +658,11 @@ mod tests {
             for c in base.iter().chain(g_cls.iter().flatten()) {
                 d.add_clause(c);
             }
-            assert_eq!(ans, d.solve(&assume), "round {round} unrestricted follow-up");
+            assert_eq!(
+                ans,
+                d.solve(&assume),
+                "round {round} unrestricted follow-up"
+            );
         }
     }
 

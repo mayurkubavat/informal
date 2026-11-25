@@ -1659,6 +1659,7 @@ dependencies = [
  "anyhow",
  "informal-ir",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
