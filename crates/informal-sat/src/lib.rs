@@ -589,6 +589,80 @@ mod tests {
     }
 
     #[test]
+    fn mini_solve_domain_and_groups_match_dpll() {
+        let mut seed = 0xD1B5_4A32_D192_ED03u64;
+        let mut rnd = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for round in 0..300 {
+            let nv = 6 + rnd(8) as i32;
+            let act0 = nv + 1;
+            let act1 = nv + 2;
+            let act2 = nv + 3;
+            let mut m = Mini::with_seed(round as u64 + 1);
+            m.reserve(act2);
+            let mut base: Vec<Vec<Lit>> = Vec::new();
+            let mut g_cls: [Vec<Vec<Lit>>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+            let mk_lit = |rnd: &mut dyn FnMut(u64) -> u64| {
+                let v = 1 + rnd(nv as u64) as Lit;
+                if rnd(2) == 0 {
+                    v
+                } else {
+                    -v
+                }
+            };
+            for _ in 0..(nv as usize * 2) {
+                let len = 2 + rnd(2) as usize;
+                let c: Vec<Lit> = (0..len).map(|_| mk_lit(&mut rnd)).collect();
+                m.add_clause(&c);
+                base.push(c);
+            }
+            let acts = [act0, act1, act2];
+            for g in 0..3 {
+                for _ in 0..4 {
+                    let len = 1 + rnd(3) as usize;
+                    let mut c: Vec<Lit> = (0..len).map(|_| mk_lit(&mut rnd)).collect();
+                    c.push(-acts[g]);
+                    m.add_clause_grouped(&c, g as u32);
+                    g_cls[g].push(c);
+                }
+            }
+            let dom: Vec<Lit> = (1..=nv).collect();
+            for active_from in 0..3u32 {
+                let mut assume: Vec<Lit> = (0..rnd(3)).map(|_| mk_lit(&mut rnd)).collect();
+                for &a in &acts[active_from as usize..] {
+                    assume.push(a);
+                }
+                m.set_active_groups_from(active_from);
+                let ans = m.solve_domain(&assume, &dom);
+
+                let mut d = Dpll::default();
+                for c in &base {
+                    d.add_clause(c);
+                }
+                for cls in g_cls.iter().skip(active_from as usize) {
+                    for c in cls {
+                        d.add_clause(c);
+                    }
+                }
+                let want = d.solve(&assume);
+                assert_eq!(ans, want, "round {round} group {active_from}");
+            }
+            // Follow with an unrestricted solve to exercise `heap_dirty` rebuild.
+            let assume: Vec<Lit> = (0..rnd(3)).map(|_| mk_lit(&mut rnd)).collect();
+            let ans = m.solve(&assume);
+            let mut d = Dpll::default();
+            for c in base.iter().chain(g_cls.iter().flatten()) {
+                d.add_clause(c);
+            }
+            assert_eq!(ans, d.solve(&assume), "round {round} unrestricted follow-up");
+        }
+    }
+
+    #[test]
     fn pigeonhole_3_into_2_is_unsat() {
         let mut s = best();
         let p = |i: i32, h: i32| i * 2 + h + 1; // pigeon i in hole h

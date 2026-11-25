@@ -1,17 +1,11 @@
 //! A small CDCL solver for the many short queries IC3 makes.
 //!
-//! The round-2 research found that IC3 queries are millisecond-scale and
-//! that a lean solver beats CaDiCaL there (GipSAT is 3.61x faster than
-//! MiniSat on them). This is the first step: MiniSat-style CDCL with two
-//! watched literals, first-UIP learning with clause minimization, VSIDS on
-//! a binary heap, phase saving, Luby restarts, assumptions with a final
-//! conflict analysis (for `failed`), and level-0 simplification that drops
-//! satisfied clauses, so activation-literal clauses retired by a unit do
-//! not pile up. COI-restricted decisions and bucket VSIDS come next.
-//!
-//! TODO(D2/D7, Gemini P3): grow this into a GipSAT-class solver: DAG
-//! cone-of-influence restricted decisions, O(1) bucket VSIDS, temporary
-//! clauses. This is the one solver worth owning in Rust (D2).
+//! Designed around GipSAT-style incremental IC3 workloads: flat clause arena
+//! (no per-clause heap allocations), inline binary-clause watch fast path,
+//! grouped frame watch lists (`add_clause_grouped`), COI-restricted decisions
+//! and domain propagation (`solve_domain`) without global-heap churn, first-UIP
+//! learning with recursive clause minimization, temporary clauses (`retire`),
+//! phase saving, Luby restarts, and level-0 compaction.
 //!
 //! Hot loops index slices directly; no `unsafe`.
 
@@ -37,14 +31,22 @@ enum Val {
     Undef,
 }
 
-struct Clause {
+/// Clause metadata in [`Mini::clauses`]; its literals sit contiguously in
+/// [`Mini::lits`]`[start .. start + len]`.
+#[derive(Clone, Copy)]
+struct ClauseHdr {
+    start: u32,
+    len: u32,
     /// Watch-list group ([`Sat::add_clause_grouped`]); `BASE` for none.
     group: u32,
-    lits: Vec<Lit>,
-    learnt: bool,
     activity: f32,
+    learnt: bool,
     deleted: bool,
 }
+
+/// High bit of [`Watch::clause`] marks a binary clause whose other literal is
+/// stored directly in [`Watch::blocker`] (zero arena dereference on propagation).
+const BIN_BIT: u32 = 1 << 31;
 
 #[derive(Clone, Copy)]
 struct Watch {
@@ -61,17 +63,13 @@ const BASE: u32 = u32::MAX;
 pub struct Mini {
     /// Watch lists of grouped clauses: by literal code, the (group, list)
     /// pairs that exist for it, sorted by group. Above level 0 in a
-    /// restricted solve only groups from `active_from` up are scanned;
-    /// the caller guarantees the others cannot matter (IC3: lemmas of
-    /// lower frames, whose activation literal is not assumed). With every
-    /// frame's lemmas in one list, each assignment of a popular latch
-    /// walked the watchers of all frames' lemmas. Sparse per literal: a
-    /// table per group cost one cache miss per group for every propagated
-    /// literal, a sixth of the run time on cv32e40x.
+    /// restricted solve only groups from `active_from` up are scanned.
     gw: Vec<Vec<(u32, Vec<Watch>)>>,
     active_from: usize,
-    clauses: Vec<Clause>,
-    watches: Vec<Vec<Watch>>, // by literal code: clauses watching ¬lit... see `watch`
+    clauses: Vec<ClauseHdr>,
+    /// Flat literal arena shared by every clause.
+    lits: Vec<Lit>,
+    watches: Vec<Vec<Watch>>, // by literal code: clauses watching ¬lit
     assign: Vec<Val>,         // by variable
     level: Vec<u32>,
     reason: Vec<Option<u32>>,
@@ -80,33 +78,26 @@ pub struct Mini {
     var_inc: f64,
     cla_inc: f32,
     heap: Heap,
+    /// Set when `activity` changed during a restricted solve (where `heap` is
+    /// bypassed); triggers an O(N) rebuild before the next unrestricted solve.
+    heap_dirty: bool,
     trail: Vec<Lit>,
     trail_lim: Vec<usize>,
     qhead: usize,
+    /// Scratch marks during conflict analysis / minimization:
+    /// `0` = unseen, `1` = in conflict/learnt, `2` = redundant, `3` = non-redundant.
     seen: Vec<u8>,
     ok: bool,
-    /// The last model, as the values of the variables on the trail at
-    /// SAT: `model_val[v]` counts when `model_stamp[v] == model_id`
-    /// (unassigned variables read as false). Filled from the trail, not
-    /// by copying every variable per answer.
+    /// Last SAT model via epoch stamping (avoids copying level-0 trail).
     model_val: Vec<bool>,
     model_stamp: Vec<u32>,
     model_id: u32,
-    /// The outstanding temporary clause ([`Sat::add_temp_clause`]): the
-    /// clause count when it was added (it and every clause learned from it
-    /// sit at or after this index), its activation literal, and whether
-    /// it was already false at level 0 (then it is not stored: a solve
-    /// that assumes the activation literal is UNSAT at once).
+    /// Outstanding temporary clause: `(clause_mark, act_lit, false_at_lvl0)`.
     temp: Option<(usize, Lit, bool)>,
     /// Clauses marked deleted since the last compaction.
     garbage: usize,
-    /// 0: every variable starts with phase false. Otherwise each new
-    /// variable's first phase is a hash of this and its index, so that a
-    /// run can be repeated on a different but reproducible path.
+    /// Initial phase hash seed (`0` => all false).
     seed: u64,
-    /// Decisions in this solver, flushed to [`DECISIONS`] once per solve
-    /// (a shared atomic per decision cost a cache line bounce per
-    /// decision across the IC3 workers: H7 in the feedback report).
     decisions: u64,
     conflict: Vec<Lit>, // failed assumptions (negated), after Unsat
     terminate: Option<Box<dyn Fn() -> bool + Send>>,
@@ -114,14 +105,17 @@ pub struct Mini {
     /// Decision domain for the current solve (empty: every variable).
     in_domain: Vec<bool>,
     restricted: bool,
-    /// The domain's variables by activity, highest first: restricted
-    /// solves decide only on these and leave the global heap alone.
+    /// Domain variables in caller order for restricted solves.
     dom: Vec<Var>,
-    /// Every `dom` entry before this index is assigned.
     dom_head: usize,
     learnts: usize,
     max_learnts: f64,
     pub conflicts: u64,
+    /// Reusable scratch buffers (zero heap churn per clause/conflict).
+    add_buf: Vec<Lit>,
+    ana_learnt: Vec<Lit>,
+    ana_clear: Vec<Var>,
+    ana_stack: Vec<Var>,
 }
 
 /// Process-wide counters for profiling (INFORMAL_IC3_STATS).
@@ -157,6 +151,7 @@ impl Default for Mini {
     fn default() -> Self {
         Mini {
             clauses: Vec::new(),
+            lits: Vec::new(),
             gw: vec![Vec::new(); 2],
             active_from: 0,
             watches: vec![Vec::new(); 2],
@@ -168,6 +163,7 @@ impl Default for Mini {
             var_inc: 1.0,
             cla_inc: 1.0,
             heap: Heap::default(),
+            heap_dirty: false,
             trail: Vec::new(),
             trail_lim: Vec::new(),
             qhead: 0,
@@ -190,6 +186,10 @@ impl Default for Mini {
             learnts: 0,
             max_learnts: MAX_LEARNTS,
             conflicts: 0,
+            add_buf: Vec::new(),
+            ana_learnt: Vec::new(),
+            ana_clear: Vec::new(),
+            ana_stack: Vec::new(),
         }
     }
 }
@@ -209,7 +209,9 @@ impl Mini {
             self.watches.push(Vec::new());
             self.gw.push(Vec::new());
             self.gw.push(Vec::new());
-            self.heap.insert(n, &self.activity);
+            if !self.heap_dirty {
+                self.heap.insert(n, &self.activity);
+            }
         }
     }
 
@@ -234,10 +236,12 @@ impl Mini {
         }
     }
 
+    #[inline]
     fn decision_level(&self) -> u32 {
         self.trail_lim.len() as u32
     }
 
+    #[inline]
     fn enqueue(&mut self, l: Lit, reason: Option<u32>) {
         let v = var(l);
         self.assign[v] = if l > 0 { Val::True } else { Val::False };
@@ -246,17 +250,37 @@ impl Mini {
         self.trail.push(l);
     }
 
+    #[inline]
+    fn push_clause_raw(&mut self, lits: &[Lit], group: u32, learnt: bool) -> u32 {
+        let ci = self.clauses.len() as u32;
+        debug_assert!(ci < BIN_BIT, "clause index overflow");
+        let start = self.lits.len() as u32;
+        self.lits.extend_from_slice(lits);
+        self.clauses.push(ClauseHdr {
+            start,
+            len: lits.len() as u32,
+            group,
+            activity: 0.0,
+            learnt,
+            deleted: false,
+        });
+        self.attach(ci);
+        ci
+    }
+
     fn attach(&mut self, ci: u32) {
-        let c = &self.clauses[ci as usize];
-        let (a, b, g) = (c.lits[0], c.lits[1], c.group);
+        let h = self.clauses[ci as usize];
+        let s = h.start as usize;
+        let (a, b) = (self.lits[s], self.lits[s + 1]);
+        let tag = if h.len == 2 { ci | BIN_BIT } else { ci };
         // Watch lists are indexed by the literal whose falsification wakes
         // the clause.
-        self.wl(g, code(-a)).push(Watch {
-            clause: ci,
+        self.wl(h.group, code(-a)).push(Watch {
+            clause: tag,
             blocker: b,
         });
-        self.wl(g, code(-b)).push(Watch {
-            clause: ci,
+        self.wl(h.group, code(-b)).push(Watch {
+            clause: tag,
             blocker: a,
         });
     }
@@ -278,55 +302,76 @@ impl Mini {
         &mut lists[i].1
     }
 
-    /// Unit propagation; the conflicting clause on failure.
-    /// Above level 0 in a restricted solve, propagation stays inside the
-    /// domain (GipSAT): a clause with an unassigned literal outside the
-    /// domain counts as satisfied, since the caller guarantees that any
-    /// conflict-free assignment of the domain extends to every clause.
-    /// Without this, each IC3 query propagated through the whole
-    /// transition relation (about twice its domain on ILA_Piccolo).
-    fn propagate(&mut self) -> Option<u32> {
-        let dom = self.restricted && self.decision_level() > 0;
-        // Level 0 and unrestricted solves see every group, so watches
-        // stay valid for whatever is active next.
-        let first_group = if dom { self.active_from } else { 0 };
-        let outside = |s: &Self, l: Lit| -> bool {
-            dom && !s.in_domain.get(var(l)).copied().unwrap_or(false)
+    #[inline]
+    fn outside(&self, dom: bool, l: Lit) -> bool {
+        dom && !self.in_domain.get(var(l)).copied().unwrap_or(false)
+    }
+
+    /// Propagate one watch list (`g_idx == None` for `watches[c_p]`, else
+    /// `gw[c_p][gi].1`) when `p` (`false_lit == -p`) is propagated.
+    fn propagate_list(
+        &mut self,
+        c_p: usize,
+        g_idx: Option<usize>,
+        false_lit: Lit,
+        dom: bool,
+    ) -> Option<u32> {
+        let mut ws = match g_idx {
+            None => std::mem::take(&mut self.watches[c_p]),
+            Some(gi) => std::mem::take(&mut self.gw[c_p][gi].1),
         };
-        while self.qhead < self.trail.len() {
-            let p = self.trail[self.qhead];
-            self.qhead += 1;
-            // The base list, then the groups in use.
-            let mut slot = BASE;
-            loop {
-                let mut ws = std::mem::take(self.wl(slot, code(p)));
-                let mut i = 0;
-                let mut j = 0;
-                let mut confl = None;
-                while i < ws.len() {
-                    let w = ws[i];
-                    i += 1;
-                    if self.lit_value(w.blocker) == Val::True || outside(self, w.blocker) {
-                        ws[j] = w;
+        let mut i = 0;
+        let mut j = 0;
+        let mut confl = None;
+        while i < ws.len() {
+            let w = ws[i];
+            i += 1;
+            match self.lit_value(w.blocker) {
+                Val::True => {
+                    ws[j] = w;
+                    j += 1;
+                    continue;
+                }
+                Val::Undef if self.outside(dom, w.blocker) => {
+                    ws[j] = w;
+                    j += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            if (w.clause & BIN_BIT) != 0 {
+                let ci = (w.clause & !BIN_BIT) as usize;
+                if self.clauses[ci].deleted {
+                    continue;
+                }
+                ws[j] = w;
+                j += 1;
+                if self.lit_value(w.blocker) == Val::False {
+                    confl = Some(ci as u32);
+                    while i < ws.len() {
+                        ws[j] = ws[i];
+                        i += 1;
                         j += 1;
-                        continue;
                     }
-                    let ci = w.clause as usize;
-                    if self.clauses[ci].deleted {
-                        continue;
-                    }
-                    let false_lit = -p;
-                    {
-                        let lits = &mut self.clauses[ci].lits;
-                        if lits[0] == false_lit {
-                            lits.swap(0, 1);
-                        }
-                    }
-                    let first = self.clauses[ci].lits[0];
-                    if first != w.blocker
-                        && (self.lit_value(first) == Val::True
-                            || (self.lit_value(first) == Val::Undef && outside(self, first)))
-                    {
+                } else {
+                    self.enqueue(w.blocker, Some(ci as u32));
+                }
+                continue;
+            }
+            let ci = w.clause as usize;
+            let hdr = self.clauses[ci];
+            if hdr.deleted {
+                continue;
+            }
+            let start = hdr.start as usize;
+            let end = start + hdr.len as usize;
+            if self.lits[start] == false_lit {
+                self.lits.swap(start, start + 1);
+            }
+            let first = self.lits[start];
+            if first != w.blocker {
+                match self.lit_value(first) {
+                    Val::True => {
                         ws[j] = Watch {
                             clause: w.clause,
                             blocker: first,
@@ -334,62 +379,82 @@ impl Mini {
                         j += 1;
                         continue;
                     }
-                    // Look for a new watch.
-                    let len = self.clauses[ci].lits.len();
-                    let mut found = false;
-                    for k in 2..len {
-                        let l = self.clauses[ci].lits[k];
-                        if self.lit_value(l) != Val::False {
-                            self.clauses[ci].lits.swap(1, k);
-                            let g = self.clauses[ci].group;
-                            self.wl(g, code(-l)).push(Watch {
-                                clause: w.clause,
-                                blocker: first,
-                            });
-                            found = true;
-                            break;
-                        }
-                    }
-                    if found {
+                    Val::Undef if self.outside(dom, first) => {
+                        ws[j] = Watch {
+                            clause: w.clause,
+                            blocker: first,
+                        };
+                        j += 1;
                         continue;
                     }
-                    ws[j] = Watch {
+                    _ => {}
+                }
+            }
+            // Look for a new watch.
+            let mut found = false;
+            for k in (start + 2)..end {
+                let l = self.lits[k];
+                if self.lit_value(l) != Val::False {
+                    self.lits.swap(start + 1, k);
+                    self.wl(hdr.group, code(-l)).push(Watch {
                         clause: w.clause,
                         blocker: first,
-                    };
-                    j += 1;
-                    match self.lit_value(first) {
-                        Val::False => {
-                            confl = Some(w.clause);
-                            while i < ws.len() {
-                                ws[j] = ws[i];
-                                i += 1;
-                                j += 1;
-                            }
-                        }
-                        _ => self.enqueue(first, Some(w.clause)),
+                    });
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                continue;
+            }
+            ws[j] = Watch {
+                clause: w.clause,
+                blocker: first,
+            };
+            j += 1;
+            match self.lit_value(first) {
+                Val::False => {
+                    confl = Some(w.clause);
+                    while i < ws.len() {
+                        ws[j] = ws[i];
+                        i += 1;
+                        j += 1;
                     }
                 }
-                ws.truncate(j);
-                // New watches may have been pushed to this list meanwhile.
-                let added = std::mem::take(self.wl(slot, code(p)));
-                ws.extend(added);
-                *self.wl(slot, code(p)) = ws;
-                if confl.is_some() {
+                _ => self.enqueue(first, Some(w.clause)),
+            }
+        }
+        ws.truncate(j);
+        let dst = match g_idx {
+            None => &mut self.watches[c_p],
+            Some(gi) => &mut self.gw[c_p][gi].1,
+        };
+        if !dst.is_empty() {
+            ws.extend(std::mem::take(dst));
+        }
+        *dst = ws;
+        confl
+    }
+
+    /// Unit propagation; returns the conflicting clause index on failure.
+    fn propagate(&mut self) -> Option<u32> {
+        let dom = self.restricted && self.decision_level() > 0;
+        let first_group = if dom { self.active_from as u32 } else { 0 };
+        while self.qhead < self.trail.len() {
+            let p = self.trail[self.qhead];
+            self.qhead += 1;
+            let c_p = code(p);
+            let false_lit = -p;
+            if let Some(confl) = self.propagate_list(c_p, None, false_lit, dom) {
+                self.qhead = self.trail.len();
+                return Some(confl);
+            }
+            let start_gi = self.gw[c_p].partition_point(|e| e.0 < first_group);
+            let ng = self.gw[c_p].len();
+            for gi in start_gi..ng {
+                if let Some(confl) = self.propagate_list(c_p, Some(gi), false_lit, dom) {
                     self.qhead = self.trail.len();
-                    return confl;
-                }
-                // The next group that has a list for this literal.
-                let from = if slot == BASE {
-                    first_group as u32
-                } else {
-                    slot + 1
-                };
-                let lists = &self.gw[code(p)];
-                let at = lists.partition_point(|e| e.0 < from);
-                match lists.get(at) {
-                    Some(e) => slot = e.0,
-                    None => break,
+                    return Some(confl);
                 }
             }
         }
@@ -404,7 +469,11 @@ impl Mini {
             }
             self.var_inc *= 1e-100;
         }
-        self.heap.update(v, &self.activity);
+        if self.restricted {
+            self.heap_dirty = true;
+        } else {
+            self.heap.update(v, &self.activity);
+        }
     }
 
     fn bump_clause(&mut self, ci: usize) {
@@ -418,31 +487,37 @@ impl Mini {
         }
     }
 
-    /// First-UIP analysis: (learnt clause with the asserting literal first,
-    /// backjump level).
-    fn analyze(&mut self, mut confl: u32) -> (Vec<Lit>, u32) {
-        let mut learnt = vec![0];
-        let mut path = 0;
+    /// First-UIP analysis into `self.ana_learnt` (asserting literal at `[0]`),
+    /// returning the backjump level.
+    fn analyze(&mut self, mut confl: u32) -> u32 {
+        self.ana_learnt.clear();
+        self.ana_learnt.push(0);
+        self.ana_clear.clear();
+        let mut path = 0usize;
         let mut p: Lit = 0;
         let mut idx = self.trail.len();
+        let cur_lvl = self.decision_level();
         loop {
-            if self.clauses[confl as usize].learnt {
+            let hdr = self.clauses[confl as usize];
+            if hdr.learnt {
                 self.bump_clause(confl as usize);
             }
-            let start = usize::from(p != 0);
-            // By index: cloning the clause per conflict step was H7's
-            // second cost.
-            let len = self.clauses[confl as usize].lits.len();
-            for k in start..len {
-                let q = self.clauses[confl as usize].lits[k];
+            let start = hdr.start as usize;
+            let end = start + hdr.len as usize;
+            for k in start..end {
+                let q = self.lits[k];
+                if q == p {
+                    continue;
+                }
                 let v = var(q);
                 if self.seen[v] == 0 && self.level[v] > 0 {
                     self.seen[v] = 1;
+                    self.ana_clear.push(v);
                     self.bump_var(v);
-                    if self.level[v] >= self.decision_level() {
+                    if self.level[v] >= cur_lvl {
                         path += 1;
                     } else {
-                        learnt.push(q);
+                        self.ana_learnt.push(q);
                     }
                 }
             }
@@ -460,48 +535,88 @@ impl Mini {
             }
             confl = self.reason[var(p)].expect("propagated literal has a reason");
         }
-        learnt[0] = -p;
-        // Minimize: drop literals implied by others in the clause.
-        let keep: Vec<bool> = learnt
-            .iter()
-            .enumerate()
-            .map(|(i, &l)| i == 0 || !self.redundant(l))
-            .collect();
-        let mut out: Vec<Lit> = learnt
-            .iter()
-            .zip(&keep)
-            .filter(|(_, &k)| k)
-            .map(|(&l, _)| l)
-            .collect();
-        for &l in &learnt {
-            self.seen[var(l)] = 0;
+        self.ana_learnt[0] = -p;
+
+        // Recursive clause minimization (MiniSat `litRedundant`) with level mask.
+        let mut abstract_levels = 0u64;
+        for i in 1..self.ana_learnt.len() {
+            abstract_levels |= 1u64 << (self.level[var(self.ana_learnt[i])] & 63);
         }
+        let mut write = 1usize;
+        for read in 1..self.ana_learnt.len() {
+            let l = self.ana_learnt[read];
+            if self.reason[var(l)].is_none() || !self.lit_redundant(l, abstract_levels) {
+                self.ana_learnt[write] = l;
+                write += 1;
+            }
+        }
+        self.ana_learnt.truncate(write);
+
+        for &v in &self.ana_clear {
+            self.seen[v] = 0;
+        }
+        self.ana_clear.clear();
+
         // Backjump level: the highest level among the rest; put it second.
         let mut bt = 0;
-        if out.len() > 1 {
+        if self.ana_learnt.len() > 1 {
             let mut max_i = 1;
-            for i in 2..out.len() {
-                if self.level[var(out[i])] > self.level[var(out[max_i])] {
+            let mut max_lvl = self.level[var(self.ana_learnt[1])];
+            for i in 2..self.ana_learnt.len() {
+                let lv = self.level[var(self.ana_learnt[i])];
+                if lv > max_lvl {
+                    max_lvl = lv;
                     max_i = i;
                 }
             }
-            out.swap(1, max_i);
-            bt = self.level[var(out[1])];
+            self.ana_learnt.swap(1, max_i);
+            bt = max_lvl;
         }
-        (out, bt)
+        bt
     }
 
-    /// Local minimization: `l` is redundant if its reason's other literals
-    /// are all in the clause (marked seen) or at level 0.
-    fn redundant(&self, l: Lit) -> bool {
-        match self.reason[var(l)] {
-            None => false,
-            Some(r) => self.clauses[r as usize]
-                .lits
-                .iter()
-                .skip(1)
-                .all(|&q| self.seen[var(q)] != 0 || self.level[var(q)] == 0),
+    /// Recursive minimization: `l` is redundant if every path through reason
+    /// clauses terminates in literals already in `ana_learnt` (`seen == 1`),
+    /// previously confirmed redundant (`seen == 2`), or fixed at level 0.
+    fn lit_redundant(&mut self, l: Lit, abstract_levels: u64) -> bool {
+        let top = self.ana_clear.len();
+        self.ana_stack.clear();
+        self.ana_stack.push(var(l));
+        while let Some(v) = self.ana_stack.pop() {
+            let Some(r) = self.reason[v] else {
+                for &u in &self.ana_clear[top..] {
+                    self.seen[u] = 3;
+                }
+                return false;
+            };
+            let hdr = self.clauses[r as usize];
+            let start = hdr.start as usize;
+            let end = start + hdr.len as usize;
+            for k in start..end {
+                let q = self.lits[k];
+                let qv = var(q);
+                if qv == v {
+                    continue;
+                }
+                let lv = self.level[qv];
+                if lv == 0 || self.seen[qv] == 1 || self.seen[qv] == 2 {
+                    continue;
+                }
+                if self.seen[qv] == 3
+                    || self.reason[qv].is_none()
+                    || (abstract_levels & (1u64 << (lv & 63))) == 0
+                {
+                    for &u in &self.ana_clear[top..] {
+                        self.seen[u] = 3;
+                    }
+                    return false;
+                }
+                self.seen[qv] = 2;
+                self.ana_clear.push(qv);
+                self.ana_stack.push(qv);
+            }
         }
+        true
     }
 
     /// The assumptions responsible for a conflict on `p` (MiniSat's
@@ -525,9 +640,14 @@ impl Mini {
                     }
                 }
                 Some(r) => {
-                    for &q in self.clauses[r as usize].lits.iter().skip(1) {
-                        if self.level[var(q)] > 0 {
-                            self.seen[var(q)] = 1;
+                    let hdr = self.clauses[r as usize];
+                    let start = hdr.start as usize;
+                    let end = start + hdr.len as usize;
+                    for k in start..end {
+                        let q = self.lits[k];
+                        let qv = var(q);
+                        if qv != x && self.level[qv] > 0 {
+                            self.seen[qv] = 1;
                         }
                     }
                 }
@@ -543,12 +663,15 @@ impl Mini {
         }
         self.dom_head = 0;
         let lim = self.trail_lim[lvl as usize];
+        let reinsert = !self.restricted && !self.heap_dirty;
         for i in (lim..self.trail.len()).rev() {
             let v = var(self.trail[i]);
             self.phase[v] = self.trail[i] > 0;
             self.assign[v] = Val::Undef;
             self.reason[v] = None;
-            self.heap.insert(v, &self.activity);
+            if reinsert {
+                self.heap.insert(v, &self.activity);
+            }
         }
         self.trail.truncate(lim);
         self.trail_lim.truncate(lvl as usize);
@@ -580,7 +703,7 @@ impl Mini {
         let mut idx: Vec<usize> = (0..self.clauses.len())
             .filter(|&i| {
                 let c = &self.clauses[i];
-                c.learnt && !c.deleted && c.lits.len() > 2 && !self.locked(i)
+                c.learnt && !c.deleted && c.len > 2 && !self.locked(i)
             })
             .collect();
         idx.sort_by(|&a, &b| {
@@ -591,37 +714,56 @@ impl Mini {
         for &i in idx.iter().take(idx.len() / 2) {
             self.clauses[i].deleted = true;
             self.learnts -= 1;
+            self.garbage += 1;
         }
     }
 
     fn locked(&self, ci: usize) -> bool {
-        let l = self.clauses[ci].lits[0];
+        let l = self.lits[self.clauses[ci].start as usize];
         self.lit_value(l) == Val::True && self.reason[var(l)] == Some(ci as u32)
     }
 
-    /// At level 0: drop satisfied clauses and rebuild watches.
+    /// At level 0: drop satisfied clauses, compact the literal arena, and
+    /// rebuild watches.
     fn simplify(&mut self) {
         debug_assert_eq!(self.decision_level(), 0);
         for ci in 0..self.clauses.len() {
-            if self.clauses[ci].deleted {
+            let h = self.clauses[ci];
+            if h.deleted {
                 continue;
             }
-            if self.clauses[ci]
-                .lits
+            let s = h.start as usize;
+            let e = s + h.len as usize;
+            if self.lits[s..e]
                 .iter()
                 .any(|&l| self.lit_value(l) == Val::True)
             {
                 self.clauses[ci].deleted = true;
-                if self.clauses[ci].learnt {
+                if h.learnt {
                     self.learnts -= 1;
                 }
             }
         }
-        // Compact: renumber live clauses and rebuild every watch list.
         for r in self.reason.iter_mut() {
             *r = None; // level-0 reasons are never needed
         }
-        self.clauses.retain(|c| !c.deleted);
+        let mut new_clauses = Vec::with_capacity(self.clauses.len());
+        let mut new_lits = Vec::with_capacity(self.lits.len());
+        for h in &self.clauses {
+            if h.deleted {
+                continue;
+            }
+            let s = h.start as usize;
+            let e = s + h.len as usize;
+            let new_start = new_lits.len() as u32;
+            new_lits.extend_from_slice(&self.lits[s..e]);
+            new_clauses.push(ClauseHdr {
+                start: new_start,
+                ..*h
+            });
+        }
+        self.clauses = new_clauses;
+        self.lits = new_lits;
         for w in self.watches.iter_mut() {
             w.clear();
         }
@@ -652,6 +794,7 @@ impl Mini {
 
     fn search(&mut self, assumptions: &[Lit], budget: u64) -> Option<Answer> {
         let mut conflicts = 0u64;
+        let mut decs_here = 0u64;
         loop {
             if let Some(confl) = self.propagate() {
                 self.conflicts += 1;
@@ -660,27 +803,33 @@ impl Mini {
                     self.ok = false;
                     return Some(Answer::Unsat);
                 }
-                let (learnt, bt) = self.analyze(confl);
+                let bt = self.analyze(confl);
                 self.cancel_until(bt);
-                if learnt.len() == 1 {
-                    self.enqueue(learnt[0], None);
+                if self.ana_learnt.len() == 1 {
+                    let unit = self.ana_learnt[0];
+                    self.enqueue(unit, None);
                 } else {
+                    let asserting = self.ana_learnt[0];
                     let ci = self.clauses.len() as u32;
-                    self.clauses.push(Clause {
+                    let start = self.lits.len() as u32;
+                    let len = self.ana_learnt.len() as u32;
+                    self.lits.extend_from_slice(&self.ana_learnt);
+                    self.clauses.push(ClauseHdr {
+                        start,
+                        len,
                         group: BASE,
-                        lits: learnt.clone(),
-                        learnt: true,
                         activity: 0.0,
+                        learnt: true,
                         deleted: false,
                     });
                     self.attach(ci);
                     self.bump_clause(ci as usize);
                     self.learnts += 1;
-                    self.enqueue(learnt[0], Some(ci));
+                    self.enqueue(asserting, Some(ci));
                 }
                 self.var_inc /= 0.95;
                 self.cla_inc /= 0.999;
-                if conflicts.is_multiple_of(256) && self.terminate.as_ref().is_some_and(|f| f()) {
+                if (conflicts & 63) == 0 && self.terminate.as_ref().is_some_and(|f| f()) {
                     return None;
                 }
                 continue;
@@ -718,6 +867,10 @@ impl Mini {
             };
             self.trail_lim.push(self.trail.len());
             self.decisions += 1;
+            decs_here += 1;
+            if (decs_here & 4095) == 0 && self.terminate.as_ref().is_some_and(|f| f()) {
+                return None;
+            }
             self.enqueue(decision, None);
         }
     }
@@ -737,28 +890,29 @@ impl Sat for Mini {
             return;
         }
         self.cancel_until(0);
-        let mut c: Vec<Lit> = Vec::with_capacity(lits.len());
         for &l in lits {
             self.ensure(var(l));
         }
+        self.add_buf.clear();
         for &l in lits {
             match self.lit_value(l) {
                 Val::True => return,
                 Val::False => continue,
                 Val::Undef => {
-                    if c.contains(&-l) {
+                    if self.add_buf.contains(&-l) {
                         return;
                     }
-                    if !c.contains(&l) {
-                        c.push(l);
+                    if !self.add_buf.contains(&l) {
+                        self.add_buf.push(l);
                     }
                 }
             }
         }
-        match c.len() {
+        match self.add_buf.len() {
             0 => self.ok = false,
             1 => {
-                self.enqueue(c[0], None);
+                let unit = self.add_buf[0];
+                self.enqueue(unit, None);
                 if self.propagate().is_some() {
                     self.ok = false;
                 }
@@ -766,11 +920,15 @@ impl Sat for Mini {
             }
             _ => {
                 let ci = self.clauses.len() as u32;
-                self.clauses.push(Clause {
+                let start = self.lits.len() as u32;
+                let len = self.add_buf.len() as u32;
+                self.lits.extend_from_slice(&self.add_buf);
+                self.clauses.push(ClauseHdr {
+                    start,
+                    len,
                     group,
-                    lits: c,
-                    learnt: false,
                     activity: 0.0,
+                    learnt: false,
                     deleted: false,
                 });
                 self.attach(ci);
@@ -787,21 +945,20 @@ impl Sat for Mini {
             self.ensure(var(a));
         }
         self.cancel_until(0);
+        if !self.restricted && self.heap_dirty {
+            self.heap
+                .rebuild(self.assign.len(), &self.assign, &self.activity);
+            self.heap_dirty = false;
+        }
         if let Some((_, act, true)) = self.temp {
             if assumptions.contains(&act) {
                 self.conflict.push(-act);
                 return Answer::Unsat;
             }
         }
-        // Compaction renumbers clauses: not while a temporary clause's
-        // index range is in use.
         if self.units_since_simplify > 64 && self.temp.is_none() {
             self.simplify();
         }
-        // The limit grows by 10% per reduction within one solve only.
-        // Carried across solves it never stopped growing: after a
-        // million IC3 queries the solver held 38,000 learned clauses of
-        // 14 literals, twice the lemmas' watchers (x-epic a16-p128).
         self.max_learnts = MAX_LEARNTS;
         let t0 = std::time::Instant::now();
         let d0 = self.decisions;
@@ -841,12 +998,6 @@ impl Sat for Mini {
                 self.model_val.resize(n, false);
                 self.model_stamp.resize(n, 0);
             }
-            // Only what this solve assigned: level-0 values stay in
-            // `assign` and are read from there. IC3 retires one activation
-            // variable per query as a level-0 unit, so the level-0 trail
-            // grows with every query (143k entries after 325k queries on
-            // x-epic a16-p128) and copying it per SAT answer cost as much
-            // as the search itself.
             let from = self.trail_lim.first().copied().unwrap_or(self.trail.len());
             for &l in &self.trail[from..] {
                 let v = var(l);
@@ -863,7 +1014,6 @@ impl Sat for Mini {
         let val = if self.model_stamp.get(v) == Some(&self.model_id) {
             self.model_val[v]
         } else {
-            // Fixed at level 0, or unassigned (reads as false).
             self.assign.get(v) == Some(&Val::True)
         };
         val == (lit > 0)
@@ -882,47 +1032,33 @@ impl Sat for Mini {
         debug_assert!(self.assign[var(act)] == Val::Undef);
         let mark = self.clauses.len();
         self.temp = Some((mark, act, false));
-        let mut c: Vec<Lit> = Vec::with_capacity(lits.len() + 1);
+        self.add_buf.clear();
+        self.add_buf.push(-act);
         for &l in lits {
             match self.lit_value(l) {
                 Val::True => return, // holds anyway
                 Val::False => continue,
                 Val::Undef => {
-                    if c.contains(&-l) {
+                    if self.add_buf[1..].contains(&-l) {
                         return;
                     }
-                    if !c.contains(&l) {
-                        c.push(l);
+                    if !self.add_buf[1..].contains(&l) {
+                        self.add_buf.push(l);
                     }
                 }
             }
         }
-        if c.is_empty() {
+        if self.add_buf.len() == 1 {
             // False at level 0: assuming `act` is a conflict. Not stored,
             // so that `act` is not fixed and can be reused.
             self.temp = Some((mark, act, true));
             return;
         }
-        // Activation literal first (see `Sat::add_temp_clause`); the
-        // second watch is then the first cube literal, as before.
-        c.insert(0, -act);
-        self.clauses.push(Clause {
-            group: BASE,
-            lits: c,
-            learnt: false,
-            activity: 0.0,
-            deleted: false,
-        });
-        self.attach(mark as u32);
+        let buf = std::mem::take(&mut self.add_buf);
+        self.push_clause_raw(&buf, BASE, false);
+        self.add_buf = buf;
     }
 
-    /// Removes the temporary clause and every clause learned from it
-    /// (each contains `-act`: `act` is only ever an assumption), and
-    /// frees `act` if a learned unit fixed it. Nothing else can mention
-    /// `act`, so the solver is as if the query never happened, minus the
-    /// lemmas that hold without it. Before this, every IC3 query left a
-    /// dead variable, a level-0 unit and dead clauses behind, and cleaning
-    /// up was O(variables) every 64 queries: quadratic over a run.
     fn retire(&mut self, act: Lit) -> bool {
         self.cancel_until(0);
         let Some((mark, a, _)) = self.temp.take() else {
@@ -930,10 +1066,15 @@ impl Sat for Mini {
         };
         debug_assert_eq!(a, act);
         for ci in mark..self.clauses.len() {
-            let c = &mut self.clauses[ci];
-            if !c.deleted && c.lits.contains(&-act) {
-                c.deleted = true;
-                if c.learnt {
+            let h = self.clauses[ci];
+            if h.deleted {
+                continue;
+            }
+            let s = h.start as usize;
+            let e = s + h.len as usize;
+            if self.lits[s..e].contains(&-act) {
+                self.clauses[ci].deleted = true;
+                if h.learnt {
                     self.learnts -= 1;
                 }
                 self.garbage += 1;
@@ -941,8 +1082,6 @@ impl Sat for Mini {
         }
         let v = var(act);
         if self.assign[v] != Val::Undef {
-            // A learned unit `-act`: it satisfied only clauses that are
-            // gone now and propagated nothing.
             if let Some(pos) = self.trail.iter().rposition(|&l| var(l) == v) {
                 self.trail.remove(pos);
                 if self.qhead > pos {
@@ -951,7 +1090,9 @@ impl Sat for Mini {
             }
             self.assign[v] = Val::Undef;
             self.reason[v] = None;
-            self.heap.insert(v, &self.activity);
+            if !self.heap_dirty {
+                self.heap.insert(v, &self.activity);
+            }
         }
         if self.garbage > 4096 && 2 * self.garbage > self.clauses.len() {
             self.simplify();
@@ -975,8 +1116,6 @@ impl Sat for Mini {
                 dom.push(v);
             }
         }
-        // Decisions follow the caller's order (IC3 puts latches and
-        // inputs first, so gates mostly follow by propagation).
         self.dom_head = 0;
         DOMAIN_VARS.fetch_add(dom.len() as u64, std::sync::atomic::Ordering::Relaxed);
         self.dom = dom;
@@ -990,7 +1129,6 @@ impl Sat for Mini {
     }
 
     fn failed(&self, lit: Lit) -> bool {
-        // `conflict` holds negations of the failed assumptions.
         self.conflict.contains(&-lit)
     }
 
@@ -1016,6 +1154,23 @@ struct Heap {
 }
 
 impl Heap {
+    fn rebuild(&mut self, nvars: usize, assign: &[Val], act: &[f64]) {
+        self.heap.clear();
+        self.pos.clear();
+        self.pos.resize(nvars, None);
+        for v in 1..nvars {
+            if assign[v] == Val::Undef {
+                let i = self.heap.len();
+                self.heap.push(v);
+                self.pos[v] = Some(i);
+            }
+        }
+        let n = self.heap.len();
+        for i in (0..n / 2).rev() {
+            self.down(i, act);
+        }
+    }
+
     fn insert(&mut self, v: Var, act: &[f64]) {
         if self.pos.len() <= v {
             self.pos.resize(v + 1, None);

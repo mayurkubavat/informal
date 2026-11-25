@@ -72,7 +72,7 @@ impl Engine for Ic3Engine {
         };
         let mini = self.mini;
         if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
-            let t = cnf::build(&g);
+            let t = cnf::template(&g);
             eprintln!(
                 "template: {} latches {} inputs {} ands, {} live vars, {} clauses, {} lits",
                 g.latches.len(),
@@ -127,12 +127,17 @@ impl Engine for Ic3Engine {
                 }));
                 Box::new(s)
             };
-            let Some(mut ic3) = ic3::Ic3::new(&g, Box::new(make)) else {
-                return Ok(result(
-                    self.name(),
-                    unknown("latch inits that are not constants"),
-                    t0,
-                ));
+            let Some(mut ic3) =
+                ic3::Ic3::with_config_until(&g, Box::new(make), ic3::Config::default(), &|| {
+                    slice.should_stop()
+                })
+            else {
+                let reason = if slice.should_stop() {
+                    slice.stop_reason()
+                } else {
+                    "latch inits that are not constants"
+                };
+                return Ok(result(self.name(), unknown(reason), t0));
             };
             if attempt == 0
                 && (std::env::var_os("INFORMAL_IC3_MINE").is_some()
@@ -484,8 +489,18 @@ impl Engine for Ic3Mt {
                             }));
                             Box::new(s)
                         };
-                        let Some(mut ic3) = ic3::Ic3::with_config(g, Box::new(make), cfg) else {
-                            return unknown("latch inits that are not constants").into();
+                        let Some(mut ic3) = ic3::Ic3::with_config_until(
+                            g,
+                            Box::new(make),
+                            cfg,
+                            &|| inner.should_stop(),
+                        ) else {
+                            let reason = if inner.should_stop() {
+                                inner.stop_reason()
+                            } else {
+                                "latch inits that are not constants"
+                            };
+                            return unknown(reason).into();
                         };
                         ic3.share(pool, id);
                         if let Some(mut hub) = HubBridge::new(g, inner, self.name()) {

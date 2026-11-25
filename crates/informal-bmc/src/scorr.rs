@@ -111,18 +111,35 @@ pub(crate) fn simulate(
     (sig, live)
 }
 
-/// A member's signature: its latch's words, complemented by its phase,
-/// on live runs only (the constant is all zero).
-fn signature(m: &Member, row: &HashMap<Lit, usize>, sigs: &[Vec<u64>], live: &[u64]) -> Vec<u64> {
-    let flip = if m.phase { !0u64 } else { 0 };
-    match row.get(&m.lit) {
-        None => vec![0; live.len()],
-        Some(&i) => sigs[i]
-            .iter()
-            .zip(live)
-            .map(|(&x, &a)| (x ^ flip) & a)
-            .collect(),
+/// Mix `x` into a pair of 64-bit hashes (128-bit rolling fingerprint).
+#[inline]
+fn mix_sig(h: &mut (u64, u64), x: u64) {
+    h.0 = h.0.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ x;
+    h.0 = h.0.rotate_left(27).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h.1 = h.1.wrapping_mul(0x94d0_49bb_1331_11eb) ^ x.wrapping_add(0x517c_c1b7_2722_0a95);
+    h.1 = h.1.rotate_left(31).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+}
+
+/// A member's rolling 128-bit signature over `sigs` masked by `live`.
+fn signature_hash(
+    m: &Member,
+    row: &[usize],
+    sigs: &[Vec<u64>],
+    live: &[u64],
+) -> (u64, u64) {
+    let mut h = (0u64, 0u64);
+    let idx = row.get(var(m.lit) as usize).copied().unwrap_or(usize::MAX);
+    if idx == usize::MAX {
+        for _ in live {
+            mix_sig(&mut h, 0);
+        }
+    } else {
+        let flip = if m.phase { !0u64 } else { 0 };
+        for (&x, &a) in sigs[idx].iter().zip(live) {
+            mix_sig(&mut h, (x ^ flip) & a);
+        }
     }
+    h
 }
 
 /// Split classes by a per-member key (relative to the member's phase);
@@ -134,20 +151,21 @@ fn split<K: Eq + std::hash::Hash>(
 ) -> Vec<Vec<Member>> {
     let mut next = Vec::new();
     for c in classes {
-        let mut groups: Vec<(K, Vec<Member>)> = Vec::new();
-        let mut index: HashMap<K, usize> = HashMap::new();
+        let mut groups: Vec<Vec<Member>> = Vec::new();
+        let mut index: HashMap<K, usize> = HashMap::with_capacity(c.len().min(64));
         for m in c {
             let k = key(&m);
-            match index.get(&k) {
-                Some(&gi) => groups[gi].1.push(m),
-                None => {
-                    // Keys are cloned only through the map position.
-                    index.insert(key(&m), groups.len());
-                    groups.push((k, vec![m]));
+            match index.entry(k) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    groups[*e.get()].push(m);
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(groups.len());
+                    groups.push(vec![m]);
                 }
             }
         }
-        for (_, mut g) in groups {
+        for mut g in groups {
             if g.len() > 1 {
                 let p0 = g[0].phase;
                 for m in g.iter_mut() {
@@ -160,26 +178,98 @@ fn split<K: Eq + std::hash::Hash>(
     next
 }
 
-/// Latch literal -> index in `g.latches`.
-fn latch_rows(g: &Aig) -> HashMap<Lit, usize> {
-    g.latches
-        .iter()
-        .enumerate()
-        .map(|(i, l)| (l.lit, i))
-        .collect()
+/// Dense table `var(latch.lit) -> index in g.latches` (`usize::MAX` for non-latches).
+fn latch_rows(g: &Aig) -> Vec<usize> {
+    let mut row = vec![usize::MAX; g.nodes.len()];
+    for (i, l) in g.latches.iter().enumerate() {
+        row[var(l.lit) as usize] = i;
+    }
+    row
 }
 
 /// Classes of candidates; the first member of each is the representative
 /// (the constant when the class has one, else the lowest latch).
-fn candidates(g: &Aig) -> Vec<Vec<Member>> {
-    let mut sigs: Vec<Vec<u64>> = vec![Vec::new(); g.latches.len()];
-    let mut live = Vec::new();
-    for r in 0..SIM_ROUNDS {
-        let (sim, l) = simulate(g, None, SIM_STEPS, 0x9e37_79b9_7f4a_7c15 ^ r as u64);
-        for (i, s) in sim.into_iter().enumerate() {
-            sigs[i].extend(s);
+///
+/// Uses streaming 128-bit fingerprints (zero per-step signature buffers) and
+/// stops simulation early if `sim_deadline` or `ctx` expires so `refine` keeps
+/// budget even on large folded cones.
+fn candidates(g: &Aig, row: &[usize], ctx: &RunContext) -> Vec<Vec<Member>> {
+    let now = std::time::Instant::now();
+    let left = ctx.deadline.saturating_duration_since(now);
+    // Reserve at least half of scorr's budget for SAT refinement.
+    let sim_deadline = now + left / 2;
+
+    let n = g.nodes.len();
+    let nl = g.latches.len();
+    let mut vals = vec![0u64; n];
+    let mut state = vec![0u64; nl];
+    let flips: Vec<u64> = g
+        .latches
+        .iter()
+        .map(|l| if l.init == Init::One { !0u64 } else { 0 })
+        .collect();
+    let mut hashes = vec![(0u64, 0u64); nl];
+    let mut const_hash = (0u64, 0u64);
+
+    let w = |vals: &[u64], l: Lit| -> u64 {
+        let x = vals[var(l) as usize];
+        if is_neg(l) {
+            !x
+        } else {
+            x
         }
-        live.extend(l);
+    };
+
+    'rounds: for r in 0..SIM_ROUNDS {
+        if r > 0 && (ctx.should_stop() || std::time::Instant::now() >= sim_deadline) {
+            break;
+        }
+        let mut rng = (0x9e37_79b9_7f4a_7c15u64 ^ r as u64) | 1;
+        let mut rnd = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        for (i, l) in g.latches.iter().enumerate() {
+            state[i] = match l.init {
+                Init::One => !0,
+                Init::Zero => 0,
+                _ => rnd(),
+            };
+        }
+        let mut alive = !0u64;
+        for step in 0..SIM_STEPS {
+            if step > 0
+                && (step & 15) == 0
+                && (ctx.should_stop() || (r > 0 && std::time::Instant::now() >= sim_deadline))
+            {
+                break 'rounds;
+            }
+            let mut li = 0;
+            for v in 0..n {
+                vals[v] = match g.nodes[v] {
+                    Node::Const => 0,
+                    Node::Input => rnd(),
+                    Node::Latch => {
+                        li += 1;
+                        state[li - 1]
+                    }
+                    Node::And(a, b) => w(&vals, a) & w(&vals, b),
+                };
+            }
+            for &c in &g.constraints {
+                alive &= w(&vals, c);
+            }
+            mix_sig(&mut const_hash, 0);
+            for (i, l) in g.latches.iter().enumerate() {
+                mix_sig(&mut hashes[i], (state[i] ^ flips[i]) & alive);
+                state[i] = w(&vals, l.next);
+            }
+            if alive == 0 {
+                break;
+            }
+        }
     }
     // One class of every initialized latch and the constant; a member's
     // phase is its init value, so its normalized signature is
@@ -197,17 +287,28 @@ fn candidates(g: &Aig) -> Vec<Vec<Member>> {
             });
         }
     }
-    let row = latch_rows(g);
-    let mut classes = split(vec![all], |m| signature(m, &row, &sigs, &live));
+    let mut classes = split(vec![all], |m| {
+        let idx = row.get(var(m.lit) as usize).copied().unwrap_or(usize::MAX);
+        if idx == usize::MAX {
+            const_hash
+        } else {
+            hashes[idx]
+        }
+    });
     classes.sort_by_key(|c| c[0].lit);
     classes
 }
 
 /// One step of `g` from 64 states at once (`state`: a word per latch)
-/// with random inputs: the next-state word of every latch, and the mask of
-/// runs whose state and inputs meet the constraints.
-fn step_words(g: &Aig, state: &[u64], rnd: &mut impl FnMut() -> u64) -> (Vec<u64>, u64) {
-    let mut vals = vec![0u64; g.nodes.len()];
+/// with random inputs: writes the next-state word of every latch into `next`
+/// using reusable scratch `vals`, and returns the mask of live runs.
+fn step_words(
+    g: &Aig,
+    state: &[u64],
+    vals: &mut [u64],
+    next: &mut [u64],
+    rnd: &mut impl FnMut() -> u64,
+) -> u64 {
     let w = |vals: &[u64], l: Lit| -> u64 {
         let x = vals[var(l) as usize];
         if is_neg(l) {
@@ -225,14 +326,17 @@ fn step_words(g: &Aig, state: &[u64], rnd: &mut impl FnMut() -> u64) -> (Vec<u64
                 li += 1;
                 state[li - 1]
             }
-            Node::And(a, b) => w(&vals, a) & w(&vals, b),
+            Node::And(a, b) => w(vals, a) & w(vals, b),
         };
     }
     let mut live = !0u64;
     for &c in &g.constraints {
-        live &= w(&vals, c);
+        live &= w(vals, c);
     }
-    (g.latches.iter().map(|l| w(&vals, l.next)).collect(), live)
+    for (i, l) in g.latches.iter().enumerate() {
+        next[i] = w(vals, l.next);
+    }
+    live
 }
 
 /// Refutation without SAT: 64 random states in which every candidate
@@ -246,7 +350,7 @@ fn step_words(g: &Aig, state: &[u64], rnd: &mut impl FnMut() -> u64) -> (Vec<u64
 fn random_refine(
     g: &Aig,
     mut classes: Vec<Vec<Member>>,
-    row: &HashMap<Lit, usize>,
+    row: &[usize],
     seed: u64,
     quiet: usize,
     ctx: &RunContext,
@@ -261,6 +365,8 @@ fn random_refine(
     let count = |cs: &[Vec<Member>]| cs.iter().map(Vec::len).sum::<usize>();
     let mut idle = 0;
     let mut state = vec![0u64; g.latches.len()];
+    let mut next_state = vec![0u64; g.latches.len()];
+    let mut vals = vec![0u64; g.nodes.len()];
     while idle < quiet && !classes.is_empty() && !ctx.should_stop() {
         for x in state.iter_mut() {
             *x = rnd();
@@ -268,16 +374,21 @@ fn random_refine(
         for c in &classes {
             let r = if c[0].lit == FALSE { 0 } else { rnd() };
             for m in c {
-                if let Some(&i) = row.get(&m.lit) {
-                    state[i] = if m.phase { !r } else { r };
+                let idx = row.get(var(m.lit) as usize).copied().unwrap_or(usize::MAX);
+                if idx != usize::MAX {
+                    state[idx] = if m.phase { !r } else { r };
                 }
             }
         }
-        let (next, live) = step_words(g, &state, &mut rnd);
+        let live = step_words(g, &state, &mut vals, &mut next_state, &mut rnd);
         let before = (classes.len(), count(&classes));
-        classes = split(classes, |m| match row.get(&m.lit) {
-            None => 0,
-            Some(&i) => (if m.phase { !next[i] } else { next[i] }) & live,
+        classes = split(classes, |m| {
+            let idx = row.get(var(m.lit) as usize).copied().unwrap_or(usize::MAX);
+            if idx == usize::MAX {
+                0
+            } else {
+                (if m.phase { !next_state[idx] } else { next_state[idx] }) & live
+            }
         });
         if (classes.len(), count(&classes)) == before {
             idle += 1;
@@ -293,11 +404,11 @@ fn random_refine(
 fn refine(
     g: &Aig,
     mut classes: Vec<Vec<Member>>,
+    row: &[usize],
     sat: Box<dyn Sat>,
     ctx: &RunContext,
     stats: &mut Stats,
 ) -> Option<Vec<Vec<Member>>> {
-    let row = latch_rows(g);
     let mut u = Unroll::new(g, sat, true);
     u.add_frame();
     // No constraints in frame 1: the equalities must follow from a valid
@@ -314,7 +425,7 @@ fn refine(
             classes = random_refine(
                 g,
                 classes,
-                &row,
+                row,
                 0x2545_f491 ^ stats.refinements as u64,
                 16,
                 ctx,
@@ -397,13 +508,17 @@ fn refine(
             .iter()
             .map(|l| u.sat.value(u.lit(1, l.lit)))
             .collect();
-        let one = |m: &Member| match row.get(&m.lit) {
-            None => false,
-            Some(&i) => v1[i] ^ m.phase,
+        let one = |m: &Member| {
+            let idx = row.get(var(m.lit) as usize).copied().unwrap_or(usize::MAX);
+            if idx == usize::MAX {
+                false
+            } else {
+                v1[idx] ^ m.phase
+            }
         };
         classes = split(classes, one);
         let (sigs, live) = simulate(g, Some(&v1), 8, 0x5851_f42d ^ stats.refinements as u64);
-        let next = split(classes, |m| signature(m, &row, &sigs, &live));
+        let next = split(classes, |m| signature_hash(m, row, &sigs, &live));
         u.sat.add_clause(&[-a]);
         classes = next;
     }
@@ -425,7 +540,8 @@ pub fn latch_correspondence(
         refinements: 0,
         equalities: Vec::new(),
     };
-    let classes = candidates(g);
+    let row = latch_rows(g);
+    let classes = candidates(g, &row, ctx);
     let dbg = std::env::var_os("INFORMAL_IC3_STATS").is_some();
     if dbg {
         eprintln!(
@@ -437,7 +553,7 @@ pub fn latch_correspondence(
     if classes.is_empty() {
         return None;
     }
-    let classes = refine(g, classes, sat, ctx, &mut stats)?;
+    let classes = refine(g, classes, &row, sat, ctx, &mut stats)?;
     // Member latch variable -> (representative literal, phase).
     let mut subst: HashMap<u32, (Lit, bool)> = HashMap::new();
     for c in &classes {

@@ -188,17 +188,25 @@ struct Solver {
 }
 
 impl Solver {
-    fn new(t: &Template, nvars: usize, mut sat: Box<dyn Sat>) -> Self {
+    fn new_until(
+        t: &Template,
+        nvars: usize,
+        mut sat: Box<dyn Sat>,
+        stop: &dyn Fn() -> bool,
+    ) -> Option<Self> {
         sat.reserve(nvars as i32 + 1);
         sat.add_clause(&[-1]); // template variable 1 is the AIG constant false
-        for c in &t.clauses {
+        for (i, c) in t.clauses.iter().enumerate() {
+            if (i & 4095) == 0 && stop() {
+                return None;
+            }
             sat.add_clause(c);
         }
-        Solver {
+        Some(Solver {
             sat,
             next: nvars as i32 + 1,
             spare_act: None,
-        }
+        })
     }
 
     /// Add `clause` for one query; returns the literal to assume.
@@ -396,7 +404,18 @@ impl<'g> Ic3<'g> {
         make_sat: Box<dyn Fn() -> Box<dyn Sat>>,
         cfg: Config,
     ) -> Option<Self> {
-        if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) {
+        Self::with_config_until(g, make_sat, cfg, &|| false)
+    }
+
+    /// [`Ic3::with_config`], aborting early if `stop()` triggers during
+    /// initial CNF template ingestion on very large models.
+    pub fn with_config_until(
+        g: &'g Aig,
+        make_sat: Box<dyn Fn() -> Box<dyn Sat>>,
+        cfg: Config,
+        stop: &dyn Fn() -> bool,
+    ) -> Option<Self> {
+        if g.latches.iter().any(|l| matches!(l.init, Init::Expr(_))) || stop() {
             return None;
         }
         let tpl = cnf::template(g);
@@ -404,7 +423,10 @@ impl<'g> Ic3<'g> {
         // the feature is off, so variable numbering stays as it was).
         let aux_cap = if cfg.derive { AUX_MAX } else { 0 };
         let nvars = g.nodes.len() + 1 + 2 * aux_cap;
-        let lift = Solver::new(&tpl, nvars, make_sat());
+        let lift = Solver::new_until(&tpl, nvars, make_sat(), stop)?;
+        if stop() {
+            return None;
+        }
         // One literal for "some bad output": an extra variable when needed.
         let bad = if g.bads.len() == 1 {
             t(g.bads[0])
@@ -507,7 +529,9 @@ impl<'g> Ic3<'g> {
                 ic3.lift.sat.add_clause(&[ic3.bad, -t(b)]);
             }
         }
-        ic3.push_frame(); // F_0
+        if !ic3.push_frame_until(stop) {
+            return None;
+        }
         for l in &g.latches {
             match l.init {
                 Init::Zero => ic3.add_frame_clause(0, &[-t(l.lit)]),
@@ -540,10 +564,16 @@ impl<'g> Ic3<'g> {
     }
 
     fn push_frame(&mut self) {
+        let _ = self.push_frame_until(&|| false);
+    }
+
+    fn push_frame_until(&mut self, stop: &dyn Fn() -> bool) -> bool {
         // A new top frame has no lemmas yet: a lemma of level j lives in
         // solvers 1..=j only.
         if !self.single || self.solvers.is_empty() {
-            let s = Solver::new(&self.t, self.nvars, (self.make_sat)());
+            let Some(s) = Solver::new_until(&self.t, self.nvars, (self.make_sat)(), stop) else {
+                return false;
+            };
             let mut s = self.base_solver_from(s);
             if !self.solvers.is_empty() {
                 for c in &self.inf {
@@ -558,6 +588,7 @@ impl<'g> Ic3<'g> {
             self.acts.push(a);
         }
         self.frames.push(Vec::new());
+        true
     }
 
     /// The solver that answers queries on F_i.
