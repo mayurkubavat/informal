@@ -199,6 +199,28 @@ pub fn size_aware_slot_cap(base_cap: usize, f: &Features, effort: Effort) -> usi
     base_cap.min(size_cap)
 }
 
+/// Capability-derived diversity bucket used to penalize redundant siblings
+/// without suppressing complementary paradigms (bit vs word domain, step-1 vs
+/// jump-step BMC, or CEGAR gate-level abstraction vs k-induction+IC3).
+fn diversity_bucket(c: &crate::Capabilities) -> (EngineDomain, EngineKind, u8) {
+    let sub = match c.kind {
+        EngineKind::Bmc => u8::from(c.min_effort > Effort::Low),
+        EngineKind::Hybrid => u8::from(c.min_effort > Effort::Standard),
+        _ => 0,
+    };
+    (c.domain, c.kind, sub)
+}
+
+/// Half-budget opportunity-cost penalty for multi-worker engines whose slot
+/// footprint would exceed half of Wave 0's thread budget.
+fn slot_pressure(slots: usize, wave0_slot_cap: usize) -> f64 {
+    if wave0_slot_cap > 0 && slots > 1 && slots * 2 > wave0_slot_cap {
+        0.08 * (slots - 1) as f64 / wave0_slot_cap as f64
+    } else {
+        0.0
+    }
+}
+
 impl SelectorModel {
     /// Parse a JSON model file produced by `scripts/train_selector.py`.
     pub fn from_json_str(raw: &str) -> Result<Self, serde_json::Error> {
@@ -248,10 +270,11 @@ impl SelectorModel {
     /// Complementarity-aware greedy partitioning into `(wave0, wave1)` under a
     /// thread-slot budget `wave0_slot_cap` (`0` = all candidates in Wave 0).
     ///
-    /// Guarantees Wave 0 includes at least one prover and (when available) one
-    /// dedicated bug-finder before filling remaining slots using predicted
-    /// utility minus `redundancy_penalty` per already-picked engine of the
-    /// same [`EngineKind`].
+    /// Guarantees Wave 0 includes at least one prover and up to two distinct-bucket
+    /// dedicated bug-finders (when `wave0_slot_cap == 0 || wave0_slot_cap >= 6`)
+    /// before filling remaining slots using predicted utility minus slot-pressure
+    /// and `redundancy_penalty` per already-picked engine in the same
+    /// capability diversity bucket.
     pub fn rank_and_partition(
         &self,
         candidates: &[Arc<dyn Engine>],
@@ -263,58 +286,106 @@ impl SelectorModel {
         }
         let x = self.standardize(&extract_features(f));
         let scores: Vec<f64> = candidates.iter().map(|e| self.score(e, &x, f)).collect();
+        let buckets: Vec<(EngineDomain, EngineKind, u8)> = candidates
+            .iter()
+            .map(|e| diversity_bucket(&e.capabilities()))
+            .collect();
 
         let mut picked_idx: Vec<usize> = Vec::with_capacity(candidates.len());
         let mut picked_set: HashSet<usize> = HashSet::with_capacity(candidates.len());
         let mut used_slots = 0usize;
-        let mut kind_counts: HashMap<EngineKind, usize> = HashMap::new();
+        let mut bucket_counts: HashMap<(EngineDomain, EngineKind, u8), usize> = HashMap::new();
 
         let fits = |idx: usize, used: usize| -> bool {
             let need = candidates[idx].capabilities().slots();
             used == 0 || wave0_slot_cap == 0 || used + need <= wave0_slot_cap
         };
 
-        let pick = |idx: usize,
-                    picked_idx: &mut Vec<usize>,
-                    picked_set: &mut HashSet<usize>,
-                    used_slots: &mut usize,
-                    kind_counts: &mut HashMap<EngineKind, usize>| {
-            let caps = candidates[idx].capabilities();
-            picked_idx.push(idx);
-            picked_set.insert(idx);
-            *used_slots += caps.slots();
-            *kind_counts.entry(caps.kind).or_insert(0) += 1;
-        };
+        let eff =
+            |idx: usize, counts: &HashMap<(EngineDomain, EngineKind, u8), usize>, pen: f64| {
+                let need = candidates[idx].capabilities().slots();
+                let dup = *counts.get(&buckets[idx]).unwrap_or(&0) as f64;
+                scores[idx] - slot_pressure(need, wave0_slot_cap) - pen * dup
+            };
+
+        let pick =
+            |idx: usize,
+             picked_idx: &mut Vec<usize>,
+             picked_set: &mut HashSet<usize>,
+             used_slots: &mut usize,
+             counts: &mut HashMap<(EngineDomain, EngineKind, u8), usize>| {
+                picked_idx.push(idx);
+                picked_set.insert(idx);
+                *used_slots += candidates[idx].capabilities().slots();
+                *counts.entry(buckets[idx]).or_insert(0) += 1;
+            };
 
         // 1. Best prover that fits.
         if let Some(best_p) = (0..candidates.len())
             .filter(|&i| candidates[i].capabilities().proves && fits(i, used_slots))
-            .max_by(|&a, &b| scores[a].total_cmp(&scores[b]).then_with(|| b.cmp(&a)))
+            .max_by(|&a, &b| {
+                eff(a, &bucket_counts, 0.0)
+                    .total_cmp(&eff(b, &bucket_counts, 0.0))
+                    .then_with(|| b.cmp(&a))
+            })
         {
             pick(
                 best_p,
                 &mut picked_idx,
                 &mut picked_set,
                 &mut used_slots,
-                &mut kind_counts,
+                &mut bucket_counts,
             );
         }
 
-        // 2. Best dedicated bug-finder (BMC/Swarm) that fits.
+        // 2a. Best dedicated bug-finder (BMC/Swarm) that fits.
         if let Some(best_b) = (0..candidates.len())
             .filter(|&i| {
                 let c = candidates[i].capabilities();
                 !picked_set.contains(&i) && c.finds_bugs && !c.proves && fits(i, used_slots)
             })
-            .max_by(|&a, &b| scores[a].total_cmp(&scores[b]).then_with(|| b.cmp(&a)))
+            .max_by(|&a, &b| {
+                eff(a, &bucket_counts, self.redundancy_penalty)
+                    .total_cmp(&eff(b, &bucket_counts, self.redundancy_penalty))
+                    .then_with(|| b.cmp(&a))
+            })
         {
             pick(
                 best_b,
                 &mut picked_idx,
                 &mut picked_set,
                 &mut used_slots,
-                &mut kind_counts,
+                &mut bucket_counts,
             );
+        }
+
+        // 2b. Second dedicated bug-finder from a distinct diversity bucket
+        // (e.g., jump-step BMC alongside step-1 BMC, or bit-level BMC alongside
+        // word-level BMC) when Wave 0 has >= 6 slots.
+        if wave0_slot_cap == 0 || wave0_slot_cap >= 6 {
+            if let Some(best_b2) = (0..candidates.len())
+                .filter(|&i| {
+                    let c = candidates[i].capabilities();
+                    !picked_set.contains(&i)
+                        && c.finds_bugs
+                        && !c.proves
+                        && *bucket_counts.get(&buckets[i]).unwrap_or(&0) == 0
+                        && fits(i, used_slots)
+                })
+                .max_by(|&a, &b| {
+                    eff(a, &bucket_counts, self.redundancy_penalty)
+                        .total_cmp(&eff(b, &bucket_counts, self.redundancy_penalty))
+                        .then_with(|| b.cmp(&a))
+                })
+            {
+                pick(
+                    best_b2,
+                    &mut picked_idx,
+                    &mut picked_set,
+                    &mut used_slots,
+                    &mut bucket_counts,
+                );
+            }
         }
 
         // 3. Greedily fill remaining Wave-0 slots with diversity penalty.
@@ -322,17 +393,9 @@ impl SelectorModel {
             let next = (0..candidates.len())
                 .filter(|&i| !picked_set.contains(&i) && fits(i, used_slots))
                 .max_by(|&a, &b| {
-                    let pa = scores[a]
-                        - self.redundancy_penalty
-                            * (*kind_counts
-                                .get(&candidates[a].capabilities().kind)
-                                .unwrap_or(&0) as f64);
-                    let pb = scores[b]
-                        - self.redundancy_penalty
-                            * (*kind_counts
-                                .get(&candidates[b].capabilities().kind)
-                                .unwrap_or(&0) as f64);
-                    pa.total_cmp(&pb).then_with(|| b.cmp(&a))
+                    eff(a, &bucket_counts, self.redundancy_penalty)
+                        .total_cmp(&eff(b, &bucket_counts, self.redundancy_penalty))
+                        .then_with(|| b.cmp(&a))
                 });
             match next {
                 Some(i) => pick(
@@ -340,7 +403,7 @@ impl SelectorModel {
                     &mut picked_idx,
                     &mut picked_set,
                     &mut used_slots,
-                    &mut kind_counts,
+                    &mut bucket_counts,
                 ),
                 None => break,
             }
@@ -354,18 +417,8 @@ impl SelectorModel {
             .filter(|i| !picked_set.contains(i))
             .collect();
         rem_idx.sort_by(|&a, &b| {
-            let pa = scores[a]
-                - 0.5
-                    * self.redundancy_penalty
-                    * (*kind_counts
-                        .get(&candidates[a].capabilities().kind)
-                        .unwrap_or(&0) as f64);
-            let pb = scores[b]
-                - 0.5
-                    * self.redundancy_penalty
-                    * (*kind_counts
-                        .get(&candidates[b].capabilities().kind)
-                        .unwrap_or(&0) as f64);
+            let pa = eff(a, &bucket_counts, 0.5 * self.redundancy_penalty);
+            let pb = eff(b, &bucket_counts, 0.5 * self.redundancy_penalty);
             pb.total_cmp(&pa).then_with(|| a.cmp(&b))
         });
         let wave1: Vec<Arc<dyn Engine>> =
@@ -391,131 +444,38 @@ pub fn default_model() -> &'static SelectorModel {
     })
 }
 
-/// Built-in default Ridge model (`lam = 50.0`, 5-fold CV `34/60`, OOF PAR-2
-/// `585.6 s` vs `584.5 s` 15-engine VBS on HWMCC'24 `sample60`).
+/// Built-in default Ridge model (`lam = 50.0`, trained on 219 models: 179
+/// HWMCC'24 AIGER + 40 word-level Btor2 BV/array, 18 safety engines; 5-fold CV
+/// `119/219`, OOF PAR-2 `2149.8 s` vs `2131.3 s` VBS, Btor2 `33/40` `+0.2 s`).
 pub fn builtin_model() -> SelectorModel {
+    #[rustfmt::skip]
     let entries: &[(&str, [f64; NUM_FEATURES])] = &[
-        (
-            "informal-bcar",
-            [
-                0.18168, -0.01068, -0.01068, -0.02177, -0.01336, 0.02651, -0.00850, 0.04187, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-bdd",
-            [
-                0.20727, 0.00235, 0.00235, -0.01272, 0.00650, 0.0, -0.01927, -0.00939, 0.0, 0.0,
-            ],
-        ),
-        (
-            "informal-bmc",
-            [
-                0.15329, -0.01016, -0.01016, -0.00309, 0.00255, -0.00432, 0.01135, 0.02815, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-bmc-10",
-            [
-                0.12391, -0.01096, -0.01096, -0.00735, -0.00788, 0.00742, 0.00800, 0.02459, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-bmc-65",
-            [
-                0.08133, -0.00586, -0.00586, -0.01413, -0.01554, 0.00871, -0.00879, -0.00712, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-car",
-            [
-                0.16200, -0.01518, -0.01518, -0.03000, -0.02448, 0.01802, -0.01134, 0.04325, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-gla",
-            [
-                0.22145, -0.01819, -0.01819, -0.03637, -0.01790, 0.04329, -0.01472, 0.03967, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-ic3",
-            [
-                0.23710, -0.00767, -0.00767, -0.04626, -0.01682, 0.03532, -0.04308, -0.00129, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-ic3-cadical",
-            [
-                0.23148, -0.01502, -0.01502, -0.03582, -0.02245, 0.04504, -0.01815, 0.03378, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-ic3-inn",
-            [
-                0.17721, -0.01478, -0.01478, -0.02884, -0.02234, 0.03366, -0.01077, 0.04077, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-ic3-mt",
-            [
-                0.25824, -0.01342, -0.01342, -0.03954, -0.01847, 0.04243, -0.02464, 0.03130, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-imc",
-            [
-                0.19422, -0.01323, -0.01323, -0.02799, -0.00417, 0.03021, -0.01291, 0.04800, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-kind",
-            [
-                0.24119, -0.02735, -0.02735, -0.05652, -0.03123, 0.02035, -0.02497, 0.02716, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-kind-ic3",
-            [
-                0.26756, -0.02431, -0.02431, -0.05573, -0.02421, 0.03463, -0.02834, 0.02831, 0.0,
-                0.0,
-            ],
-        ),
-        (
-            "informal-swarm",
-            [
-                0.07046, -0.00835, -0.00835, -0.00472, -0.01468, 0.01472, 0.00870, 0.03136, 0.0,
-                0.0,
-            ],
-        ),
+        ("informal-bcar",        [0.24159, -0.02437, -0.03241, -0.05494, -0.06946,  0.01272, -0.06058,  0.04238, -0.06868,  0.01414]),
+        ("informal-bdd",         [0.21685, -0.02646, -0.03977, -0.04930, -0.05593, -0.00269, -0.04683, -0.03419, -0.09811,  0.02802]),
+        ("informal-bmc",         [0.13362, -0.01746, -0.00815, -0.02281, -0.01003, -0.01824, -0.00695,  0.01472, -0.00181,  0.02196]),
+        ("informal-bmc-10",      [0.12647, -0.01724, -0.00763, -0.02344, -0.01878, -0.01242, -0.00794,  0.00705,  0.00424,  0.02134]),
+        ("informal-bmc-65",      [0.09931, -0.01965, -0.01143, -0.02806, -0.03194,  0.00359, -0.01269, -0.01199,  0.00111,  0.01858]),
+        ("informal-car",         [0.23312, -0.02749, -0.02699, -0.05871, -0.08170, -0.01930, -0.05363,  0.03824, -0.07853,  0.03653]),
+        ("informal-gla",         [0.27798, -0.03120, -0.03757, -0.06270, -0.07299,  0.02621, -0.05768,  0.03408, -0.09123,  0.01908]),
+        ("informal-ic3",         [0.29972, -0.03004, -0.03333, -0.07438, -0.06027,  0.01048, -0.08188,  0.00753, -0.09052,  0.02356]),
+        ("informal-ic3-cadical", [0.27983, -0.02824, -0.03385, -0.06430, -0.07162,  0.02066, -0.06642,  0.03602, -0.09213,  0.02095]),
+        ("informal-ic3-inn",     [0.23121, -0.02363, -0.02604, -0.05418, -0.06647,  0.00913, -0.05713,  0.04481, -0.08213,  0.03017]),
+        ("informal-ic3-mt",      [0.29702, -0.02656, -0.02888, -0.06665, -0.06245,  0.01853, -0.07247,  0.03654, -0.08948,  0.01510]),
+        ("informal-ic3sa",       [0.53777, -0.01009, -0.04868, -0.01348,  0.00054,  0.00132, -0.00442,  0.00358, -0.08370, -0.03166]),
+        ("informal-imc",         [0.24301, -0.02308, -0.02363, -0.05162, -0.04959,  0.00021, -0.05316,  0.04739, -0.06623,  0.03775]),
+        ("informal-kind",        [0.28777, -0.03918, -0.04176, -0.07368, -0.07602,  0.00095, -0.06021,  0.01825, -0.07457,  0.02100]),
+        ("informal-kind-ic3",    [0.30975, -0.03580, -0.04205, -0.07338, -0.06831,  0.01615, -0.06919,  0.02944, -0.08261,  0.01612]),
+        ("informal-swarm",       [0.09221, -0.01746, -0.00655, -0.02558, -0.03594,  0.00879, -0.00792,  0.01332,  0.00074,  0.02742]),
+        ("informal-wbmc",        [0.26132, -0.01819, -0.01978, -0.01443, -0.00944,  0.00429,  0.01195,  0.00038, -0.01303, -0.01389]),
+        ("informal-wkind",       [0.63702, -0.01422, -0.00263, -0.01898, -0.01172,  0.00086, -0.00590, -0.01756, -0.04952, -0.03395]),
     ];
     SelectorModel {
         version: 1,
         means: [
-            0.0,
-            8.33390,
-            8.33390,
-            11.50043,
-            7.30604,
-            1.54986,
-            3.25878,
-            0.79856,
-            0.0,
-            std::f64::consts::LN_2,
+            0.0, 7.30511, 7.64278, 10.08583, 6.33024, 1.44464, 2.93135, 0.67389, 0.01542, 1.13242,
         ],
         stds: [
-            1.0, 2.96139, 2.96139, 2.34146, 2.30924, 1.56772, 1.91640, 1.23075, 1.0, 1.0,
+            1.0, 3.75020, 3.34194, 3.71277, 3.05094, 1.59132, 1.66510, 0.95766, 0.05222, 1.06112,
         ],
         redundancy_penalty: 0.28,
         weights: entries.iter().map(|&(k, w)| (k.to_string(), w)).collect(),
@@ -573,21 +533,116 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         let m2 = SelectorModel::from_json_str(&json).unwrap();
         assert_eq!(m2.version, 1);
-        assert_eq!(m2.weights.len(), 15);
+        assert_eq!(m2.weights.len(), 18);
+
+        let stub_with = |name: &'static str,
+                         domain: EngineDomain,
+                         kind: EngineKind,
+                         proves: bool,
+                         min_effort: Effort,
+                         slots: u8|
+         -> Arc<dyn Engine> {
+            Arc::new(Stub {
+                name,
+                caps: Capabilities {
+                    formats: vec![ModelFormat::Aiger, ModelFormat::Btor2],
+                    proves,
+                    finds_bugs: true,
+                    domain,
+                    kind,
+                    min_effort,
+                    worker_slots: slots,
+                    multi_worker: slots > 1,
+                    ..Default::default()
+                },
+            })
+        };
 
         let pool = vec![
-            stub("informal-ic3-mt", EngineKind::Ic3, true, 4),
-            stub("informal-ic3", EngineKind::Ic3, true, 1),
-            stub("informal-kind-ic3", EngineKind::Hybrid, true, 1),
-            stub("informal-kind", EngineKind::KInduction, true, 1),
-            stub("informal-bcar", EngineKind::Car, true, 1),
-            stub("informal-imc", EngineKind::Interpolation, true, 1),
-            stub("informal-bmc", EngineKind::Bmc, false, 1),
-            stub("informal-swarm", EngineKind::Swarm, false, 1),
+            stub_with(
+                "informal-ic3-mt",
+                EngineDomain::BitLevel,
+                EngineKind::Ic3,
+                true,
+                Effort::Standard,
+                4,
+            ),
+            stub_with(
+                "informal-ic3",
+                EngineDomain::BitLevel,
+                EngineKind::Ic3,
+                true,
+                Effort::Low,
+                1,
+            ),
+            stub_with(
+                "informal-kind-ic3",
+                EngineDomain::BitLevel,
+                EngineKind::Hybrid,
+                true,
+                Effort::High,
+                1,
+            ),
+            stub_with(
+                "informal-gla",
+                EngineDomain::BitLevel,
+                EngineKind::Hybrid,
+                true,
+                Effort::Standard,
+                1,
+            ),
+            stub_with(
+                "informal-kind",
+                EngineDomain::BitLevel,
+                EngineKind::KInduction,
+                true,
+                Effort::Low,
+                1,
+            ),
+            stub_with(
+                "informal-bcar",
+                EngineDomain::BitLevel,
+                EngineKind::Car,
+                true,
+                Effort::Standard,
+                1,
+            ),
+            stub_with(
+                "informal-imc",
+                EngineDomain::BitLevel,
+                EngineKind::Interpolation,
+                true,
+                Effort::Standard,
+                1,
+            ),
+            stub_with(
+                "informal-bmc",
+                EngineDomain::BitLevel,
+                EngineKind::Bmc,
+                false,
+                Effort::Low,
+                1,
+            ),
+            stub_with(
+                "informal-bmc-10",
+                EngineDomain::BitLevel,
+                EngineKind::Bmc,
+                false,
+                Effort::Standard,
+                1,
+            ),
+            stub_with(
+                "informal-swarm",
+                EngineDomain::BitLevel,
+                EngineKind::Swarm,
+                false,
+                Effort::Standard,
+                1,
+            ),
         ];
 
-        // Huge RISC-V-like cone: cap=6 must include both a prover and BMC without
-        // exceeding 6 slots.
+        // Huge RISC-V-like cone: cap=6 must include a prover, BOTH step-1 and
+        // jump-step BMC, and avoid letting 4-slot ic3-mt starve Wave 0.
         let huge = Features {
             nodes: 1_109_978,
             inputs: 14_000,
@@ -604,10 +659,54 @@ mod tests {
         let slots: usize = w0.iter().map(|e| e.capabilities().slots()).sum();
         assert!(slots <= cap, "Wave 0 used {slots} > cap {cap}");
         assert!(w0.iter().any(|e| e.capabilities().proves));
-        assert!(w0
-            .iter()
-            .any(|e| e.capabilities().finds_bugs && !e.capabilities().proves));
+        assert!(w0.iter().any(|e| e.name() == "informal-bmc"));
+        assert!(w0.iter().any(|e| e.name() == "informal-bmc-10"));
+        assert!(w0.iter().any(|e| e.name() == "informal-gla"));
         assert!(!w1.is_empty(), "overflow engines must queue in Wave 1");
+
+        // Wide BV Btor2 cone: word-level and bit-level engines coexist without
+        // suppressing each other across domains.
+        let mut bv_pool = pool;
+        bv_pool.push(stub_with(
+            "informal-wkind",
+            EngineDomain::WordLevel,
+            EngineKind::KInduction,
+            true,
+            Effort::Standard,
+            1,
+        ));
+        bv_pool.push(stub_with(
+            "informal-ic3sa",
+            EngineDomain::WordLevel,
+            EngineKind::Ic3,
+            true,
+            Effort::Standard,
+            1,
+        ));
+        bv_pool.push(stub_with(
+            "informal-wbmc",
+            EngineDomain::WordLevel,
+            EngineKind::Bmc,
+            false,
+            Effort::Low,
+            1,
+        ));
+        let wide_bv = Features {
+            nodes: 34,
+            inputs: 3,
+            states: 5,
+            state_bits: 320,
+            bad: 1,
+            arith_ops: 8,
+            max_width: 64,
+            ..Default::default()
+        };
+        let (bv_w0, _) = m2.rank_and_partition(&bv_pool, &wide_bv, 10);
+        assert!(bv_w0
+            .iter()
+            .any(|e| e.capabilities().domain == EngineDomain::WordLevel));
+        assert!(bv_w0.iter().any(|e| e.name() == "informal-bmc-10"));
+        let _ = stub;
     }
 
     #[test]
