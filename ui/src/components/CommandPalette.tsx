@@ -2,6 +2,7 @@
 // action handlers with `gui_*` screen-control tools.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { trapFocusKeyDown } from "../focusTrap";
 
 export interface PaletteCommand {
   id: string;
@@ -25,6 +26,7 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -40,12 +42,14 @@ export function CommandPalette({
           e.preventDefault();
           e.stopPropagation();
           onCloseRef.current();
+        } else if (e.key === "Tab") {
+          if (trapFocusKeyDown(dialogRef.current, e)) e.stopPropagation();
         }
       };
       window.addEventListener("keydown", onGlobalKey, true);
       return () => window.removeEventListener("keydown", onGlobalKey, true);
     } else if (prevFocus.current) {
-      prevFocus.current.focus();
+      if (document.contains(prevFocus.current)) prevFocus.current.focus();
       prevFocus.current = null;
     }
   }, [open]);
@@ -81,6 +85,7 @@ export function CommandPalette({
       }}
     >
       <div
+        ref={dialogRef}
         className="palette-modal"
         role="dialog"
         aria-modal="true"

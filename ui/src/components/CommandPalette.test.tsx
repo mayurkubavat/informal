@@ -30,4 +30,42 @@ describe("CommandPalette", () => {
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Command palette" }), { key: "Escape" });
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("traps Tab / Shift+Tab inside the modal and restores focus on close", () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <div>
+        <button>Trigger</button>
+        <CommandPalette open={false} commands={mkCommands(() => {})} onClose={onClose} />
+        <button>Background</button>
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "Trigger" });
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+
+    rerender(
+      <div>
+        <button>Trigger</button>
+        <CommandPalette open={true} commands={mkCommands(() => {})} onClose={onClose} />
+        <button>Background</button>
+      </div>,
+    );
+    const input = screen.getByRole("combobox", { name: "Search commands and properties" });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(input).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(input).toHaveFocus();
+
+    rerender(
+      <div>
+        <button>Trigger</button>
+        <CommandPalette open={false} commands={mkCommands(() => {})} onClose={onClose} />
+        <button>Background</button>
+      </div>,
+    );
+    expect(trigger).toHaveFocus();
+  });
 });

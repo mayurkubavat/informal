@@ -87,4 +87,33 @@ describe("MenuBar", () => {
     setup();
     expect(screen.getByRole("menubar")).not.toContainElement(screen.getByLabelText("extra"));
   });
+
+  it("supports WAI-ARIA arrow navigation across menus/items and restores focus to trigger on Escape", async () => {
+    setup();
+    const fileBtn = title("File");
+    const viewBtn = title("View");
+    fileBtn.focus();
+
+    // ArrowRight on closed menubar moves focus to next top-level menu button
+    await userEvent.keyboard("{ArrowRight}");
+    expect(viewBtn).toHaveFocus();
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(fileBtn).toHaveFocus();
+
+    // ArrowDown opens File and focuses first enabled item (skips disabled Close design)
+    await userEvent.keyboard("{ArrowDown}");
+    const openItem = screen.getByRole("menuitem", { name: /Open/ });
+    expect(openItem).toHaveFocus();
+
+    // ArrowRight inside open menu switches directly to View and focuses Dark
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("menuitem", { name: /Dark/ })).toHaveFocus();
+
+    // Escape closes View menu and restores focus to View trigger button
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(viewBtn).toHaveFocus();
+  });
 });

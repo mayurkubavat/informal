@@ -61,7 +61,7 @@ export default defineConfig({
           {
             // Native WebKit + 2x Retina parity (matches macOS WKWebView / Linux WebKitGTK).
             name: "webkit-hidpi",
-            testMatch: /e2e\/(canvas-and-gestures|mcp-app-iframe|ui-fuzz-and-resilience|user-journeys)\.spec\.ts/,
+            testMatch: /e2e\/(canvas-and-gestures|keyboard-focus-contracts|mcp-app-iframe|ui-fuzz-and-resilience|user-journeys)\.spec\.ts/,
             use: { ...devices["Desktop Safari"], viewport: size, deviceScaleFactor: 2 },
           },
         ]

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { trapFocusKeyDown } from "../focusTrap";
 
 interface GuideGroup {
   title: string;
@@ -59,6 +60,7 @@ export function ShortcutSheet({
   onClose: () => void;
 }) {
   const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -72,12 +74,14 @@ export function ShortcutSheet({
           e.preventDefault();
           e.stopPropagation();
           onCloseRef.current();
+        } else if (e.key === "Tab") {
+          if (trapFocusKeyDown(dialogRef.current, e)) e.stopPropagation();
         }
       };
       window.addEventListener("keydown", onGlobalKey, true);
       return () => window.removeEventListener("keydown", onGlobalKey, true);
     } else if (prevFocus.current) {
-      prevFocus.current.focus();
+      if (document.contains(prevFocus.current)) prevFocus.current.focus();
       prevFocus.current = null;
     }
   }, [open]);
@@ -92,6 +96,7 @@ export function ShortcutSheet({
       }}
     >
       <div
+        ref={dialogRef}
         className="shortcut-modal"
         role="dialog"
         aria-modal="true"

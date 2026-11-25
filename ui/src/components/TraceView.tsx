@@ -168,6 +168,8 @@ export function TraceView({
   const [scrollPos, setScrollPos] = useState({ left: 0, top: 0, vw: 1000, vh: 500 });
   const scroller = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const addBtnRef = useRef<HTMLButtonElement>(null);
+  const vcdAutoFocusedFor = useRef<Vcd | null>(null);
 
   const sliceOnly = controlledSliceOnly ?? sliceOnlyLocal;
   const setSliceOnly = (v: boolean) => {
@@ -202,6 +204,18 @@ export function TraceView({
     setSliceOnlyLocal(false);
     reveal.current = true;
   }, [vcd, vcdOverride, path, n, depth]);
+
+  // When a keyboard pivot opens Trace (unmounting PropTable and dropping focus
+  // onto document.body), land focus on `.trace` once the waveform is ready so
+  // Left/Right/N/P scrubbing works immediately with zero mouse clicks.
+  useEffect(() => {
+    if (!vcd || vcdAutoFocusedFor.current === vcd) return;
+    vcdAutoFocusedFor.current = vcd;
+    const a = document.activeElement;
+    if (!a || a === document.body) {
+      scroller.current?.focus({ preventScroll: true });
+    }
+  }, [vcd]);
 
   // Stream FST waveform windows on demand as viewport scroll or cursor changes.
   useEffect(() => {
@@ -356,6 +370,7 @@ export function TraceView({
   };
 
   const onKey = (e: React.KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (e.key === "n" || e.key === "N") {
       e.preventDefault();
       jumpEdge(1);
@@ -745,7 +760,7 @@ export function TraceView({
           )}
         </span>
         <span className="add-wrap">
-          <button className="btn" onClick={() => setAdding((a) => !a)} disabled={!vcd} aria-expanded={adding}>
+          <button ref={addBtnRef} className="btn" onClick={() => setAdding((a) => !a)} disabled={!vcd} aria-expanded={adding}>
             Add signal…
           </button>
           {adding && (
@@ -754,8 +769,12 @@ export function TraceView({
               onAdd={(s) => {
                 setShown((l) => [...l, s.path]);
                 setAdding(false);
+                addBtnRef.current?.focus();
               }}
-              onClose={() => setAdding(false)}
+              onClose={(restoreFocus) => {
+                setAdding(false);
+                if (restoreFocus) addBtnRef.current?.focus();
+              }}
             />
           )}
         </span>
@@ -1054,30 +1073,61 @@ function PropLane({ y, n, px, depth, cover }: { y: number; n: number; px: number
   );
 }
 
-function AddSignal({ signals, onAdd, onClose }: { signals: Signal[]; onAdd: (s: Signal) => void; onClose: () => void }) {
+function AddSignal({
+  signals,
+  onAdd,
+  onClose,
+}: {
+  signals: Signal[];
+  onAdd: (s: Signal) => void;
+  onClose: (restoreFocus?: boolean) => void;
+}) {
   const [q, setQ] = useState("");
   const box = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
-    const down = (e: PointerEvent) => !box.current?.contains(e.target as Node) && !(e.target as Element).closest?.(".add-wrap") && onClose();
+    const down = (e: PointerEvent) => !box.current?.contains(e.target as Node) && !(e.target as Element).closest?.(".add-wrap") && onCloseRef.current(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCloseRef.current(true);
+      }
+    };
     window.addEventListener("pointerdown", down);
-    return () => window.removeEventListener("pointerdown", down);
-  }, [onClose]);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, []);
   const list = signals.filter((s) => s.path.toLowerCase().includes(q.trim().toLowerCase()));
+  const onBoxKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose(true);
+      return;
+    }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const opts = [...(box.current?.querySelectorAll<HTMLButtonElement>(".add-item") ?? [])];
+    if (!opts.length) return;
+    e.preventDefault();
+    const cur = opts.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "ArrowDown") {
+      opts[cur < 0 ? 0 : (cur + 1) % opts.length]?.focus();
+    } else if (cur <= 0) {
+      inputRef.current?.focus();
+    } else {
+      opts[cur - 1]?.focus();
+    }
+  };
   return (
-    <div
-      className="add-pop"
-      ref={box}
-      role="dialog"
-      aria-label="Add signal"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          onClose();
-        }
-      }}
-    >
+    <div className="add-pop" ref={box} role="dialog" aria-label="Add signal" onKeyDown={onBoxKeyDown}>
       <input
+        ref={inputRef}
         className="filter"
         autoFocus
         placeholder="Filter signals"

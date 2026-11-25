@@ -71,7 +71,29 @@ describe("TraceView", () => {
     await userEvent.clear(within(dialog).getByLabelText("Filter signals"));
     await userEvent.click(within(dialog).getByRole("option"));
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add signal…" })).toHaveFocus();
     expect(within(lane("informal.informal_cyc")).getByText("b")).toBeInTheDocument(); // cycle 11 in hex
+  });
+
+  it("restores focus to Add signal button when AddSignal closes on Escape", async () => {
+    view();
+    const addBtn = screen.getByRole("button", { name: "Add signal…" });
+    await userEvent.click(addBtn);
+    const dialog = screen.getByRole("dialog", { name: "Add signal" });
+    expect(within(dialog).getByLabelText("Filter signals")).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Add signal" })).toBeNull();
+    expect(addBtn).toHaveFocus();
+  });
+
+  it("does not swallow Alt+ArrowLeft so workbench history-back shortcut works while waveform is focused", () => {
+    view();
+    const trace = screen.getByLabelText(/^Trace of a_never9/);
+    expect(screen.getByRole("status", { name: "Cursor" })).toHaveTextContent("cycle 11");
+    const ev = new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true, cancelable: true });
+    trace.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(screen.getByRole("status", { name: "Cursor" })).toHaveTextContent("cycle 11");
   });
 
   it("marks a cover with the covered colour", () => {

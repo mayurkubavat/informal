@@ -126,6 +126,7 @@ export function PropTable({
       }
       return;
     }
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (!rows.length) return;
     const last = rows.length - 1;
     const i = selIndex;

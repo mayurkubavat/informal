@@ -1279,6 +1279,8 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
   cursor: pointer;
 }
 .palette-item.active { background: var(--accent-soft); }
+.palette-item.active .palette-group,
+.palette-item.active .muted { color: var(--text-2); }
 .palette-group {
   min-width: 78px;
   font-size: 10.5px;

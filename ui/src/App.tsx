@@ -182,6 +182,7 @@ export default function App() {
   );
   const [narrow, setNarrow] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 720 : false));
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerToggleRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const mq = window.matchMedia?.("(max-width: 719.98px)");
@@ -1588,6 +1589,23 @@ export default function App() {
     el?.focus();
     el?.select?.();
   }, [focusReq]);
+
+  // Recover focus onto the newly mounted center view when a keyboard pivot
+  // (Enter -> Trace, Alt+Left -> Table/Trace, F3 -> Table) unmounts the
+  // previously focused pane and would otherwise strand focus on document.body.
+  const prevCenterRef = useRef(center);
+  useEffect(() => {
+    const prev = prevCenterRef.current;
+    prevCenterRef.current = center;
+    if (prev === center || layoutPreset === "cex-debug") return;
+    const a = document.activeElement;
+    if (a && a !== document.body) return;
+    if (center === "table") {
+      document.querySelector<HTMLElement>(".table-wrap")?.focus({ preventScroll: true });
+    } else if (center === "trace") {
+      document.querySelector<HTMLElement>(".trace")?.focus({ preventScroll: true });
+    }
+  }, [center, layoutPreset]);
   const focusFilter = () => {
     setCenter("table");
     setFocusReq((r) => ({ id: "prop-filter", n: (r?.n ?? 0) + 1 }));
@@ -1640,6 +1658,10 @@ export default function App() {
     else if (mod && !e.shiftKey && !e.altKey && e.key === "5") openProfiler();
     else if (mod && !e.shiftKey && !e.altKey && ["1", "2", "3", "4"].includes(e.key)) setBottomTab(DOCK[Number(e.key) - 1]);
     else if (e.key === "Escape" && shortcutOpen) setShortcutOpen(false);
+    else if (e.key === "Escape" && narrow && drawerOpen) {
+      setDrawerOpen(false);
+      drawerToggleRef.current?.focus();
+    }
     // Esc closes an open menu first (the context menu stops its Esc, the
     // menu bar marks it handled) and a field may use it (the filter clears
     // itself); only then does it stop a running prove.
@@ -2096,6 +2118,7 @@ export default function App() {
       <div className={`toolrow ${running ? "is-proving" : ""}`}>
         {narrow && (
           <button
+            ref={drawerToggleRef}
             className={`tool drawer-toggle ${drawerOpen ? "on" : ""}`}
             onClick={() => setDrawerOpen((o) => !o)}
             aria-expanded={drawerOpen}
