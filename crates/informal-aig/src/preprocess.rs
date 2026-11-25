@@ -31,7 +31,8 @@ fn t_and(a: T, b: T) -> T {
 /// Latches that keep their initial value forever: assume every latch with
 /// a constant init is stuck there, simulate one step with inputs unknown,
 /// drop the ones whose next value differs, and repeat to a fixpoint.
-fn constant_latches(g: &Aig) -> Vec<Option<bool>> {
+/// Returns `None` if `stop()` triggers mid-fixpoint.
+fn constant_latches_until(g: &Aig, stop: &dyn Fn() -> bool) -> Option<Vec<Option<bool>>> {
     let mut stuck: Vec<Option<bool>> = g
         .latches
         .iter()
@@ -47,9 +48,15 @@ fn constant_latches(g: &Aig) -> Vec<Option<bool>> {
         .enumerate()
         .map(|(i, l)| (var(l.lit), i))
         .collect();
+    let mut vals: Vec<T> = vec![None; g.nodes.len()];
     loop {
-        let mut vals: Vec<T> = vec![None; g.nodes.len()];
+        if stop() {
+            return None;
+        }
         for (v, n) in g.nodes.iter().enumerate() {
+            if (v & 4095) == 0 && stop() {
+                return None;
+            }
             vals[v] = match *n {
                 Node::Const => Some(false),
                 Node::Input => None,
@@ -67,7 +74,7 @@ fn constant_latches(g: &Aig) -> Vec<Option<bool>> {
             }
         }
         if !changed {
-            return stuck;
+            return Some(stuck);
         }
     }
 }
@@ -136,9 +143,25 @@ pub fn compose_inputs(ab: &[Option<Lit>], b: &Aig, bc: &[Option<Lit>]) -> InputM
         .collect()
 }
 
+/// [`simplify`] with a cooperative stop predicate (`None` if cancelled).
+pub fn simplify_until(g: &Aig, stop: &dyn Fn() -> bool) -> Option<(Aig, Stats)> {
+    let (out, stats, _, _) = simplify_maps_until(g, stop)?;
+    Some((out, stats))
+}
+
 /// [`simplify`] with both the [`LatchMap`] and the [`InputMap`].
 pub fn simplify_maps(g: &Aig) -> (Aig, Stats, LatchMap, InputMap) {
-    let stuck = constant_latches(g);
+    simplify_maps_until(g, &|| false).expect("non-cancelling simplify_maps cannot abort")
+}
+
+/// [`simplify_maps`] with a cooperative stop predicate polled during constant
+/// latch fixpoint propagation, COI traversal, and structural hash rebuild.
+/// Returns `None` when `stop()` becomes true.
+pub fn simplify_maps_until(
+    g: &Aig,
+    stop: &dyn Fn() -> bool,
+) -> Option<(Aig, Stats, LatchMap, InputMap)> {
+    let stuck = constant_latches_until(g, stop)?;
     let mut stats = Stats {
         latches_before: g.latches.len(),
         ands_before: g.num_ands(),
@@ -161,7 +184,12 @@ pub fn simplify_maps(g: &Aig) -> (Aig, Stats, LatchMap, InputMap) {
         .chain(&g.constraints)
         .map(|&l| var(l))
         .collect();
+    let mut pops = 0usize;
     while let Some(v) = stack.pop() {
+        pops += 1;
+        if (pops & 4095) == 0 && stop() {
+            return None;
+        }
         if std::mem::replace(&mut need[v as usize], true) {
             continue;
         }
@@ -186,6 +214,9 @@ pub fn simplify_maps(g: &Aig) -> (Aig, Stats, LatchMap, InputMap) {
     let mut map = vec![FALSE; g.nodes.len()];
     let mut new_latches = Vec::new();
     for (v, n) in g.nodes.iter().enumerate() {
+        if (v & 4095) == 0 && stop() {
+            return None;
+        }
         if !need[v] {
             continue;
         }
@@ -278,7 +309,7 @@ pub fn simplify_maps(g: &Aig) -> (Aig, Stats, LatchMap, InputMap) {
             need[v].then(|| map[v] ^ (i & 1))
         })
         .collect();
-    (out, stats, lmap, imap)
+    Some((out, stats, lmap, imap))
 }
 
 /// What [`fold_clock`] did, for certificates on the model as loaded.
@@ -550,5 +581,22 @@ mod tests {
                     .collect();
             }
         }
+    }
+
+    #[test]
+    fn simplify_maps_until_honors_stop_predicate() {
+        let mut g = Aig::new();
+        let x = g.input();
+        let q = g.latch(Init::Zero);
+        let nx = g.and(x, q ^ 1);
+        g.set_next(q, nx);
+        g.bads.push(q);
+        assert!(simplify_maps_until(&g, &|| true).is_none());
+        let (s1, st1, lm1, im1) = simplify_maps_until(&g, &|| false).unwrap();
+        let (s2, st2, lm2, im2) = simplify_maps(&g);
+        assert_eq!(st1, st2);
+        assert_eq!(lm1, lm2);
+        assert_eq!(im1, im2);
+        assert_eq!(s1.num_ands(), s2.num_ands());
     }
 }

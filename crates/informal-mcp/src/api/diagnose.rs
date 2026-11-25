@@ -19,24 +19,50 @@ impl Api {
         let first = opt_u64(args, "first")?.map(|f| f as usize);
         let last = opt_u64(args, "last")?.map(|l| l as usize);
         let helpers = opt_bool(args, "helpers")?.unwrap_or(false);
-        let (view, expr, vcd_text, model, clocks) = self.on_shell(false, move |sh| {
-            let s = sh.session.borrow();
-            let i = find(&s, &name)?;
-            let p = &s.props[i];
-            let Some(path) = &p.trace else {
-                return Err(no_trace_err(p));
-            };
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| err("internal", format!("{path}: {e}")))?;
-            let model = std::fs::read_to_string(s.workdir.join(format!("prop_{i}.btor2"))).ok();
-            let top = s.design.top.as_deref().unwrap_or_default();
-            let clocks: Vec<String> = s
-                .clocks
-                .iter()
-                .map(|c| format!("{top}.{}", c.signal))
-                .collect();
-            Ok((prop_view(p, false), p.expr.clone(), text, model, clocks))
-        })??;
+        let (view, expr, trace_path, model, clocks) = if self.state.is_busy() {
+            let t = self.live_trace_target(&name)?;
+            (t.view, t.expr, t.path, t.model, t.clocks)
+        } else {
+            self.on_shell(false, move |sh| {
+                let s = sh.session.borrow();
+                let i = find(&s, &name)?;
+                let p = &s.props[i];
+                let Some(path) = &p.trace else {
+                    return Err(no_trace_err(p));
+                };
+                let model = std::fs::read_to_string(s.workdir.join(format!("prop_{i}.btor2"))).ok();
+                let top = s.design.top.as_deref().unwrap_or_default();
+                let clocks: Vec<String> = s
+                    .clocks
+                    .iter()
+                    .map(|c| format!("{top}.{}", c.signal))
+                    .collect();
+                Ok((
+                    prop_view(p, false),
+                    p.expr.clone(),
+                    path.clone(),
+                    model,
+                    clocks,
+                ))
+            })??
+        };
+        if let Some(fst_path) = vcd::fst_for(std::path::Path::new(&trace_path)) {
+            if let Ok(reply) = trace_get_fst(
+                &fst_path,
+                &view,
+                &expr,
+                model.as_deref(),
+                &clocks,
+                &globs,
+                first,
+                last,
+                helpers,
+            ) {
+                return Ok(reply);
+            }
+        }
+        let vcd_text = std::fs::read_to_string(&trace_path)
+            .map_err(|e| err("internal", format!("{trace_path}: {e}")))?;
         let trace = vcd::parse(&vcd_text).map_err(|e| err("internal", e))?;
         let prop = view["name"].as_str().unwrap_or_default().to_string();
         let lane = format!("informal.{prop}");
@@ -605,4 +631,134 @@ impl Api {
             "report": parsed,
         }))
     }
+}
+
+/// Streamed FST path for `trace_get` (decision D10): opens only the FST
+/// header/hierarchy to rank & filter signals, then decodes ONLY the requested
+/// `[first..=last]` window for the selected signals (plus the 1-bit property
+/// lane for `hit_at`) without ever reading VCD text into memory.
+#[allow(clippy::too_many_arguments)]
+fn trace_get_fst(
+    fst_path: &std::path::Path,
+    view: &Value,
+    expr: &str,
+    model: Option<&str>,
+    clocks: &[String],
+    globs: &[String],
+    first: Option<usize>,
+    last: Option<usize>,
+    helpers: bool,
+) -> Result<Value, String> {
+    let mut reader =
+        informal_fpv::trace::fst_read::FstReader::open(fst_path).map_err(|e| format!("{e:#}"))?;
+    let meta = reader.meta().clone();
+    let prop = view["name"].as_str().unwrap_or_default().to_string();
+    let lane = format!("informal.{prop}");
+    let helper =
+        |n: &str| n.starts_with("informal.") || (!meta.steps && clocks.iter().any(|c| c == n));
+
+    let lane_idx = meta.signals.iter().position(|s| s.name == lane);
+    let mut chosen_idx: Vec<usize> = meta
+        .signals
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !(s.clock && !meta.steps))
+        .filter(|(_, s)| s.name != lane && (helpers || !helper(&s.name)))
+        .filter(|(_, s)| {
+            let tail = s.name.split_once('.').map_or("", |(_, t)| t);
+            let leaf = s.name.rsplit('.').next().unwrap_or("");
+            globs.is_empty()
+                || globs
+                    .iter()
+                    .any(|g| glob(g, &s.name) || glob(g, tail) || glob(g, leaf))
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    let in_cone: Vec<String> = model
+        .and_then(|m| cone::cone(m).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    let words: Vec<&str> = expr
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+        .collect();
+    chosen_idx.sort_by_key(|&idx| {
+        let name = &meta.signals[idx].name;
+        let tail = name.split_once('.').map_or("", |(_, t)| t);
+        if words.contains(&tail) {
+            0
+        } else if in_cone.contains(name) {
+            1
+        } else {
+            2
+        }
+    });
+    let matched = chosen_idx.len();
+    chosen_idx.truncate(MAX_SIGNALS);
+
+    let end = meta.frames.saturating_sub(1);
+    let last = last.unwrap_or(end).min(end);
+    let first = first
+        .unwrap_or(0)
+        .max((last + 1).saturating_sub(MAX_FRAMES))
+        .min(last);
+
+    let hit_at: Vec<usize> = if let Some(li) = lane_idx {
+        let lw = reader
+            .read_window(0, end, Some(&[li]))
+            .map_err(|e| format!("{e:#}"))?;
+        let mut hits = Vec::new();
+        if let Some(sig) = lw.signals.first() {
+            for (idx, (rf, val)) in sig.runs.iter().enumerate() {
+                if val == "1" {
+                    let next_f = sig.runs.get(idx + 1).map_or(meta.frames, |(nf, _)| *nf);
+                    for f in *rf..next_f.min(meta.frames) {
+                        hits.push(f);
+                    }
+                }
+            }
+        }
+        hits
+    } else {
+        Vec::new()
+    };
+
+    let win = reader
+        .read_window(first, last, Some(&chosen_idx))
+        .map_err(|e| format!("{e:#}"))?;
+    let signals: Vec<Value> = win
+        .signals
+        .iter()
+        .map(|s| {
+            let mut vals = Vec::with_capacity(last - first + 1);
+            let mut r_idx = 0usize;
+            for f in first..=last {
+                while r_idx + 1 < s.runs.len() && s.runs[r_idx + 1].0 <= f {
+                    r_idx += 1;
+                }
+                let bits = s.runs.get(r_idx).map(|(_, b)| b.as_str()).unwrap_or("x");
+                vals.push(vcd::value(bits));
+            }
+            json!({
+                "name": s.name,
+                "width": s.width,
+                "values": vals,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "schema": "informal.trace/1",
+        "property": view,
+        "unit": if meta.steps { "model_step" } else { "cycle" },
+        "frames": meta.frames,
+        "first": first,
+        "last": last,
+        "hit_at": hit_at,
+        "signals": signals,
+        "signals_omitted": matched - chosen_idx.len(),
+        "notes": meta.notes,
+    }))
 }

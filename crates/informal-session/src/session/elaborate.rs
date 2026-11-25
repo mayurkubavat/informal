@@ -120,6 +120,9 @@ impl Session {
                 return Ok(());
             }
         }
+        if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+            bail!("stopped");
+        }
         let prev = self.compiled.take();
         let req = informal_svlang::Request {
             files: self.design.files.clone(),
@@ -136,8 +139,19 @@ impl Session {
             ..Default::default()
         };
         self.design.hierarchy.clear();
-        let compiled = informal_svlang::compile_cached(prev.as_ref(), &req)
-            .map_err(|e| anyhow::anyhow!("SystemVerilog errors:\nerror: {e}"))?;
+        let compiled =
+            informal_svlang::compile_cached_cancel(prev.as_ref(), &req, Some(self.stop.as_ref()))
+                .map_err(|e| {
+                if e == "cancelled" {
+                    anyhow::anyhow!("stopped")
+                } else {
+                    anyhow::anyhow!("SystemVerilog errors:\nerror: {e}")
+                }
+            })?;
+        if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+            self.compiled = Some(compiled);
+            bail!("stopped");
+        }
         let d = informal_svlang::design_from_compiled(&compiled, &req);
         let errors: Vec<String> = d.errors().take(20).map(|e| e.to_string()).collect();
         if !errors.is_empty() {
@@ -183,6 +197,7 @@ impl Session {
         self.compiled = Some(compiled);
         self.elaborated = true;
         self.lp.invalidate_design();
+        self.publish_snapshot();
         Ok(())
     }
 
@@ -497,12 +512,19 @@ impl Session {
                 cuts.join(", ")
             ));
         }
+        if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("stopped".into());
+        }
+        let cancel = Some(self.stop.as_ref());
         let l = match self.compiled.as_deref() {
             Some(c) if c.matches_request(&req) && c.is_fresh() => {
-                informal_svlang::lower_from_compiled(c, &req)
+                informal_svlang::lower_from_compiled_cancel(c, &req, cancel)
             }
-            _ => informal_svlang::lower(&req),
+            _ => informal_svlang::lower_cancel(&req, cancel),
         };
+        if !l.ok && l.errors.iter().any(|e| e == "cancelled") {
+            return Err("stopped".into());
+        }
         for n in &l.notes {
             self.log(&format!("svlang: {n}"));
         }

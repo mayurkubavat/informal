@@ -79,6 +79,18 @@ impl Session {
             prove_bound: None,
             with_proof_core: false,
             last_lemma_stats: None,
+            snapshot_slot: None,
+        }
+    }
+
+    /// Publish an updated immutable [`crate::snapshot::SessionSnapshot`] into
+    /// `self.snapshot_slot` (if attached by a concurrent front end).
+    pub fn publish_snapshot(&self) {
+        if let Some(slot) = &self.snapshot_slot {
+            let snap = Arc::new(crate::snapshot::SessionSnapshot::from_session(self));
+            if let Ok(mut guard) = slot.lock() {
+                *guard = snap;
+            }
         }
     }
 
@@ -88,6 +100,7 @@ impl Session {
         let engines = std::mem::take(&mut self.engines);
         let workdir = std::mem::take(&mut self.workdir);
         let (stop, sink, dry_run) = (self.stop.clone(), self.sink.take(), self.dry_run);
+        let snapshot_slot = self.snapshot_slot.clone();
         let certificates = self.certificates.take();
         let (depth, pre, wit) = (self.environment_depth, self.preconditions, self.witnesses);
         let (pc, pc_dir, pc_mode) = (
@@ -106,6 +119,8 @@ impl Session {
         self.dry_run = dry_run;
         self.stop = stop;
         self.sink = sink;
+        self.snapshot_slot = snapshot_slot;
+        self.publish_snapshot();
     }
 
     /// Returns the active hierarchical pin-net [`informal_svlang::StructuralGraph`]
@@ -142,15 +157,15 @@ impl Session {
             model
         };
         let from_winner = witness.and_then(trace::parse_witness).and_then(|w| {
-            match trace::vcd_from_witness(replay, &w, name, clock) {
-                Ok(v) => Some((v, w.depth)),
+            match trace::replay_witness(replay, &w, name, clock) {
+                Ok(data) => Some((data, w.depth)),
                 Err(e) => {
                     self.log(&format!("{name}: the engine's witness does not replay ({e:#}); re-running BMC for the trace"));
                     None
                 }
             }
         });
-        let (vcd, trace_depth) = match from_winner {
+        let (data, trace_depth) = match from_winner {
             Some(t) => t,
             None => {
                 self.trace_reruns.fetch_add(1, Ordering::SeqCst);
@@ -163,16 +178,23 @@ impl Session {
                     Ok(w) => w,
                     Err(e) => return Err(Some(format!("{e:#}"))),
                 };
-                match trace::vcd_from_witness(replay, &w, name, clock) {
-                    Ok(v) => (v, w.depth),
+                match trace::replay_witness(replay, &w, name, clock) {
+                    Ok(data) => (data, w.depth),
                     Err(e) => return Err(Some(format!("{e:#}"))),
                 }
             }
         };
         let path = self.workdir.join(trace::file_name(name));
+        let vcd = data.to_vcd();
         if let Err(e) = std::fs::write(&path, vcd) {
             self.log(&format!("{name}: writing {}: {e}", path.display()));
             return Err(None);
+        }
+        // Also emit a chunked GTKWave-standard `.fst` sibling for O(1)
+        // random-access windowed streaming (D10) without re-simulating.
+        let fst_path = trace::fst_sibling(&path);
+        if let Err(e) = std::fs::write(&fst_path, data.to_fst()) {
+            self.log(&format!("{name}: writing {}: {e}", fst_path.display()));
         }
         let shown = std::env::current_dir()
             .ok()
@@ -194,7 +216,9 @@ impl Session {
             ModelFormat::Btor2,
             self.time_limit.min(Duration::from_secs(30)),
         );
-        let r = bmc.check(&req, &informal_engine::RunContext::new(req.timeout))?;
+        let mut ctx = informal_engine::RunContext::new(req.timeout);
+        ctx.cancel = informal_engine::CancelToken::from_shared(self.stop.clone());
+        let r = bmc.check(&req, &ctx)?;
         match (
             &r.verdict,
             r.witness.as_deref().and_then(trace::parse_witness),

@@ -108,6 +108,7 @@ impl Session {
         self.props[i].trace = trace;
         self.props[i].engines = runs;
         self.props[i].stats = stats;
+        self.publish_snapshot();
         halt
     }
 

@@ -4,6 +4,7 @@
 
 mod apps;
 mod diagnose;
+mod live_read;
 mod lp;
 mod prove;
 mod session;
@@ -358,6 +359,12 @@ impl Api {
             "lp_open_violations": 0,
         });
         if self.state.is_busy() {
+            let live = self.live_prompt_context();
+            if let (Some(dst), Some(src)) = (ctx.as_object_mut(), live.as_object()) {
+                for (k, v) in src {
+                    dst.insert(k.clone(), v.clone());
+                }
+            }
             return ctx;
         }
         let root = self.opts.root.clone();

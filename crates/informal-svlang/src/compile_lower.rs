@@ -113,14 +113,19 @@ fn command_properties(
     nl: &mut Netlist,
     properties: &[(String, String)],
     opts: &PropertyOptions,
-) -> Vec<RtlProperty> {
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Vec<RtlProperty>, String> {
     if properties.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
+    let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst));
     let top = nl.top.clone();
     let mut arenas = Vec::new();
     let mut bound = Vec::new();
     for (_, text) in properties {
+        if cancelled() {
+            return Err("cancelled".into());
+        }
         let mut arena = svlang::ExprArena::new();
         bound.push(
             comp.bind_property_in_scope(design, &top, text, &mut arena)
@@ -132,6 +137,9 @@ fn command_properties(
                 }),
         );
         arenas.push(arena);
+    }
+    if cancelled() {
+        return Err("cancelled".into());
     }
     let external: Vec<svlang::netlist::ExternalProperty<'_>> = properties
         .iter()
@@ -181,7 +189,7 @@ fn command_properties(
         }
     }
     let mut compiled = compiled_vec.into_iter();
-    properties
+    let out = properties
         .iter()
         .zip(&bound)
         .map(|((name, _), b)| {
@@ -214,7 +222,8 @@ fn command_properties(
                 line: None,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    Ok(out)
 }
 
 /// The property specification that starts at `line` and `column` (both from
@@ -440,8 +449,9 @@ fn reset_value(
 
 /// One model of `base`: the properties compiled, the reset applied and the
 /// netlist written, with the reset's length and the cycles left out of the
-/// properties as given.
-pub(crate) fn model(
+/// properties as given, polling `cancel` between stages.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn model_cancel(
     req: &Request,
     comp: &svlang::Compilation,
     design: &svlang::ElaboratedDesign,
@@ -449,13 +459,21 @@ pub(crate) fn model(
     reset_steps: u32,
     skip_cycles: u32,
     clock_skips: &[(String, bool, u32)],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(btor2::Model, Vec<RtlProperty>), Vec<String>> {
+    let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst));
+    if cancelled() {
+        return Err(vec!["cancelled".into()]);
+    }
     let mut nl = base.clone();
     if req.branch_covers {
         nl.add_branch_covers(skip_cycles);
     }
     if req.toggle_covers {
         nl.add_toggle_covers(skip_cycles);
+    }
+    if cancelled() {
+        return Err(vec!["cancelled".into()]);
     }
     let mut properties = rtl_properties(
         &mut nl,
@@ -464,6 +482,9 @@ pub(crate) fn model(
         req.precondition_covers,
         req.witness_covers,
     );
+    if cancelled() {
+        return Err(vec!["cancelled".into()]);
+    }
     if req.precondition_covers {
         let existing: std::collections::HashSet<String> =
             nl.checks.iter().filter_map(|c| c.label.clone()).collect();
@@ -501,18 +522,25 @@ pub(crate) fn model(
     // The labelled immediate assertions are targets of the model too, under
     // their labels (the ones that cannot be listed were reported at compile).
     immediate_checks(&nl, &mut properties);
-    properties.extend(command_properties(
-        comp,
-        design,
-        &mut nl,
-        &req.properties,
-        &property_options(
-            skip_cycles,
-            clock_skips,
-            req.precondition_covers,
-            req.witness_covers,
-        ),
-    ));
+    properties.extend(
+        command_properties(
+            comp,
+            design,
+            &mut nl,
+            &req.properties,
+            &property_options(
+                skip_cycles,
+                clock_skips,
+                req.precondition_covers,
+                req.witness_covers,
+            ),
+            cancel,
+        )
+        .map_err(|e| vec![e])?,
+    );
+    if cancelled() {
+        return Err(vec!["cancelled".into()]);
+    }
     // Leaving an assumption out would make the model weaker than the design says.
     let lost: Vec<String> = properties
         .iter()

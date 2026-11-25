@@ -15,7 +15,8 @@ pub use informal_app_protocol::protocol;
 pub use informal_compat::compat;
 pub use informal_debug::why_cex;
 pub use informal_session::{
-    cache, complexity, cov, lp, miter, progress, proof_core, sec, session, spv, stats, xprop,
+    cache, complexity, cov, lp, miter, progress, proof_core, sec, session, snapshot, spv, stats,
+    xprop,
 };
 pub use informal_trace as trace;
 
@@ -25,5 +26,6 @@ pub use session::{
     Effort, Environment, FairEnvironment, Fairness, Kind, Orchestration, Property, Session,
     SourceLoc, Status, Task, Vacuity, EMBEDDED,
 };
+pub use snapshot::{SessionSnapshot, SnapshotSlot};
 pub use stats::{DesignInfo, ProofStats, PropertyInfo};
 pub use worker::{Reply, Request, Worker};

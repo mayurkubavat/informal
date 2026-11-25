@@ -22,7 +22,7 @@ binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | \
 binary(source) | binary(engine_log) | binary(split) | binary(isolate) | \
 binary(session) | binary(mcp) | binary(certificate) | binary(compile_cache) | \
 binary(conn_cov_cache) | binary(csr_protocol) | binary(effort_orchestration) | \
-binary(engine_conformance) | binary(lp_formal) | binary(lp_gate_pg) | \
+binary(engine_conformance) | binary(engine_diff_fuzz) | binary(lp_formal) | binary(lp_gate_pg) | \
 binary(sec_complexity_wkind) | binary(stats) | binary(sva_why_cex) | \
 binary(tasks) | binary(ui_tcl_contract) | binary(vacuity) | binary(xprop_spv_cores)"""
 test-group = 'engines'
@@ -35,6 +35,6 @@ binary(sv_semantics) | binary(flow) | binary(trace) | binary(stop) | \
 binary(source) | binary(engine_log) | binary(split) | binary(isolate) | \
 binary(session) | binary(mcp) | binary(certificate) | binary(compile_cache) | \
 binary(conn_cov_cache) | binary(csr_protocol) | binary(effort_orchestration) | \
-binary(engine_conformance) | binary(lp_formal) | binary(lp_gate_pg) | \
+binary(engine_conformance) | binary(engine_diff_fuzz) | binary(lp_formal) | binary(lp_gate_pg) | \
 binary(sec_complexity_wkind) | binary(stats) | binary(sva_why_cex) | \
 binary(tasks) | binary(ui_tcl_contract) | binary(vacuity) | binary(xprop_spv_cores))"""

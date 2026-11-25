@@ -157,6 +157,14 @@ async fn call(w: &Worker, req: Request) -> Reply {
 
 #[tauri::command]
 async fn snapshot(w: State<'_, Worker>) -> Result<Reply, String> {
+    if w.is_running() {
+        let snap = w.snapshot_live();
+        return Ok(Reply {
+            ok: true,
+            result: String::new(),
+            session: snap.session_json.clone(),
+        });
+    }
     Ok(call(&w, Request::Snapshot).await)
 }
 
@@ -333,11 +341,39 @@ fn read_trace(path: String) -> Result<String, String> {
 }
 
 /// Binary `IFTR` v1 waveform stream over raw Tauri v2 IPC (`Uint8Array` on JS side),
-/// avoiding VCD text allocation and JSON serialization for large traces.
+/// preferring the streamed `.fst` sibling when present and avoiding VCD text
+/// allocation and JSON serialization for large traces.
 #[tauri::command]
 fn read_trace_bin(path: String) -> Result<tauri::ipc::Response, String> {
-    let text = trace_in(Path::new(WORKDIR), Path::new(&path))?;
-    let bytes = informal_mcp::vcd::encode_iftr(&text)?;
+    let p = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let bytes = informal_mcp::vcd::encode_iftr_from_path(&p)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Lightweight trace metadata (frames, signal list, format) read from the FST
+/// header/hierarchy without loading value-change blocks (D10).
+#[tauri::command]
+fn read_trace_meta(path: String) -> Result<informal_mcp::vcd::TraceMeta, String> {
+    let p = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    informal_mcp::vcd::read_meta(&p)
+}
+
+/// Stream ONLY `[first_frame..=last_frame]` (and optional signal paths) as
+/// binary `IFTR` v1 bytes via O(window) random-access FST block reads (D10).
+#[tauri::command]
+fn read_trace_window(
+    path: String,
+    first_frame: usize,
+    last_frame: usize,
+    signals: Option<Vec<String>>,
+) -> Result<tauri::ipc::Response, String> {
+    let p = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let bytes = informal_mcp::vcd::encode_window_iftr_from_path(
+        &p,
+        first_frame,
+        last_frame,
+        signals.as_deref(),
+    )?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -346,13 +382,14 @@ fn trace_in(workdir: &Path, path: &Path) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// The canonical path of `path` when it is an existing `.vcd` file inside
-/// `workdir` (symlinks and `..` resolved first), else an error.
+/// The canonical path of `path` when it is an existing `.vcd` or `.fst` file
+/// inside `workdir` (symlinks and `..` resolved first), else an error.
 fn vcd_in(workdir: &Path, path: &Path) -> Result<PathBuf, String> {
     let shown = path.display();
     let root = std::fs::canonicalize(workdir).map_err(|e| format!("{}: {e}", workdir.display()))?;
     let p = std::fs::canonicalize(path).map_err(|e| format!("{shown}: {e}"))?;
-    if !p.starts_with(&root) || p.extension().is_none_or(|e| e != "vcd") || !p.is_file() {
+    let is_trace_ext = p.extension().is_some_and(|e| e == "vcd" || e == "fst");
+    if !p.starts_with(&root) || !is_trace_ext || !p.is_file() {
         return Err(format!("{shown}: not a trace in {}", root.display()));
     }
     Ok(p)
@@ -391,9 +428,10 @@ fn tool_available(name: String) -> bool {
 #[tauri::command]
 fn open_in_surfer(path: String) -> Result<(), String> {
     let vcd = vcd_in(Path::new(WORKDIR), Path::new(&path))?;
+    let target = informal_mcp::vcd::fst_for(&vcd).unwrap_or(vcd);
     let surfer = find_on_path("surfer", std::env::var_os("PATH").as_deref())
         .ok_or("surfer is not on PATH (install it from surfer-project.org)")?;
-    spawn_detached(&surfer, &vcd)
+    spawn_detached(&surfer, &target)
 }
 
 fn spawn_detached(program: &Path, arg: &Path) -> Result<(), String> {
@@ -964,6 +1002,8 @@ fn main() {
             read_text,
             read_trace,
             read_trace_bin,
+            read_trace_meta,
+            read_trace_window,
             tool_available,
             open_in_surfer,
             llm_status,

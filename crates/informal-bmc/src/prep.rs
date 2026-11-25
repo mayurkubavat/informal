@@ -87,7 +87,9 @@ fn load_base(req: &CheckRequest, ctx: &RunContext, tier: u8) -> Result<BaseLoade
     let design_hash = store::design_hash(&g);
     let property_hash = store::property_hash(&g);
     let latch_lits: Vec<informal_aig::Lit> = g.latches.iter().map(|l| l.lit).collect();
-    let (g, _, map, imap) = pre::simplify_maps(&g);
+    let Some((g, _, map, imap)) = pre::simplify_maps_until(&g, &|| ctx.should_stop()) else {
+        return Err(ctx.stop_reason().to_string());
+    };
 
     let run_passes = (tier >= 2 || std::env::var_os("INFORMAL_AIG_PASSES").is_some())
         && !ctx.should_stop()
@@ -182,10 +184,13 @@ fn load_base(req: &CheckRequest, ctx: &RunContext, tier: u8) -> Result<BaseLoade
 }
 
 /// Derive a [`Loaded`] model (folded or unfolded) from a simplified + merged [`BaseLoaded`].
-fn derive_loaded(base: &BaseLoaded, fold: bool) -> Loaded {
+fn derive_loaded(base: &BaseLoaded, fold: bool, ctx: &RunContext) -> Result<Loaded, String> {
     if fold && base.can_fold {
         if let Some((f, info, fl, fi)) = pre::fold_clock(&base.aig) {
-            let (s, _, map, imap) = pre::simplify_maps(&f);
+            let Some((s, _, map, imap)) = pre::simplify_maps_until(&f, &|| ctx.should_stop())
+            else {
+                return Err(ctx.stop_reason().to_string());
+            };
             if std::env::var_os("INFORMAL_IC3_STATS").is_some() {
                 eprintln!(
                     "fold: clock latch {} (phase {}), {} -> {} ands; {} latches after simplification",
@@ -218,7 +223,7 @@ fn derive_loaded(base: &BaseLoaded, fold: bool) -> Loaded {
             });
             let fl_map = pre::compose(&fl, &f, &map);
             let fi_map = pre::compose_inputs(&fi, &f, &imap);
-            return Loaded {
+            return Ok(Loaded {
                 latch_map: pre::compose(&base.latch_map, &base.aig, &fl_map),
                 input_map: pre::compose_inputs(&base.input_map, &base.aig, &fi_map),
                 aig: s,
@@ -230,10 +235,10 @@ fn derive_loaded(base: &BaseLoaded, fold: bool) -> Loaded {
                     ok,
                 }),
                 merged: base.merged.clone(),
-            };
+            });
         }
     }
-    Loaded {
+    Ok(Loaded {
         aig: base.aig.clone(),
         latch_map: base.latch_map.clone(),
         input_map: base.input_map.clone(),
@@ -241,7 +246,7 @@ fn derive_loaded(base: &BaseLoaded, fold: bool) -> Loaded {
         property_hash: base.property_hash,
         folded: None,
         merged: base.merged.clone(),
-    }
+    })
 }
 
 /// The simplified model and the maps from the loaded model to it (test helper).
@@ -249,7 +254,7 @@ fn derive_loaded(base: &BaseLoaded, fold: bool) -> Loaded {
 pub(crate) fn prepare(req: &CheckRequest, fold: bool) -> Result<Loaded, String> {
     let ctx = RunContext::new(req.timeout);
     let base = load_base(req, &ctx, 0)?;
-    Ok(derive_loaded(&base, fold))
+    derive_loaded(&base, fold, &ctx)
 }
 
 /// The model as the engines see it: simplified, latch-merged, and its CNF
@@ -457,7 +462,7 @@ fn build_prepared(ctx: &RunContext, base: &BaseLoaded, fold: bool) -> Result<Pre
         property_hash,
         folded,
         merged,
-    } = derive_loaded(base, fold);
+    } = derive_loaded(base, fold, ctx)?;
     if ctx.should_stop() {
         return Err(ctx.stop_reason().to_string());
     }

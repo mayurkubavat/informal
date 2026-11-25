@@ -177,6 +177,7 @@ impl Session {
             self.props[i].engines.clear();
             self.props[i].stats = None;
         }
+        self.publish_snapshot();
     }
 
     /// Properties skipped because `total_time_limit` expired.
@@ -197,6 +198,7 @@ impl Session {
             self.props[i].trace = None;
             self.props[i].witness_trace = None;
         }
+        self.publish_snapshot();
     }
 
     /// Prove `targets`, all of `task`, on that task's model: the
@@ -213,6 +215,10 @@ impl Session {
         batch_deadline: Option<Instant>,
     ) -> bool {
         let lowered = self.lower(task);
+        if matches!(&lowered, Err(e) if e == "stopped") || self.stop.load(Ordering::SeqCst) {
+            self.mark_stopped(targets);
+            return true;
+        }
         let mut environment = None;
         if let Ok((btor, _)) = &lowered {
             let assumes = self

@@ -107,6 +107,9 @@ impl Api {
     }
 
     pub(super) fn session_summary(&self) -> Reply {
+        if self.state.is_busy() {
+            return self.live_session_summary();
+        }
         let (mode, state) = (self.opts.mode, self.state.clone());
         self.on_shell(false, move |sh| summary(&sh.session.borrow(), mode, &state))
     }
@@ -129,6 +132,9 @@ impl Api {
         let name = opt_str(args, "name")?;
         let origin = opt_str(args, "origin")?;
         let task = opt_str(args, "task")?;
+        if self.state.is_busy() {
+            return self.live_property_list(kind, status, name, origin, task);
+        }
         self.on_shell(false, move |sh| {
             let s = sh.session.borrow();
             if let Some(t) = &task {
@@ -154,6 +160,9 @@ impl Api {
 
     pub(super) fn property_get(&self, args: &Value) -> Reply {
         let name = req_str(args, "name")?;
+        if self.state.is_busy() {
+            return self.live_property_get(&name);
+        }
         self.on_shell(false, move |sh| {
             let s = sh.session.borrow();
             let p = find(&s, &name)?;
@@ -213,6 +222,9 @@ impl Api {
         let scope = opt_str(args, "scope")?;
         let depth = opt_u64(args, "depth")?.unwrap_or(2);
         let signals = opt_bool(args, "signals")?.unwrap_or(true);
+        if self.state.is_busy() {
+            return self.live_design_hierarchy(scope, depth, signals);
+        }
         self.on_shell(false, move |sh| {
             let s = sh.session.borrow();
             if !s.elaborated {
@@ -243,17 +255,21 @@ impl Api {
         let last = opt_u64(args, "last_line")?.map(|l| l as usize);
         // A file of the design or a script that made a property may lie
         // outside the root; anything else must be below it.
-        let known: Vec<PathBuf> = self.on_shell(false, |sh| {
-            let s = sh.session.borrow();
-            let sources = s.props.iter().filter_map(|p| p.source.as_ref());
-            s.design
-                .files
-                .iter()
-                .cloned()
-                .chain(sources.map(|l| PathBuf::from(&l.file)))
-                .filter_map(|p| p.canonicalize().ok())
-                .collect()
-        })?;
+        let known: Vec<PathBuf> = if self.state.is_busy() {
+            self.live_known_sources()
+        } else {
+            self.on_shell(false, |sh| {
+                let s = sh.session.borrow();
+                let sources = s.props.iter().filter_map(|p| p.source.as_ref());
+                s.design
+                    .files
+                    .iter()
+                    .cloned()
+                    .chain(sources.map(|l| PathBuf::from(&l.file)))
+                    .filter_map(|p| p.canonicalize().ok())
+                    .collect()
+            })?
+        };
         let named = self.opts.root.join(&file);
         let path = match named.canonicalize() {
             Ok(p) if known.contains(&p) => p,
@@ -284,6 +300,9 @@ impl Api {
     pub(super) fn open_workbench(&self, args: &Value) -> Reply {
         let focus = opt_str(args, "focus_property")?;
         let view = opt_str(args, "view")?;
+        if self.state.is_busy() {
+            return self.live_open_workbench(focus, view);
+        }
         let snap = self.on_shell(false, move |sh| {
             let s = sh.session.borrow();
             serde_json::to_value(&*s).map_err(|e| err("internal", e.to_string()))

@@ -464,6 +464,10 @@ pub struct Session {
     /// Telemetry from the most recent task's cooperative [`informal_engine::LemmaHub`].
     #[serde(skip)]
     pub last_lemma_stats: Option<informal_engine::HubStats>,
+    /// Shared read-only snapshot slot updated after elaboration, clears, and
+    /// each settled property so concurrent readers never block behind `prove`.
+    #[serde(skip)]
+    pub snapshot_slot: Option<crate::snapshot::SnapshotSlot>,
 }
 
 /// What the environment check found (docs/vacuity.md).

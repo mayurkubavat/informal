@@ -16,11 +16,12 @@ pub mod struct_graph;
 mod types;
 
 pub use cache::{
-    cache_stats, compile_cached, design_from_compiled, lower_from_compiled, CacheStats,
-    CompileFingerprint, CompiledDesign, FileDigest, LowerKey,
+    cache_stats, compile_cached, compile_cached_cancel, design_from_compiled, lower_from_compiled,
+    lower_from_compiled_cancel, CacheStats, CompileFingerprint, CompiledDesign, FileDigest,
+    LowerKey,
 };
 pub(crate) use compile_lower::{
-    design_stats, driver, hint, immediate_checks, model, rtl_properties, show,
+    design_stats, driver, hint, immediate_checks, model_cancel, rtl_properties, show,
 };
 pub use gate_fast::{
     elaborate_fast_cached, should_use_fast_path, try_elaborate_fast_cached, FastGateDesign,
@@ -53,8 +54,14 @@ pub const BLAST_WORDS: usize = 4096;
 /// part of the model. Nothing is guessed: anything not modelled is an
 /// error.
 pub fn lower(req: &Request) -> Lowered {
-    match cache::compile_cached(None, req) {
-        Ok(compiled) => cache::lower_from_compiled(&compiled, req),
+    lower_cancel(req, None)
+}
+
+/// [`lower`] with cooperative cancellation polled across compile, netlist
+/// lowering, property compilation, and Btor2 emission.
+pub fn lower_cancel(req: &Request, cancel: Option<&std::sync::atomic::AtomicBool>) -> Lowered {
+    match cache::compile_cached_cancel(None, req, cancel) {
+        Ok(compiled) => cache::lower_from_compiled_cancel(&compiled, req, cancel),
         Err(e) => Lowered {
             ok: false,
             errors: vec![e],

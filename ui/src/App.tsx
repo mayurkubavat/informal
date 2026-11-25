@@ -31,6 +31,8 @@ import {
   type NavSnapshot,
 } from "./store/workbenchController";
 import { resolveSvgPalette } from "./svgTheme";
+import { STREAM_THRESHOLD_FRAMES, WindowedTraceStore } from "./traceStream";
+import type { Vcd } from "./vcd";
 import { useTheme } from "./useTheme";
 import { BOTTOM_DEFAULT, clampBottom, clampLeft, LEFT_MAX, LEFT_MIN, useLayout } from "./useLayout";
 import { MenuBar, type MenuDef, type MenuItem } from "./components/MenuBar";
@@ -118,7 +120,16 @@ export default function App() {
   const [texts, setTexts] = useState<Record<string, string>>({});
   // The property shown in the trace tab (null: no trace tab), its binary IFTR stream, and raw VCD text.
   const [traceName, setTraceName] = useState<string | null>(null);
-  const [trace, setTrace] = useState<{ path: string; text: string | null; binary: Uint8Array | null; error: string | null } | null>(null);
+  const [trace, setTrace] = useState<{
+    path: string;
+    text: string | null;
+    binary: Uint8Array | null;
+    streamedVcd?: Vcd | null;
+    format?: "fst" | "vcd";
+    error: string | null;
+  } | null>(null);
+  const traceStoreRef = useRef<{ path: string; store: WindowedTraceStore } | null>(null);
+  const traceFetchingRef = useRef<Set<string>>(new Set());
   const traceSvgCaptureRef = useRef<(() => string | null) | null>(null);
   const schemSvgCaptureRef = useRef<(() => string | null) | null>(null);
 
@@ -685,22 +696,111 @@ export default function App() {
   useEffect(() => {
     if (traceName && selected && selected !== traceName && currentTrace) setTraceName(selected);
   }, [selected, traceName, currentTrace]);
-  // Load both binary IFTR stream (zero-JSON Uint8Array IPC) and VCD text when the trace tab's path changes.
+  // Load waveform using streamed FST windows for deep traces (> 512 cycles) or
+  // binary IFTR stream (FST-backed on disk) without double-loading VCD text.
   useEffect(() => {
     if (!tracePath) return;
     let live = true;
-    setTrace((t) => (t?.path === tracePath ? t : { path: tracePath, text: null, binary: null, error: null }));
-    Promise.all([
-      backend.readTraceBin(tracePath).catch(() => null),
-      backend.readTrace(tracePath),
-    ]).then(
-      ([binary, text]) => live && setTrace({ path: tracePath, text, binary, error: null }),
-      (e) => live && setTrace({ path: tracePath, text: null, binary: null, error: String(e) }),
+    traceStoreRef.current = null;
+    traceFetchingRef.current.clear();
+    setTrace((t) =>
+      t?.path === tracePath
+        ? t
+        : { path: tracePath, text: null, binary: null, streamedVcd: null, error: null },
     );
+    (async () => {
+      try {
+        const meta = await backend.readTraceMeta(tracePath).catch(() => null);
+        if (!live) return;
+        if (meta && meta.frames > STREAM_THRESHOLD_FRAMES) {
+          const store = new WindowedTraceStore(meta);
+          traceStoreRef.current = { path: tracePath, store };
+          const anchor = Math.max(0, Math.min(meta.frames - 1, traceProp?.status.depth ?? meta.frames - 1));
+          const initial = store.nextMissingChunk(Math.max(0, anchor - 128), Math.min(meta.frames - 1, anchor + 64));
+          if (initial) {
+            const winBytes = await backend.readTraceWindow(tracePath, initial.first, initial.last);
+            if (!live) return;
+            store.mergeWindow(initial.first, initial.last, winBytes);
+          }
+          setTrace({
+            path: tracePath,
+            text: null,
+            binary: null,
+            streamedVcd: store.toVcd(),
+            format: meta.format,
+            error: null,
+          });
+          return;
+        }
+        const binary = await backend.readTraceBin(tracePath).catch(() => null);
+        if (!live) return;
+        if (binary) {
+          setTrace({
+            path: tracePath,
+            text: null,
+            binary,
+            streamedVcd: null,
+            format: meta?.format ?? "vcd",
+            error: null,
+          });
+          return;
+        }
+        const text = await backend.readTrace(tracePath);
+        if (!live) return;
+        setTrace({ path: tracePath, text, binary: null, streamedVcd: null, format: "vcd", error: null });
+      } catch (e) {
+        if (live) {
+          setTrace({ path: tracePath, text: null, binary: null, streamedVcd: null, error: String(e) });
+        }
+      }
+    })();
     return () => {
       live = false;
     };
   }, [tracePath]);
+
+  const requestTraceWindow = useCallback((first: number, last: number) => {
+    const cur = traceStoreRef.current;
+    if (!cur) return;
+    const chunk = cur.store.nextMissingChunk(first, last);
+    if (!chunk) return;
+    const key = `${cur.path}:${chunk.first}:${chunk.last}`;
+    if (traceFetchingRef.current.has(key)) return;
+    traceFetchingRef.current.add(key);
+    backend
+      .readTraceWindow(cur.path, chunk.first, chunk.last)
+      .then((bytes) => {
+        if (traceStoreRef.current?.path !== cur.path) return;
+        cur.store.mergeWindow(chunk.first, chunk.last, bytes);
+        setTrace((prev) =>
+          prev && prev.path === cur.path
+            ? { ...prev, streamedVcd: cur.store.toVcd() }
+            : prev,
+        );
+      })
+      .catch(() => {})
+      .finally(() => {
+        traceFetchingRef.current.delete(key);
+      });
+  }, []);
+
+  const exportTraceVcd = useCallback(() => {
+    if (!tracePath) return;
+    const download = (text: string) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      a.download = tracePath.split("/").pop() || `${traceProp?.name ?? "trace"}.vcd`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 0);
+    };
+    if (trace?.text) {
+      download(trace.text);
+      return;
+    }
+    backend.readTrace(tracePath).then(download).catch(() => {});
+  }, [tracePath, trace?.text, traceProp?.name]);
   const showTrace = center === "trace" && !!traceProp;
 
   // Live formal-ready lint (`svlang lint` SV-FPV-001..005) when source view opens on an RTL file
@@ -1813,6 +1913,10 @@ export default function App() {
       path={trace?.path ?? tracePath ?? ""}
       text={trace?.text ?? null}
       binary={trace?.binary ?? null}
+      vcdOverride={trace?.streamedVcd ?? null}
+      traceFormat={trace?.format}
+      onRequestWindow={requestTraceWindow}
+      onExportVcd={exportTraceVcd}
       error={trace?.error}
       dark={isDark}
       addRequest={addReq}

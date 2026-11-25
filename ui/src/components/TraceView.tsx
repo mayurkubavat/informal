@@ -83,6 +83,10 @@ export function TraceView({
   path,
   text,
   binary,
+  vcdOverride,
+  traceFormat,
+  onRequestWindow,
+  onExportVcd,
   error,
   dark: darkProp,
   addRequest,
@@ -107,6 +111,10 @@ export function TraceView({
   path: string;
   text: string | null;
   binary?: Uint8Array | null;
+  vcdOverride?: Vcd | null;
+  traceFormat?: "fst" | "vcd";
+  onRequestWindow?: (firstFrame: number, lastFrame: number) => void;
+  onExportVcd?: () => void;
   error?: string | null;
   dark?: boolean;
   addRequest?: { path: string; n: number } | null;
@@ -127,6 +135,7 @@ export function TraceView({
   onCaptureSvgRef?: React.MutableRefObject<(() => string | null) | null>;
 }) {
   const vcd = useMemo<Vcd | null>(() => {
+    if (vcdOverride) return vcdOverride;
     if (binary && binary.byteLength >= 14) {
       try {
         return decodeIftr(binary);
@@ -135,7 +144,7 @@ export function TraceView({
       }
     }
     return text ? parseVcd(text) : null;
-  }, [binary, text]);
+  }, [vcdOverride, binary, text]);
 
   const clockSignal = clock?.signal;
   const clockEdge = clock?.edge;
@@ -172,11 +181,17 @@ export function TraceView({
   const shownRef = useRef<string[]>([]);
   shownRef.current = shown;
   const shownFor = useRef<Vcd | null>(null);
+  const shownPathRef = useRef<string | null>(null);
   const reveal = useRef(false);
 
   useEffect(() => {
     if (!vcd) return;
     shownFor.current = vcd;
+    // Preserve cursor/lanes when a new FST window arrives for the same trace path.
+    if (shownPathRef.current === path && shownRef.current.length > 0 && vcdOverride) {
+      return;
+    }
+    shownPathRef.current = path;
     const visible = vcd.signals.filter((s) => !helper(s));
     const lpSigs = visible.filter((s) => isLpDomainSig(s)).map((s) => s.path);
     const rtlSigs = visible.filter((s) => !isLpDomainSig(s)).map((s) => s.path);
@@ -186,7 +201,15 @@ export function TraceView({
     setAdding(false);
     setSliceOnlyLocal(false);
     reveal.current = true;
-  }, [vcd, n, depth]);
+  }, [vcd, vcdOverride, path, n, depth]);
+
+  // Stream FST waveform windows on demand as viewport scroll or cursor changes.
+  useEffect(() => {
+    if (!onRequestWindow || !vcdOverride || n <= 0) return;
+    const visFirst = Math.max(0, Math.floor(scrollPos.left / Math.max(1, px)) - 64);
+    const visLast = Math.min(n - 1, Math.ceil((scrollPos.left + scrollPos.vw) / Math.max(1, px)) + 64);
+    onRequestWindow(Math.min(visFirst, cursor), Math.max(visLast, cursor));
+  }, [onRequestWindow, vcdOverride, scrollPos.left, scrollPos.vw, px, cursor, n]);
 
   const lpDomainTracks = useMemo(() => extractLpDomainTracks(vcd), [vcd]);
 
@@ -366,7 +389,10 @@ export function TraceView({
   };
 
   const exportVcd = () => {
-    if (!text) return;
+    if (!text) {
+      onExportVcd?.();
+      return;
+    }
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
     a.download = path.split("/").pop() || `${prop.name}.vcd`;
@@ -733,8 +759,13 @@ export function TraceView({
             />
           )}
         </span>
-        <button className="btn" onClick={exportVcd} disabled={!text} title={`Save ${path}`}>
-          Export VCD
+        <button
+          className="btn"
+          onClick={exportVcd}
+          disabled={!text && !onExportVcd}
+          title={traceFormat === "fst" ? `Save VCD (streamed via FST: ${path})` : `Save ${path}`}
+        >
+          {traceFormat === "fst" ? "Export VCD (FST)" : "Export VCD"}
         </button>
         {onPopOut && (
           <button className="btn small" onClick={onPopOut} title="Pop waveform out into a secondary window">

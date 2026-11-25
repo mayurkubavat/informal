@@ -10,6 +10,7 @@
 //! SuperCAR/CAR-DT and Avy; check the Pono and BtorMC entries.
 
 pub mod isolated;
+pub mod validate;
 
 use anyhow::{bail, Context};
 use informal_engine::{
@@ -80,6 +81,11 @@ pub struct EngineSpec {
     /// memory through memfd on Linux) instead of the original file.
     #[serde(default)]
     pub preprocess: bool,
+    /// Validate structured `{cert}` / `{cex}` output files (replaying witnesses
+    /// on the original model and checking proof certificates) and withdraw any
+    /// conflicting or corrupt claim (decisions D1/D8).
+    #[serde(default)]
+    pub validate_files: bool,
     /// Memory cap in MiB for the engine and every process it starts
     /// (default: `INFORMAL_ENGINE_MEM_MB`, else none). On Linux this runs the
     /// engine in a systemd user scope with MemoryMax, so a runaway engine
@@ -271,10 +277,13 @@ impl Drop for Staged {
 /// Simplify the model and write it as binary AIGER to an anonymous
 /// in-memory file the child can open by `/proc/self/fd/N` (it inherits the
 /// descriptor). `None` (use the original file) when the model cannot be
-/// loaded or has resets AIGER cannot express.
-fn stage_preprocessed(model: &Path) -> Option<Staged> {
+/// loaded, is cancelled, or has resets AIGER cannot express.
+fn stage_preprocessed(model: &Path, ctx: &RunContext) -> Option<Staged> {
+    if ctx.should_stop() {
+        return None;
+    }
     let g = informal_aig::load(model).ok()?;
-    let (s, _) = informal_aig::preprocess::simplify(&g);
+    let (s, _) = informal_aig::preprocess::simplify_until(&g, &|| ctx.should_stop())?;
     if s.latches
         .iter()
         .any(|l| matches!(l.init, informal_aig::Init::Expr(_)))
@@ -370,19 +379,35 @@ impl Engine for ExternalEngine {
         let start = Instant::now();
         // Kept alive until the child exits: the engine reads it by path.
         let staged = if self.spec.preprocess {
-            stage_preprocessed(&req.model)
+            stage_preprocessed(&req.model, ctx)
         } else {
             None
         };
+        if ctx.should_stop() {
+            return Ok(EngineResult {
+                engine: self.spec.name.clone(),
+                verdict: Verdict::Unknown {
+                    reason: if ctx.cancel.is_cancelled() {
+                        "cancelled".into()
+                    } else {
+                        ctx.stop_reason().into()
+                    },
+                },
+                wall_ms: start.elapsed().as_millis(),
+                witness: None,
+                certificate: None,
+            });
+        }
         let model = match &staged {
             Some(s) => s.path.clone(),
             None => req.model.to_string_lossy().into_owned(),
         };
+        let artifacts = validate::ArtifactFiles::for_args(&self.spec.args, req.format);
         let args: Vec<String> = self
             .spec
             .args
             .iter()
-            .map(|a| a.replace("{model}", &model))
+            .map(|a| artifacts.substitute(&a.replace("{model}", &model)))
             .collect();
         let limit = self.spec.mem_limit_mb.or_else(|| {
             std::env::var("INFORMAL_ENGINE_MEM_MB")
@@ -486,54 +511,32 @@ impl Engine for ExternalEngine {
             },
             Some(st) => self.classify(st.code(), &format!("{stdout}\n{stderr}")),
         };
-        let witness = if !matches!(verdict, Verdict::Unsafe { .. }) {
-            None
-        } else if self.spec.cex_witness && staged.is_none() {
-            // The depth is left as the engine reported it: the witness is
-            // not checked here (informal-fpv replays it and takes the depth from
-            // the trace when it does).
-            match named_witness(&stdout, &req.model, req.format) {
-                Ok(w) => Some(w),
-                Err(e) => {
-                    ctx.report(Progress::line(
-                        &self.spec.name,
-                        format!("[informal: witness not used: {e}]"),
-                        true,
-                    ));
-                    None
-                }
-            }
-        } else {
-            self.spec.witness_on_stdout.then_some(stdout)
-        };
+        let validated = validate::reconcile_verdict(
+            verdict,
+            &req.model,
+            req.format,
+            staged.is_some(),
+            &artifacts,
+            &stdout,
+            self.spec.cex_witness,
+            self.spec.witness_on_stdout,
+            self.spec.validate_files,
+        );
+        if let Some(note) = validated.note {
+            ctx.report(Progress::line(
+                &self.spec.name,
+                format!("[informal: {note}]"),
+                true,
+            ));
+        }
         Ok(EngineResult {
             engine: self.spec.name.clone(),
-            verdict,
+            verdict: validated.verdict,
             wall_ms: start.elapsed().as_millis(),
-            witness,
+            witness: validated.witness,
             certificate: None,
         })
     }
-}
-
-/// The counterexample in an engine's stdout as a named witness: Btor2
-/// witness for a Btor2 model, AIGER witness for AIGER.
-fn named_witness(stdout: &str, model: &Path, format: ModelFormat) -> Result<String, String> {
-    let btor2 = format == ModelFormat::Btor2;
-    let raw = informal_engine::witness::extract(stdout, btor2)
-        .ok_or("no counterexample in the output")?;
-    let named = if btor2 {
-        let text =
-            std::fs::read_to_string(model).map_err(|e| format!("{}: {e}", model.display()))?;
-        informal_engine::witness::from_btor2(&raw, &text)?
-    } else {
-        let g = informal_aig::load(model).map_err(|e| format!("{}: {e:#}", model.display()))?;
-        let name = |l: u32| g.names.get(&informal_aig::var(l)).cloned();
-        let inputs: Vec<_> = g.inputs.iter().map(|&i| name(i)).collect();
-        let latches: Vec<_> = g.latches.iter().map(|l| name(l.lit)).collect();
-        informal_engine::witness::from_aiger(&raw, &inputs, &latches)?
-    };
-    Ok(named)
 }
 
 #[cfg(test)]

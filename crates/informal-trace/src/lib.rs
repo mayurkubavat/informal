@@ -1,4 +1,4 @@
-//! Counterexample and cover traces as VCD (docs/ui/trace-format.md).
+//! Counterexample and cover traces as VCD and streamed FST (docs/ui/trace-format.md, D10).
 //!
 //! An engine's named witness (`informalw 1`: free initial latch values and
 //! per-frame inputs by signal name) is replayed on the property's own,
@@ -11,11 +11,15 @@
 //! slang lowering's combinational nets, in `prop_N.trace.btor2`) are
 //! replayed and written too.
 
+pub mod fst_read;
+pub mod fst_write;
+mod lz4;
+
 use anyhow::{bail, Context, Result};
 use informal_aig::{is_neg, var, Aig, Init, Lit, Node};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A parsed `informalw 1` witness.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -59,17 +63,44 @@ pub fn parse_witness(text: &str) -> Option<Witness> {
     (w.frames.len() == w.depth + 1).then_some(w)
 }
 
-/// One VCD variable: its scope path, leaf name and per-frame value bits
+/// One trace variable: its scope path, leaf name and per-frame value bits
 /// (LSB first).
-struct Var {
-    scope: Vec<String>,
-    name: String,
-    bits: Vec<Vec<Option<bool>>>,
+#[derive(Debug, Clone)]
+pub struct TraceVar {
+    pub scope: Vec<String>,
+    pub name: String,
+    pub bits: Vec<Vec<Option<bool>>>,
 }
 
-/// Replay `w` on the model at `model` (Btor2 or AIGER) and write the trace
-/// as VCD text. `prop` names the property lane, `clock` the clock signal.
-pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> Result<String> {
+/// Complete replayed trace ready to emit as VCD and/or chunked FST.
+#[derive(Debug, Clone)]
+pub struct TraceData {
+    pub prop: String,
+    pub frames: usize,
+    pub half_cycle: bool,
+    pub vars: Vec<TraceVar>,
+    pub notes: Vec<String>,
+}
+
+impl TraceData {
+    /// Render as VCD text.
+    pub fn to_vcd(&self) -> String {
+        let mut vcd = write_vcd(&self.vars, self.frames, &self.prop, self.half_cycle);
+        for note in self.notes.iter().rev() {
+            vcd = format!("$comment {note} $end\n{vcd}");
+        }
+        vcd
+    }
+
+    /// Render as GTKWave-standard chunked FST bytes.
+    pub fn to_fst(&self) -> Vec<u8> {
+        fst_write::write_fst(self)
+    }
+}
+
+/// Replay `w` on the model at `model` (Btor2 or AIGER) and return structured
+/// [`TraceData`] that can be written as both VCD and FST without re-simulating.
+pub fn replay_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> Result<TraceData> {
     let g = informal_aig::load(model).with_context(|| format!("loading {}", model.display()))?;
     let frames = simulate(&g, w)?;
     let bad = |f: usize| g.bads.iter().any(|&b| lit(&frames[f], b));
@@ -118,7 +149,7 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         .iter()
         .find_map(|n| n.split_once('.').map(|(t, _)| t.to_string()))
         .unwrap_or_else(|| "top".into());
-    let mut vars = vec![Var {
+    let mut vars = vec![TraceVar {
         scope: vec![top.clone()],
         name: clock_leaf.to_string(),
         // One step per clock cycle: the clock is drawn, rising with each
@@ -152,7 +183,7 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
                 b
             })
             .collect();
-        vars.push(Var {
+        vars.push(TraceVar {
             scope: parts,
             name: leaf,
             bits,
@@ -176,18 +207,18 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
         let bits = (0..frames.len())
             .map(|f| bits_of.iter().map(|&b| Some(lit(&frames[f], b))).collect())
             .collect();
-        vars.push(Var {
+        vars.push(TraceVar {
             scope: parts,
             name: leaf,
             bits,
         });
     }
-    vars.push(Var {
+    vars.push(TraceVar {
         scope: vec!["informal".into()],
         name: prop.to_string(),
         bits: (0..frames.len()).map(|f| vec![Some(bad(f))]).collect(),
     });
-    let mut vcd = write_vcd(&vars, frames.len(), prop, half_cycle);
+    let mut notes = Vec::new();
     // A liveness counterexample: the frame the loop starts in. The last
     // frame has that frame's state again, and the trace goes round from
     // there for ever.
@@ -202,13 +233,39 @@ pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> R
                 .map(|f| frames[f][var(pick) as usize])
                 .collect::<Vec<_>>(),
         ) {
-            vcd = format!(
-                "$comment liveness: frame {} has the state of frame {start} again; the frames from {start} on repeat for ever $end\n{vcd}",
+            notes.push(format!(
+                "liveness: frame {} has the state of frame {start} again; the frames from {start} on repeat for ever",
                 frames.len() - 1
-            );
+            ));
         }
     }
-    Ok(vcd)
+    Ok(TraceData {
+        prop: prop.to_string(),
+        frames: frames.len(),
+        half_cycle,
+        vars,
+        notes,
+    })
+}
+
+/// Replay `w` on the model at `model` (Btor2 or AIGER) and write the trace
+/// as VCD text. `prop` names the property lane, `clock` the clock signal.
+pub fn vcd_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> Result<String> {
+    Ok(replay_witness(model, w, prop, clock)?.to_vcd())
+}
+
+/// Replay `w` on the model at `model` and write the trace as chunked FST bytes.
+pub fn fst_from_witness(model: &Path, w: &Witness, prop: &str, clock: &str) -> Result<Vec<u8>> {
+    Ok(replay_witness(model, w, prop, clock)?.to_fst())
+}
+
+/// Sibling `.fst` path for a `.vcd` trace path (or itself if already `.fst`).
+pub fn fst_sibling(path: &Path) -> PathBuf {
+    if path.extension().is_some_and(|e| e == "fst") {
+        path.to_path_buf()
+    } else {
+        path.with_extension("fst")
+    }
 }
 
 /// `q[3]` -> ("q", 3); `en` -> ("en", 0).
@@ -309,7 +366,7 @@ fn ident(mut i: usize) -> String {
     }
 }
 
-fn bits_text(b: &[Option<bool>]) -> String {
+pub(crate) fn bits_text(b: &[Option<bool>]) -> String {
     b.iter()
         .rev()
         .map(|x| match x {
@@ -330,7 +387,7 @@ pub const HALF_CYCLE: &str = "informal_clock_phase";
 /// step of a clock the model drives: the clock lane shows the clock input's
 /// level in each frame (low in even frames and high in odd ones when the
 /// model does not name it), and changes at 10f with the values.
-fn write_vcd(vars: &[Var], frames: usize, prop: &str, half_cycle: bool) -> String {
+fn write_vcd(vars: &[TraceVar], frames: usize, prop: &str, half_cycle: bool) -> String {
     let mut s = String::new();
     let unit = if half_cycle { "model steps" } else { "cycles" };
     let _ = writeln!(s, "$comment informal trace of {prop}: {frames} {unit} $end");
@@ -512,5 +569,117 @@ mod tests {
         assert_eq!(ident(0), "!");
         assert_eq!(ident(93), "~");
         assert_eq!(ident(94), "!!");
+    }
+
+    #[test]
+    fn fst_roundtrip_and_windowed_streaming_across_blocks() {
+        // Synthetic 1,000-cycle multi-signal trace split across 64-frame FST VC blocks (16 blocks).
+        let frames = 1000usize;
+        let mut vars = vec![TraceVar {
+            scope: vec!["dut".into()],
+            name: "clk".into(),
+            bits: Vec::new(),
+        }];
+        vars.push(TraceVar {
+            scope: vec!["dut".into()],
+            name: "cnt".into(),
+            bits: (0..frames)
+                .map(|f| {
+                    let v = (f * 3 + 1) & 0xff;
+                    (0..8).map(|b| Some(((v >> b) & 1) == 1)).collect()
+                })
+                .collect(),
+        });
+        vars.push(TraceVar {
+            scope: vec!["dut".into(), "sub".into()],
+            name: "flag".into(),
+            bits: (0..frames).map(|f| vec![Some((f / 17) % 2 == 1)]).collect(),
+        });
+        vars.push(TraceVar {
+            scope: vec!["dut".into()],
+            name: "maybe_x".into(),
+            bits: (0..frames)
+                .map(|f| {
+                    if f % 100 == 0 {
+                        vec![None, Some(true)]
+                    } else {
+                        vec![Some(false), Some(true)]
+                    }
+                })
+                .collect(),
+        });
+        let data = TraceData {
+            prop: "a_deep".into(),
+            frames,
+            half_cycle: false,
+            vars,
+            notes: vec!["liveness: loop at 42".into()],
+        };
+        let bytes = fst_write::write_fst_chunked(&data, 64);
+        let mut reader = fst_read::FstReader::from_bytes(bytes.clone()).unwrap();
+        let meta = reader.meta();
+        assert_eq!(meta.frames, 1000);
+        assert!(!meta.steps);
+        assert_eq!(meta.block_count, 16);
+        assert_eq!(meta.signals.len(), 4);
+        let cnt_idx = meta
+            .signals
+            .iter()
+            .position(|s| s.name == "dut.cnt")
+            .unwrap();
+        let flag_idx = meta
+            .signals
+            .iter()
+            .position(|s| s.name == "dut.sub.flag")
+            .unwrap();
+        assert_eq!(meta.signals[cnt_idx].width, 8);
+        assert_eq!(meta.notes, ["liveness: loop at 42"]);
+
+        // Windowed read in the middle ([520..=560]) must touch at most 2 blocks (not all 16!)
+        // and only decode the 2 selected signals (`dut.cnt` and `dut.sub.flag`).
+        let win = reader
+            .read_window(520, 560, Some(&[cnt_idx, flag_idx]))
+            .unwrap();
+        assert!(
+            win.blocks_read <= 2,
+            "expected windowed read to skip other blocks, read {}",
+            win.blocks_read
+        );
+        assert_eq!(win.signals.len(), 2);
+        // Verify exact value at every frame in [520..=560].
+        let val_at = |runs: &[(usize, String)], f: usize| -> String {
+            let idx = runs.partition_point(|(rf, _)| *rf <= f).saturating_sub(1);
+            runs[idx].1.clone()
+        };
+        for f in 520..=560 {
+            let want_cnt = format!("{:08b}", (f * 3 + 1) & 0xff);
+            assert_eq!(val_at(&win.signals[0].runs, f), want_cnt, "cnt@{f}");
+            let want_flag = if (f / 17) % 2 == 1 { "1" } else { "0" };
+            assert_eq!(val_at(&win.signals[1].runs, f), want_flag, "flag@{f}");
+        }
+
+        // Cross-check with real GTKWave `fst2vcd` when installed on PATH.
+        if let Ok(status) = std::process::Command::new("fst2vcd").arg("--help").output() {
+            if status.status.success() || !status.stderr.is_empty() || !status.stdout.is_empty() {
+                let p = std::env::temp_dir()
+                    .join(format!("informal-fst-interop-{}.fst", std::process::id()));
+                std::fs::write(&p, &bytes).unwrap();
+                let out = std::process::Command::new("fst2vcd")
+                    .arg(&p)
+                    .output()
+                    .unwrap();
+                let _ = std::fs::remove_file(&p);
+                assert!(
+                    out.status.success(),
+                    "fst2vcd rejected InFormal FST: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                let vcd_out = String::from_utf8_lossy(&out.stdout);
+                assert!(vcd_out.contains("$scope module dut $end"), "{vcd_out}");
+                assert!(vcd_out.contains("cnt [7:0]"), "{vcd_out}");
+                assert!(vcd_out.contains("#5200"), "missing #5200 in fst2vcd output");
+                assert!(vcd_out.contains("#9990"), "missing #9990 in fst2vcd output");
+            }
+        }
     }
 }

@@ -16,6 +16,7 @@ pub mod progress;
 pub mod proof_core;
 pub mod sec;
 pub mod session;
+pub mod snapshot;
 pub mod spv;
 pub mod stats;
 pub mod xprop;

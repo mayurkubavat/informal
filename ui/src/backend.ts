@@ -762,6 +762,35 @@ export const backend = {
     if (bin === null) throw new Error(`${path}: no such trace`);
     return bin;
   },
+  // Lightweight FST/VCD metadata without loading value changes (D10).
+  readTraceMeta: async (path: string): Promise<import("./traceStream").TraceMeta | null> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<import("./traceStream").TraceMeta>("read_trace_meta", { path });
+    }
+    return null;
+  },
+  // Streamed FST/IFTR window `[firstFrame..=lastFrame]` over raw Tauri IPC (D10).
+  readTraceWindow: async (
+    path: string,
+    firstFrame: number,
+    lastFrame: number,
+    signals?: string[],
+  ): Promise<Uint8Array> => {
+    if (inTauri) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const ab = await invoke<ArrayBuffer | Uint8Array>("read_trace_window", {
+        path,
+        firstFrame,
+        lastFrame,
+        signals: signals ?? null,
+      });
+      return ab instanceof Uint8Array ? ab : new Uint8Array(ab);
+    }
+    const bin = mockTraceBin(path);
+    if (bin === null) throw new Error(`${path}: no such trace`);
+    return bin;
+  },
   // Port-aware RTL COI & causal schematic subgraph (`elkjs` + Canvas).
   schematic: async (name: string, maxDepth = 2, maxNodes = 80): Promise<SchematicGraphView> => {
     if (isMcpAppSurface) {

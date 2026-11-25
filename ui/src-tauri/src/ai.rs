@@ -282,9 +282,19 @@ mod tests {
         assert_eq!(shown["window"]["asked"]["action"], "open_trace");
         assert_eq!(shown["window"]["asked"]["frame"], 3);
         assert_eq!(ai.window.state().unwrap()["view"], "trace");
-        // While a command of the person's has the shell, tools say busy.
+        // While a command of the person's has the shell, read-only queries
+        // answer non-blockingly from the live SessionSnapshot while mutating
+        // or long commands still answer busy.
         let held = ai.api.state().foreign();
-        let busy = ai.api.call("session_summary", &serde_json::json!({}));
+        let live_summary = ai.api.call("session_summary", &serde_json::json!({}));
+        assert!(
+            live_summary.is_ok(),
+            "read-only session_summary should succeed during foreign command: {:?}",
+            live_summary
+        );
+        let live_props = ai.api.call("property_list", &serde_json::json!({}));
+        assert!(live_props.is_ok());
+        let busy = ai.api.call("prove", &serde_json::json!({"wait": true}));
         assert_eq!(busy.unwrap_err().code, "busy");
         drop(held);
         assert!(ai

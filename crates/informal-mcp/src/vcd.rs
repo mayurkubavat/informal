@@ -2,7 +2,172 @@
 //! (`informal_fpv::trace`, docs/ui/trace-format.md), read back into one
 //! value per signal and frame.
 
+use serde::Serialize;
 use std::collections::HashMap;
+use std::path::Path;
+
+/// Lightweight trace metadata returned by `read_trace_meta` before streaming
+/// any waveform value-change windows.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TraceMeta {
+    pub frames: usize,
+    pub steps: bool,
+    pub format: &'static str,
+    pub block_count: usize,
+    pub signals: Vec<TraceSignalMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TraceSignalMeta {
+    pub name: String,
+    pub path: String,
+    pub width: usize,
+    pub clock: bool,
+}
+
+/// Resolve the `.fst` sibling for `path` if it exists on disk.
+pub fn fst_for(path: &Path) -> Option<std::path::PathBuf> {
+    let cand = informal_fpv::trace::fst_sibling(path);
+    cand.is_file().then_some(cand)
+}
+
+/// Read trace metadata without loading value changes (uses FST header/hierarchy
+/// when `.fst` is present, else scans the VCD header).
+pub fn read_meta(path: &Path) -> Result<TraceMeta, String> {
+    if let Some(fst) = fst_for(path) {
+        let reader =
+            informal_fpv::trace::fst_read::FstReader::open(&fst).map_err(|e| format!("{e:#}"))?;
+        let m = reader.meta();
+        let signals = m
+            .signals
+            .iter()
+            .map(|s| TraceSignalMeta {
+                name: s.name.rsplit('.').next().unwrap_or(&s.name).to_string(),
+                path: s.name.clone(),
+                width: s.width,
+                clock: s.clock,
+            })
+            .collect();
+        return Ok(TraceMeta {
+            frames: m.frames,
+            steps: m.steps,
+            format: "fst",
+            block_count: m.block_count,
+            signals,
+        });
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let t = parse(&text)?;
+    let signals = t
+        .signals
+        .iter()
+        .map(|s| TraceSignalMeta {
+            name: s.name.rsplit('.').next().unwrap_or(&s.name).to_string(),
+            path: s.name.clone(),
+            width: s.width,
+            clock: s.clock,
+        })
+        .collect();
+    Ok(TraceMeta {
+        frames: t.frames,
+        steps: t.steps,
+        format: "vcd",
+        block_count: 1,
+        signals,
+    })
+}
+
+/// Encode a full trace into binary `IFTR` v1, preferring the streamed `.fst`
+/// sibling when present so VCD text is never parsed for large traces.
+pub fn encode_iftr_from_path(path: &Path) -> Result<Vec<u8>, String> {
+    if let Some(fst) = fst_for(path) {
+        let mut reader =
+            informal_fpv::trace::fst_read::FstReader::open(&fst).map_err(|e| format!("{e:#}"))?;
+        let last = reader.meta().frames.saturating_sub(1);
+        return reader
+            .encode_window_iftr(0, last, None)
+            .map_err(|e| format!("{e:#}"));
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    encode_iftr(&text)
+}
+
+/// Stream ONLY `[first_frame..=last_frame]` (and optional signal subset) as
+/// binary `IFTR` v1 bytes. Uses O(window) random-access FST block reads when
+/// `.fst` is present, falling back to VCD slicing otherwise.
+pub fn encode_window_iftr_from_path(
+    path: &Path,
+    first_frame: usize,
+    last_frame: usize,
+    signals: Option<&[String]>,
+) -> Result<Vec<u8>, String> {
+    if let Some(fst) = fst_for(path) {
+        let mut reader =
+            informal_fpv::trace::fst_read::FstReader::open(&fst).map_err(|e| format!("{e:#}"))?;
+        let selected: Option<Vec<usize>> = signals.map(|wanted| {
+            reader
+                .meta()
+                .signals
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.clock || wanted.iter().any(|w| w == &s.name))
+                .map(|(idx, _)| idx)
+                .collect()
+        });
+        return reader
+            .encode_window_iftr(first_frame, last_frame, selected.as_deref())
+            .map_err(|e| format!("{e:#}"));
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    encode_window_iftr_from_vcd(&text, first_frame, last_frame, signals)
+}
+
+fn encode_window_iftr_from_vcd(
+    text: &str,
+    first_frame: usize,
+    last_frame: usize,
+    signals: Option<&[String]>,
+) -> Result<Vec<u8>, String> {
+    let full = decode_iftr(&encode_iftr(text)?, false)?;
+    let max_f = full.frames.saturating_sub(1);
+    let first = first_frame.min(max_f);
+    let last = last_frame.min(max_f).max(first);
+    let mut win_sigs = Vec::new();
+    for s in &full.signals {
+        if let Some(wanted) = signals {
+            if !s.clock && !wanted.iter().any(|w| w == &s.name) {
+                continue;
+            }
+        }
+        let mut runs = Vec::new();
+        let mut prev: Option<&str> = None;
+        for (f, val) in s.values.iter().enumerate().take(last + 1).skip(first) {
+            let v = val.as_str();
+            if prev != Some(v) {
+                runs.push((f, v.to_string()));
+                prev = Some(v);
+            }
+        }
+        win_sigs.push(informal_fpv::trace::fst_read::WindowSignal {
+            name: s.name.clone(),
+            width: s.width,
+            clock: s.clock,
+            runs,
+        });
+    }
+    let win = informal_fpv::trace::fst_read::TraceWindow {
+        total_frames: full.frames,
+        steps: full.steps,
+        first_frame: first,
+        last_frame: last,
+        signals: win_sigs,
+        notes: full.notes,
+        blocks_read: 1,
+    };
+    Ok(informal_fpv::trace::fst_read::encode_trace_window_iftr(
+        &win,
+    ))
+}
 
 /// One signal of a trace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,5 +590,71 @@ b1010 #
         assert_eq!(got.frames, expected.frames);
         assert_eq!(got.steps, expected.steps);
         assert_eq!(got.signals, expected.signals);
+    }
+
+    #[test]
+    fn fst_sibling_streams_meta_and_window_iftr() {
+        let dir = std::env::temp_dir().join(format!("informal-mcp-fst-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let vcd_path = dir.join("prop.vcd");
+        let fst_path = dir.join("prop.fst");
+        std::fs::write(&vcd_path, VCD).unwrap();
+        let data = informal_fpv::trace::TraceData {
+            prop: "a".into(),
+            frames: 3,
+            half_cycle: false,
+            vars: vec![
+                informal_fpv::trace::TraceVar {
+                    scope: vec!["top".into()],
+                    name: "clk".into(),
+                    bits: Vec::new(),
+                },
+                informal_fpv::trace::TraceVar {
+                    scope: vec!["top".into()],
+                    name: "en".into(),
+                    bits: vec![vec![Some(true)], vec![Some(true)], vec![Some(false)]],
+                },
+                informal_fpv::trace::TraceVar {
+                    scope: vec!["top".into()],
+                    name: "q".into(),
+                    bits: vec![
+                        vec![Some(true), Some(true), Some(true), Some(true)],
+                        vec![Some(false), Some(false), Some(false), Some(false)],
+                        vec![Some(false), Some(true), Some(false), Some(true)],
+                    ],
+                },
+                informal_fpv::trace::TraceVar {
+                    scope: vec!["informal".into()],
+                    name: "a".into(),
+                    bits: vec![vec![Some(false)], vec![Some(false)], vec![Some(true)]],
+                },
+            ],
+            notes: Vec::new(),
+        };
+        std::fs::write(&fst_path, data.to_fst()).unwrap();
+
+        let meta = read_meta(&vcd_path).unwrap();
+        assert_eq!(meta.format, "fst");
+        assert_eq!(meta.frames, 3);
+        assert_eq!(meta.signals.len(), 4);
+
+        let full_bin = encode_iftr_from_path(&vcd_path).unwrap();
+        let got = decode_iftr(&full_bin, true).unwrap();
+        assert_eq!(got.signals[0].name, "top.en");
+        assert_eq!(got.signals[0].values, ["1", "1", "0"]);
+        assert_eq!(got.signals[1].name, "top.q");
+        assert_eq!(got.signals[1].values, ["1111", "0000", "1010"]);
+        assert_eq!(got.signals[2].name, "informal.a");
+        assert_eq!(got.signals[2].values, ["0", "0", "1"]);
+
+        let win_bin =
+            encode_window_iftr_from_path(&vcd_path, 1, 2, Some(&["top.q".into()])).unwrap();
+        let win = decode_iftr(&win_bin, true).unwrap();
+        assert_eq!(win.signals.len(), 1);
+        assert_eq!(win.signals[0].name, "top.q");
+        assert_eq!(win.signals[0].values[1], "0000");
+        assert_eq!(win.signals[0].values[2], "1010");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

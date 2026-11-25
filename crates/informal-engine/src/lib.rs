@@ -280,6 +280,10 @@ impl CancelToken {
     pub fn new() -> Self {
         Self::default()
     }
+    /// Wrap an existing shared atomic stop flag (e.g. `Session::stop`).
+    pub fn from_shared(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
     pub fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst)
     }

@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 use svlang::netlist::{LowerConfig, LowerOutcome};
@@ -364,18 +364,41 @@ pub fn compile_cached(
     prev: Option<&Arc<CompiledDesign>>,
     req: &Request,
 ) -> Result<Arc<CompiledDesign>, String> {
+    compile_cached_cancel(prev, req, None)
+}
+
+/// [`compile_cached`] with cooperative cancellation polled between compile,
+/// elaboration, and digest stages. Returns `Err("cancelled")` when tripped.
+pub fn compile_cached_cancel(
+    prev: Option<&Arc<CompiledDesign>>,
+    req: &Request,
+    cancel: Option<&AtomicBool>,
+) -> Result<Arc<CompiledDesign>, String> {
+    let cancelled = || cancel.is_some_and(|c| c.load(Ordering::SeqCst));
+    if cancelled() {
+        return Err("cancelled".into());
+    }
     if let Some(cached) = prev {
         if cached.matches_request(req) && cached.is_fresh() {
             bump_tier1_hit();
             return Ok(Arc::clone(cached));
         }
     }
+    if cancelled() {
+        return Err("cancelled".into());
+    }
 
     let fingerprint = CompileFingerprint::from_request(req);
     let compilation = crate::driver(req)
         .compile()
         .map_err(|e| format!("svlang: {e}"))?;
+    if cancelled() {
+        return Err("cancelled".into());
+    }
     let (diags, elaborated) = compilation.check();
+    if cancelled() {
+        return Err("cancelled".into());
+    }
     let diagnostics: Vec<Diagnostic> = diags
         .iter()
         .map(|d| Diagnostic {
@@ -515,11 +538,25 @@ pub fn design_from_compiled(compiled: &CompiledDesign, req: &Request) -> Design 
 /// Lower a cached [`CompiledDesign`] into Btor2 (`Lowered`) without repeating
 /// parsing or elaboration. Fails closed when `compiled.check_ok` is `false`.
 pub fn lower_from_compiled(compiled: &CompiledDesign, req: &Request) -> Lowered {
+    lower_from_compiled_cancel(compiled, req, None)
+}
+
+/// [`lower_from_compiled`] with cooperative cancellation polled across netlist
+/// lowering, property compilation, and Btor2 emission.
+pub fn lower_from_compiled_cancel(
+    compiled: &CompiledDesign,
+    req: &Request,
+    cancel: Option<&AtomicBool>,
+) -> Lowered {
     let fail = |errors: Vec<String>| Lowered {
         ok: false,
         errors,
         ..Default::default()
     };
+    let cancelled = || cancel.is_some_and(|c| c.load(Ordering::SeqCst));
+    if cancelled() {
+        return fail(vec!["cancelled".into()]);
+    }
     if !compiled.check_ok {
         let errors: Vec<String> = compiled
             .diagnostics
@@ -554,6 +591,9 @@ pub fn lower_from_compiled(compiled: &CompiledDesign, req: &Request) -> Lowered 
         bbox_array_words: req.bbox_array_words,
     };
     let outcome = compiled.lower_netlist_cached(&key);
+    if cancelled() {
+        return fail(vec!["cancelled".into()]);
+    }
     let base = match outcome.as_ref() {
         LowerOutcome::Lowered(nl) => nl,
         LowerOutcome::Unsupported(ds) => {
@@ -573,7 +613,7 @@ pub fn lower_from_compiled(compiled: &CompiledDesign, req: &Request) -> Lowered 
     };
 
     let reset = u32::from(req.reset.is_some());
-    let mut built = crate::model(
+    let mut built = crate::model_cancel(
         req,
         &compiled.compilation,
         &compiled.elaborated.design,
@@ -581,9 +621,10 @@ pub fn lower_from_compiled(compiled: &CompiledDesign, req: &Request) -> Lowered 
         reset,
         reset,
         &[],
+        cancel,
     );
     if matches!(&built, Ok((m, _)) if m.steps_per_cycle > 1) && req.reset.is_some() {
-        built = crate::model(
+        built = crate::model_cancel(
             req,
             &compiled.compilation,
             &compiled.elaborated.design,
@@ -591,6 +632,7 @@ pub fn lower_from_compiled(compiled: &CompiledDesign, req: &Request) -> Lowered 
             req.tick.steps,
             req.tick.cycles,
             &req.tick.by_clock,
+            cancel,
         );
     }
     match built {
