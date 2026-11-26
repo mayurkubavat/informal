@@ -233,7 +233,7 @@ pub fn get(name: &str, args: &Value, ctx: &Value) -> Result<Value, String> {
                      Undetermined properties: {undet_list}\n\n\
                      Audit checklist (report findings with exact evidence, no hand-waving):\n\
                      {spec_step}\n\
-                     2. **Lint & Anti-Cheat**: Call `formal_lint` (`SV-FPV-001..005`) — flag any output/state-constraining assumptions or missing `disable iff` reset guards.\n\
+                     2. **Lint & Anti-Cheat**: Call `formal_lint` (`SVA-FPV-001..005`) — flag any output/state-constraining assumptions or missing `disable iff` reset guards.\n\
                      3. **Vacuity & AI Provenance**: Inspect every `proven` assertion via `property_get` for `vacuity` (`non-vacuous` vs `vacuous` / `not checked`) and `under_ai` dependencies.\n\
                      4. **Assumption Sanity & Covers**: Verify environment assumptions are conflict-free and dead-end-free, and no witness `cover` is unexpectedly `unreachable`.\n\
                      5. **Formal Coverage**: Check COI/UNR coverage via `check_cov` if initialized, and summarize concrete signoff blockers."

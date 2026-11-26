@@ -1479,7 +1479,7 @@
   },
   {
     "changes": false,
-    "description": "Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SV-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.",
+    "description": "Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SVA-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.",
     "input": {
       "properties": {
         "check_covers": {
@@ -1580,7 +1580,7 @@
           "type": "string"
         },
         "overconstraint_warnings": {
-          "description": "Static SV-FPV-001 / internal-signal warnings",
+          "description": "Static SVA-FPV-001 / internal-signal warnings",
           "items": {
             "type": "string"
           },
@@ -4007,7 +4007,7 @@
   },
   {
     "changes": false,
-    "description": "Run svlang lint with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.",
+    "description": "Run svlang lint with the `formal-ready` rule pack (`SVA-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.",
     "input": {
       "properties": {
         "file": {

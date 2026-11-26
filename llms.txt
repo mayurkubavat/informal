@@ -12,7 +12,7 @@
 
 - [Getting Started](docs/guide/getting-started.md): Installation, optional solvers (CaDiCaL, Bitwuzla, rIC3, ABC), and first proof
 - [FPV Methodology](docs/guide/fpv-methodology.md): Clocks, reset, SVA properties, tasks, vacuity, dead-end checks, and helper assertions
-- [Debugging Counterexamples](docs/guide/debugging-cex.md): `why_cex`, waveforms, schematics, source overlays, and `SV-FPV` formal lint
+- [Debugging Counterexamples](docs/guide/debugging-cex.md): `why_cex`, waveforms, schematics, source overlays, and `SVA-FPV` formal lint
 - [Convergence & Engines](docs/guide/convergence-and-engines.md): Portfolio engines, `get_fv_complexity`, `blackbox_assistant`, `stopat`, `abstract -counter`, and proof cache
 - [Formal Apps](docs/guide/formal-apps.md): Coverage/UNR, Connectivity, X-Prop, Security Path (SPV), SEC/LEC, CSR/RAL, and Bus Protocol VIP
 - [Certificates & Signoff](docs/guide/certificates-and-signoff.md): Independent AIGER/Certifaiger proof checking and `fvp.spec.json` signoff gates

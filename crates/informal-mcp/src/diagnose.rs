@@ -1,6 +1,6 @@
 //! Deterministic ACI diagnostic helpers: fuzzy candidate matching for
 //! Poka-Yoke error recovery, signal role classification, static assumption
-//! hygiene checks (`SV-FPV-001`), RTL source snippet extraction, and
+//! hygiene checks (`SVA-FPV-001`), RTL source snippet extraction, and
 //! deterministic CEX triage & proof-convergence recommendations.
 
 use informal_fpv::{Property, Status};
@@ -227,7 +227,7 @@ pub fn expr_identifiers(expr: &str) -> Vec<String> {
     out
 }
 
-/// Static anti-cheat check for `assume` expressions (`SV-FPV-001` equivalent):
+/// Static anti-cheat check for `assume` expressions (`SVA-FPV-001` equivalent):
 /// returns warnings if the assumption references DUT outputs or internal state
 /// rather than only primary inputs.
 pub fn assume_overconstraint_warnings(expr: &str, scopes: &[Scope]) -> Vec<String> {
@@ -246,7 +246,7 @@ pub fn assume_overconstraint_warnings(expr: &str, scopes: &[Scope]) -> Vec<Strin
     let mut warnings = Vec::new();
     if !outputs.is_empty() {
         warnings.push(format!(
-            "SV-FPV-001 risk: assumption references DUT output port(s) [{}]. Environment assumptions should constrain primary inputs only; if this is an internal invariant, prove it as an `assert` first and promote via `assume -from_assert`.",
+            "SVA-FPV-001 risk: assumption references DUT output port(s) [{}]. Environment assumptions should constrain primary inputs only; if this is an internal invariant, prove it as an `assert` first and promote via `assume -from_assert`.",
             outputs.join(", ")
         ));
     }
@@ -292,8 +292,8 @@ pub fn cex_triage_hint(
     lint_rules: &[String],
 ) -> String {
     let mut hints = Vec::new();
-    if lint_rules.iter().any(|r| r == "SV-FPV-003") {
-        hints.push("SV-FPV-003 (missing `disable iff` reset guard) detected in RTL; check whether the failure fires during or immediately after reset.".to_string());
+    if lint_rules.iter().any(|r| r == "SVA-FPV-003") {
+        hints.push("SVA-FPV-003 (missing `disable iff` reset guard) detected in RTL; check whether the failure fires during or immediately after reset.".to_string());
     }
     let primary_inputs: Vec<&str> = active_signals
         .iter()
@@ -473,7 +473,7 @@ mod tests {
         let out_warn = assume_overconstraint_warnings("q <= 4'd8", &scopes);
         assert!(out_warn
             .iter()
-            .any(|w| w.contains("SV-FPV-001") && w.contains("q")));
+            .any(|w| w.contains("SVA-FPV-001") && w.contains("q")));
         let int_warn = assume_overconstraint_warnings("cnt_int != 4'd9", &scopes);
         assert!(int_warn.iter().any(|w| w.contains("cnt_int")));
     }

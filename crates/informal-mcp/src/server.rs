@@ -24,7 +24,7 @@ fn read_workbench_html() -> String {
 }
 
 const INSTRUCTIONS: &str = "InFormal is an IEEE 1800 SystemVerilog formal property verification tool. \
-Workflow: open a design with `session_open` (run `formal_lint` early for SV-FPV-001..005 hygiene), \
+Workflow: open a design with `session_open` (run `formal_lint` early for SVA-FPV-001..005 hygiene), \
 run `prove` to settle properties, call `cex_diagnose` first on any `cex` (single-call causal slice + \
 active trace + signal roles + RTL drivers), and call `convergence_diagnose` first on any `undetermined` \
 property. Decision D17: only a `prove` verdict establishes truth; NEVER mask an RTL bug or constrain \

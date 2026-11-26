@@ -67,7 +67,7 @@ InFormal exposes high-level composite workflow tools and server-hosted **MCP Pro
    - Failing assertion (`cex`) → call **`cex_diagnose`** (fuses `property_get`, `why_cex`, trimmed trace, primary-input vs. DUT-state roles, driver source snippets, and `formal_lint`).
    - Timed-out property (`undetermined`) → call **`convergence_diagnose`** (fuses engine telemetry, COI counts, `fv_complexity` hotspots, active constraints, and ranked tactics).
 2. **Validate before proposing (zero side effects):**
-   - Call **`proposal_validate`** on any candidate assumption, helper assertion, cover, or cut point. It clones the active task into a scratch task and verifies syntax, `SV-FPV-001` primary-input hygiene, assumption consistency + conflict core, 2QBF dead-end freedom, cover non-regression, vacuity, and target impact — then deletes the scratch task cleanly.
+   - Call **`proposal_validate`** on any candidate assumption, helper assertion, cover, or cut point. It clones the active task into a scratch task and verifies syntax, `SVA-FPV-001` primary-input hygiene, assumption consistency + conflict core, 2QBF dead-end freedom, cover non-regression, vacuity, and target impact — then deletes the scratch task cleanly.
 3. **Propose & present visually:**
    - Only after `proposal_validate` reports sound, call **`proposal_add`** (or **`formal_fix_apply`** for RTL quick-fixes).
    - When attached to `InFormal.app`, call **`gui_present_cex`** to switch the user's window to `CEX Debug`, pin causal waveform callouts, and launch an interactive walkthrough.

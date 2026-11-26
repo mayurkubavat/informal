@@ -227,7 +227,7 @@ pub(super) fn session_and_proposals() -> Vec<Tool> {
         Tool {
             name: "proposal_validate",
             title: "Validate a candidate assumption, helper assertion, cover, or cut point",
-            description: "Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SV-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.",
+            description: "Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SVA-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.",
             input: obj(
                 &[
                     ("kind", one_of(&["assume", "assert", "cover", "cut_point"], "")),
@@ -251,7 +251,7 @@ pub(super) fn session_and_proposals() -> Vec<Tool> {
                     ("text", s("")),
                     ("environment", json!({"type": "object"})),
                     ("dead_end", json!({"type": "object"})),
-                    ("overconstraint_warnings", list(s(""), "Static SV-FPV-001 / internal-signal warnings")),
+                    ("overconstraint_warnings", list(s(""), "Static SVA-FPV-001 / internal-signal warnings")),
                     ("candidate_result", json!({"type": ["object", "null"], "description": "Prove result of candidate assert/cover itself"})),
                     ("newly_proven", list(s(""), "Target assertions that became proven and non-vacuous")),
                     ("vacuous_assertions", list(s(""), "Target assertions whose proof became vacuous")),

@@ -802,7 +802,7 @@ export function mockFormalLint(file?: string): FormalLintFindingView[] {
   const insertAt = idx >= 0 ? idx + "@(posedge clk)".length : 0;
   return [
     {
-      rule: "SV-FPV-003",
+      rule: "SVA-FPV-003",
       name: "FormalAssertMissingDisableIff",
       severity: "info",
       message: "Concurrent property 'm_en' has no 'disable iff' in module 'counter' with reset 'rst_n'",

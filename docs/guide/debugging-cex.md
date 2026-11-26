@@ -71,12 +71,12 @@ In the **`CEX Debug`** workspace preset:
 
 ---
 
-## 4. Formal Lint (`SV-FPV`) & Quick-Fixes
+## 4. Formal Lint (`SVA-FPV`) & Quick-Fixes
 
 Before chasing an elusive CEX, run `svlang`'s formal-readiness lint pack (`formal_lint` via MCP or the desktop workbench's Lint diagnostics) to catch common formal setup bugs automatically:
 
-- **`SV-FPV-001`**: Assumption constraining a DUT output or internal signal instead of primary inputs.
-- **`SV-FPV-002`–`005`**: Missing reset guards, uninitialized flops, latch inference, and SVA/CDC/FSM traps.
+- **`SVA-FPV-001`**: Assumption constraining a DUT output or internal signal instead of primary inputs.
+- **`SVA-FPV-002`–`005`**: Missing reset guards, uninitialized flops, latch inference, and SVA/CDC/FSM traps.
 
 Many findings include 1-click byte-range quick-fixes (`Quick-Fix` in `SourceView`, or `formal_fix_apply` via MCP).
 
@@ -86,7 +86,7 @@ Many findings include 1-click byte-range quick-fixes (`Quick-Fix` in `SourceView
 
 When working with an AI agent connected to `informal mcp`:
 - **`cex_diagnose`** fuses `property_get`, `why_cex`, a trimmed causal trace, primary-input vs. DUT-state roles, RTL driver source snippets, and `formal_lint` into one JSON dossier.
-- **`proposal_validate`** tests any proposed assumption or assertion fix in a zero-side-effect scratch task (checking syntax, `SV-FPV-001`, conflicts, 2QBF dead-ends, and cover non-regression) *before* proposing it.
+- **`proposal_validate`** tests any proposed assumption or assertion fix in a zero-side-effect scratch task (checking syntax, `SVA-FPV-001`, conflicts, 2QBF dead-ends, and cover non-regression) *before* proposing it.
 - **`gui_present_cex`** switches a live `InFormal.app` window to `CEX Debug`, pins causal callouts, and launches a step-by-step walkthrough bar.
 
 ---

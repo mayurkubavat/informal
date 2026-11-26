@@ -38,7 +38,7 @@ The workbench uses a dockable graphite/teal multi-pane layout with presets optim
 
 - **Property → Source / Trace / Schematic:** Selecting any property updates the Details inspector, jumps SourceView to the RTL or Tcl definition (with a `.sv` / `.tcl` switcher pill when a property is Tcl-defined), and enables waveform + schematic inspection for `cex`/`covered` properties.
 - **Inline Signal Values (`@C<k>`):** Moving the waveform cursor updates inline signal value annotations in SourceView and node labels in SchematicView.
-- **Formal Lint & Quick-Fix:** `SV-FPV` lint diagnostics appear inline in SourceView with 1-click `Quick-Fix` buttons.
+- **Formal Lint & Quick-Fix:** `SVA-FPV` lint diagnostics appear inline in SourceView with 1-click `Quick-Fix` buttons.
 
 ---
 

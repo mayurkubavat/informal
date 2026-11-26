@@ -119,7 +119,7 @@ reply (`tools/list`).
 | Design | `design_hierarchy` | Instance tree with ports and signals | no |
 | | `design_info` | Counts of the design (inputs, flops, latches, memories, clocks and resets found) and the size of the current task's model (Btor2 nodes, states, AIG ands) | no |
 | | `design_source` | Source text by file and line range | no |
-| | `formal_lint` | Run `svlang lint` (`formal-ready` pack: `SV-FPV-001..005`, SVA, CDC, FSM) on the design's RTL files with structured 1-click quick-fix byte edits | no |
+| | `formal_lint` | Run `svlang lint` (`formal-ready` pack: `SVA-FPV-001..005`, SVA, CDC, FSM) on the design's RTL files with structured 1-click quick-fix byte edits | no |
 | | `formal_fix_apply` | Apply a byte-range quick-fix from `formal_lint` to a design file under the workspace root (or propose it in `propose` mode) | yes, by mode |
 | | `signal_nav` | Resolve declarations, sequential/combinational drivers, and SVA/expression loads of an RTL signal across files | no |
 | | `fv_complexity` | COI state bits, wide arithmetic hotspots, memories, and blackbox candidates (`get_fv_complexity`) | no |
@@ -144,7 +144,7 @@ reply (`tools/list`).
 | Low Power | `load_upf` | Load and resolve IEEE 1801 UPF (1.0–4.0) or CPF (1.1–2.0) power intent (and optional Liberty `.lib` files) | yes |
 | | `check_lp` | Run static UPF/RTL/gate/PG low-power checks, formal LPV AAG/2-copy corruption proofs, certified auto-waivers, and power-aware SEC/LEC | yes |
 | | `lp_diagnose` | Read-only low-power violation dossier: PST witness, UPF snippet, RTL crossing path & driver snippets, `why_cex` slice, and remediation hint | no |
-| Proposals | `proposal_validate` | Zero-side-effect scratch-task soundness oracle: checks syntax, `SV-FPV-001` DUT-output assumption hygiene, environment consistency + UNSAT conflict core, 2QBF dead-end freedom, cover non-regression, vacuity, and target impact before `proposal_add` | no |
+| Proposals | `proposal_validate` | Zero-side-effect scratch-task soundness oracle: checks syntax, `SVA-FPV-001` DUT-output assumption hygiene, environment consistency + UNSAT conflict core, 2QBF dead-end freedom, cover non-regression, vacuity, and target impact before `proposal_add` | no |
 | | `proposal_add` | Propose an assumption, helper assertion, cover or cut point | yes, by mode |
 | | `proposal_list` | Every proposal and its state | no |
 | | `proposal_undo` | Withdraw or remove proposals, one or all; results that stood on them are reset | yes |

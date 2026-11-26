@@ -21,7 +21,7 @@ Methodology, workflows, and debugging for learners through expert formal verific
 | --- | --- |
 | [Getting Started](guide/getting-started.md) | Prerequisites, building InFormal & optional solvers (CaDiCaL, Bitwuzla, rIC3, ABC), first proof, launching `InFormal.app` |
 | [FPV Methodology](guide/fpv-methodology.md) | Clocks, reset modeling, RTL vs. Tcl SVA properties, tasks, witness covers, vacuity, `check_assumptions`, 2QBF dead-end checks, `assume -from_assert` |
-| [Debugging Counterexamples](guide/debugging-cex.md) | `why_cex` causal slicing, waveforms (`visualize` & VCD), RTL cone schematics, source overlays, `SV-FPV` lint & quick-fixes |
+| [Debugging Counterexamples](guide/debugging-cex.md) | `why_cex` causal slicing, waveforms (`visualize` & VCD), RTL cone schematics, source overlays, `SVA-FPV` lint & quick-fixes |
 | [Convergence & Engines](guide/convergence-and-engines.md) | In-house & external portfolio (`bmc`, `kind`, `ic3`, `klive`, `wbmc`, `wkind`), `get_fv_complexity`, `blackbox_assistant`, `stopat`, `abstract -counter`, `informal split`, proof cache |
 | [Formal Apps](guide/formal-apps.md) | `check_cov` (COI/UNR), `check_conn`, `check_xprop`, `check_spv`, `check_sec` (SEC/LEC), `check_csr` (HJSON/CSV/RAL), `check_protocol` (APB/AXI4-Lite/TL-UL) |
 | [Certificates & Signoff](guide/certificates-and-signoff.md) | Independent proof/CEX checking (Certifaiger, `aigsim`, `btorsim`) and machine-verifiable verification plans (`fvp.spec.json` + `spec_audit`) |

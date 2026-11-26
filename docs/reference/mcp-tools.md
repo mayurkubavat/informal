@@ -213,7 +213,7 @@ Server-hosted playbooks dynamically hydrated with the active session's top modul
 
 ### `proposal_validate`
 
-**Validate a candidate assumption, helper assertion, cover, or cut point** — Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SV-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.
+**Validate a candidate assumption, helper assertion, cover, or cut point** — Zero-side-effect scratch-task soundness oracle: tests a candidate `assume`, helper `assert` (lemma), `cover`, or `cut_point` BEFORE calling `proposal_add`. Checks syntax, SVA-FPV-001 DUT-output over-constraint hygiene, bounded environment consistency + UNSAT conflict core, 2QBF dead-end trap states, vacuity, cover non-regression (`lost_covers`), and whether target assertions become `proven`. Leaves the live session completely untouched.
 
 - **Availability:** All modes (`read-only`, `propose`, `auto`)
 - **Mutates session:** no
@@ -519,7 +519,7 @@ Server-hosted playbooks dynamically hydrated with the active session's top modul
 
 ### `formal_lint`
 
-**Formal-readiness lint & quick-fixes** — Run svlang lint with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.
+**Formal-readiness lint & quick-fixes** — Run svlang lint with the `formal-ready` rule pack (`SVA-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.
 
 - **Availability:** All modes (`read-only`, `propose`, `auto`)
 - **Mutates session:** no

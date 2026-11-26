@@ -232,7 +232,7 @@ pub(super) fn audit_assumption_boundary(
                     bad_sigs.push(id.clone());
                     bad_roles.push(role.to_string());
                     reasons.push(format!(
-                        "`{id}` is a DUT output port (SV-FPV-001 over-constraint)"
+                        "`{id}` is a DUT output port (SVA-FPV-001 over-constraint)"
                     ));
                 }
                 "internal_state"

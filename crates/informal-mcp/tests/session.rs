@@ -967,7 +967,7 @@ fn slice1_aci_diagnose_proposal_validate_poka_yoke_and_prompts() {
     assert_eq!(conflict["verdict"], "reject");
     assert_eq!(conflict["environment"]["conflict"], true);
 
-    // 4c. DUT-output constraint in `assume` -> SV-FPV-001 static overconstraint warning.
+    // 4c. DUT-output constraint in `assume` -> SVA-FPV-001 static overconstraint warning.
     let out_warn = call(
         &api,
         "proposal_validate",
@@ -977,7 +977,7 @@ fn slice1_aci_diagnose_proposal_validate_poka_yoke_and_prompts() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|w| w.as_str().unwrap().contains("SV-FPV-001")));
+        .any(|w| w.as_str().unwrap().contains("SVA-FPV-001")));
 
     // 4d. Sound helper assertion (`q <= 4'd9`) -> PASS.
     let good_lemma = call(

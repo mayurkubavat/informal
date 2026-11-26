@@ -157,7 +157,7 @@ pub(super) fn rtl_and_spec() -> Vec<Tool> {
         Tool {
             name: "formal_lint",
             title: "Formal-readiness lint & quick-fixes",
-            description: "Run svlang lint with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.",
+            description: "Run svlang lint with the `formal-ready` rule pack (`SVA-FPV-001..005`, SVA, CDC, FSM) on the elaborated design's RTL files and return findings with structured 1-click quick-fix byte edits.",
             input: obj(
                 &[("file", s("Optional design file filter"))],
                 &[],

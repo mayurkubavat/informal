@@ -1,7 +1,7 @@
 // CodeMirror 6 RTL & Tcl Source Viewer with:
 // - SystemVerilog / SVA syntax highlighting
 // - Live Active Trace Value inline annotations (`// q = 4'h9 @ C11`) synced to TraceView cursor
-// - Live `svlang lint` (`formal-ready` `SV-FPV-001..005`) diagnostic squiggles & 1-click Quick-Fixes
+// - Live `svlang lint` (`formal-ready` `SVA-FPV-001..005`) diagnostic squiggles & 1-click Quick-Fixes
 // - Go-to-Driver / Go-to-Load (`signal_nav`) cross-hierarchy navigation popover
 // - `why_cex` active causal line tint and `check_cov` UNR/covered gutter markers
 

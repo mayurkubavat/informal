@@ -586,7 +586,7 @@ export default function App() {
   // The source view follows the selected property's own file (its script
   // line, or RTL for SVA in the design); the top file otherwise.
   // In CEX Debug, Tcl-defined properties auto-pivot to the primary RTL `.sv`
-  // file so live `@C<k>` values and `SV-FPV` lint appear immediately, with
+  // file so live `@C<k>` values and `SVA-FPV` lint appear immediately, with
   // file-switcher pills (`top.sv` · `script.tcl`) to flip back anytime.
   // Unless an agent pointed at other lines (gui_highlight_source): those
   // stay until the person selects a property.
@@ -805,7 +805,7 @@ export default function App() {
   }, [tracePath, traceName, trace?.text, traceProp?.name]);
   const showTrace = center === "trace" && !!traceProp;
 
-  // Live formal-ready lint (`svlang lint` SV-FPV-001..005) when source view opens on an RTL file
+  // Live formal-ready lint (`svlang lint` SVA-FPV-001..005) when source view opens on an RTL file
   const refreshLint = useCallback(
     (targetFile?: string) => {
       if (!session?.elaborated) {

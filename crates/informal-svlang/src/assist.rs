@@ -1,4 +1,4 @@
-//! Live Formal-Ready linting (`svlang-lint` `SV-FPV-001..005` + SVA/CDC/FSM checks)
+//! Live Formal-Ready linting (`svlang-lint` `SVA-FPV-001..005` + SVA/CDC/FSM checks)
 //! with 1-click quick-fixes and RTL Go-to-Driver / Go-to-Load navigation.
 
 use crate::types::Request;
@@ -87,8 +87,8 @@ fn line_byte_span(src: &str, line_1based: u32) -> Option<(usize, usize)> {
     }
 }
 
-/// Synthesize a 1-click quick-fix for `SV-FPV-001` (`assume` -> `assert`) or
-/// `SV-FPV-003` (insert `disable iff (...)`) when the underlying syntax rule
+/// Synthesize a 1-click quick-fix for `SVA-FPV-001` (`assume` -> `assert`) or
+/// `SVA-FPV-003` (insert `disable iff (...)`) when the underlying syntax rule
 /// emitted a diagnostic without a byte-level rewrite.
 fn synthesize_fpv_fix(
     rule: &str,
@@ -100,7 +100,7 @@ fn synthesize_fpv_fix(
     let (lstart, lend) = line_byte_span(src, line)?;
     let line_str = &src[lstart..lend];
     match rule {
-        "SV-FPV-001" => {
+        "SVA-FPV-001" => {
             // Find standalone keyword `assume` on the diagnostic line.
             let bytes = line_str.as_bytes();
             let kw = b"assume";
@@ -126,7 +126,7 @@ fn synthesize_fpv_fix(
             }
             None
         }
-        "SV-FPV-003" => {
+        "SVA-FPV-003" => {
             let rst_expr = reset_hint
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -183,7 +183,7 @@ fn synthesize_fpv_fix(
     }
 }
 
-/// Run `svlang-lint` with the `formal-ready` rule pack (`SV-FPV-001..005`, SVA, CDC, FSM)
+/// Run `svlang-lint` with the `formal-ready` rule pack (`SVA-FPV-001..005`, SVA, CDC, FSM)
 /// in-process on `req`'s SystemVerilog files and return structured findings + quick-fixes.
 pub fn lint_formal_ready(
     req: &Request,
@@ -612,25 +612,25 @@ endmodule
         let diags = lint_formal_ready(&req, Some("!rst_n")).unwrap();
         let rules: Vec<&str> = diags.iter().map(|d| d.rule.as_str()).collect();
         assert!(
-            rules.contains(&"SV-FPV-001"),
-            "expected SV-FPV-001 in {diags:?}"
+            rules.contains(&"SVA-FPV-001"),
+            "expected SVA-FPV-001 in {diags:?}"
         );
         assert!(
-            rules.contains(&"SV-FPV-003"),
-            "expected SV-FPV-003 in {diags:?}"
+            rules.contains(&"SVA-FPV-003"),
+            "expected SVA-FPV-003 in {diags:?}"
         );
 
-        let fpv1 = diags.iter().find(|d| d.rule == "SV-FPV-001").unwrap();
+        let fpv1 = diags.iter().find(|d| d.rule == "SVA-FPV-001").unwrap();
         assert!(
             !fpv1.fixes.is_empty(),
-            "SV-FPV-001 should carry a quick-fix"
+            "SVA-FPV-001 should carry a quick-fix"
         );
         assert!(fpv1.fixes[0].replacement.contains("assert"));
 
-        let fpv3 = diags.iter().find(|d| d.rule == "SV-FPV-003").unwrap();
+        let fpv3 = diags.iter().find(|d| d.rule == "SVA-FPV-003").unwrap();
         assert!(
             !fpv3.fixes.is_empty(),
-            "SV-FPV-003 should carry a quick-fix"
+            "SVA-FPV-003 should carry a quick-fix"
         );
         assert!(fpv3.fixes[0].replacement.contains("disable iff (!rst_n)"));
 

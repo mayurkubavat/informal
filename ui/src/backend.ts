@@ -908,7 +908,7 @@ export const backend = {
     }
     return mockSchematic(name, maxDepth);
   },
-  // Live `svlang lint` (`formal-ready` `SV-FPV-001..005` + quick-fixes).
+  // Live `svlang lint` (`formal-ready` `SVA-FPV-001..005` + quick-fixes).
   formalLint: async (file?: string): Promise<FormalLintFindingView[]> => {
     if (isMcpAppSurface) {
       try {
