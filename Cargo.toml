@@ -34,9 +34,9 @@ informal-car = { path = "crates/informal-car" }
 informal-ic3 = { path = "crates/informal-ic3" }
 informal-swarm = { path = "crates/informal-swarm" }
 informal-svlang = { path = "crates/informal-svlang" }
-svlang = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }
-svlang-lint = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }
-svlang-model = { git = "https://github.com/mayurkubavat/svlang.git", rev = "a7501b4301a3c3a89b4b6d6ae3c6f0dce6cf7bc2" }
+svlang = { git = "https://github.com/mayurkubavat/svlang.git", rev = "1a07460682a44c7fc3c998fe26ae282d69dd4800" }
+svlang-lint = { git = "https://github.com/mayurkubavat/svlang.git", rev = "1a07460682a44c7fc3c998fe26ae282d69dd4800" }
+svlang-model = { git = "https://github.com/mayurkubavat/svlang.git", rev = "1a07460682a44c7fc3c998fe26ae282d69dd4800" }
 informal-bitwuzla = { path = "crates/informal-bitwuzla" }
 informal-llm = { path = "crates/informal-llm" }
 informal-mcp = { path = "crates/informal-mcp" }
