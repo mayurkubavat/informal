@@ -226,6 +226,17 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
+/// Stop an engine's scope by name, whether or not anything is still in it. Does not wait;
+/// an error (the scope already ended and was collected) is ignored.
+fn stop_scope(unit: &str) {
+    let _ = Command::new("systemctl")
+        .args(["--user", "--no-block", "stop", unit])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// True when `systemd-run --user --scope` works here (checked once).
 fn scopes_available() -> bool {
     static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -414,14 +425,30 @@ impl Engine for ExternalEngine {
                 .ok()
                 .and_then(|v| v.parse().ok())
         });
+        // A scope gets a name of its own, so it can be stopped by name once the engine is done:
+        // an engine killed between `systemd-run` registering the scope and starting in it
+        // leaves the scope empty but active, and a job queue that counts units at their
+        // MemoryMax then sees memory taken that nothing uses.
+        let mut scope_unit: Option<String> = None;
         let mut cmd = match limit.filter(|_| scopes_available()) {
             Some(mb) => {
+                static SCOPES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let unit = format!(
+                    "informal-{}-{}-{}.scope",
+                    std::process::id(),
+                    self.spec
+                        .name
+                        .replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_"),
+                    SCOPES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                );
                 let mut c = Command::new("systemd-run");
                 c.args(["--user", "--scope", "--quiet", "--collect"])
+                    .arg(format!("--unit={unit}"))
                     .args(rdev_slice())
                     .arg(format!("-pMemoryMax={mb}M"))
                     .arg("-pMemorySwapMax=0")
                     .arg(&self.spec.program);
+                scope_unit = Some(unit);
                 c
             }
             None => Command::new(&self.spec.program),
@@ -498,6 +525,9 @@ impl Engine for ExternalEngine {
         #[cfg(unix)]
         unsafe {
             libc::killpg(child.id() as i32, libc::SIGKILL);
+        }
+        if let Some(unit) = &scope_unit {
+            stop_scope(unit);
         }
         let stdout = out_t.join().unwrap_or_default();
         let stderr = err_t.join().unwrap_or_default();
