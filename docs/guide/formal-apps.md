@@ -1,6 +1,6 @@
 # Formal Apps Guide
 
-InFormal ships **seven built-in Formal Apps** accessible in both JasperGold (`jg`) and VC Formal (`vcf`) Tcl flavors, through the MCP server (`check_*` tools), and in the Desktop Workbench's **`Formal Apps`** panel. Each app synthesizes formal properties automatically from a high-level specification or structural analysis so you do not have to hand-write boilerplate SVA.
+InFormal ships **eight built-in Formal Apps** accessible in both JasperGold (`jg`) and VC Formal (`vcf`) Tcl flavors, through the MCP server (`check_*` / `load_upf` tools), and in the Desktop Workbench's **`Formal Apps`** panel. Each app synthesizes formal properties or structural checks automatically from a high-level specification so you do not have to hand-write boilerplate SVA.
 
 | App | Tcl / MCP Command | Purpose | Runnable Lab |
 | --- | --- | --- | --- |
@@ -11,6 +11,7 @@ InFormal ships **seven built-in Formal Apps** accessible in both JasperGold (`jg
 | **Equivalence (SEC / LEC)** | `check_sec` | Sequential, pipelined (`-latency N`), and combinational (`-lec`) checks | `examples/04-formal-apps/sec/` |
 | **CSR / RAL** | `check_csr` | Auto-generated register checks from OpenTitan HJSON, CSV, or UVM RAL `.sv` | `examples/04-formal-apps/csr/` |
 | **Bus Protocol VIP** | `check_protocol` | 1-command formal assertions & assumptions for APB, AXI4-Lite, and TL-UL | `examples/04-formal-apps/protocol/` |
+| **Low-Power (UPF)** | `load_upf`, `check_lp` | IEEE 1801 UPF + Liberty static PG audit, formal 2-copy corruption, and LP-SEC | `docs/reference/tcl-commands.md` |
 
 ---
 
@@ -131,6 +132,22 @@ check_protocol -report
 ```
 
 Use `-prefix <P>` or `-map {proto_sig dut_sig ...}` when port names differ from standard bus conventions.
+
+---
+
+## 8. Low-Power UPF Verification (`load_upf` & `check_lp`)
+
+Parses IEEE 1801 UPF power intent (and optional Liberty `.lib` power-pin models) alongside RTL or gate-level netlists to verify multi-domain low-power correctness:
+- **Structural & PG audit (`check_lp`):** missing or misplaced isolation cells, level shifters, retention cells, power switches, and always-on supply crossings across power domains.
+- **Formal corruption & LP-SEC:** exact 2-copy power-off corruption reachability and UPF-overlaid sequential equivalence checking.
+- **Waivers, UPF diff, and AI diagnosis:** `set_lp_waiver`, `compare_upf`, `report_lp`, and single-call MCP triage via `lp_diagnose` and the `audit_low_power` prompt.
+
+```tcl
+load_upf subsys.upf
+check_lp
+report_lp
+set_lp_waiver -rule LP_ISO_MISSING -instance u_debug_tap -comment {tie-off in top wrapper}
+```
 
 ---
 

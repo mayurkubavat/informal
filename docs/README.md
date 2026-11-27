@@ -21,11 +21,11 @@ Methodology, workflows, and debugging for learners through expert formal verific
 | --- | --- |
 | [Getting Started](guide/getting-started.md) | Prerequisites, building InFormal & optional solvers (CaDiCaL, Bitwuzla, rIC3, ABC), first proof, launching `InFormal.app` |
 | [FPV Methodology](guide/fpv-methodology.md) | Clocks, reset modeling, RTL vs. Tcl SVA properties, tasks, witness covers, vacuity, `check_assumptions`, 2QBF dead-end checks, `assume -from_assert` |
-| [Debugging Counterexamples](guide/debugging-cex.md) | `why_cex` causal slicing, waveforms (`visualize` & VCD), RTL cone schematics, source overlays, `SVA-FPV` lint & quick-fixes |
-| [Convergence & Engines](guide/convergence-and-engines.md) | In-house & external portfolio (`bmc`, `kind`, `ic3`, `klive`, `wbmc`, `wkind`), `get_fv_complexity`, `blackbox_assistant`, `stopat`, `abstract -counter`, `informal split`, proof cache |
-| [Formal Apps](guide/formal-apps.md) | `check_cov` (COI/UNR), `check_conn`, `check_xprop`, `check_spv`, `check_sec` (SEC/LEC), `check_csr` (HJSON/CSV/RAL), `check_protocol` (APB/AXI4-Lite/TL-UL) |
+| [Debugging Counterexamples](guide/debugging-cex.md) | `why_cex` causal slicing, streamed FST/VCD waveforms (`visualize`), RTL cone schematics, source overlays, `SVA-FPV` lint & quick-fixes |
+| [Convergence & Engines](guide/convergence-and-engines.md) | Multi-paradigm portfolio (`bmc`, `kind`, `ic3`/`ic3-inn`/`gla`, `imc`, `car`, `bdd`, `klive`/`rlive`, `swarm`, `wbmc`/`wkind`/`ic3sa`), `LemmaHub`, staged-wave selector, `get_fv_complexity`, `blackbox_assistant`, `stopat`, `abstract -counter`, proof cache |
+| [Formal Apps](guide/formal-apps.md) | `check_cov` (COI/UNR), `check_conn`, `check_xprop`, `check_spv`, `check_sec` (SEC/LEC), `check_csr` (HJSON/CSV/RAL), `check_protocol` (APB/AXI4-Lite/TL-UL), `check_lp` (IEEE 1801 UPF + Liberty low power) |
 | [Certificates & Signoff](guide/certificates-and-signoff.md) | Independent proof/CEX checking (Certifaiger, `aigsim`, `btorsim`) and machine-verifiable verification plans (`fvp.spec.json` + `spec_audit`) |
-| [Desktop Workbench UI](guide/workbench-ui.md) | Tauri 2 + React workbench layouts (`Setup`, `Prove`, `CEX Debug`, `Formal Apps`), cross-probing, Proposals tab, Ask mode |
+| [Desktop Workbench UI](guide/workbench-ui.md) | Tauri 2 + React workbench layouts (`Triage`, `CEX Debug`, `Split`, `Signoff`), cross-probing, Command Palette, Proposals tab, Ask mode |
 
 ---
 
@@ -49,10 +49,10 @@ Auto-generated directly from `informal-cli`, `informal-fpv`, and `informal-mcp` 
 | Reference | Scope |
 | --- | --- |
 | [CLI Reference Manual](reference/cli.md) | All `informal` subcommands, flags, defaults, exit codes, and environment variables |
-| [Tcl Command Reference](reference/tcl-commands.md) | All 75 `informal shell` commands (`common`, `jg`, `vcf`) — identical to interactive `help <cmd>` |
+| [Tcl Command Reference](reference/tcl-commands.md) | All 85 `informal shell` commands (`common`, `jg`, `vcf`) — identical to interactive `help <cmd>` |
 | [JG ↔ VCF Command Crosswalk](reference/jg-vcf-crosswalk.md) | Side-by-side mapping across JasperGold, VC Formal, and flavor-independent commands |
 | [SVA & Lowering Support](reference/sva-support.md) | Supported IEEE 1800-2023 SVA operators, liveness, local variables, and explicit lowering rules |
-| [MCP Tools & Prompts Reference](reference/mcp-tools.md) | All 48 MCP tools (36 core + 12 `gui_*`), 4 live-hydrated prompts, and `informal.error/1` schema |
+| [MCP Tools & Prompts Reference](reference/mcp-tools.md) | All 52 MCP tools (40 core + 12 `gui_*`), 5 live-hydrated prompts, and `informal.error/1` schema |
 | [Formal Plan Spec Schema](reference/spec-schema.md) | `fvp.spec.json` (`informal.spec/1`) contract and `spec_audit` verdicts |
 | [Machine-Readable Index](reference/index.json) | Unified JSON catalog of CLI, Tcl, MCP tools, and prompts (also summarized in [llms.txt](../llms.txt)) |
 

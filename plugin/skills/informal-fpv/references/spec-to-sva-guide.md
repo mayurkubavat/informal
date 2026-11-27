@@ -23,7 +23,7 @@ Before manually writing dozens of properties:
 
 ## Step 3: SVA Authoring Checklist (Avoid Common LLM Pitfalls)
 
-1. **Always guard against reset**: Include `disable iff (<reset_expr>)` in RTL SVA (or verify InFormal's session `reset` covers command-added properties) so `SV-FPV-003` never trips.
+1. **Always guard against reset**: Include `disable iff (<reset_expr>)` in RTL SVA (or verify InFormal's session `reset` covers command-added properties) so `SVA-FPV-003` never trips.
 2. **Exact temporal operator**:
    - Same-cycle combinational or registered consequence: `A |-> B`.
    - Next-cycle consequence: `A |=> B` (equivalent to `A |-> ##1 B`).

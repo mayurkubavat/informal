@@ -1,52 +1,47 @@
-# InFormal desktop app
+# InFormal Desktop Workbench (`ui/`)
 
-A Tauri 2 app: a native window whose views are React, over the Rust core
-linked in-process. UI v1 has the property manager, a Tcl console that
-speaks the JasperGold or VC Formal command set, and a source view that
-marks lines using the selected property's signals. Counterexample
-waveforms (Surfer) come once the engines export traces.
+A cross-platform **Tauri 2 + React** desktop workbench over the InFormal Rust core linked in-process, plus an embedded single-file **MCP App** bundle (`vite.mcp-app.config.ts`) rendered directly inside MCP-App-capable IDEs.
 
-```
+## Features
+
+- **Property Manager & Multi-Task Tree:** Task-scoped filtering (`<embedded>` and user tasks), optional proof-telemetry columns (engine, bound, time, CPU, peak memory, lemmas, proof evidence, task), and JasperGold/VC Formal context menus.
+- **3-Pane CEX Debug Workspace:** Synchronized **CodeMirror 6 RTL SourceView** (inline `@C<k>` live trace values, `SVA-FPV` / `SV-RTL` lint quick-fixes, `signal_nav` go-to-driver/load), **HiDPI `<canvas>` TraceView** (streamed FST/VCD traces, `Why CEX` dynamic backward causal slice, VCD/FST export, Surfer launch), and **ELK.js COI & Causal SchematicView**.
+- **Eight Built-In Formal Apps Dock:** Interactive tabs for `Coverage`, `X-Prop`, `SPV`, `SEC / LEC`, `CSR / Conn`, `Bus VIP`, and `Low Power` (IEEE 1801 UPF).
+- **Keyboard-First UX:** Four workspace presets (`Triage`, `CEX Debug`, `Split`, `Signoff`), Light/Dark/System themes, Command Palette (`Cmd/Ctrl+K`), Shortcut Sheet (`?`), and modal focus traps.
+- **AI Proposals, Walkthroughs & Ask Mode:** Serves the live session over a local Unix socket (`informal mcp --connect`), renders human-reviewed Accept/Reject Proposal cards with `[AI-added]` / `[under AI-added]` provenance, supports guided multi-cycle `WalkthroughBar` tours, and includes a read-only Ask console (`../docs/ui/ask-mode.md`).
+
+```text
 ui/
-  src/            React views (App.tsx) and the bridge to Rust (backend.ts)
-  src-tauri/      the app crate: Tauri commands over informal_fpv::Worker
+  src/             React workbench views, Zustand store, HiDPI canvas trace, ELK schematic, MCP App entry
+  src-tauri/       Tauri 2 Rust bridge over informal_fpv::Worker and local MCP socket
+  tests/e2e/       Playwright UI, WebKit 2x HiDPI, MCP iframe, fuzz, and real-backend Layer-5 E2E tests
 ```
 
-The app also serves its session to an outside AI agent on a local socket;
-what the agent proposes waits in the Proposals tab for Accept or Reject
-(`../docs/ai-interface.md`).
-
-Tasks (decision D20) are nodes of the task tree: clicking one shows only
-its properties, its status groups filter within it, and the current task is
-marked. The property table's optional columns (engine, bound, time, CPU,
-peak memory, lemmas, proof evidence, task) are shown or hidden from the
-Columns button, a right-click on the header, or View > Table columns; the
-choice is kept with the layout. The Design Info tab shows
-`get_design_info -json`: the design's counts, the setup, and the current
-task's model size; it is read when the tab opens and on Refresh. While a
-prove runs, the progress readout names the running property, its engine,
-the bound reached and its elapsed time. Every statistic is what the
-engines measured (`../docs/fpv-shell.md`, Design and proof statistics).
-The browser mock shows a second task with `?tasks=1`.
-
-## Run
+## Run & Build
 
 ```sh
 cd ui
-npm install
-npm run dev          # views only, in a browser, against a mock backend
-npm run tauri dev    # the desktop app (finds ../config/engines.toml and runs from the repo root)
-npm run tauri dev -- -- $PWD/../tests/fpv/counter/counter.jg.tcl   # open with a script sourced
-npm run tauri build  # .deb / AppImage on Linux, .app / .dmg on macOS
+npm ci
+
+npm run dev              # browser preview against mock backend (or ?bridge=http://... for real backend)
+npm run tauri dev        # live desktop app (locates ../config/engines.toml from repo root)
+npm run tauri dev -- -- "$PWD/../examples/02-fpv-fundamentals/fifo/run.jg.tcl"
+CARGO_BUILD_JOBS=2 npx tauri build --bundles app   # macOS .app / Linux .deb / AppImage
 ```
 
-The desktop build needs, on Ubuntu:
+On Ubuntu/Debian, install WebKitGTK & Tauri system dependencies first:
 
 ```sh
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
-  libjavascriptcoregtk-4.1-dev librsvg2-dev
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
-macOS needs only the Xcode command line tools. `src-tauri` is a separate
-Cargo workspace, so `cargo build` at the repo root never needs these
-packages.
+## Test
+
+```sh
+cd ui
+npx tsc --noEmit
+npm test                 # Vitest unit, store, interaction & fuzz tests
+npm run test:e2e         # Playwright E2E, real-backend Layer 5, and WebKit 2x HiDPI checks
+```
+
+See [Desktop Workbench Guide](../docs/guide/workbench-ui.md) and [UI Testing Notes](../docs/ui/testing.md) for full details.

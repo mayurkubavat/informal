@@ -86,6 +86,7 @@ Query `prompts/list` or invoke `prompts/get` in any MCP client that supports pro
 | `close_undetermined` | Converge a timed-out proof (`convergence_diagnose` → helper invariants / `stopat` / abstraction) |
 | `spec_to_sva` | Formalize a hardware requirement into reset-guarded SVA + witness cover respecting DUT port boundary |
 | `audit_signoff` | Full signoff audit (`spec_audit`, `formal_lint`, vacuity, `under_ai`, `check_cov`) |
+| `audit_low_power` | IEEE 1801 UPF low-power audit (`load_upf`, `check_lp`, `lp_diagnose`, waivers, and LP-SEC checks) |
 
 ---
 
@@ -99,6 +100,6 @@ To ground any external AI agent without bloating its context window, point it at
 
 ## Related References
 
-- Auto-generated schemas for all 48 MCP tools: [MCP Tools & Prompts Reference](../reference/mcp-tools.md)
+- Auto-generated schemas for all 52 MCP tools and 5 prompts: [MCP Tools & Prompts Reference](../reference/mcp-tools.md)
 - `fvp.spec.json` schema: [Formal Spec Schema](../reference/spec-schema.md)
 - Implementation architecture & protocol details: [docs/ai-interface.md](../ai-interface.md)

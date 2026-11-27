@@ -1,6 +1,6 @@
 ---
 name: informal-fpv
-description: Expert IEEE 1800 SystemVerilog formal property verification with InFormal: single-call CEX root-cause diagnosis (`cex_diagnose`), proof-convergence triage (`convergence_diagnose`), zero-side-effect CEGIS soundness validation (`proposal_validate`), RTL cone schematics, Formal Apps (COV, X-Prop, SPV, SEC, CSR, Protocol VIP), and interactive workbench walkthroughs.
+description: Expert IEEE 1800 SystemVerilog formal property verification with InFormal: single-call CEX root-cause diagnosis (`cex_diagnose`), proof-convergence triage (`convergence_diagnose`), zero-side-effect CEGIS soundness validation (`proposal_validate`), RTL cone schematics, eight Formal Apps (COV, Connectivity, X-Prop, SPV, SEC, CSR, Protocol VIP, UPF Low Power), and interactive workbench walkthroughs.
 ---
 
 # InFormal Formal Verification — Expert Playbook
@@ -19,7 +19,7 @@ Use the `informal` MCP server tools whenever the user wants to elaborate SystemV
 
 | Situation | First Tool to Call | Follow-Up / Playbook |
 | --- | --- | --- |
-| Open design / script | `session_open` → `formal_lint` | Fix `SV-FPV-001..005` early (`formal_fix_apply`) before trusting proofs |
+| Open design / script | `session_open` → `formal_lint` | Fix `SVA-FPV-001..005` early (`formal_fix_apply`) before trusting proofs |
 | Run proofs | `prove` | Check `vacuity` and `under_ai` on every settled property |
 | Property is `cex` or `covered` | `cex_diagnose` | Read `references/cex-triage-playbook.md` (do NOT dump raw `trace_get` first) |
 | Property is `undetermined` or slow | `convergence_diagnose` | Read `references/convergence-playbook.md` (helper-lemma CEGIS / abstraction) |
@@ -28,7 +28,7 @@ Use the `informal` MCP server tools whenever the user wants to elaborate SystemV
 | Signoff & requirement completeness audit | `spec_audit` + `formal_lint` | Cross-checks `fvp.spec.json` (`informal.spec/1`), input-only `assume` boundary, witness covers, vacuity, and signoff gates |
 | Desktop `InFormal.app` connected (`gui_*` present) | `gui_present_cex` | Single-call atomic visual tour (`cex-debug` + Why CEX + callouts + walkthrough) |
 | IDE embedded side pane (no `gui_*`) | `open_workbench` | Automatically refreshed by `prove`, `cex_diagnose`, `why_cex`, `schematic_get`, Formal Apps |
-| Formal Apps (COV, X-Prop, SPV, SEC, CSR, VIP) | `check_cov` / `check_xprop` / `check_spv` / `check_sec` / `check_csr` / `check_protocol` | Inspect `session_summary` and `property_list` after running |
+| Formal Apps (COV, Conn, X-Prop, SPV, SEC, CSR, VIP, LP) | `check_cov` / `check_conn` / `check_xprop` / `check_spv` / `check_sec` / `check_csr` / `check_protocol` / `load_upf` + `check_lp` + `lp_diagnose` | Inspect `session_summary` and `property_list` after running |
 
 ## Server-Hosted MCP Prompts
 
@@ -37,6 +37,7 @@ When starting a structured workflow, you can also inspect or invoke the session-
 - `close_undetermined`: live-hydrated proof convergence & helper-lemma CEGIS ladder.
 - `spec_to_sva`: hydrated with exact top-module `inputs` vs `outputs` boundary to prevent output-constraining assumptions.
 - `audit_signoff`: full formal signoff gate (`formal_lint`, vacuity, `under_ai`, cover sanity, `check_cov`).
+- `audit_low_power`: IEEE 1801 UPF low-power audit (`load_upf`, `check_lp`, `lp_diagnose`, waivers, and LP-SEC).
 
 ## Progressive-Disclosure Reference Guides
 

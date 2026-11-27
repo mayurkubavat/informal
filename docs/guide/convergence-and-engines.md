@@ -6,19 +6,24 @@ When a property returns `undetermined`, blindly raising the timeout rarely works
 
 ## 1. Engine Portfolio Architecture
 
-InFormal runs all applicable engines in parallel per property, takes the **first checked definitive verdict**, cancels the remaining engines, and verifies that no two engines disagree ([docs/engines.md](../engines.md)).
+InFormal runs applicable engines via a **learned Ridge staged-wave scheduler** (`informal-engine`) with **Phase 2 `LemmaHub`** cooperative proof sharing, takes the **first checked definitive verdict**, cancels remaining workers cooperatively, and verifies that no two engines disagree ([docs/engines.md](../engines.md)). Before bit-level solving, composable AIG passes (`rewrite`, `fraig`, `scorr`, temporal decomposition, period-2 clock folding) simplify a working copy while keeping the un-preprocessed loaded AIG intact for final verification.
 
 ### In-House Engines
 
 | Engine | Level | Strengths |
 | --- | --- | --- |
-| `informal-bmc` | Bit-level (CaDiCaL) | Fast shallow/medium bug finding (`cex`) and cover witnesses |
-| `informal-kind` | Bit-level (CaDiCaL) | Fast proofs on inductive or shallow-diameter designs |
-| `informal-ic3` | Bit-level (CaDiCaL) | Unbounded safety proofs via IC3/PDR (single & multi-threaded lemma sharing) |
-| `informal-kind-ic3` | Bit-level (CaDiCaL) | Feeds IC3 lemmas into k-induction for deep state machines |
-| `informal-klive` | Bit-level (CaDiCaL) | Liveness (`s_eventually`, `s_until`) via k-liveness / L2S |
-| `informal-wbmc` | Word-level (Bitwuzla) | Bug finding over wide datapaths and unblasted `Sort::Array` memories (`> 4096` words) |
-| `informal-wkind` | Word-level (Bitwuzla) | Word-level k-induction over large arrays and wide arithmetic without bit-blasting |
+| `informal-bmc`, `-10`, `-65` | Bit-level (CaDiCaL) | Fast shallow and deep strided bug finding (`cex`) and cover witnesses |
+| `informal-kind` | Bit-level (CaDiCaL) | Fast proofs on inductive or shallow-diameter designs with clock folding |
+| `informal-ic3`, `-ic3-mt` | Bit-level (CaDiCaL / in-house CDCL) | Single- and multi-threaded IC3/PDR safety proofs with local lemma checking |
+| `informal-ic3-inn`, `informal-gla` | Bit-level (`informal-ic3`) | IC3 with internal signals (IC3-INN) and Gate-Level Abstraction CEGAR |
+| `informal-kind-ic3` | Bit-level (CaDiCaL) | Feeds Houdini-filtered IC3 invariants into strengthened $k$-induction |
+| `informal-imc` | Bit-level (`informal-imc`) | Native Craig interpolation backed by CaDiCaL proof tracing |
+| `informal-car` | Bit-level (`informal-car`) | Forward and Backward Complementary Approximate Reachability (FCAR / BCAR) |
+| `informal-bdd` | Bit-level (`informal-bdd`) | Zero-dependency pure-Rust complemented-edge ROBDD exact reachability |
+| `informal-klive`, `informal-rlive` | Bit-level (`informal-liveness`) | Liveness (`s_eventually`, `s_until`) via $k$-liveness and SCC-guided RLive |
+| `informal-swarm` | Bit-level (`informal-swarm`) | Bit-parallel simulation-guided bug hunter with SAT bridging |
+| `informal-wbmc`, `informal-wkind` | Word-level (Bitwuzla) | Word-level BMC and $k$-induction over wide datapaths and unblasted `Sort::Array` memories |
+| `informal-ic3sa` | Word-level (Bitwuzla) | Word-level IC3 with syntax-guided abstraction and prophecy variables |
 
 ### External Engines (`config/engines.toml`)
 

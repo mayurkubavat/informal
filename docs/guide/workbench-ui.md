@@ -1,8 +1,8 @@
 # Desktop Workbench UI (`InFormal.app`)
 
-InFormal includes a cross-platform desktop workbench built with Tauri 2 and React (`ui/`), designed around standard EDA formal verification workflows — synchronized property tables, source overlays, COI schematics, waveforms, Formal Apps, AI proposal review, and local LLM Ask mode.
+InFormal includes a cross-platform desktop workbench built with Tauri 2 and React (`ui/`), designed around standard EDA formal verification workflows — synchronized property tables, CodeMirror 6 RTL source overlays with inline `@C<k>` values, ELK.js COI & causal schematics, streamed HiDPI `<canvas>` waveforms (VCD/FST), eight built-in Formal Apps, AI proposal review, Command Palette (`Cmd/Ctrl+K`), and local LLM Ask mode.
 
-![The InFormal workbench](../ui/workbench-light.png)
+![InFormal CEX Debug Workbench](../ui/workbench-cex-debug.png)
 
 ---
 
@@ -25,20 +25,23 @@ See [`ui/README.md`](https://github.com/mayurkubavat/informal/blob/main/ui/READM
 
 ## 2. Workspace Presets & Panels
 
-The workbench uses a dockable graphite/teal multi-pane layout with presets optimized for each stage of formal verification:
+The workbench uses a dockable graphite/teal multi-pane layout (Light, Dark, and System themes) with four presets optimized for each stage of formal verification:
 
 | Preset | Purpose | Key Panels |
 | --- | --- | --- |
-| **Triage / Setup** | Initial script load, elaboration, design stats, lint | Tasks sidebar, Property Table, Design Info, Tcl Console, Messages |
-| **CEX Debug** | Deep counterexample & witness analysis | Synchronized SourceView (with inline `@C<k>` values + RTL `.sv` auto-pivot), SchematicView (COI + active `why_cex` paths), TraceView (waveform + `Why CEX` causal filter + AI Callouts), compact Console |
-| **Formal Apps** | Running & reviewing `check_cov`, `check_conn`, `check_xprop`, `check_spv`, `check_sec`, `check_csr`, `check_protocol` | Dedicated Formal Apps view + summary/waiver tables |
-| **Signoff** | Final review of vacuity, covers, proof stats, and proposals | Property Table, Details/Stats, Proposals |
+| **Triage** | Initial script load, elaboration, design stats, lint | Tasks/Design sidebar, Property Table, Design Info, Tcl Console, Messages |
+| **CEX Debug** | Deep counterexample & witness analysis | Synchronized RTL SourceView (with inline `@C<k>` values + `.sv`/`.tcl` switcher), SchematicView (ELK.js COI + active `why_cex` paths), TraceView (HiDPI `<canvas>` waveform + `Why CEX` causal filter + FST/VCD export + Surfer launch), compact Details dock |
+| **Split** | Side-by-side table & RTL/trace authoring | Property Table paired directly with live SourceView or TraceView |
+| **Signoff & Formal Apps** | Running & reviewing Formal Apps, vacuity, covers, and proposals | Dedicated Formal Apps dock (`Coverage`, `X-Prop`, `SPV`, `SEC / LEC`, `CSR / Conn`, `Bus VIP`, `Low Power`), Property Table, Details/Stats, Proposals |
 
-### Cross-Probing & Quick-Fix
+![InFormal Formal Apps Panel](../ui/workbench-formal-apps.png)
 
-- **Property → Source / Trace / Schematic:** Selecting any property updates the Details inspector, jumps SourceView to the RTL or Tcl definition (with a `.sv` / `.tcl` switcher pill when a property is Tcl-defined), and enables waveform + schematic inspection for `cex`/`covered` properties.
+### Cross-Probing, Keyboard Contracts & Quick-Fix
+
+- **Property → Source / Trace / Schematic:** Selecting any property updates the Details inspector (including invariant clause counts and proof evidence), jumps SourceView to the RTL or Tcl definition, and enables waveform + schematic inspection for `cex`/`covered` properties.
 - **Inline Signal Values (`@C<k>`):** Moving the waveform cursor updates inline signal value annotations in SourceView and node labels in SchematicView.
-- **Formal Lint & Quick-Fix:** `SVA-FPV` lint diagnostics appear inline in SourceView with 1-click `Quick-Fix` buttons.
+- **Formal Lint & Quick-Fix:** `SVA-FPV` and `SV-RTL` lint diagnostics appear inline in SourceView with 1-click `Quick-Fix` buttons.
+- **Zero-Mouse Navigation:** Open the Command Palette (`Cmd/Ctrl+K`) or Shortcut Sheet (`?`) to switch presets, themes, effort levels, and Formal Apps without leaving the keyboard.
 
 ---
 
@@ -64,5 +67,6 @@ The console includes an **Ask** mode backed by `informal-llm` and configured in 
 ## Related Guides
 
 - [Debugging Counterexamples](debugging-cex.md)
+- [Formal Apps Guide](formal-apps.md)
 - [AI & MCP Integration](../integration/ai-and-mcp.md)
 - UI internals: [stop-progress.md](../ui/stop-progress.md) · [trace-format.md](../ui/trace-format.md) · [testing.md](../ui/testing.md)

@@ -8,6 +8,6 @@
   "suggestedPrompts": [
     "Open the InFormal workbench and prove all assertions in my SystemVerilog design",
     "Slice the failing CEX with why_cex, open the RTL cone schematic, and walk me through the root cause",
-    "Run formal-readiness lint (SV-FPV-001..005) and verify CSR or AXI4-Lite protocol properties"
+    "Run formal-readiness lint (SVA-FPV-001..005) and verify CSR, AXI4-Lite protocol, or UPF low-power properties"
   ]
 }

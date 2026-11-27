@@ -9,7 +9,7 @@ Call `cex_diagnose(name="<prop>")` first. Do NOT call `trace_get` across all sig
 - `signal_roles`: maps every active signal to `primary_input`, `dut_output`, `inout`, or `internal_state`.
 - `active_trace`: values of active causal signals over `[failure_frame - window .. failure_frame]`.
 - `driver_snippets`: RTL assignment lines driving the active DUT state/outputs.
-- `lint_findings`: `SV-FPV-*` issues (e.g., `SV-FPV-003` missing `disable iff`).
+- `lint_findings`: `SVA-FPV-*` issues (e.g., `SVA-FPV-003` missing `disable iff`).
 
 ## Step 2: Classify Into Exactly One Root-Cause Bucket
 
@@ -39,12 +39,12 @@ Call `cex_diagnose(name="<prop>")` first. Do NOT call `trace_get` across all sig
 
 ### Bucket C — Property or Setup Bug
 **Indicators:**
-- `SV-FPV-003` fired: assertion missing `disable iff (<reset>)` and fails at cycle 0/1 during reset.
+- `SVA-FPV-003` fired: assertion missing `disable iff (<reset>)` and fails at cycle 0/1 during reset.
 - Off-by-one sampling (`|->` vs `|=>`) or `$past(x)` evaluated on cycle 0 before a prior cycle exists.
 - Wrong clock edge or reset polarity in setup script.
 
 **Action:**
-- For `SV-FPV-003` in RTL, offer `formal_fix_apply` (respecting mode).
+- For `SVA-FPV-003` in RTL, offer `formal_fix_apply` (respecting mode).
 - For script/SVA expression bugs, validate the corrected property with `proposal_validate(kind="assert", expr="...")` and explain the exact temporal mismatch.
 
 ## Step 3: Visual Communication Etiquette
