@@ -1,11 +1,12 @@
 cff-version: 1.2.0
-message: "If you use InFormal, please cite the technical report below."
+message: "If you use InFormal in academic or industrial work, please cite the report below."
 title: "InFormal"
 type: software
 authors:
   - family-names: Kubavat
     given-names: Mayur
     affiliation: Independent Researcher
+    orcid: "https://orcid.org/0009-0009-1087-8558"
 repository-code: "https://github.com/mayurkubavat/informal"
 license: Apache-2.0
 preferred-citation:
@@ -15,9 +16,8 @@ preferred-citation:
     - family-names: Kubavat
       given-names: Mayur
       affiliation: Independent Researcher
+      orcid: "https://orcid.org/0009-0009-1087-8558"
   year: 2026
   month: 11
-  institution:
-    name: Zenodo
   doi: 10.5281/zenodo.24261270
   url: "https://doi.org/10.5281/zenodo.24261270"

@@ -161,6 +161,20 @@ scripts/check.sh        # hygiene, fmt, clippy, Rust/UI tests, docgen sync, link
 
 `scripts/check.sh` ends with `GATE: PASS` or `GATE: FAIL (<step>)`. Pass `--fast` while iterating, `--e2e` to include Playwright UI tests, `--quiet` to throttle parallelism on a busy machine, or `--allow-missing-tools` when optional external solvers are absent. On macOS, set `CARGO_BUILD_JOBS=2` when building the full workspace.
 
+## Citation
+
+If you use InFormal in academic research, benchmarks, or verification flows, please cite (also available via GitHub's **Cite this repository** button from [`CITATION.cff`](CITATION.cff)):
+
+```bibtex
+@misc{kubavat2026informal,
+  author       = {Mayur Kubavat},
+  title        = {{InFormal}: An Open-Source Formal Property Verifier for {SystemVerilog} with Checked Verdicts},
+  howpublished = {Tech.\ Rep., Nov.\ 2026, doi: 10.5281/zenodo.24261270},
+  year         = {2026},
+  url          = {https://github.com/mayurkubavat/informal}
+}
+```
+
 ## License & Third-Party Tools
 
 Apache-2.0 (`LICENSE`, `NOTICE`). Third-party solver versions, licenses, and build steps are documented in [`docs/third-party.md`](docs/third-party.md) and pinned in [`tools.lock`](tools.lock). See [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
