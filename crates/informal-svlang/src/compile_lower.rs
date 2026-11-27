@@ -472,6 +472,13 @@ pub(crate) fn model_cancel(
     if req.toggle_covers {
         nl.add_toggle_covers(skip_cycles);
     }
+    if req.tristate_contention_checks || req.tristate_floating_checks {
+        nl.add_tristate_checks(
+            req.tristate_contention_checks,
+            req.tristate_floating_checks,
+            skip_cycles,
+        );
+    }
     if cancelled() {
         return Err(vec!["cancelled".into()]);
     }
@@ -642,7 +649,15 @@ fn append_alias_trace_outputs(nl: &Netlist, btor2: &mut String) {
             continue;
         }
         let canon = match nl.value(t.value).kind {
-            ValueKind::Input(i) => Some(sym_clean(&nl.inputs[i].name)),
+            ValueKind::Input(i) => {
+                let raw = &nl.inputs[i].name;
+                let full = if nl.top.is_empty() || raw.starts_with(&format!("{}.", nl.top)) {
+                    raw.clone()
+                } else {
+                    format!("{}.{raw}", nl.top)
+                };
+                Some(sym_clean(&full))
+            }
             ValueKind::StateOut(s) => Some(sym_clean(&nl.states[s.0 as usize].name)),
             _ => None,
         };

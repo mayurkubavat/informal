@@ -470,6 +470,7 @@ impl Session {
             tick: self.tick_reset(),
             skip_initial_checks: self.design.skip_initial_checks,
             isunknown_is_false: self.design.isunknown_is_false,
+            ..Default::default()
         };
         if let Some(w) = req.bbox_mul_width {
             self.log(&format!(

@@ -146,6 +146,17 @@ pub fn collect_xprop_sinks(
     if want_out {
         if !top_output_ports.is_empty() {
             for port in top_output_ports {
+                if let (Ok(r_oe), Ok(r_do)) = (
+                    resolve_signal(m, top, &format!("{port}$oe")),
+                    resolve_signal(m, top, &format!("{port}$out")),
+                ) {
+                    for r in [r_oe, r_do] {
+                        if seen_out_names.insert(r.name.clone()) {
+                            sinks.push((r.node_ref, r.width, r.name, "output"));
+                        }
+                    }
+                    continue;
+                }
                 if let Ok(r) = resolve_signal(m, top, port) {
                     if seen_out_names.insert(r.name.clone()) {
                         sinks.push((r.node_ref, r.width, r.name, "output"));
@@ -154,10 +165,18 @@ pub fn collect_xprop_sinks(
             }
         } else {
             // Fallback when scope hierarchy is unavailable: top-level `output` lines in trace section.
+            let all_out_syms: HashSet<&str> = m
+                .lines()
+                .filter(|l| l.op == Op::Output)
+                .filter_map(|l| l.symbol.as_deref())
+                .collect();
             for l in m.lines().filter(|l| l.op == Op::Output) {
                 let Some(sym) = l.symbol.as_deref() else {
                     continue;
                 };
+                if all_out_syms.contains(format!("{sym}$oe").as_str()) {
+                    continue;
+                }
                 let is_top_sig = match sym.strip_prefix(&top_prefix) {
                     Some(rest) => !rest.contains('.'),
                     None => !sym.contains('.'),

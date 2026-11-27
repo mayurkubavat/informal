@@ -237,7 +237,7 @@ fn collect_aon_macro_output_nets(
             let Some(sp) = lib_c.pin(&pname) else {
                 continue;
             };
-            if sp.direction != PinDir::Output {
+            if !matches!(sp.direction, PinDir::Output | PinDir::Inout) {
                 continue;
             }
             if let Some(pin_ss) = ctx.effective_pin_ss(cid, &pname) {

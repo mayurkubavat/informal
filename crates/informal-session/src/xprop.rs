@@ -208,11 +208,20 @@ pub fn prove(
 
     let mut items = Vec::with_capacity(targets.len());
     for (nref, w, name, cat) in targets {
+        let base_name = name
+            .strip_suffix("$oe")
+            .or_else(|| name.strip_suffix("$out"))
+            .unwrap_or(&name);
         if s.xprop
             .waivers
             .iter()
             .filter(|wv| !wv.source_only)
-            .any(|wv| glob(&wv.pattern, &name) || name.contains(wv.pattern.as_str()))
+            .any(|wv| {
+                glob(&wv.pattern, &name)
+                    || name.contains(wv.pattern.as_str())
+                    || glob(&wv.pattern, base_name)
+                    || base_name.contains(wv.pattern.as_str())
+            })
         {
             items.push(XpropItem {
                 name,

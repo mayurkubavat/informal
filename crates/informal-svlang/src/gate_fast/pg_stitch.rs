@@ -205,7 +205,51 @@ impl<'a> ElabCtx<'a> {
                         });
                     }
                 }
-                Some(PortDir::Inout) | None | Some(PortDir::Ref) => {
+                Some(PortDir::Inout) => {
+                    if let Some(pnet) = bnd.parent_net {
+                        self.graph.nets[pnet.0 as usize].drivers.push(DriverEdge {
+                            dst_range: bnd.parent_range,
+                            src_net: Some(inet_id),
+                            src_range: Some(bnd.pin_range),
+                            origin: DriverOrigin::ChildPin(pid),
+                            op: ExprOpSummary::Identity,
+                            extra_deps: Vec::new(),
+                            dep_ops: Vec::new(),
+                            inline_clamp: None,
+                            loc: bnd.loc,
+                        });
+                        self.graph.nets[inet_id.0 as usize]
+                            .drivers
+                            .push(DriverEdge {
+                                dst_range: bnd.pin_range,
+                                src_net: Some(pnet),
+                                src_range: Some(bnd.parent_range),
+                                origin: DriverOrigin::ParentPort(pid),
+                                op: ExprOpSummary::Identity,
+                                extra_deps: Vec::new(),
+                                dep_ops: Vec::new(),
+                                inline_clamp: None,
+                                loc: bnd.loc,
+                            });
+                        self.graph.nets[pnet.0 as usize].loads.push(LoadEdge {
+                            src_range: bnd.parent_range,
+                            dst_net: Some(inet_id),
+                            dst_pin: Some(pid),
+                            dst_range: bnd.pin_range,
+                            op: ExprOpSummary::Identity,
+                            loc: bnd.loc,
+                        });
+                        self.graph.nets[inet_id.0 as usize].loads.push(LoadEdge {
+                            src_range: bnd.pin_range,
+                            dst_net: Some(pnet),
+                            dst_pin: Some(pid),
+                            dst_range: bnd.parent_range,
+                            op: ExprOpSummary::Identity,
+                            loc: bnd.loc,
+                        });
+                    }
+                }
+                None | Some(PortDir::Ref) => {
                     if let Some(pnet) = bnd.parent_net {
                         self.graph.nets[pnet.0 as usize].loads.push(LoadEdge {
                             src_range: bnd.parent_range,
@@ -252,6 +296,40 @@ impl<'a> ElabCtx<'a> {
                         inline_clamp: None,
                         loc: bnd.loc,
                     });
+                }
+            }
+            Some(PortDir::Inout) => {
+                if let Some(pnet) = bnd.parent_net {
+                    self.graph.nets[pnet.0 as usize].drivers.push(DriverEdge {
+                        dst_range: bnd.parent_range,
+                        src_net: None,
+                        src_range: None,
+                        origin: DriverOrigin::ChildPin(pid),
+                        op: ExprOpSummary::Identity,
+                        extra_deps: Vec::new(),
+                        dep_ops: Vec::new(),
+                        inline_clamp: None,
+                        loc: bnd.loc,
+                    });
+                    self.graph.nets[pnet.0 as usize].loads.push(LoadEdge {
+                        src_range: bnd.parent_range,
+                        dst_net: None,
+                        dst_pin: Some(pid),
+                        dst_range: bnd.pin_range,
+                        op: bnd.expr_op,
+                        loc: bnd.loc,
+                    });
+                } else {
+                    for &(dn, dr) in &bnd.expr_deps {
+                        self.graph.nets[dn.0 as usize].loads.push(LoadEdge {
+                            src_range: dr,
+                            dst_net: None,
+                            dst_pin: Some(pid),
+                            dst_range: bnd.pin_range,
+                            op: bnd.expr_op.clone(),
+                            loc: bnd.loc,
+                        });
+                    }
                 }
             }
             _ => {

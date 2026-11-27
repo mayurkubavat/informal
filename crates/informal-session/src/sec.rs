@@ -718,14 +718,17 @@ fn build_dual_miter_btor2(
 
 fn find_input_line(m: &Model, top: &str, name: &str) -> Option<(u32, u32, String)> {
     let rel_target = strip_top(name.trim(), Some(top));
-    for l in m.with_op(Op::Input) {
-        let Some(sym) = l.symbol.as_deref() else {
-            continue;
-        };
-        let rel = strip_top(sym, Some(top));
-        if rel == rel_target {
-            let w = l.sort.and_then(|s| m.width(s))?;
-            return Some((l.id, w, rel.to_string()));
+    let split_target = format!("{rel_target}$in");
+    for cand in [rel_target, split_target.as_str()] {
+        for l in m.with_op(Op::Input) {
+            let Some(sym) = l.symbol.as_deref() else {
+                continue;
+            };
+            let rel = strip_top(sym, Some(top));
+            if rel == cand {
+                let w = l.sort.and_then(|s| m.width(s))?;
+                return Some((l.id, w, rel.to_string()));
+            }
         }
     }
     None
@@ -1023,6 +1026,65 @@ pub(crate) fn prove_sec_from_btor(
         }
     }
     for (s_out, i_out) in out_pairs {
+        let prefix = if setup.lec { "lec_out" } else { "sec_out" };
+        let kind = if setup.lec {
+            "lec_output"
+        } else {
+            "sec_output"
+        };
+        let s_base_rel = strip_top(s_out.trim(), Some(spec_top)).to_string();
+        let i_base_rel = strip_top(i_out.trim(), Some(imp_top)).to_string();
+
+        // Top-level `inout` ports expose split `(<port>$oe, <port>$out)` outputs:
+        // compare both output-enable and masked drive value independently.
+        let s_oe_opt = resolve_signal(&m_spec, Some(spec_top), &format!("{s_out}$oe")).ok();
+        let s_do_opt = resolve_signal(&m_spec, Some(spec_top), &format!("{s_out}$out")).ok();
+        let i_oe_opt = resolve_signal(&m_imp, Some(imp_top), &format!("{i_out}$oe")).ok();
+        let i_do_opt = resolve_signal(&m_imp, Some(imp_top), &format!("{i_out}$out")).ok();
+        if let (Some(s_oe), Some(s_do), Some(i_oe), Some(i_do)) =
+            (s_oe_opt, s_do_opt, i_oe_opt, i_do_opt)
+        {
+            if s_oe.width != i_oe.width {
+                return Err(format!(
+                    "check_sec: inout enable width mismatch `{s_out}$oe` ({} bits) vs `{i_out}$oe` ({} bits)",
+                    s_oe.width, i_oe.width
+                ));
+            }
+            if s_do.width != i_do.width {
+                return Err(format!(
+                    "check_sec: inout output width mismatch `{s_out}$out` ({} bits) vs `{i_out}$out` ({} bits)",
+                    s_do.width, i_do.width
+                ));
+            }
+            for (rs, ri) in [(s_oe, i_oe), (s_do, i_do)] {
+                let s_rel = strip_top(&rs.name, Some(spec_top)).to_string();
+                let i_rel = strip_top(&ri.name, Some(imp_top)).to_string();
+                let lat = if setup.lec {
+                    0
+                } else {
+                    setup
+                        .output_latency
+                        .get(&s_rel)
+                        .or_else(|| setup.output_latency.get(&i_rel))
+                        .or_else(|| setup.output_latency.get(&s_base_rel))
+                        .or_else(|| setup.output_latency.get(&i_base_rel))
+                        .copied()
+                        .unwrap_or(setup.latency)
+                };
+                targets.push(DualTarget {
+                    name: format!("{prefix}_{}", sanitize_ident(&i_rel)),
+                    kind,
+                    spec_sig: s_rel,
+                    imp_sig: i_rel,
+                    spec_ref: rs.node_ref,
+                    imp_ref: ri.node_ref,
+                    width: rs.width,
+                    latency: lat,
+                });
+            }
+            continue;
+        }
+
         let rs = resolve_signal(&m_spec, Some(spec_top), &s_out)
             .map_err(|e| format!("check_sec (spec output `{s_out}`): {e}"))?;
         let ri = resolve_signal(&m_imp, Some(imp_top), &i_out)
@@ -1045,12 +1107,6 @@ pub(crate) fn prove_sec_from_btor(
                 .copied()
                 .unwrap_or(setup.latency)
         };
-        let prefix = if setup.lec { "lec_out" } else { "sec_out" };
-        let kind = if setup.lec {
-            "lec_output"
-        } else {
-            "sec_output"
-        };
         targets.push(DualTarget {
             name: format!("{prefix}_{}", sanitize_ident(&i_rel)),
             kind,
@@ -1064,7 +1120,11 @@ pub(crate) fn prove_sec_from_btor(
     }
 
     if let Some(pat) = filter_name {
-        targets.retain(|t| crate::session::glob(pat, &t.name) || t.imp_sig == pat);
+        targets.retain(|t| {
+            crate::session::glob(pat, &t.name)
+                || t.imp_sig == pat
+                || t.imp_sig.split('$').next() == Some(pat)
+        });
     }
     if targets.is_empty() {
         return Err("check_sec -prove: no matched outputs or state keypoints to compare".into());

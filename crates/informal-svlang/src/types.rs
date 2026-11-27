@@ -410,6 +410,10 @@ pub struct Request {
     pub branch_covers: bool,
     /// Model only: synthesize register rise/fall toggle covers (`check_cov`).
     pub toggle_covers: bool,
+    /// Model only: synthesize tri-state bus multi-driver contention assertions.
+    pub tristate_contention_checks: bool,
+    /// Model only: synthesize non-pulled internal tri-state bus floating assertions.
+    pub tristate_floating_checks: bool,
 }
 
 /// How long the reset lasts in a model that drives the clocks, where one

@@ -129,8 +129,9 @@ pub fn run_prove_corruption(
     let explicit_filter = !s.engine_filter.is_empty();
 
     for (obs_ref, obs_w, out_name) in top_outputs {
-        // Guard output if the output port itself belongs to a switchable domain.
-        let guard_ref = domain_of_signal_path(graph, &cell_domain, top_ref, &out_name)
+        // Guard output if the output/inout port itself belongs to a switchable domain.
+        let base_out = out_name.split('$').next().unwrap_or(&out_name);
+        let guard_ref = domain_of_signal_path(graph, &cell_domain, top_ref, base_out)
             .and_then(|pd| domain_sig_by_id(&pa.domains, pd))
             .filter(|d| d.is_corruptible)
             .map(|d| d.on);
@@ -263,6 +264,20 @@ pub(crate) fn collect_top_output_targets(
         .unwrap_or_default();
 
     for port in top_ports {
+        let oe_name = format!("{port}$oe");
+        let do_name = format!("{port}$out");
+        if let (Some((oe_ref, oe_w)), Some((do_ref, do_w))) = (
+            resolve_btor_sig(m, top, &oe_name),
+            resolve_btor_sig(m, top, &do_name),
+        ) {
+            if seen.insert(oe_name.clone()) {
+                out.push((oe_ref, oe_w, oe_name));
+            }
+            if seen.insert(do_name.clone()) {
+                out.push((do_ref, do_w, do_name));
+            }
+            continue;
+        }
         if let Some((nref, w)) = resolve_btor_sig(m, top, &port) {
             if seen.insert(port.clone()) {
                 out.push((nref, w, port));
@@ -271,11 +286,18 @@ pub(crate) fn collect_top_output_targets(
     }
     if out.is_empty() {
         let top_prefix = top.map(|t| format!("{t}.")).unwrap_or_default();
+        let all_out_syms: HashSet<&str> = m
+            .with_op(Op::Output)
+            .filter_map(|l| l.symbol.as_deref())
+            .collect();
         for l in m.with_op(Op::Output) {
             let (Some(&arg), Some(sym)) = (l.args.first(), l.symbol.as_deref()) else {
                 continue;
             };
-            if sym.starts_with("lp.") || sym.starts_with("informal") {
+            if sym.starts_with("lp.")
+                || sym.starts_with("informal")
+                || all_out_syms.contains(format!("{sym}$oe").as_str())
+            {
                 continue;
             }
             let is_top = match sym.strip_prefix(&top_prefix) {

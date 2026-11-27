@@ -81,6 +81,31 @@ pub fn resolve_driving_sources(
                 _ => {}
             }
         }
+        for ld in &net.loads {
+            let Some(pid) = ld.dst_pin else { continue };
+            let pin = graph.pin(pid);
+            let dst_cell = graph.cell(pin.cell);
+            if let Some(lc) = liberty.cell(&dst_cell.module) {
+                if lc
+                    .pin(&pin.name)
+                    .is_some_and(|sp| sp.direction == PinDir::Inout)
+                {
+                    let ep = SignalEndpoint::LeafPin {
+                        cell: pin.cell,
+                        pin: pid,
+                    };
+                    if !out.contains(&ep) {
+                        out.push(ep);
+                    }
+                }
+            } else if pin.dir == Some(informal_svlang::PortDir::Inout) {
+                if let Some(dn) = ld.dst_net {
+                    if visited.insert(dn) {
+                        queue.push_back((dn, d + 1));
+                    }
+                }
+            }
+        }
     }
     out
 }
@@ -110,7 +135,10 @@ pub fn resolve_sink_loads(
             if let Some(&pid) = owner.pins.iter().find(|&&pid| {
                 let p = graph.pin(pid);
                 p.internal_net == Some(nid)
-                    && matches!(p.dir, Some(informal_svlang::PortDir::Output))
+                    && matches!(
+                        p.dir,
+                        Some(informal_svlang::PortDir::Output | informal_svlang::PortDir::Inout)
+                    )
             }) {
                 let ep = SignalEndpoint::TopPort {
                     cell: net.cell,
@@ -220,15 +248,22 @@ pub fn run_stage3_cell_checks(
             let Some(sp) = lib_c.pin(&pname) else {
                 continue;
             };
-            if sp.direction != PinDir::Input || sp.is_clock {
+            if !matches!(sp.direction, PinDir::Input | PinDir::Inout) || sp.is_clock {
                 continue;
             }
             let Some(dst_ss) = ctx.effective_pin_ss(cid, &pname) else {
                 continue;
             };
+            let self_ep = SignalEndpoint::LeafPin {
+                cell: cid,
+                pin: pid,
+            };
             for pnet in pin_parent_nets(ctx.graph, pid) {
                 let drivers = resolve_driving_sources(ctx.graph, ctx.liberty, pnet, 6);
                 for drv in drivers {
+                    if drv == self_ep {
+                        continue;
+                    }
                     let (src_ss, src_pd, src_is_ls, src_is_macro) = match drv {
                         SignalEndpoint::LeafPin {
                             cell: sc,
