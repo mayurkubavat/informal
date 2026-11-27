@@ -1461,8 +1461,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sv-aiger"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-btor2",
  "sv-netlist",
@@ -1470,13 +1470,13 @@ dependencies = [
 
 [[package]]
 name = "sv-bigint"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 
 [[package]]
 name = "sv-btor2"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-netlist",
  "sv-semantic",
@@ -1484,8 +1484,8 @@ dependencies = [
 
 [[package]]
 name = "sv-checks"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-fxhash",
  "sv-scopes",
@@ -1494,8 +1494,8 @@ dependencies = [
 
 [[package]]
 name = "sv-expr"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-bigint",
  "sv-fxhash",
@@ -1505,13 +1505,13 @@ dependencies = [
 
 [[package]]
 name = "sv-fxhash"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 
 [[package]]
 name = "sv-ir"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-bigint",
  "sv-fxhash",
@@ -1520,13 +1520,13 @@ dependencies = [
 
 [[package]]
 name = "sv-lexer"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 
 [[package]]
 name = "sv-netlist"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-semantic",
  "sv-syntax",
@@ -1534,16 +1534,16 @@ dependencies = [
 
 [[package]]
 name = "sv-preprocessor"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-lexer",
 ]
 
 [[package]]
 name = "sv-scopes"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-fxhash",
  "sv-syntax",
@@ -1551,8 +1551,8 @@ dependencies = [
 
 [[package]]
 name = "sv-semantic"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-bigint",
  "sv-checks",
@@ -1567,13 +1567,13 @@ dependencies = [
 
 [[package]]
 name = "sv-source"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 
 [[package]]
 name = "sv-sva"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-expr",
  "sv-fxhash",
@@ -1583,8 +1583,8 @@ dependencies = [
 
 [[package]]
 name = "sv-syntax"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-lexer",
  "sv-preprocessor",
@@ -1592,8 +1592,8 @@ dependencies = [
 
 [[package]]
 name = "sv-yosys"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-netlist",
  "sv-semantic",
@@ -1601,8 +1601,8 @@ dependencies = [
 
 [[package]]
 name = "svlang"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "sv-aiger",
  "sv-btor2",
@@ -1617,8 +1617,8 @@ dependencies = [
 
 [[package]]
 name = "svlang-lint"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "regex",
  "svlang",
@@ -1627,8 +1627,8 @@ dependencies = [
 
 [[package]]
 name = "svlang-model"
-version = "0.6.1"
-source = "git+https://github.com/mayurkubavat/svlang.git?rev=1a07460682a44c7fc3c998fe26ae282d69dd4800#1a07460682a44c7fc3c998fe26ae282d69dd4800"
+version = "0.6.2"
+source = "git+https://github.com/mayurkubavat/svlang.git?rev=77fb1681d010775ab450f3d4f922feaeabd70432#77fb1681d010775ab450f3d4f922feaeabd70432"
 dependencies = [
  "svlang",
 ]
